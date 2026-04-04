@@ -1790,38 +1790,45 @@ func (p *Pipeline) failJobWithStatus(jobID string, status models.IngestionStatus
 }
 
 // cleanupFile removes a temporary file
-// getNextMovieCode gets the next sequential movie code from MongoDB atomic counter
-// Returns zero-padded string (e.g., "0001", "0008", "0100")
+// getNextMovieCode gets the next sequential movie code from MongoDB atomic counter.
+// Skips codes that already exist in the movies collection to handle pre-existing data.
+// Returns zero-padded string (e.g., "0001", "0008", "0100").
 func (p *Pipeline) getNextMovieCode(ctx context.Context) (string, error) {
 	if p.movieCol == nil {
 		return "", fmt.Errorf("movie collection not initialized")
 	}
 
-	// Use counters collection for atomic increment
 	countersCol := p.movieCol.Database().Collection("counters")
-
-	// Atomic increment: find and update counter, return new value
 	filter := bson.M{"_id": "movieCode"}
 	update := bson.M{"$inc": bson.M{"seq": 1}}
-	opts := options.FindOneAndUpdate().
-		SetUpsert(true).
-		SetReturnDocument(options.After)
+	opts := options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After)
 
 	var result struct {
 		ID  string `bson:"_id"`
 		Seq int    `bson:"seq"`
 	}
 
-	err := countersCol.FindOneAndUpdate(ctx, filter, update, opts).Decode(&result)
-	if err != nil {
-		return "", fmt.Errorf("failed to increment movie code counter: %w", err)
+	const maxRetries = 100
+	for i := 0; i < maxRetries; i++ {
+		if err := countersCol.FindOneAndUpdate(ctx, filter, update, opts).Decode(&result); err != nil {
+			return "", fmt.Errorf("failed to increment movie code counter: %w", err)
+		}
+
+		code := fmt.Sprintf("%04d", result.Seq)
+
+		// Check if this code is already taken by an existing movie
+		count, err := p.movieCol.CountDocuments(ctx, bson.M{"code": code})
+		if err != nil {
+			return "", fmt.Errorf("failed to check code uniqueness: %w", err)
+		}
+		if count == 0 {
+			log.Printf("[PIPELINE] Movie code counter: seq=%d, formatted=%s", result.Seq, code)
+			return code, nil
+		}
+		log.Printf("[PIPELINE] Movie code %s already exists, skipping to next", code)
 	}
 
-	// Format as zero-padded string (minimum 4 digits)
-	code := fmt.Sprintf("%04d", result.Seq)
-
-	log.Printf("[PIPELINE] Movie code counter: seq=%d, formatted=%s", result.Seq, code)
-	return code, nil
+	return "", fmt.Errorf("failed to find unique movie code after %d attempts", maxRetries)
 }
 
 // sendTelegramNotification sends a Telegram notification after successful movie creation
