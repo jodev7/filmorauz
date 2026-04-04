@@ -1,0 +1,28 @@
+# Watermark Removal Service Dependencies
+# Python packages required for the AI-based watermark removal pipeline
+# Install with: pip install -r requirements.txt
+
+# Core image/video processing
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0
+scikit-image>=0.21.0
+
+# OCR for text watermark detection
+easyocr>=1.7.0
+
+# Utilities
+tqdm>=4.65.0
+python-dotenv>=1.0.0
+
+# Optional: YOLO for logo/watermark detection
+# Uncomment if using YOLO-based detection
+# ultralytics>=8.0.0
+
+# Optional: LaMa for AI inpainting (PRO mode)
+# Uncomment if using LaMa inpainting
+# simple-lama-inpainting>=0.1.0
+
+# Optional GPU support (install separately if needed)
+# torch>=2.0.0
+# torchvision>=0.15.0

@@ -1,0 +1,86 @@
+"""
+Source Configuration
+Contains search endpoints and configuration for each source
+"""
+from typing import List, Dict, Any
+
+# Source-specific search configuration
+SOURCES = {
+    "uzmovi": {
+        "base_url": "https://uzmovi.tv",
+        "search_paths": [
+            "/search",  # GET /search?q=query (primary)
+            "/index.php?do=search",  # POST fallback
+            "/",
+        ],
+        "search_method": "GET",  # POST or GET
+        "search_params": {},  # Additional params for GET
+        "search_param_key": "q",  # query param name
+    },
+    "freekino": {
+        "base_url": "https://freekino.net",
+        "search_paths": [
+            "/index.php",
+            "/search",
+            "/",
+        ],
+        "search_method": "POST",
+        "search_params": {
+            "do": "search",
+            "subaction": "search",
+        },
+        "search_param_key": "story",
+    },
+    "asilmedia": {
+        "base_url": "https://asilmedia.org",
+        "search_paths": [
+            "/index.php?do=search",
+            "/search",
+            "/",
+        ],
+        "search_method": "POST",
+        "search_params": {
+            "do": "search",
+            "subaction": "search",
+        },
+        "search_param_key": "story",
+    },
+    "kinolar": {
+        "base_url": "https://kinolar.uz",
+        "search_paths": [
+            "/index.php",
+            "/search",
+            "/",
+        ],
+        "search_method": "POST",  # Uses POST for search
+        "search_params": {
+            "do": "search",
+            "subaction": "search",
+        },
+        "search_param_key": "story",
+    },
+    "manual": {
+        "base_url": "",
+        "search_paths": [],
+        "search_method": "NONE",
+        "search_params": {},
+        "search_param_key": "",
+    },
+}
+
+
+def get_source_config(source: str) -> Dict[str, Any]:
+    """Get configuration for a source"""
+    return SOURCES.get(source, {})
+
+
+def get_search_paths(source: str) -> List[str]:
+    """Get search path candidates for a source"""
+    config = get_source_config(source)
+    return config.get("search_paths", ["/"])
+
+
+def get_base_url(source: str) -> str:
+    """Get base URL for a source"""
+    config = get_source_config(source)
+    return config.get("base_url", "")

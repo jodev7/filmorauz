@@ -1,0 +1,75 @@
+# Environment — never commit these
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env.local
+
+# Keep the templates
+!backend/.env.dev
+!backend/.env.prod
+!frontend/.env.dev
+!frontend/.env.prod
+
+# Go
+backend/filmorauz-api
+backend/vendor/
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Build output
+dist/
+build/
+
+# Uploads & media
+uploads/
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.wmv
+*.flv
+*.webm
+*.m4v
+*.mpg
+*.mpeg
+*.m3u8
+
+# Logs & temp
+*.log
+logs/
+tmp/
+temp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+
+#Claude settings
+.claude
+
+
+#Worker
+worker/readyvideo
+
+
+
+
+venv/
+parser/venv/
+.venv/
+node_modules/
+uploads/
+*.mp4
+*.mkv
+*.avi
+*.mov
+.env

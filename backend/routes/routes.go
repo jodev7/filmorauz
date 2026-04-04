@@ -1,0 +1,305 @@
+package routes
+
+import (
+	"github.com/filmorauz/backend/handlers"
+	"github.com/filmorauz/backend/middleware"
+	"github.com/filmorauz/backend/services"
+	"github.com/gin-gonic/gin"
+)
+
+func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler) {
+	api := r.Group("/api")
+
+	// Health check
+	api.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ok"})
+	})
+
+	// Telegram Auth routes (public)
+	api.POST("/auth/telegram/start", authHandler.TelegramAuthStart)
+	api.POST("/auth/telegram/complete", authHandler.TelegramAuthComplete)
+	api.GET("/auth/telegram/status/:code", authHandler.TelegramAuthStatus)
+
+	// Telegram notification route (for worker to call after movie creation)
+	api.POST("/telegram/notify-movie", telegramHandler.NotifyMovie)
+	api.GET("/telegram/health", telegramHandler.HealthCheck)
+
+	// Protected auth routes
+	api.GET("/auth/me", middleware.RequireAuthNoBan(authService), authHandler.CurrentUser)
+	api.PATCH("/auth/me", middleware.RequireAuth(authService), authHandler.UpdateProfile)
+	api.PATCH("/auth/me/language", middleware.RequireAuth(authService), authHandler.UpdateLanguageCode)
+	api.POST("/auth/upload/profile-image", middleware.RequireAuth(authService), uploadHandler.UploadProfileImage)
+	api.PATCH("/auth/profile-style", middleware.RequireAuth(authService), authHandler.UpdateProfileStyle)
+	api.PATCH("/auth/privacy", middleware.RequireAuth(authService), authHandler.UpdatePrivacy)
+	api.POST("/auth/logout", middleware.RequireAuth(authService), authHandler.Logout)
+
+	// Ban appeal routes (for banned users)
+	appeals := api.Group("/appeals")
+	appeals.Use(middleware.RequireAuth(authService))
+	{
+		appeals.POST("", banAppealHandler.CreateAppeal)   // Submit appeal (banned users only)
+		appeals.GET("/me", banAppealHandler.GetMyAppeals) // Get my appeals
+	}
+
+	// Notification routes (for all authenticated users)
+	notifications := api.Group("/notifications")
+	notifications.Use(middleware.RequireAuth(authService))
+	{
+		notifications.GET("", notificationHandler.GetNotifications)
+		notifications.GET("/unread-count", notificationHandler.GetUnreadCount)
+		notifications.PATCH("/:id/read", notificationHandler.MarkAsRead)
+		notifications.PATCH("/read-all", notificationHandler.MarkAllAsRead)
+	}
+
+	// User-protected routes (history, favorites)
+	user := api.Group("/user")
+	user.Use(middleware.RequireAuth(authService))
+	{
+		// Watch history
+		user.POST("/history/watch", userHandler.RecordWatchHistory)
+		user.GET("/history", userHandler.GetWatchHistory)
+
+		// Continue Watching
+		user.GET("/continue-watching", userHandler.GetContinueWatching)
+
+		// Favorites
+		user.POST("/favorites/:movieId", userHandler.AddFavorite)
+		user.DELETE("/favorites/:movieId", userHandler.RemoveFavorite)
+		user.GET("/favorites", userHandler.GetFavorites)
+	}
+
+	// Watch progress (auth required)
+	watch := api.Group("/watch")
+	watch.Use(middleware.RequireAuth(authService))
+	{
+		watch.POST("/:movieId/progress", userHandler.SaveWatchProgress)
+		watch.POST("/:movieId/complete", userHandler.MarkWatchComplete)
+	}
+
+	// Public view counter (no auth required) - must be before :slug routes
+	api.POST("/movies/:id/view", userHandler.RecordView)
+
+	// Public user profile (no auth required)
+	api.GET("/users/:id", userHandler.GetPublicProfile)
+
+	// Public movie routes
+	api.GET("/movies", movieHandler.ListMovies)
+	api.GET("/movies/trending", movieHandler.GetTrendingMovies)
+	// Movie by slug (must come before :id routes to avoid slug being treated as id)
+	api.GET("/movies/slug/:slug", movieHandler.GetMovieBySlug)
+	// Movie by ID and recommendations
+	api.GET("/movies/:id", movieHandler.GetMovieByID)
+	api.GET("/movies/:id/recommendations", movieHandler.GetRecommendations)
+	api.GET("/search", movieHandler.SearchMovies)
+
+	// Protected movie watch endpoint (requires auth + premium check)
+	v1Watch := api.Group("/v1")
+	v1Movies := v1Watch.Group("/movies")
+	v1Movies.Use(middleware.RequireAuth(authService))
+	{
+		v1Movies.GET("/:id/watch", movieHandler.GetMovieWatchSource)
+	}
+
+	// Movie rating routes (v1)
+	v1 := api.Group("/v1")
+	{
+		// Rating summary (public - optional auth to get user rating)
+		v1.GET("/movies/:id/rating-summary", middleware.OptionalAuth(authService), ratingHandler.GetRatingSummary)
+
+		// Rating (auth required)
+		rating := v1.Group("/movies/:id/rating")
+		rating.Use(middleware.RequireAuth(authService))
+		{
+			rating.POST("", ratingHandler.SetRating)
+			rating.DELETE("", ratingHandler.DeleteRating)
+		}
+
+		// Series rating summary (public - optional auth to get user rating)
+		v1.GET("/series/:id/rating-summary", middleware.OptionalAuth(authService), ratingHandler.GetSeriesRatingSummary)
+
+		// Series rating (auth required)
+		seriesRating := v1.Group("/series/:id/rating")
+		seriesRating.Use(middleware.RequireAuth(authService))
+		{
+			seriesRating.POST("", ratingHandler.SetSeriesRating)
+			seriesRating.DELETE("", ratingHandler.DeleteSeriesRating)
+		}
+	}
+
+	// Share routes (public)
+	api.POST("/movies/share", shareHandler.CreateShare)
+	api.POST("/shares/:code/open", shareHandler.RecordShareOpen)
+	api.GET("/movies/share-stats", shareHandler.GetMovieShareStats)
+
+	// User share stats (auth required)
+	userShares := api.Group("/user")
+	userShares.Use(middleware.RequireAuth(authService))
+	{
+		userShares.GET("/share-stats", shareHandler.GetUserShareStats)
+	}
+
+	// Public movie code lookup (for Telegram bot)
+	api.GET("/public/movies/code/:code", movieHandler.GetMovieByCode)
+
+	// Ingestion routes (public for admin UI - auth handled separately)
+	api.GET("/ingestion/search", ingestionHandler.SearchSource)
+	api.GET("/ingestion/details", ingestionHandler.GetMovieDetails)
+	api.GET("/ingestion/catalog/categories", ingestionHandler.GetCatalogCategories)
+	api.GET("/ingestion/catalog", ingestionHandler.ListCatalog)
+
+	// Progress endpoint is public - called by parser without auth
+	api.POST("/ingestion/jobs/:id/progress", ingestionHandler.UpdateJobProgress)
+
+	// Process endpoint - triggers worker to process downloaded video
+	api.POST("/ingestion/jobs/:id/process", ingestionHandler.ProcessIngestionJob)
+
+	// Worker claim endpoint - worker calls this to get a job for ffmpeg processing
+	// Returns job where steps.download=true and steps.process=false
+	api.GET("/ingestion/jobs/worker/claim", ingestionHandler.WorkerClaimJob)
+
+	// Admin routes — protected by JWT and admin role check
+	admin := api.Group("/admin")
+	admin.Use(middleware.RequireAdmin(authService))
+	{
+		// Movie management
+		admin.POST("/movies", movieHandler.CreateMovie)
+		admin.PUT("/movies/:id", movieHandler.UpdateMovie)
+		admin.DELETE("/movies/:id", movieHandler.DeleteMovie)
+
+		// Ingestion job management
+		admin.POST("/ingestion/jobs", ingestionHandler.CreateIngestionJob)
+		admin.GET("/ingestion/jobs", ingestionHandler.ListIngestionJobs)
+		admin.GET("/ingestion/jobs/:id", ingestionHandler.GetIngestionJob)
+		admin.POST("/ingestion/jobs/:id/retry", ingestionHandler.RetryIngestionJob)
+		admin.DELETE("/ingestion/jobs/:id", ingestionHandler.DeleteIngestionJob)
+		// Manual import from direct video URL
+		admin.POST("/ingestion/manual", ingestionHandler.CreateManualJob)
+		// Import from catalog
+		admin.POST("/ingestion/import", ingestionHandler.ImportFromCatalog)
+
+		// User management
+		admin.GET("/dashboard/stats", adminUserHandler.DashboardStats)
+		admin.GET("/analytics/top-movies", adminUserHandler.GetTopMovies)
+		admin.GET("/analytics/top-series", adminUserHandler.GetTopSeries)
+		admin.GET("/analytics/users", adminUserHandler.GetUserMetrics)
+		admin.GET("/users", adminUserHandler.ListUsers)
+		admin.GET("/users/banned", adminUserHandler.GetBannedUsers)
+		admin.GET("/users/ban-history", adminUserHandler.GetBanHistory)
+		admin.PATCH("/users/:id/role/:role", adminUserHandler.UpdateUserRole)
+		admin.PATCH("/v1/users/:id/role", adminUserHandler.UpdateUserRole)
+		admin.PATCH("/users/:id/premium", adminUserHandler.UpdateUserPremium)
+		admin.POST("/users/:id/ban", adminUserHandler.BanUser)
+		admin.DELETE("/users/:id/ban", adminUserHandler.UnbanUser)
+
+		// Ban appeals management
+		admin.GET("/appeals", banAppealHandler.GetAppeals)
+		admin.GET("/appeals/stats", banAppealHandler.GetAppealStats)
+		admin.GET("/appeals/pending-count", banAppealHandler.GetPendingCount)
+		admin.POST("/appeals/:id/review", banAppealHandler.ReviewAppeal)
+
+		// Share analytics
+		admin.GET("/share-stats", shareHandler.GetAdminShareStats)
+
+		// Collection management
+		admin.POST("/collections", collectionHandler.CreateCollection)
+		admin.GET("/collections", collectionHandler.ListCollections)
+		admin.GET("/collections/:id", collectionHandler.GetCollection)
+		admin.PUT("/collections/:id", collectionHandler.UpdateCollection)
+		admin.DELETE("/collections/:id", collectionHandler.DeleteCollection)
+	}
+
+	// Public collection routes
+	collections := api.Group("/collections")
+	{
+		collections.GET("", collectionHandler.GetCollections)
+		collections.GET("/featured", collectionHandler.GetFeaturedCollections)
+		collections.GET("/slug/:slug", collectionHandler.GetCollectionBySlug)
+	}
+
+	// Comment routes (v1)
+	v1Comments := api.Group("/v1")
+	{
+		// Public - get comments by target (movie or episode)
+		v1Comments.GET("/comments", commentHandler.GetCommentsByTarget)
+
+		// Public - get movie comments (backward compatibility)
+		v1Comments.GET("/movies/:id/comments", commentHandler.GetComments)
+
+		// Auth required - create comment, reply, edit, delete
+		comments := v1Comments.Group("/movies/:id/comments")
+		comments.Use(middleware.RequireAuth(authService))
+		{
+			comments.POST("", commentHandler.CreateComment)
+		}
+
+		// Reply to comment
+		replies := v1Comments.Group("/comments")
+		replies.Use(middleware.RequireAuth(authService))
+		{
+			replies.POST("/:id/replies", commentHandler.CreateReply)
+			replies.PUT("/:id", commentHandler.UpdateComment)
+			replies.DELETE("/:id", commentHandler.DeleteComment)
+		}
+	}
+
+	// Admin comment moderation - under /api/v1/admin/ (requires admin role)
+	v1Admin := v1.Group("/admin")
+	v1Admin.Use(middleware.RequireAdmin(authService))
+	{
+		v1Admin.GET("/comments", commentHandler.AdminGetComments)
+		v1Admin.PATCH("/comments/:id/status", commentHandler.AdminUpdateCommentStatus)
+		v1Admin.DELETE("/comments/:id", commentHandler.AdminDeleteComment)
+		v1Admin.GET("/comment-settings", commentHandler.AdminGetCommentSettings)
+		v1Admin.PUT("/comment-settings", commentHandler.AdminUpdateCommentSettings)
+	}
+
+	// Series routes
+	// NOTE: More specific routes (with more path segments) must come BEFORE less specific ones
+	// to avoid wildcard conflicts in Gin
+
+	// Season routes - must come before series/:slug
+	seasons := api.Group("/seasons")
+	{
+		seasons.GET("/:id/episodes", seriesHandler.GetEpisodes)
+	}
+
+	// Episode routes
+	episodes := api.Group("/episodes")
+	{
+		episodes.GET("/:id", seriesHandler.GetEpisode)
+	}
+
+	// Series by ID routes - must come before /series/:slug
+	seriesByID := api.Group("/series-by-id")
+	{
+		seriesByID.GET("/:id/seasons", seriesHandler.GetSeasons)
+	}
+
+	// Series routes - least specific (just /series and /series/:slug)
+	series := api.Group("/series")
+	{
+		series.GET("", seriesHandler.ListSeries)
+		series.GET("/:slug", seriesHandler.GetSeriesBySlug)
+	}
+
+	// Admin series management
+	adminSeries := admin.Group("/series")
+	{
+		adminSeries.POST("", seriesHandler.CreateSeries)
+		adminSeries.PUT("/:id", seriesHandler.UpdateSeries)
+		adminSeries.DELETE("/:id", seriesHandler.DeleteSeries)
+		adminSeries.POST("/:id/seasons", seriesHandler.CreateSeason)
+	}
+
+	// Admin season/episode management
+	adminSeasons := admin.Group("/seasons")
+	{
+		adminSeasons.POST("/:id/episodes", seriesHandler.CreateEpisode)
+	}
+
+	// Admin episode management
+	adminEpisodes := admin.Group("/episodes")
+	{
+		adminEpisodes.DELETE("/:id", seriesHandler.DeleteEpisode)
+	}
+}
