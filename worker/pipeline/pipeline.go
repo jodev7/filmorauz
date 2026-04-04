@@ -385,7 +385,7 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	metadataSource := "parser"
 
 	if p.enricher != nil && metadata != nil {
-		enrichedMetadata, metadataSource, err = p.enricher.EnrichMetadata(ctx, metadata)
+		enrichedMetadata, metadataSource, err = p.enricher.EnrichMetadata(ctx, metadata, job.Source)
 		if err != nil {
 			log.Printf("[PIPELINE] Metadata enrichment failed: %v", err)
 			enrichedMetadata = MergeMetadata(nil, metadata)
@@ -541,7 +541,8 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 						log.Printf("[PIPELINE] Failed to upload branded poster: %v, using unbranded", uploadErr)
 					} else {
 						finalPosterURL = brandedURL
-						log.Printf("[PIPELINE] Branded poster ready: %s", brandedURL)
+						posterGenerated = true // branded+localized poster was produced
+						log.Printf("[PIPELINE] Branded poster ready: %s (poster_generated=true)", brandedURL)
 						log.Printf("[PIPELINE] Localization attempted: %v, succeeded: %v", localizationAttempted, localizationSucceeded)
 
 						// Cleanup temp file
@@ -1629,9 +1630,6 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 	log.Printf("[PIPELINE] Genres: %v", enrichedMetadata.Genres)
 	log.Printf("[PIPELINE] Countries: %v", enrichedMetadata.Countries)
 	log.Printf("[PIPELINE] Duration: %d minutes", enrichedMetadata.Duration)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
 	// FIRST: Check if movie with this slug already exists
 	existingMovie := bson.M{"slug": displaySlug}

@@ -430,6 +430,9 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 		log.Printf("[JOB REPO] Deriving status from stage: stage=%q -> status=%q", progress.Stage, effectiveStatus)
 	}
 
+	log.Printf("[JOB REPO] UpdateProgress: id=%s stage=%q status=%q progress=%d downloaded=%d total=%d steps_download=%v",
+		id, progress.Stage, effectiveStatus, progress.Progress, progress.DownloadedBytes, progress.TotalBytes, progress.StepsDownload)
+
 	// Build update - always set all fields from progress (allow 0 values)
 	update := bson.M{
 		"$set": bson.M{
@@ -450,15 +453,12 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 		log.Printf("[JOB REPO] Setting steps.download = true")
 		update["$set"].(bson.M)["steps.download"] = true
 
-		// Also update stage to process when download completes
-		// This ensures dashboard shows "processing" instead of stale "downloading"
+		// On download complete: save local_path but do NOT force stage/status —
+		// worker sets those explicitly when it starts processing.
+		// Forcing stage="process" here caused the frontend to leave "download" stage
+		// before the progress bar could show 100%, producing a visible jump.
 		if progress.StepsDownload {
-			update["$set"].(bson.M)["stage"] = "process"
-			update["$set"].(bson.M)["status"] = "processing"
-			log.Printf("[JOB REPO] Updated stage=process, status=processing (download completed)")
-
-			// NEW: Also update local_path when file_path is provided
-			// This ensures worker can find the downloaded file
+			log.Printf("[JOB REPO] Download complete (steps_download=true); keeping stage=%q until worker advances it", progress.Stage)
 			if progress.FilePath != "" {
 				update["$set"].(bson.M)["local_path"] = progress.FilePath
 				log.Printf("[JOB REPO] Updated local_path=%s (download completed)", progress.FilePath)

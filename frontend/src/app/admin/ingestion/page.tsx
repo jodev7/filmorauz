@@ -750,12 +750,14 @@ function JobsTab({
                 {/* Progress bar */}
                 <div className="w-64">
                   {(() => {
-                    const displayProgress =
-                      (activeStage === "downloading" || activeStage === "download") &&
-                      safeJob.total_bytes > 0 &&
-                      safeJob.downloaded_bytes >= 0
-                        ? (safeJob.downloaded_bytes / safeJob.total_bytes) * 100
-                        : safeJob.progress;
+                    const bytePercent =
+                      safeJob.total_bytes > 0 && safeJob.downloaded_bytes > 0
+                        ? Math.min((safeJob.downloaded_bytes / safeJob.total_bytes) * 100, 100)
+                        : null;
+                    const displayProgress = bytePercent !== null ? bytePercent : safeJob.progress;
+                    if (process.env.NODE_ENV !== "production") {
+                      console.debug(`[progress] job=${safeJob.id} stage=${activeStage} bytes=${safeJob.downloaded_bytes}/${safeJob.total_bytes} bytePercent=${bytePercent?.toFixed(1)} coarse=${safeJob.progress} display=${displayProgress.toFixed(1)}`);
+                    }
                     return (
                       <>
                         <div className="flex justify-between text-xs text-gray-400 mb-1">

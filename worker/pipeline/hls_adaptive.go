@@ -176,9 +176,12 @@ func getRenditionNames(renditions []RenditionConfig) []string {
 func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int)) error {
 	log.Printf("[HLS] Creating base video with delogo + logo filters...")
 
-	// delogo filter: x=10 (from left), y=10 (from top), w=150 (width), h=50 (height)
-	// This targets the top-left region where many source watermarks appear
-	delogoFilter := "delogo=x=10:y=10:w=150:h=50"
+	// delogo filters for known source watermarks:
+	//   top-right    — Asilmedia logo (asilmedia.org), ~200x60px from top-right corner
+	//   bottom-right — Yangi.tv logo,                  ~200x50px from bottom-right corner
+	// Chained with comma; iw/ih expressions resolve to actual video dimensions at runtime.
+	delogoFilter := "delogo=x=iw-205:y=5:w=200:h=60," +
+		"delogo=x=iw-205:y=ih-55:w=200:h=50"
 
 	// Build filter graph for logo overlay.
 	// scale=trunc(iw/2)*2:trunc(ih/2)*2 ensures even dimensions required by libx264.

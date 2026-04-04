@@ -68,7 +68,7 @@ type SearchResultsResponse struct {
 // EnrichMetadata enriches movie metadata using external sources
 // Priority: TMDB (primary) -> Parser (fallback)
 // Returns enriched metadata and the source (tmdb/parser/fallback)
-func (e *MetadataEnricher) EnrichMetadata(ctx context.Context, parserMetadata *models.ParsedMovieMetadata) (*models.EnrichedMetadata, string, error) {
+func (e *MetadataEnricher) EnrichMetadata(ctx context.Context, parserMetadata *models.ParsedMovieMetadata, jobSource string) (*models.EnrichedMetadata, string, error) {
 	if parserMetadata == nil {
 		return nil, "parser", fmt.Errorf("parser metadata is nil")
 	}
@@ -129,8 +129,8 @@ func (e *MetadataEnricher) EnrichMetadata(ctx context.Context, parserMetadata *m
 	}
 
 	// STEP 2: Fallback to parser service (but NEVER use parser posters)
-	log.Printf("[METADATA] Falling back to parser enrichment for: %s", title)
-	enriched, err := e.searchAndEnrich(ctx, title, parserMetadata.Year)
+	log.Printf("[METADATA] Falling back to parser enrichment for: %s (source=%s)", title, jobSource)
+	enriched, err := e.searchAndEnrich(ctx, title, parserMetadata.Year, jobSource)
 	if err != nil {
 		log.Printf("[METADATA] Parser enrichment failed: %v, using fallback", err)
 		fallback := e.createFallbackMetadataFromParser(parserMetadata)
@@ -213,14 +213,17 @@ func truncateForLog(s string, maxLen int) string {
 }
 
 // searchAndEnrich searches for the movie and returns enriched metadata
-func (e *MetadataEnricher) searchAndEnrich(ctx context.Context, title string, year int) (*models.EnrichedMetadata, error) {
+func (e *MetadataEnricher) searchAndEnrich(ctx context.Context, title string, year int, jobSource string) (*models.EnrichedMetadata, error) {
 	// Build search URL
 	query := title
 	if year > 0 {
 		query = fmt.Sprintf("%s %d", title, year)
 	}
 
-	searchURL := fmt.Sprintf("%s/search?source=uzmovi&q=%s", e.parserURL, strings.ReplaceAll(query, " ", "+"))
+	if jobSource == "" {
+		jobSource = "uzmovi"
+	}
+	searchURL := fmt.Sprintf("%s/search?source=%s&q=%s", e.parserURL, jobSource, strings.ReplaceAll(query, " ", "+"))
 
 	log.Printf("[METADATA] Searching: %s", searchURL)
 
@@ -274,7 +277,7 @@ func (e *MetadataEnricher) searchAndEnrich(ctx context.Context, title string, ye
 		Translation:    first.Translation,
 		PosterURL:      first.PosterURL,
 		BackdropURL:    first.BackdropURL,
-		SourceProvider: "uzmovi",
+		SourceProvider: jobSource,
 		SourceURL:      "",
 	}, nil
 }
