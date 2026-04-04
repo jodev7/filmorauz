@@ -133,31 +133,31 @@ def _parallel_download_worker(url: str, headers: dict, part_ranges: list, temp_d
     
     # Monitor progress while threads are running
     last_update_time = time.time()
-    min_time_for_update = 0.5  # 0.5 seconds
-    
+    last_reported_progress = -1
+
     while any(t.is_alive() for t in threads):
         # Calculate total downloaded bytes from part files
         total_downloaded = 0
         for part_file in part_files:
             if os.path.exists(part_file):
                 total_downloaded += os.path.getsize(part_file)
-        
+
         with progress_lock:
             g_downloaded_bytes = total_downloaded
-        
-        # Report progress periodically
+
+        # Report when +1% gained OR 2s elapsed (avoid per-chunk DB writes)
         current_time = time.time()
-        if current_time - last_update_time >= min_time_for_update:
-            elapsed = time.time() - g_start_time
-            if elapsed > 0 and g_total_bytes > 0:
-                speed = g_downloaded_bytes / elapsed
-                eta = int((g_total_bytes - g_downloaded_bytes) / speed) if speed > 0 else 0
-                progress = int((g_downloaded_bytes / g_total_bytes) * 100) if g_total_bytes > 0 else 0
-                
+        elapsed = current_time - g_start_time
+        if elapsed > 0 and g_total_bytes > 0:
+            speed = g_downloaded_bytes / elapsed
+            eta = int((g_total_bytes - g_downloaded_bytes) / speed) if speed > 0 else 0
+            progress = int((g_downloaded_bytes / g_total_bytes) * 100)
+
+            if progress > last_reported_progress or current_time - last_update_time >= 2.0:
                 if progress_callback:
                     progress_callback(progress, g_downloaded_bytes, g_total_bytes, speed, eta)
-            
-            last_update_time = current_time
+                last_reported_progress = progress
+                last_update_time = current_time
         
         time.sleep(0.1)
     
@@ -590,8 +590,7 @@ class DownloaderService:
         # Initialize progress tracking variables
         last_reported_bytes = 0
         last_update_time = time.time()
-        min_bytes_for_update = 256 * 1024  # 256 KB minimum between updates
-        min_time_for_update = 0.5  # 0.5 seconds minimum between updates
+        last_reported_progress = -1  # track last % sent; update on +1% OR 2s elapsed
         
         # Send initial progress to backend
         if backend_job_id:
@@ -666,19 +665,13 @@ class DownloaderService:
                                 "message": f"Downloading... {downloaded_mb:.1f} / {total_mb:.1f} MB ({progress_percent}%)",
                             })
                         
-                        # Report progress to backend - send more frequently
+                        # Report to backend on +1% progress OR every 2s (avoid per-chunk DB writes)
                         current_time = time.time()
-                        bytes_since_last_update = downloaded_bytes - last_reported_bytes
                         time_since_last_update = current_time - last_update_time
-                        
-                        # Send update when:
-                        # - bytes changed by at least 256KB, OR
-                        # - time elapsed is at least 0.5 seconds
-                        # This ensures smooth KB/MB updates in UI
                         should_update = (
                             backend_job_id and (
-                                bytes_since_last_update >= min_bytes_for_update or
-                                time_since_last_update >= min_time_for_update
+                                progress_percent > last_reported_progress or
+                                time_since_last_update >= 2.0
                             )
                         )
                         
@@ -699,6 +692,7 @@ class DownloaderService:
                                 "message": f"Downloading... {downloaded_mb:.1f} / {total_mb:.1f} MB ({progress_percent}%)"
                             })
                             last_reported_bytes = downloaded_bytes
+                            last_reported_progress = progress_percent
                             last_update_time = current_time
             
             # Download completed successfully

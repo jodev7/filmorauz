@@ -268,27 +268,21 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		// Continue processing - this is not fatal
 	}
 
-	// Update status to downloading
-	if err := p.updateStatus(jobID, models.IngestionStatusDownloading, 20); err != nil {
-		return fmt.Errorf("failed to update status to downloading: %w", err)
-	}
-
 	// Step 2: Get video path
 	// If parser already downloaded the file (localPath != ""), use it
 	// Otherwise, downloadVideo will check job.LocalPath and use that if available
 	var videoPath string
 	if localPath != "" {
 		videoPath = localPath
-		log.Printf("[WORKER] Using input file: %s", videoPath)
+		log.Printf("[STAGE] download complete — using parser-downloaded file: %s", videoPath)
 	} else {
 		videoPath, err = p.downloadVideo(job, metadata)
 		if err != nil {
 			return fmt.Errorf("download failed: %w", err)
 		}
+		log.Printf("[STAGE] download complete — videoPath: %s", videoPath)
 	}
-	defer p.cleanupFile(videoPath)
-
-	log.Printf("[PIPELINE] Downloaded video to: %s", videoPath)
+	// NOTE: do NOT defer cleanupFile here — file must survive retries until processing succeeds
 
 	// Update status to processing
 	if err := p.updateStatus(jobID, models.IngestionStatusProcessing, 50); err != nil {
@@ -311,13 +305,18 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	log.Printf("[PIPELINE] Canonical title source: %s", canonicalTitle)
 
 	// Step 3: Process video (watermark removal + HLS conversion)
+	log.Printf("[STAGE] process starting — input: %s, folder: %s", videoPath, canonicalFolderName)
 	hlsPath, err := p.processVideo(job, localPath, canonicalFolderName)
 	if err != nil {
 		return fmt.Errorf("processing failed: %w", err)
 	}
 	defer p.cleanupDir(hlsPath)
+	log.Printf("[STAGE] process complete — hlsPath: %s", hlsPath)
 
-	log.Printf("[PIPELINE] Processed video to: %s", hlsPath)
+	// Mark process step done so ClaimNextProcessingJob won't re-pick this job
+	if stepErr := p.jobRepo.UpdateStep(ctx, jobID, "process"); stepErr != nil {
+		log.Printf("[STAGE] WARNING: failed to mark process step: %v", stepErr)
+	}
 
 	// CRITICAL: Mark source file as deleted and update with processed path
 	// This clears the stale local_path (parser/downloads) and sets output_path
@@ -334,6 +333,7 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	}
 
 	// Step 4: Upload processed files (MODE-based finalization)
+	log.Printf("[STAGE] upload starting — hlsPath: %s", hlsPath)
 	if err := p.updateStatus(jobID, models.IngestionStatusFinalizingStorage, 65); err != nil {
 		log.Printf("[PIPELINE] WARNING: Failed to update status to finalizing_storage: %v", err)
 	}
@@ -341,8 +341,7 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	if err != nil {
 		return fmt.Errorf("upload failed: %w", err)
 	}
-
-	log.Printf("[PIPELINE] Finalized to: %s", streamingURL)
+	log.Printf("[STAGE] upload complete — streamingURL: %s", streamingURL)
 
 	// Update final output path based on MODE
 	// After finalization, the output_path should reflect the final location
@@ -754,10 +753,16 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 
 	// Create movie with all enriched data
 	// This is a CRITICAL step - movie MUST be created
+	log.Printf("[STAGE] saving movie to MongoDB — title: %s, streamingURL: %s", enrichedMetadata.Title, streamingURL)
 	movieResult, err := p.createMovieInDatabaseWithEnrichment(ctx, job, enrichedMetadata, streamingURL, finalPosterURL, originalPosterURL, posterGenerated, finalBackdropURL, originalBackdropURL, backdropGenerated, metadataSource)
 	if err != nil {
 		return fmt.Errorf("failed to create movie in database: %w", err)
 	}
+	log.Printf("[STAGE] movie saved to MongoDB")
+
+	// Both upload and MongoDB save succeeded — safe to delete the original source file
+	log.Printf("[STAGE] deleting source file after full success: %s", videoPath)
+	p.cleanupFile(videoPath)
 
 	// Update job with movie ID and movie data
 	if movieResult != nil {

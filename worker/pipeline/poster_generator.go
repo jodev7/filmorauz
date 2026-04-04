@@ -172,18 +172,21 @@ func (pg *PosterGenerator) validatePosterURL(ctx context.Context, posterURL stri
 		return false, nil
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "HEAD", posterURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", posterURL, nil)
 	if err != nil {
 		return false, err
 	}
+	// Only fetch first 512 bytes to confirm reachability without downloading the full image
+	req.Header.Set("Range", "bytes=0-511")
 
 	resp, err := pg.httpClient.Do(req)
 	if err != nil {
 		return false, err
 	}
 	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
 
-	return resp.StatusCode == http.StatusOK, nil
+	return resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent, nil
 }
 
 // isWatermarkedPoster checks if a poster URL is from a watermarked source

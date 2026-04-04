@@ -729,7 +729,7 @@ function JobsTab({
               <div className="flex items-center gap-4">
                 {/* Status indicator */}
                 <div className={`p-2 rounded-full ${statusConfig.color} bg-opacity-20`}>
-                  <StatusIcon className={`w-5 h-5 ${activeStage === "parsing" || activeStage === "downloading" ? "animate-spin" : ""}`} />
+                  <StatusIcon className={`w-5 h-5 ${activeStage === "parsing" || activeStage === "downloading" || activeStage === "download" ? "animate-spin" : ""}`} />
                 </div>
                 
                 {/* Job info */}
@@ -751,7 +751,7 @@ function JobsTab({
                 <div className="w-64">
                   {(() => {
                     const displayProgress =
-                      activeStage === "downloading" &&
+                      (activeStage === "downloading" || activeStage === "download") &&
                       safeJob.total_bytes > 0 &&
                       safeJob.downloaded_bytes >= 0
                         ? (safeJob.downloaded_bytes / safeJob.total_bytes) * 100

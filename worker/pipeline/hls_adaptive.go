@@ -71,9 +71,9 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	renditions := p.getApplicableRenditions(inputWidth, inputHeight)
 	log.Printf("[HLS] Generating %d renditions: %v", len(renditions), getRenditionNames(renditions))
 
-	// Report progress: starting watermark/prepare stage (~45%)
+	// Report progress: starting watermark removal stage (~45%)
 	if jobStatusCallback != nil {
-		jobStatusCallback(models.IngestionStatusProcessing, 45)
+		jobStatusCallback(models.IngestionStatusRemovingWatermark, 45)
 	}
 
 	// Step 1: Create intermediate base video with delogo + logo applied
