@@ -499,32 +499,41 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 
 		// If we have a generated poster (or original), add logo overlay and localize
 		if finalPosterURL != "" {
-			// First we need to download the poster locally to add logo
-			// Check if poster is a local path or needs to be downloaded
+			log.Printf("[PIPELINE] [POSTER-LOGO] Starting logo overlay for: %s", finalPosterURL)
+
+			// First we need the poster as a local file for Go image processing.
 			var posterLocalPath string
 
-			// If poster is a local path (dev mode), use it directly
-			if strings.HasPrefix(finalPosterURL, "/uploads") || !strings.HasPrefix(finalPosterURL, "http") {
-				// It's already a local path
-				posterLocalPath = strings.TrimPrefix(finalPosterURL, "/uploads/")
+			// Priority 1: dev-mode stream URL → resolve to on-disk path directly
+			// avoids HTTP round-trip to backend which may not be running
+			if p.config.StorageConfig.Mode == "dev" {
+				if resolved := p.resolveStreamURLToLocalPath(finalPosterURL); resolved != "" {
+					if _, statErr := os.Stat(resolved); statErr == nil {
+						posterLocalPath = resolved
+						log.Printf("[PIPELINE] [POSTER-LOGO] Resolved local path: %s", posterLocalPath)
+					} else {
+						log.Printf("[PIPELINE] [POSTER-LOGO] Resolved path does not exist: %s (%v)", resolved, statErr)
+					}
+				}
+			}
+
+			// Priority 2: explicit /uploads path
+			if posterLocalPath == "" && (strings.HasPrefix(finalPosterURL, "/uploads") || !strings.HasPrefix(finalPosterURL, "http")) {
+				trimmed := strings.TrimPrefix(finalPosterURL, "/uploads/")
 				baseDir, _ := os.Getwd()
-				posterLocalPath = filepath.Join(baseDir, "uploads", posterLocalPath)
-			} else {
-				// It's a remote URL, download it
-				if p.config.StorageConfig.Mode == "dev" {
-					// Download to local path for development
-					posterLocalPath = filepath.Join(p.config.TempDir, "poster_download.jpg")
-					if err := p.downloadFile(finalPosterURL, posterLocalPath); err != nil {
-						log.Printf("[PIPELINE] Failed to download poster for logo overlay: %v", err)
-						posterLocalPath = ""
-					}
+				posterLocalPath = filepath.Join(baseDir, "uploads", trimmed)
+				log.Printf("[PIPELINE] [POSTER-LOGO] Using /uploads path: %s", posterLocalPath)
+			}
+
+			// Priority 3: HTTP download (remote URL or fallback)
+			if posterLocalPath == "" {
+				dlPath := filepath.Join(p.config.TempDir, "poster_download.jpg")
+				log.Printf("[PIPELINE] [POSTER-LOGO] Downloading poster from URL: %s", finalPosterURL)
+				if err := p.downloadFile(finalPosterURL, dlPath); err != nil {
+					log.Printf("[PIPELINE] [POSTER-LOGO] Download failed: %v — logo overlay will be skipped", err)
 				} else {
-					// Production: download to temp, add logo, upload
-					posterLocalPath = filepath.Join(p.config.TempDir, "poster_original.jpg")
-					if err := p.downloadFile(finalPosterURL, posterLocalPath); err != nil {
-						log.Printf("[PIPELINE] Failed to download poster for logo overlay: %v", err)
-						posterLocalPath = ""
-					}
+					posterLocalPath = dlPath
+					log.Printf("[PIPELINE] [POSTER-LOGO] Downloaded to: %s", dlPath)
 				}
 			}
 
@@ -653,38 +662,45 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		// ===== STEP 6d: ADD LOGO OVERLAY TO BACKDROP =====
 		// If we have a generated backdrop (or original), add logo overlay
 		if finalBackdropURL != "" {
-			// First we need to download the backdrop locally to add logo
-			// Check if backdrop is a local path or needs to be downloaded
+			log.Printf("[PIPELINE] [BACKDROP-LOGO] Starting logo overlay for: %s", finalBackdropURL)
+
 			var backdropLocalPath string
 
-			// If backdrop is a local path (dev mode), use it directly
-			if strings.HasPrefix(finalBackdropURL, "/uploads") || !strings.HasPrefix(finalBackdropURL, "http") {
-				// It's already a local path
-				backdropLocalPath = strings.TrimPrefix(finalBackdropURL, "/uploads/")
+			// Priority 1: dev-mode stream URL → resolve to on-disk path directly
+			if p.config.StorageConfig.Mode == "dev" {
+				if resolved := p.resolveStreamURLToLocalPath(finalBackdropURL); resolved != "" {
+					if _, statErr := os.Stat(resolved); statErr == nil {
+						backdropLocalPath = resolved
+						log.Printf("[PIPELINE] [BACKDROP-LOGO] Resolved local path: %s", backdropLocalPath)
+					} else {
+						log.Printf("[PIPELINE] [BACKDROP-LOGO] Resolved path does not exist: %s (%v)", resolved, statErr)
+					}
+				}
+			}
+
+			// Priority 2: explicit /uploads path
+			if backdropLocalPath == "" && (strings.HasPrefix(finalBackdropURL, "/uploads") || !strings.HasPrefix(finalBackdropURL, "http")) {
+				trimmed := strings.TrimPrefix(finalBackdropURL, "/uploads/")
 				baseDir, _ := os.Getwd()
-				backdropLocalPath = filepath.Join(baseDir, "uploads", backdropLocalPath)
-			} else {
-				// It's a remote URL, download it
-				if p.config.StorageConfig.Mode == "dev" {
-					// Download to local path for development
-					backdropLocalPath = filepath.Join(p.config.TempDir, "backdrop_download.jpg")
-					if err := p.downloadFile(finalBackdropURL, backdropLocalPath); err != nil {
-						log.Printf("[PIPELINE] Failed to download backdrop for logo overlay: %v", err)
-						backdropLocalPath = ""
-					}
+				backdropLocalPath = filepath.Join(baseDir, "uploads", trimmed)
+				log.Printf("[PIPELINE] [BACKDROP-LOGO] Using /uploads path: %s", backdropLocalPath)
+			}
+
+			// Priority 3: HTTP download
+			if backdropLocalPath == "" {
+				dlPath := filepath.Join(p.config.TempDir, "backdrop_download.jpg")
+				log.Printf("[PIPELINE] [BACKDROP-LOGO] Downloading from URL: %s", finalBackdropURL)
+				if err := p.downloadFile(finalBackdropURL, dlPath); err != nil {
+					log.Printf("[PIPELINE] [BACKDROP-LOGO] Download failed: %v — logo overlay will be skipped", err)
 				} else {
-					// Production: download to temp, add logo, upload
-					backdropLocalPath = filepath.Join(p.config.TempDir, "backdrop_original.jpg")
-					if err := p.downloadFile(finalBackdropURL, backdropLocalPath); err != nil {
-						log.Printf("[PIPELINE] Failed to download backdrop for logo overlay: %v", err)
-						backdropLocalPath = ""
-					}
+					backdropLocalPath = dlPath
+					log.Printf("[PIPELINE] [BACKDROP-LOGO] Downloaded to: %s", dlPath)
 				}
 			}
 
 			// Add logo overlay if we have a local backdrop
 			if backdropLocalPath != "" {
-				log.Printf("[PIPELINE] Using canonical folder for backdrop: %s", canonicalFolderName)
+				log.Printf("[PIPELINE] [BACKDROP-LOGO] Using canonical folder: %s", canonicalFolderName)
 
 				brandedPath, logoErr := p.posterGen.AddLogoOverlayForBackdrop(ctx, backdropLocalPath, canonicalFolderName)
 				if logoErr != nil {
@@ -696,7 +712,8 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 						log.Printf("[PIPELINE] Failed to upload branded backdrop: %v, using unbranded", uploadErr)
 					} else {
 						finalBackdropURL = brandedURL
-						log.Printf("[PIPELINE] Branded backdrop ready: %s", brandedURL)
+						backdropGenerated = true // logo was applied — mark generated regardless of AI
+						log.Printf("[PIPELINE] Branded backdrop ready: %s (backdrop_generated=true)", brandedURL)
 
 						// Cleanup temp file
 						if strings.Contains(brandedPath, p.config.TempDir) {
@@ -2221,6 +2238,21 @@ func (p *Pipeline) cleanupDir(path string) {
 }
 
 // downloadFile downloads a file from URL to local path
+// resolveStreamURLToLocalPath converts a dev-mode stream URL such as
+// "http://localhost:8080/stream/{folder}/poster.jpg" to the on-disk path
+// "uploads/movies/{folder}/poster.jpg" so we never need an HTTP round-trip
+// to the backend just to read a file we already wrote.
+func (p *Pipeline) resolveStreamURLToLocalPath(streamURL string) string {
+	baseURL := p.config.StorageConfig.BaseURL
+	prefix := baseURL + "/stream/"
+	if baseURL != "" && strings.HasPrefix(streamURL, prefix) {
+		rel := strings.TrimPrefix(streamURL, prefix) // e.g. "folder/poster.jpg"
+		baseDir, _ := os.Getwd()
+		return filepath.Join(baseDir, "uploads", "movies", rel)
+	}
+	return ""
+}
+
 func (p *Pipeline) downloadFile(url, localPath string) error {
 	resp, err := p.httpClient.Get(url)
 	if err != nil {

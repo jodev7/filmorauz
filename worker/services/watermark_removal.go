@@ -170,31 +170,39 @@ func (s *WatermarkRemovalService) removeViaHTTP(ctx context.Context, inputPath s
 	return &result, nil
 }
 
-// removeDirect executes Python script directly for watermark removal
+// removeDirect executes the watermark removal Python runner directly.
+// Uses worker/watermark_removal/run.py — a fixed-path script that correctly
+// sets sys.path before importing the watermark_removal package.
 func (s *WatermarkRemovalService) removeDirect(ctx context.Context, inputPath string) (*WatermarkRemovalResult, error) {
 	// Generate output path
 	outputDir := filepath.Dir(inputPath)
 	outputName := strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
 	outputPath := filepath.Join(outputDir, outputName+"_clean.mp4")
 
-	// Ensure temp directory exists
-	if err := os.MkdirAll(s.config.TempDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create temp dir: %w", err)
+	// Resolve the worker directory so we can find watermark_removal/run.py.
+	// The worker dir contains the watermark_removal/ Python package.
+	workerDir := s.resolveWorkerDir()
+	scriptPath := filepath.Join(workerDir, "watermark_removal", "run.py")
+
+	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+		log.Printf("[WATERMARK] Runner script not found at %s — watermark removal unavailable", scriptPath)
+		return &WatermarkRemovalResult{
+			Success:      true,
+			InputPath:    inputPath,
+			OutputPath:   inputPath,
+			FallbackUsed: true,
+			Warning:      fmt.Sprintf("watermark removal script not found: %s", scriptPath),
+		}, nil
 	}
 
-	// Create Python script for watermark removal
-	script := s.createPythonScript()
+	log.Printf("[WATERMARK] Using runner: %s", scriptPath)
+	log.Printf("[WATERMARK] Worker dir (PYTHONPATH): %s", workerDir)
 
-	// Write script to temp file
-	scriptPath := filepath.Join(s.config.TempDir, "watermark_remove.py")
-	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
-		return nil, fmt.Errorf("failed to write script: %w", err)
-	}
-	defer os.Remove(scriptPath)
-
-	// Build Python command
+	// Build Python command. stdout = JSON result, stderr = logs (captured separately).
 	cmd := exec.CommandContext(ctx, s.config.PythonPath, scriptPath, inputPath, outputPath)
 	cmd.Env = append(os.Environ(),
+		// Make `import watermark_removal` work from run.py
+		fmt.Sprintf("PYTHONPATH=%s", workerDir),
 		fmt.Sprintf("WATERMARK_ENABLED=%t", s.config.Enabled),
 		fmt.Sprintf("WATERMARK_MODE=%s", s.config.Mode),
 		fmt.Sprintf("WATERMARK_SAMPLE_COUNT=%d", s.config.SampleCount),
@@ -205,50 +213,66 @@ func (s *WatermarkRemovalService) removeDirect(ctx context.Context, inputPath st
 		fmt.Sprintf("WATERMARK_PRO_FALLBACK_TO_FAST=%t", s.config.ProFallbackToFast),
 	)
 
-	log.Printf("[WATERMARK] Running Python script...")
-	log.Printf("[WATERMARK] Command: %s %s %s %s", s.config.PythonPath, scriptPath, inputPath, outputPath)
+	// Separate stdout (JSON) from stderr (logs) so mixing doesn't break JSON parse.
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
 
-	output, err := cmd.CombinedOutput()
+	log.Printf("[WATERMARK] Starting: %s %s %s %s", s.config.PythonPath, scriptPath, inputPath, outputPath)
+
+	err := cmd.Run()
+
+	// Always surface Python logs regardless of success/failure
+	if stderrLog := strings.TrimSpace(stderrBuf.String()); stderrLog != "" {
+		log.Printf("[WATERMARK] Python log:\n%s", stderrLog)
+	}
+
 	if err != nil {
-		log.Printf("[WATERMARK] Python script error: %v", err)
-		log.Printf("[WATERMARK] Output: %s", string(output))
-		// Fallback to original video
+		log.Printf("[WATERMARK] Python process error: %v", err)
+		log.Printf("[WATERMARK] stdout: %s", strings.TrimSpace(stdoutBuf.String()))
 		return &WatermarkRemovalResult{
-			Success:           true,
-			InputPath:         inputPath,
-			OutputPath:        inputPath,
-			WatermarkDetected: true,
-			FallbackUsed:      true,
-			Warning:           fmt.Sprintf("Watermark removal failed: %v", err),
-			Error:             string(output),
+			Success:      true,
+			InputPath:    inputPath,
+			OutputPath:   inputPath,
+			FallbackUsed: true,
+			Warning:      fmt.Sprintf("watermark removal process failed: %v", err),
+			Error:        stderrBuf.String(),
 		}, nil
 	}
 
-	log.Printf("[WATERMARK] Python output: %s", string(output))
+	jsonOutput := strings.TrimSpace(stdoutBuf.String())
+	log.Printf("[WATERMARK] Python result JSON: %s", jsonOutput)
 
-	// Parse JSON result
+	// Parse JSON result from stdout
 	var result WatermarkRemovalResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		log.Printf("[WATERMARK] Failed to parse result: %v", err)
-		// Check if output video was created
-		if _, err := os.Stat(outputPath); err == nil {
+	if err := json.Unmarshal([]byte(jsonOutput), &result); err != nil {
+		log.Printf("[WATERMARK] Failed to parse JSON result: %v (raw: %q)", err, jsonOutput)
+		// If an output file was created anyway, trust it
+		if s.fileExists(outputPath) {
+			log.Printf("[WATERMARK] Output file exists despite parse error, using it")
 			return &WatermarkRemovalResult{
 				Success:           true,
 				InputPath:         inputPath,
 				OutputPath:        outputPath,
 				WatermarkDetected: true,
-				Warning:           "Could not parse result, but output was created",
+				Warning:           "JSON parse failed but output file exists",
 			}, nil
 		}
-		return nil, fmt.Errorf("failed to parse result: %w", err)
+		return &WatermarkRemovalResult{
+			Success:      true,
+			InputPath:    inputPath,
+			OutputPath:   inputPath,
+			FallbackUsed: true,
+			Warning:      fmt.Sprintf("JSON parse failed: %v", err),
+		}, nil
 	}
 
-	// If no watermark detected, use original
+	// No watermark found → use original
 	if !result.WatermarkDetected {
 		result.OutputPath = inputPath
 	}
 
-	// If fallback used or no clean output, use original
+	// Fallback or missing/invalid output → use original
 	if result.FallbackUsed || result.OutputPath == "" || !s.fileExists(result.OutputPath) {
 		result.OutputPath = inputPath
 		result.FallbackUsed = true
@@ -257,79 +281,36 @@ func (s *WatermarkRemovalService) removeDirect(ctx context.Context, inputPath st
 	return &result, nil
 }
 
-// createPythonScript creates the Python script for watermark removal
-func (s *WatermarkRemovalService) createPythonScript() string {
-	return `#!/usr/bin/env python3
-"""
-Watermark Removal Script - Called by Go worker
-"""
-import sys
-import os
-import json
-import logging
+// resolveWorkerDir returns the directory that contains the watermark_removal Python package.
+// It checks several locations in order of reliability.
+func (s *WatermarkRemovalService) resolveWorkerDir() string {
+	const marker = "watermark_removal/__init__.py"
 
-# Add watermark_removal to path - look for it relative to this script's location
-script_dir = os.path.dirname(os.path.abspath(__file__))
-# Try different possible locations for watermark_removal package
-possible_paths = [
-    os.path.join(script_dir, "watermark_removal"),
-    os.path.join(script_dir, "..", "watermark_removal"),
-    os.path.join(os.path.dirname(script_dir), "watermark_removal"),
-]
+	// 1. Explicit override via env var
+	if dir := os.Getenv("WORKER_DIR"); dir != "" {
+		if s.fileExists(filepath.Join(dir, marker)) {
+			return dir
+		}
+	}
 
-watermark_path = None
-for p in possible_paths:
-    if os.path.exists(p) and os.path.isdir(p):
-        watermark_path = os.path.dirname(p)
-        break
+	// 2. Directory of the running executable (works for compiled binaries)
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		if s.fileExists(filepath.Join(dir, marker)) {
+			return dir
+		}
+	}
 
-if watermark_path and watermark_path not in sys.path:
-    sys.path.insert(0, watermark_path)
+	// 3. Current working directory (works for `go run` in the worker directory)
+	if cwd, err := os.Getwd(); err == nil {
+		if s.fileExists(filepath.Join(cwd, marker)) {
+			return cwd
+		}
+	}
 
-try:
-    from watermark_removal import WatermarkRemovalPipeline, load_config
-except ImportError as e:
-    print(json.dumps({"error": f"Import error: {e}"}))
-    sys.exit(1)
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
-logger = logging.getLogger(__name__)
-
-
-def main():
-    if len(sys.argv) < 3:
-        print(json.dumps({"error": "Usage: script.py <input_path> <output_path>"}))
-        sys.exit(1)
-    
-    input_path = sys.argv[1]
-    output_path = sys.argv[2]
-    
-    if not os.path.exists(input_path):
-        print(json.dumps({"error": f"Input file not found: {input_path}"}))
-        sys.exit(1)
-    
-    try:
-        # Load configuration from environment
-        config = load_config()
-        
-        # Create pipeline
-        pipeline = WatermarkRemovalPipeline(config=config)
-        
-        # Process video
-        result = pipeline.process(input_path, output_path)
-        
-        # Output JSON result
-        print(json.dumps(result.to_dict()))
-        
-    except Exception as e:
-        print(json.dumps({"error": str(e), "success": False}))
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()
-`
+	// 4. Fallback: assume cwd is correct
+	cwd, _ := os.Getwd()
+	return cwd
 }
 
 // fileExists checks if a file exists

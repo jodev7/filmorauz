@@ -445,17 +445,26 @@ func (c *OpenAIClient) generateImage(ctx context.Context, req *ImageGenerationRe
 		imgReq.Style = "vivid"
 	}
 
-	log.Printf("[OPENAI] Generating image with model: %s, size: %s", imgReq.Model, imgReq.Size)
+	log.Printf("[OPENAI] ===== IMAGE GENERATION REQUEST =====")
+	log.Printf("[OPENAI] model=%s size=%s quality=%s style=%s", imgReq.Model, imgReq.Size, imgReq.Quality, imgReq.Style)
+	log.Printf("[OPENAI] prompt (first 200 chars): %.200s", imgReq.Prompt)
 
 	// Generate image
 	resp, err := c.client.CreateImage(ctx, imgReq)
 	if err != nil {
+		log.Printf("[OPENAI] ===== IMAGE GENERATION FAILED =====")
+		log.Printf("[OPENAI] Error: %v", err)
 		return nil, fmt.Errorf("image generation failed: %w", err)
 	}
 
 	if len(resp.Data) == 0 {
+		log.Printf("[OPENAI] ERROR: response contained 0 images")
 		return nil, fmt.Errorf("no image data returned")
 	}
+
+	log.Printf("[OPENAI] ===== IMAGE GENERATION SUCCESS =====")
+	log.Printf("[OPENAI] revised_prompt (first 200 chars): %.200s", resp.Data[0].RevisedPrompt)
+	log.Printf("[OPENAI] response_url=%q has_b64=%v", resp.Data[0].URL, resp.Data[0].B64JSON != "")
 
 	result := &ImageGenerationResult{
 		Revised: resp.Data[0].RevisedPrompt,
@@ -463,28 +472,35 @@ func (c *OpenAIClient) generateImage(ctx context.Context, req *ImageGenerationRe
 
 	// Handle different response formats
 	if resp.Data[0].URL != "" {
-		// Download the image
+		log.Printf("[OPENAI] Downloading generated image from: %s", resp.Data[0].URL)
 		localPath, err := c.downloadAndSaveImage(ctx, resp.Data[0].URL)
 		if err != nil {
+			log.Printf("[OPENAI] ERROR: failed to download generated image: %v", err)
 			return nil, fmt.Errorf("failed to save generated image: %w", err)
 		}
 		result.ImagePath = localPath
 		result.ImageURL = resp.Data[0].URL
+		log.Printf("[OPENAI] Image saved to: %s", localPath)
 	} else if resp.Data[0].B64JSON != "" {
-		// Decode base64 and save
 		imgData, err := base64.StdEncoding.DecodeString(resp.Data[0].B64JSON)
 		if err != nil {
+			log.Printf("[OPENAI] ERROR: failed to decode base64 image: %v", err)
 			return nil, fmt.Errorf("failed to decode base64 image: %w", err)
 		}
 		localPath, err := c.saveImageData(imgData, "png")
 		if err != nil {
+			log.Printf("[OPENAI] ERROR: failed to save b64 image: %v", err)
 			return nil, fmt.Errorf("failed to save image data: %w", err)
 		}
 		result.ImagePath = localPath
 		result.Base64 = resp.Data[0].B64JSON
+		log.Printf("[OPENAI] B64 image saved to: %s", localPath)
+	} else {
+		log.Printf("[OPENAI] ERROR: response has neither URL nor B64JSON")
+		return nil, fmt.Errorf("response contained no image URL or base64 data")
 	}
 
-	log.Printf("[OPENAI] Image generated successfully: %s", result.ImagePath)
+	log.Printf("[OPENAI] Image generation complete: %s", result.ImagePath)
 	return result, nil
 }
 
@@ -494,20 +510,31 @@ func (c *OpenAIClient) editPoster(ctx context.Context, prompt string, originalIm
 		return nil, fmt.Errorf("OpenAI client not configured")
 	}
 
-	log.Printf("[OPENAI] Editing existing poster from: %s", originalImageURL)
+	log.Printf("[OPENAI] ===== POSTER EDIT (DALL-E 3 inspired generation) =====")
+	log.Printf("[OPENAI] Fetching original poster for reference: %s", originalImageURL)
 
-	// Download the original image
+	// Download the original image (used as visual reference description in prompt)
 	imgData, contentType, err := c.downloadImage(ctx, originalImageURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to download original image: %w", err)
+		log.Printf("[OPENAI] WARNING: failed to download original poster (%v) — will generate from scratch", err)
+		// Fall through to scratch generation with text-only prompt
+		return c.generateImage(ctx, &ImageGenerationRequest{
+			Prompt:  prompt,
+			Model:   c.model,
+			Size:    "1024x1024",
+			Quality: "hd",
+			Style:   "vivid",
+		})
 	}
+	log.Printf("[OPENAI] Original poster downloaded: %d bytes, type=%s", len(imgData), contentType)
 
-	// Save original for editing reference
+	// Save locally for reference (not sent to DALL-E — API doesn't accept image URLs)
 	originalPath, err := c.saveImageData(imgData, contentType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to save original image: %w", err)
 	}
-	log.Printf("[OPENAI] Original poster saved: %s", originalPath)
+	defer os.Remove(originalPath) // clean up temp file
+	log.Printf("[OPENAI] Original poster cached locally: %s", originalPath)
 
 	// For DALL-E 3, we can't do direct editing, so we use the image as inspiration
 	// by including it in the prompt description
@@ -534,14 +561,24 @@ Important:
 		N:              1,
 	}
 
+	log.Printf("[OPENAI] ===== DALL-E 3 EDIT REQUEST =====")
+	log.Printf("[OPENAI] model=dall-e-3 size=1024x1024 quality=hd style=vivid")
+	log.Printf("[OPENAI] inspired_prompt (first 200 chars): %.200s", inspiredPrompt)
+
 	resp, err := c.client.CreateImage(ctx, imgReq)
 	if err != nil {
+		log.Printf("[OPENAI] ===== DALL-E 3 EDIT FAILED =====")
+		log.Printf("[OPENAI] Error: %v", err)
 		return nil, fmt.Errorf("image editing failed: %w", err)
 	}
 
 	if len(resp.Data) == 0 {
+		log.Printf("[OPENAI] ERROR: edit response contained 0 images")
 		return nil, fmt.Errorf("no image data returned")
 	}
+
+	log.Printf("[OPENAI] Edit succeeded — response_url=%q revised=%.100s",
+		resp.Data[0].URL, resp.Data[0].RevisedPrompt)
 
 	result := &ImageGenerationResult{
 		Revised: resp.Data[0].RevisedPrompt,
@@ -549,15 +586,21 @@ Important:
 
 	// Download the generated image
 	if resp.Data[0].URL != "" {
+		log.Printf("[OPENAI] Downloading edited poster from: %s", resp.Data[0].URL)
 		localPath, err := c.downloadAndSaveImage(ctx, resp.Data[0].URL)
 		if err != nil {
+			log.Printf("[OPENAI] ERROR: failed to download edited poster: %v", err)
 			return nil, fmt.Errorf("failed to save edited image: %w", err)
 		}
 		result.ImagePath = localPath
 		result.ImageURL = resp.Data[0].URL
+		log.Printf("[OPENAI] Edited poster saved: %s", localPath)
+	} else {
+		log.Printf("[OPENAI] ERROR: edit response has no URL")
+		return nil, fmt.Errorf("edit response contained no image URL")
 	}
 
-	log.Printf("[OPENAI] Poster edited successfully: %s", result.ImagePath)
+	log.Printf("[OPENAI] Poster edit complete: %s", result.ImagePath)
 	return result, nil
 }
 

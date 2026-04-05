@@ -125,35 +125,27 @@ func (pg *PosterGenerator) GeneratePoster(ctx context.Context, enrichedMetadata 
 		}
 	}
 
-	// Step 2: Try AI generation (OpenAI preferred, legacy endpoint fallback)
-	openAIReady := pg.openAIClient != nil && pg.openAIClient.IsConfigured()
-	aiAvailable := openAIReady || pg.aiEndpoint != ""
-	if aiAvailable && enrichedMetadata.Title != "" {
-		log.Printf("[POSTER] AI generation available (openai=%v legacy=%v), attempting poster generation", openAIReady, pg.aiEndpoint != "")
-		log.Printf("[POSTER] Using canonicalFolder=%s for AI poster output", canonicalFolder)
-		generatedURL, genErr := pg.generateAIPoster(ctx, enrichedMetadata, canonicalFolder)
-		if genErr != nil {
-			log.Printf("[POSTER] AI generation failed: %v", genErr)
-		} else if generatedURL != "" {
-			log.Printf("[POSTER] AI poster generated: %s", generatedURL)
-			result.GeneratedPosterURL = generatedURL
-			result.PosterGenerated = true
-			return result, nil
+	// Step 2: Use original URL — prefer the validated one, fall back to raw enriched URL.
+	// Never return an error when we have any URL to work with; the logo overlay
+	// in pipeline.go (step 6b) will download, brand, and save it as poster_branded.jpg.
+	fallbackURL := result.OriginalPosterURL
+	if fallbackURL == "" {
+		fallbackURL = enrichedMetadata.PosterURL
+		if fallbackURL != "" {
+			log.Printf("[POSTER] Validation failed earlier but raw URL available — using as fallback: %s", fallbackURL)
 		}
-	} else {
-		log.Printf("[POSTER] No AI generation configured (openai=%v aiEndpoint=%q title=%q), skipping", openAIReady, pg.aiEndpoint, enrichedMetadata.Title)
 	}
 
-	// Step 3: If AI failed, use original if available
-	if result.OriginalPosterURL != "" {
-		result.GeneratedPosterURL = result.OriginalPosterURL
-		result.PosterGenerated = false
-		log.Printf("[POSTER] Using CLEAN original poster: %s", result.OriginalPosterURL)
+	if fallbackURL != "" {
+		result.GeneratedPosterURL = fallbackURL
+		result.OriginalPosterURL = fallbackURL
+		result.PosterGenerated = false // logo overlay in pipeline.go will set this true
+		log.Printf("[POSTER] TMDB fallback poster URL returned for logo overlay: %s", fallbackURL)
 		return result, nil
 	}
 
-	// Step 4: No poster available - this should be handled by caller
-	log.Printf("[POSTER] WARNING: No CLEAN poster available for: %s", enrichedMetadata.Title)
+	// Step 4: Truly nothing available
+	log.Printf("[POSTER] WARNING: No poster URL available at all for: %s", enrichedMetadata.Title)
 	return result, fmt.Errorf("no poster available")
 }
 
@@ -240,47 +232,61 @@ func (pg *PosterGenerator) generateAIPoster(ctx context.Context, metadata *model
 
 // generateAIPosterWithOpenAI generates poster using OpenAI SDK
 func (pg *PosterGenerator) generateAIPosterWithOpenAI(ctx context.Context, metadata *models.EnrichedMetadata, canonicalFolder string) (string, error) {
-	log.Printf("[POSTER] OpenAI poster generation for: %s", metadata.Title)
+	log.Printf("[POSTER] ===== OpenAI POSTER GENERATION START =====")
+	log.Printf("[POSTER] title=%q original_title=%q year=%d", metadata.Title, metadata.OriginalTitle, metadata.Year)
+	log.Printf("[POSTER] tmdb_poster_url=%q", metadata.PosterURL)
+	log.Printf("[POSTER] canonicalFolder=%s storageMode=%s", canonicalFolder, pg.storageMode)
 
-	// Get original poster URL if available
 	originalPosterURL := metadata.PosterURL
 
-	// Generate poster using OpenAI
+	// Call OpenAI — errors must not be swallowed
 	result, err := pg.openAIClient.GeneratePoster(ctx, metadata, originalPosterURL)
 	if err != nil {
+		log.Printf("[POSTER] ===== OpenAI POSTER GENERATION FAILED =====")
+		log.Printf("[POSTER] Error: %v", err)
 		return "", fmt.Errorf("OpenAI poster generation failed: %w", err)
 	}
 
 	if result == nil || result.ImagePath == "" {
+		log.Printf("[POSTER] ERROR: OpenAI returned nil result or empty ImagePath")
 		return "", fmt.Errorf("OpenAI returned empty result")
 	}
 
-	log.Printf("[POSTER] OpenAI poster generated: %s", result.ImagePath)
+	log.Printf("[POSTER] OpenAI returned image: path=%s url=%s", result.ImagePath, result.ImageURL)
 
-	// Read the generated image and save to storage
 	imageData, err := os.ReadFile(result.ImagePath)
 	if err != nil {
+		log.Printf("[POSTER] ERROR: failed to read generated image file %s: %v", result.ImagePath, err)
 		return "", fmt.Errorf("failed to read generated image: %w", err)
 	}
+	log.Printf("[POSTER] Read generated image: %d bytes", len(imageData))
+	os.Remove(result.ImagePath) // clean up temp file
 
-	// Save to canonical folder
 	ext := ".png"
 	if strings.Contains(result.ImagePath, ".jpg") || strings.Contains(result.ImagePath, ".jpeg") {
 		ext = ".jpg"
 	}
 
 	if pg.storageMode == "dev" {
-		return pg.savePosterLocally(imageData, canonicalFolder, "image/jpeg")
+		savedURL, saveErr := pg.savePosterLocally(imageData, canonicalFolder, "image/jpeg")
+		if saveErr != nil {
+			log.Printf("[POSTER] ERROR: failed to save poster locally: %v", saveErr)
+			return "", saveErr
+		}
+		log.Printf("[POSTER] Poster saved locally → URL: %s", savedURL)
+		return savedURL, nil
 	}
 
 	// Production: Upload to B2
 	filename := fmt.Sprintf("movies/%s/poster%s", canonicalFolder, ext)
+	log.Printf("[POSTER] Uploading poster to B2: %s", filename)
 	publicURL, err := pg.storage.UploadData(filename, imageData, "image/jpeg")
 	if err != nil {
+		log.Printf("[POSTER] ERROR: B2 upload failed: %v", err)
 		return "", fmt.Errorf("failed to upload poster to B2: %w", err)
 	}
 
-	log.Printf("[POSTER] Uploaded OpenAI poster to B2: %s", publicURL)
+	log.Printf("[POSTER] ===== OpenAI POSTER GENERATION COMPLETE ===== url=%s", publicURL)
 	return publicURL, nil
 }
 
@@ -485,56 +491,54 @@ func (pg *PosterGenerator) GenerateBackdrop(ctx context.Context, enrichedMetadat
 		}
 	}
 
-	// Step 2: Try AI generation (OpenAI preferred, legacy endpoint fallback)
-	openAIReady := pg.openAIClient != nil && pg.openAIClient.IsConfigured()
-	aiAvailable := openAIReady || pg.aiEndpoint != ""
-	if aiAvailable && enrichedMetadata.Title != "" {
-		log.Printf("[BACKDROP] AI generation available (openai=%v legacy=%v), attempting backdrop generation", openAIReady, pg.aiEndpoint != "")
-		log.Printf("[BACKDROP] Using canonicalFolder=%s for AI backdrop output", canonicalFolder)
-		generatedURL, genErr := pg.generateAIBackdrop(ctx, enrichedMetadata, canonicalFolder)
-		if genErr != nil {
-			log.Printf("[BACKDROP] AI generation failed: %v", genErr)
-		} else if generatedURL != "" {
-			log.Printf("[BACKDROP] AI backdrop generated: %s", generatedURL)
-			result.GeneratedBackdropURL = generatedURL
-			result.BackdropGenerated = true
-			return result, nil
+	// Step 2: Use original URL — prefer the validated one, fall back to raw enriched URL.
+	fallbackURL := result.OriginalBackdropURL
+	if fallbackURL == "" {
+		fallbackURL = enrichedMetadata.BackdropURL
+		if fallbackURL != "" {
+			log.Printf("[BACKDROP] Validation failed earlier but raw URL available — using as fallback: %s", fallbackURL)
 		}
-	} else {
-		log.Printf("[BACKDROP] No AI generation configured (openai=%v aiEndpoint=%q title=%q), skipping", openAIReady, pg.aiEndpoint, enrichedMetadata.Title)
 	}
 
-	// Step 3: If AI failed, use original if available
-	if result.OriginalBackdropURL != "" {
-		result.GeneratedBackdropURL = result.OriginalBackdropURL
-		result.BackdropGenerated = false
-		log.Printf("[BACKDROP] Using CLEAN original backdrop: %s", result.OriginalBackdropURL)
+	if fallbackURL != "" {
+		result.GeneratedBackdropURL = fallbackURL
+		result.OriginalBackdropURL = fallbackURL
+		result.BackdropGenerated = false // logo overlay in pipeline.go will set backdropGenerated via UploadBrandedBackdrop
+		log.Printf("[BACKDROP] TMDB fallback backdrop URL returned for logo overlay: %s", fallbackURL)
 		return result, nil
 	}
 
-	// Step 4: No backdrop available - this should be handled by caller
-	log.Printf("[BACKDROP] WARNING: No CLEAN backdrop available for: %s", enrichedMetadata.Title)
+	// Step 4: Truly nothing available
+	log.Printf("[BACKDROP] WARNING: No backdrop URL available at all for: %s", enrichedMetadata.Title)
 	return result, fmt.Errorf("no backdrop available")
 }
 
 // generateAIBackdropWithOpenAI generates backdrop using OpenAI SDK
 func (pg *PosterGenerator) generateAIBackdropWithOpenAI(ctx context.Context, metadata *models.EnrichedMetadata, canonicalFolder string) (string, error) {
-	log.Printf("[BACKDROP] OpenAI backdrop generation for: %s", metadata.Title)
+	log.Printf("[BACKDROP] ===== OpenAI BACKDROP GENERATION START =====")
+	log.Printf("[BACKDROP] title=%q year=%d tmdb_backdrop_url=%q", metadata.Title, metadata.Year, metadata.BackdropURL)
+	log.Printf("[BACKDROP] canonicalFolder=%s storageMode=%s", canonicalFolder, pg.storageMode)
 
 	result, err := pg.openAIClient.GenerateBackdrop(ctx, metadata, metadata.BackdropURL)
 	if err != nil {
+		log.Printf("[BACKDROP] ===== OpenAI BACKDROP GENERATION FAILED =====")
+		log.Printf("[BACKDROP] Error: %v", err)
 		return "", fmt.Errorf("OpenAI backdrop generation failed: %w", err)
 	}
 	if result == nil || result.ImagePath == "" {
+		log.Printf("[BACKDROP] ERROR: OpenAI returned nil result or empty ImagePath")
 		return "", fmt.Errorf("OpenAI returned empty result for backdrop")
 	}
 
-	log.Printf("[BACKDROP] OpenAI backdrop generated: %s", result.ImagePath)
+	log.Printf("[BACKDROP] OpenAI returned image: path=%s url=%s", result.ImagePath, result.ImageURL)
 
 	imageData, err := os.ReadFile(result.ImagePath)
 	if err != nil {
+		log.Printf("[BACKDROP] ERROR: failed to read generated image file %s: %v", result.ImagePath, err)
 		return "", fmt.Errorf("failed to read generated backdrop image: %w", err)
 	}
+	log.Printf("[BACKDROP] Read generated image: %d bytes", len(imageData))
+	os.Remove(result.ImagePath) // clean up temp file
 
 	ext := ".png"
 	if strings.Contains(result.ImagePath, ".jpg") || strings.Contains(result.ImagePath, ".jpeg") {
@@ -542,16 +546,24 @@ func (pg *PosterGenerator) generateAIBackdropWithOpenAI(ctx context.Context, met
 	}
 
 	if pg.storageMode == "dev" {
-		return pg.saveBackdropLocally(imageData, canonicalFolder, "image/jpeg")
+		savedURL, saveErr := pg.saveBackdropLocally(imageData, canonicalFolder, "image/jpeg")
+		if saveErr != nil {
+			log.Printf("[BACKDROP] ERROR: failed to save backdrop locally: %v", saveErr)
+			return "", saveErr
+		}
+		log.Printf("[BACKDROP] Backdrop saved locally → URL: %s", savedURL)
+		return savedURL, nil
 	}
 
 	filename := fmt.Sprintf("movies/%s/backdrop%s", canonicalFolder, ext)
+	log.Printf("[BACKDROP] Uploading backdrop to B2: %s", filename)
 	publicURL, err := pg.storage.UploadData(filename, imageData, "image/jpeg")
 	if err != nil {
+		log.Printf("[BACKDROP] ERROR: B2 upload failed: %v", err)
 		return "", fmt.Errorf("failed to upload backdrop to B2: %w", err)
 	}
 
-	log.Printf("[BACKDROP] Uploaded OpenAI backdrop to B2: %s", publicURL)
+	log.Printf("[BACKDROP] ===== OpenAI BACKDROP GENERATION COMPLETE ===== url=%s", publicURL)
 	return publicURL, nil
 }
 

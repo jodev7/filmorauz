@@ -284,13 +284,18 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 		"-c:a", "aac",
 		"-b:a", "192k",
 		"-movflags", "+faststart",
+		"-progress", "pipe:1", // MUST appear before output path
 		outputPath,
-		"-progress", "pipe:1",
 	}
 
 	ffmpegArgs := append(append(baseArgs, filterArgs...), encodeArgs...)
 
-	log.Printf("[HLS] Base video FFmpeg: ffmpeg %s", strings.Join(ffmpegArgs, " "))
+	// Log the full ffmpeg command so it can be reproduced manually on failure
+	log.Printf("[HLS] ===== BASE VIDEO FFMPEG COMMAND =====")
+	log.Printf("[HLS] ffmpeg %s", strings.Join(ffmpegArgs, " "))
+	log.Printf("[HLS] delogo params: top-right x=%d y=5 w=200 h=60 | bottom-right x=%d y=%d w=200 h=50",
+		vidW-205, vidW-205, vidH-55)
+	log.Printf("[HLS] input resolution: %dx%d", vidW, vidH)
 
 	cmd := exec.Command("ffmpeg", ffmpegArgs...)
 	stdout, err := cmd.StdoutPipe()
@@ -349,7 +354,12 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 	}
 
 	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("ffmpeg base video failed: %w, stderr: %s", err, stderrBuf.String())
+		stderr := stderrBuf.String()
+		log.Printf("[HLS] ===== FFMPEG BASE VIDEO FAILED =====")
+		log.Printf("[HLS] Error: %v", err)
+		log.Printf("[HLS] Stderr:\n%s", stderr)
+		log.Printf("[HLS] Command was: ffmpeg %s", strings.Join(ffmpegArgs, " "))
+		return fmt.Errorf("ffmpeg base video failed: %w — stderr: %s", err, stderr)
 	}
 
 	// Report progress: base video encoding complete (~52%)

@@ -12,7 +12,7 @@ import numpy as np
 import cv2
 
 from .config import WatermarkConfig
-from .types import RegionCandidate, WatermarkType, DetectionMethod
+from .watermark_types import RegionCandidate, WatermarkType, DetectionMethod
 
 
 logger = logging.getLogger(__name__)
