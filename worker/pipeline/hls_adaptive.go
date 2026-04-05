@@ -176,16 +176,54 @@ func getRenditionNames(renditions []RenditionConfig) []string {
 func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int)) error {
 	log.Printf("[HLS] Creating base video with delogo + logo filters...")
 
-	// delogo filters for known source watermarks:
-	//   top-right    — Asilmedia logo (asilmedia.org), ~200x60px from top-right corner
-	//   bottom-right — Yangi.tv logo,                  ~200x50px from bottom-right corner
-	// Chained with comma; iw/ih expressions resolve to actual video dimensions at runtime.
-	delogoFilter := "delogo=x=iw-205:y=5:w=200:h=60," +
-		"delogo=x=iw-205:y=ih-55:w=200:h=50"
+	// ---------------------------------------------------------------------------
+	// WATERMARK REMOVAL — FALLBACK ONLY
+	//
+	// Current approach: ffmpeg delogo over fixed pixel regions.
+	// Limitation: only works for static watermarks at known positions.
+	//   Dynamic, moving, fading, or size-changing watermarks are NOT handled.
+	//
+	// TODO: replace with dynamic watermark removal before this function is called.
+	//   Suggested architecture (headless, no GUI required):
+	//
+	//   Stage: DynamicWatermarkRemoval (runs on inputPath, produces cleanPath)
+	//   ├─ 1. Frame sampling      — extract N frames evenly (ffmpeg -vf fps=1/5)
+	//   ├─ 2. Region detection    — per-frame detector (OpenCV or onnxruntime model)
+	//   │                           output: []BoundingBox{frame, x, y, w, h, confidence}
+	//   ├─ 3. Temporal tracking   — cluster boxes across frames; mark regions as
+	//   │                           static / moving / fading
+	//   ├─ 4. Mask generation     — dilated binary mask per frame (or range of frames)
+	//   ├─ 5. Inpainting          — run lama-cleaner / IOPaint headless on each masked
+	//   │                           frame, then re-assemble with ffmpeg concat
+	//   └─ 6. Output              — cleanPath passed into createBaseVideo instead of
+	//                               inputPath; delogo block below becomes a no-op
+	//
+	//   Worker hook point in pipeline.go → processVideo():
+	//     cleanPath, err := p.removeWatermarkDynamic(ctx, job, inputPath)
+	//     if err != nil { cleanPath = inputPath } // fallback to original
+	//     hlsPath, err := p.processAdaptiveHLS(jobID, cleanPath, ...)
+	//
+	// ---------------------------------------------------------------------------
 
-	// Build filter graph for logo overlay.
-	// scale=trunc(iw/2)*2:trunc(ih/2)*2 ensures even dimensions required by libx264.
-	filterGraph := fmt.Sprintf(
+	// FALLBACK: static region delogo via ffmpeg.
+	// Probe dimensions so delogo receives literal integers (iw/ih expressions are
+	// not accepted by all ffmpeg builds and cause "Invalid option" errors).
+	vidW, vidH, probeErr := p.getInputResolution(inputPath)
+	if probeErr != nil {
+		log.Printf("[HLS] WARNING: could not probe resolution for delogo, defaulting to 1920x1080: %v", probeErr)
+		vidW, vidH = 1920, 1080
+	}
+	// top-right  — Asilmedia logo (~200x60px)
+	// bottom-right — Yangi.tv logo (~200x50px)
+	delogoFilter := fmt.Sprintf(
+		"delogo=x=%d:y=5:w=200:h=60,delogo=x=%d:y=%d:w=200:h=50",
+		vidW-205, // top-right x
+		vidW-205, // bottom-right x
+		vidH-55,  // bottom-right y
+	)
+
+	// Shared video chain: delogo → drawtext branding → even-dimension scale.
+	videoChain := fmt.Sprintf(
 		"%s,"+
 			"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"+
 			"text='Filmora':fontcolor=white:fontsize=24:"+
@@ -200,24 +238,57 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 		delogoFilter,
 	)
 
-	// FFmpeg command for base video creation
-	// We use veryfast preset since this is an intermediate file; quality comes from CRF not preset
-	ffmpegArgs := []string{
-		"-y",                            // Overwrite output
-		"-ss", strconv.Itoa(cutSeconds), // Fast seek: skip first N seconds
-		"-i", inputPath, // Input file
-		"-vf", filterGraph, // Filter graph
-		"-c:v", "libx264", // H.264 video codec
-		"-preset", "veryfast", // Fast encoding for intermediate file
-		"-crf", "18", // High quality intermediate (lower CRF = better quality)
-		"-profile:v", "high", // High profile for quality
-		"-level", "4.1", // Level 4.1 for compatibility
-		"-c:a", "aac", // AAC audio codec (will be re-encoded for HLS)
-		"-b:a", "192k", // High quality audio for intermediate
-		"-movflags", "+faststart", // Enable fast start for streaming
-		outputPath, // Output file
-		"-progress", "pipe:1", // Stream progress to stdout
+	// Resolve logo path relative to working directory.
+	cwd, _ := os.Getwd()
+	logoPath := filepath.Join(cwd, "docs", "logo.png")
+	logoExists := false
+	if _, statErr := os.Stat(logoPath); statErr == nil {
+		logoExists = true
+		log.Printf("[HLS] Watermark logo found: %s", logoPath)
+	} else {
+		log.Printf("[HLS] WARNING: watermark logo not found at %s, skipping overlay", logoPath)
 	}
+
+	// Build ffmpeg args: use filter_complex (two inputs) when logo exists,
+	// plain -vf otherwise. Audio is always copied from input 0.
+	baseArgs := []string{
+		"-y",
+		"-ss", strconv.Itoa(cutSeconds),
+		"-i", inputPath,
+	}
+
+	var filterArgs []string
+	if logoExists {
+		// Second input: the logo PNG (loop=1 so it lasts for the full video)
+		filterComplex := fmt.Sprintf(
+			"[0:v]%s[base];[base][1:v]overlay=W-w-20:H-h-20[out]",
+			videoChain,
+		)
+		filterArgs = []string{
+			"-i", logoPath,
+			"-filter_complex", filterComplex,
+			"-map", "[out]",
+			"-map", "0:a?",
+		}
+		log.Printf("[HLS] Applying watermark logo overlay (bottom-right, 20px margin)")
+	} else {
+		filterArgs = []string{"-vf", videoChain}
+	}
+
+	encodeArgs := []string{
+		"-c:v", "libx264",
+		"-preset", "veryfast",
+		"-crf", "18",
+		"-profile:v", "high",
+		"-level", "4.1",
+		"-c:a", "aac",
+		"-b:a", "192k",
+		"-movflags", "+faststart",
+		outputPath,
+		"-progress", "pipe:1",
+	}
+
+	ffmpegArgs := append(append(baseArgs, filterArgs...), encodeArgs...)
 
 	log.Printf("[HLS] Base video FFmpeg: ffmpeg %s", strings.Join(ffmpegArgs, " "))
 

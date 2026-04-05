@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -41,15 +42,16 @@ type Config struct {
 
 // Pipeline handles the video ingestion pipeline
 type Pipeline struct {
-	config       Config
-	jobRepo      *repositories.JobRepository
-	storage      storage.Storage
-	httpClient   *http.Client
-	enricher     *MetadataEnricher
-	posterGen    *PosterGenerator
-	openAIClient *services.OpenAIClient // OpenAI client for poster generation
-	movieCol     *mongo.Collection      // MongoDB movies collection for direct insertion
-	dbName       string                 // Database name for logging
+	config           Config
+	jobRepo          *repositories.JobRepository
+	storage          storage.Storage
+	httpClient       *http.Client
+	enricher         *MetadataEnricher
+	posterGen        *PosterGenerator
+	openAIClient     *services.OpenAIClient          // OpenAI client for poster generation
+	movieCol         *mongo.Collection               // MongoDB movies collection for direct insertion
+	dbName           string                          // Database name for logging
+	watermarkService *services.WatermarkRemovalService // Dynamic watermark removal
 }
 
 // NewPipeline creates a new pipeline instance
@@ -95,6 +97,13 @@ func NewPipeline(config Config, jobRepo *repositories.JobRepository) (*Pipeline,
 		log.Printf("[PIPELINE] WARNING: No database provided, movie creation will be skipped")
 	}
 
+	// Initialize watermark removal service
+	watermarkConfig := services.DefaultWatermarkRemovalConfig()
+	if config.TempDir != "" {
+		watermarkConfig.TempDir = config.TempDir
+	}
+	watermarkService := services.NewWatermarkRemovalService(watermarkConfig)
+
 	return &Pipeline{
 		config:  config,
 		jobRepo: jobRepo,
@@ -102,11 +111,12 @@ func NewPipeline(config Config, jobRepo *repositories.JobRepository) (*Pipeline,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Minute, // Very long timeout for parser downloads (can take 10-20+ minutes)
 		},
-		enricher:     enricher,
-		posterGen:    posterGen,
-		openAIClient: openAIClient,
-		movieCol:     movieCol,
-		dbName:       dbName,
+		enricher:         enricher,
+		posterGen:        posterGen,
+		openAIClient:     openAIClient,
+		movieCol:         movieCol,
+		dbName:           dbName,
+		watermarkService: watermarkService,
 	}, nil
 }
 
@@ -1372,8 +1382,23 @@ func (p *Pipeline) processVideo(job *models.IngestionJob, inputPath string, cano
 		}
 	}
 
+	// Dynamic watermark removal — runs before HLS encoding
+	// Falls back to original inputPath on any error
+	hlsInput := inputPath
+	if p.watermarkService != nil {
+		if err := p.updateStatus(jobID, models.IngestionStatusRemovingWatermark, 33); err != nil {
+			log.Printf("[PIPELINE] WARNING: Failed to update status to removing_watermark: %v", err)
+		}
+		cleanPath, wmErr := p.removeWatermarkDynamic(context.Background(), job, inputPath)
+		if wmErr != nil {
+			log.Printf("[PIPELINE] Dynamic watermark removal failed, using original: %v", wmErr)
+		} else {
+			hlsInput = cleanPath
+		}
+	}
+
 	// Call the adaptive HLS generation function
-	masterPath, err := p.processAdaptiveHLS(jobID, inputPath, outputDir, defaultCutSeconds, progressCallback)
+	masterPath, err := p.processAdaptiveHLS(jobID, hlsInput, outputDir, defaultCutSeconds, progressCallback)
 	if err != nil {
 		return "", fmt.Errorf("adaptive HLS processing failed: %w", err)
 	}
@@ -1561,11 +1586,12 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 
 	// Build the movie document
 	// CRITICAL: User-facing fields should be Uzbek. If title_uz is available, use it as primary title.
-	displayTitle := enrichedMetadata.Title
+	displayTitle := cleanMovieTitle(enrichedMetadata.Title)
 	if enrichedMetadata.TitleUz != "" {
-		displayTitle = enrichedMetadata.TitleUz
+		displayTitle = cleanMovieTitle(enrichedMetadata.TitleUz)
 		log.Printf("[PIPELINE] Using Uzbek title as display title: %s", displayTitle)
 	}
+	log.Printf("[PIPELINE] Title after cleaning: %q", displayTitle)
 
 	// Generate slug from display title (Uzbek) for consistency
 	displaySlug := createMovieSlug(displayTitle)
@@ -2226,6 +2252,37 @@ func sanitizeFilename(title string) string {
 // Examples:
 //   - "Forsaj 8" -> "forsaj8"
 //   - "Spider-Man: No Way Home" -> "spidermannowayhome"
+// junkPattern matches quality tags, episode markers, and filler words common in
+// Uzbek source titles: "480p", "1080p", "1-qism", "+41", "seriali", etc.
+var junkPattern = regexp.MustCompile(
+	`(?i)\b(` +
+		`\d{3,4}p` + // 480p 720p 1080p
+		`|4k` +
+		`|hd|fhd` +
+		`|\d+-?qism\b` + // 1-qism, 2qism
+		`|qism\s*\d*` +
+		`|\+\d+` + // +41
+		`|seriali?` +
+		`|barcha\s+qismlar` +
+		`|o['` + "\u2019" + `]zbek(cha)?(\s+tilida)?` +
+		`|uzbek(\s+tilida)?` +
+		`|tilida` +
+		`)\b`,
+)
+
+// cleanMovieTitle strips quality/episode/language junk from parser titles.
+// "Bosqin seriali 1080p uzbek tilida" → "Bosqin"
+func cleanMovieTitle(title string) string {
+	cleaned := junkPattern.ReplaceAllString(title, " ")
+	// collapse multiple spaces and trim
+	cleaned = strings.Join(strings.Fields(cleaned), " ")
+	cleaned = strings.Trim(cleaned, " -–—.,:")
+	if cleaned == "" {
+		return title // fallback to original if everything was stripped
+	}
+	return cleaned
+}
+
 func createMovieSlug(title string) string {
 	// Convert to lowercase
 	s := strings.ToLower(title)
