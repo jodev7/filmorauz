@@ -792,6 +792,18 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		}
 	}
 
+	// ===== CLIP GENERATION (development only) =====
+	// Generate 10 promotional clips after successful video + MongoDB save.
+	// Skipped entirely in production — non-critical, never fails the job.
+	if p.config.StorageConfig.Mode != "prod" && p.config.StorageConfig.Mode != "production" {
+		if movieResult != nil && movieResult.Code != "" {
+			log.Printf("[CLIP] Starting clip generation for movie code=%s folder=%s", movieResult.Code, canonicalFolderName)
+			if clipErr := p.generateClips(ctx, canonicalFolderName, movieResult.Code); clipErr != nil {
+				log.Printf("[CLIP] WARNING: Clip generation failed (non-critical): %v", clipErr)
+			}
+		}
+	}
+
 	// ===== TELEGRAM NOTIFICATION =====
 	// Send Telegram notification after successful movie creation
 	// This is idempotent - if already notified, it will be skipped

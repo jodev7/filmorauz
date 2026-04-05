@@ -112,6 +112,62 @@ type ImageGenerationResult struct {
 	Revised   string // Revised prompt (for DALL-E 3)
 }
 
+// GenerateBackdrop generates a localized movie backdrop (16:9) using OpenAI
+func (c *OpenAIClient) GenerateBackdrop(ctx context.Context, metadata *models.EnrichedMetadata, originalBackdropURL string) (*ImageGenerationResult, error) {
+	if !c.IsConfigured() {
+		return nil, fmt.Errorf("OpenAI client not configured - API key required")
+	}
+
+	prompt := c.buildBackdropPrompt(metadata)
+
+	log.Printf("[OPENAI] Generating backdrop for: %s", metadata.Title)
+	log.Printf("[OPENAI] Backdrop prompt: %s", prompt)
+
+	return c.generateImage(ctx, &ImageGenerationRequest{
+		Prompt:  prompt,
+		Model:   c.model,
+		Size:    "1792x1024",
+		Quality: "hd",
+		Style:   "vivid",
+	})
+}
+
+// buildBackdropPrompt builds a prompt for wide backdrop generation
+func (c *OpenAIClient) buildBackdropPrompt(metadata *models.EnrichedMetadata) string {
+	title := metadata.Title
+	if metadata.TitleUz != "" {
+		title = metadata.TitleUz
+	} else if uzTitle := LocalizeTitle(metadata.OriginalTitle); uzTitle != "" {
+		title = uzTitle
+	}
+
+	genreDesc := c.getGenreDescription(metadata.Genres)
+	mood := c.getMoodAtmosphere(metadata)
+
+	prompt := fmt.Sprintf(`
+Create a premium cinematic movie backdrop for "%s" (%d).
+
+Genre: %s
+Mood: %s
+
+Requirements:
+- Wide cinematic 16:9 landscape composition
+- Rich atmospheric background scene — no characters required
+- High-end streaming platform quality (Netflix/Apple TV style)
+- Dramatic lighting, deep colors, professional color grading
+- No text or title overlays — clean image only
+- Do NOT include any logos or watermarks
+
+Visual Style:
+- Panoramic establishing shot or key scene atmosphere
+- Depth of field with bokeh background
+- Professional cinematography framing
+`, title, metadata.Year, genreDesc, mood)
+
+	prompt = strings.Join(strings.Fields(prompt), " ")
+	return prompt
+}
+
 // GeneratePoster generates a localized movie poster using OpenAI
 // This creates a premium cinematic poster with Uzbek title and FilmoraUz branding
 func (c *OpenAIClient) GeneratePoster(ctx context.Context, metadata *models.EnrichedMetadata, originalPosterURL string) (*ImageGenerationResult, error) {

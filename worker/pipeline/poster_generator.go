@@ -125,15 +125,15 @@ func (pg *PosterGenerator) GeneratePoster(ctx context.Context, enrichedMetadata 
 		}
 	}
 
-	// Step 2: If no original poster or we want to generate, try AI generation
-	// CRITICAL: Pass canonicalFolder to ensure AI poster is saved in SAME folder as HLS files
-	if pg.aiEndpoint != "" && enrichedMetadata.Title != "" {
-		log.Printf("[POSTER] AI endpoint configured, attempting AI poster generation")
+	// Step 2: Try AI generation (OpenAI preferred, legacy endpoint fallback)
+	openAIReady := pg.openAIClient != nil && pg.openAIClient.IsConfigured()
+	aiAvailable := openAIReady || pg.aiEndpoint != ""
+	if aiAvailable && enrichedMetadata.Title != "" {
+		log.Printf("[POSTER] AI generation available (openai=%v legacy=%v), attempting poster generation", openAIReady, pg.aiEndpoint != "")
 		log.Printf("[POSTER] Using canonicalFolder=%s for AI poster output", canonicalFolder)
 		generatedURL, genErr := pg.generateAIPoster(ctx, enrichedMetadata, canonicalFolder)
 		if genErr != nil {
 			log.Printf("[POSTER] AI generation failed: %v", genErr)
-			// Fall back to original or skip
 		} else if generatedURL != "" {
 			log.Printf("[POSTER] AI poster generated: %s", generatedURL)
 			result.GeneratedPosterURL = generatedURL
@@ -141,11 +141,7 @@ func (pg *PosterGenerator) GeneratePoster(ctx context.Context, enrichedMetadata 
 			return result, nil
 		}
 	} else {
-		if pg.aiEndpoint == "" {
-			log.Printf("[POSTER] AI endpoint NOT configured (AI_ENDPOINT env var empty), skipping AI generation")
-		} else {
-			log.Printf("[POSTER] Title is empty, skipping AI generation")
-		}
+		log.Printf("[POSTER] No AI generation configured (openai=%v aiEndpoint=%q title=%q), skipping", openAIReady, pg.aiEndpoint, enrichedMetadata.Title)
 	}
 
 	// Step 3: If AI failed, use original if available
@@ -489,15 +485,15 @@ func (pg *PosterGenerator) GenerateBackdrop(ctx context.Context, enrichedMetadat
 		}
 	}
 
-	// Step 2: If no original backdrop or we want to generate, try AI generation
-	// CRITICAL: Pass canonicalFolder to ensure AI backdrop is saved in SAME folder as HLS files
-	if pg.aiEndpoint != "" && enrichedMetadata.Title != "" {
-		log.Printf("[BACKDROP] AI endpoint configured, attempting AI backdrop generation")
+	// Step 2: Try AI generation (OpenAI preferred, legacy endpoint fallback)
+	openAIReady := pg.openAIClient != nil && pg.openAIClient.IsConfigured()
+	aiAvailable := openAIReady || pg.aiEndpoint != ""
+	if aiAvailable && enrichedMetadata.Title != "" {
+		log.Printf("[BACKDROP] AI generation available (openai=%v legacy=%v), attempting backdrop generation", openAIReady, pg.aiEndpoint != "")
 		log.Printf("[BACKDROP] Using canonicalFolder=%s for AI backdrop output", canonicalFolder)
 		generatedURL, genErr := pg.generateAIBackdrop(ctx, enrichedMetadata, canonicalFolder)
 		if genErr != nil {
 			log.Printf("[BACKDROP] AI generation failed: %v", genErr)
-			// Fall back to original or skip
 		} else if generatedURL != "" {
 			log.Printf("[BACKDROP] AI backdrop generated: %s", generatedURL)
 			result.GeneratedBackdropURL = generatedURL
@@ -505,11 +501,7 @@ func (pg *PosterGenerator) GenerateBackdrop(ctx context.Context, enrichedMetadat
 			return result, nil
 		}
 	} else {
-		if pg.aiEndpoint == "" {
-			log.Printf("[BACKDROP] AI endpoint NOT configured (AI_ENDPOINT env var empty), skipping AI generation")
-		} else {
-			log.Printf("[BACKDROP] Title is empty, skipping AI generation")
-		}
+		log.Printf("[BACKDROP] No AI generation configured (openai=%v aiEndpoint=%q title=%q), skipping", openAIReady, pg.aiEndpoint, enrichedMetadata.Title)
 	}
 
 	// Step 3: If AI failed, use original if available
@@ -525,6 +517,44 @@ func (pg *PosterGenerator) GenerateBackdrop(ctx context.Context, enrichedMetadat
 	return result, fmt.Errorf("no backdrop available")
 }
 
+// generateAIBackdropWithOpenAI generates backdrop using OpenAI SDK
+func (pg *PosterGenerator) generateAIBackdropWithOpenAI(ctx context.Context, metadata *models.EnrichedMetadata, canonicalFolder string) (string, error) {
+	log.Printf("[BACKDROP] OpenAI backdrop generation for: %s", metadata.Title)
+
+	result, err := pg.openAIClient.GenerateBackdrop(ctx, metadata, metadata.BackdropURL)
+	if err != nil {
+		return "", fmt.Errorf("OpenAI backdrop generation failed: %w", err)
+	}
+	if result == nil || result.ImagePath == "" {
+		return "", fmt.Errorf("OpenAI returned empty result for backdrop")
+	}
+
+	log.Printf("[BACKDROP] OpenAI backdrop generated: %s", result.ImagePath)
+
+	imageData, err := os.ReadFile(result.ImagePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read generated backdrop image: %w", err)
+	}
+
+	ext := ".png"
+	if strings.Contains(result.ImagePath, ".jpg") || strings.Contains(result.ImagePath, ".jpeg") {
+		ext = ".jpg"
+	}
+
+	if pg.storageMode == "dev" {
+		return pg.saveBackdropLocally(imageData, canonicalFolder, "image/jpeg")
+	}
+
+	filename := fmt.Sprintf("movies/%s/backdrop%s", canonicalFolder, ext)
+	publicURL, err := pg.storage.UploadData(filename, imageData, "image/jpeg")
+	if err != nil {
+		return "", fmt.Errorf("failed to upload backdrop to B2: %w", err)
+	}
+
+	log.Printf("[BACKDROP] Uploaded OpenAI backdrop to B2: %s", publicURL)
+	return publicURL, nil
+}
+
 // generateAIBackdrop generates an Uzbek-localized backdrop using AI
 // CRITICAL: canonicalFolder must be passed to ensure backdrop is saved in the SAME folder as HLS files
 func (pg *PosterGenerator) generateAIBackdrop(ctx context.Context, metadata *models.EnrichedMetadata, canonicalFolder string) (string, error) {
@@ -533,6 +563,17 @@ func (pg *PosterGenerator) generateAIBackdrop(ctx context.Context, metadata *mod
 	}
 
 	log.Printf("[BACKDROP] generateAIBackdrop: using canonicalFolder=%s", canonicalFolder)
+
+	// Priority 1: Use OpenAI client if configured
+	if pg.openAIClient != nil && pg.openAIClient.IsConfigured() {
+		log.Printf("[BACKDROP] Using OpenAI client for backdrop generation")
+		return pg.generateAIBackdropWithOpenAI(ctx, metadata, canonicalFolder)
+	}
+
+	// Priority 2: Use legacy AI endpoint
+	if pg.aiEndpoint == "" {
+		return "", fmt.Errorf("no AI generation configured")
+	}
 
 	// Determine the title to use for backdrop
 	// Priority: title_uz (Uzbek) > original_title (if has mapping) > title (English)
