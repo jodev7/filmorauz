@@ -174,20 +174,29 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 		//   No -progress pipe:1 → stdout not consumed in this path; omit to avoid pipe stalls
 		var args []string
 		if logoExists {
+			// Layout: 1080×1920 canvas with the 16:9 movie centered vertically.
+			//
+			// scale=1080:-2          → scale movie to 1080px wide, height auto (e.g. 608px for 16:9)
+			// pad=1080:1920:0:(oh-ih)/2  → add black bands top+bottom to reach 1920px height;
+			//                             movie is centred at y=(1920-608)/2=656
+			// drawtext (top)         → "Kino kodi: X" centred in the ~656px top band (y≈240)
+			// drawtext (bottom)      → CTA text just below the movie frame (y≈1310)
+			// [1:v]scale=140:-1      → shrink logo to 140px wide before compositing
+			// overlay bottom-right   → logo sits inside the bottom dark band, not over the movie
 			filterComplex := fmt.Sprintf(
-				// Scale to 9:16 (1080x1920) with center crop, then add text overlays, then logo
-				"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"+
-					"drawtext=text='%s':x=(w-text_w)/2:y=40:fontsize=40:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10,"+
-					"drawtext=text='%s':x=(w-text_w)/2:y=h-text_h-40:fontsize=36:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10[vt];"+
-					"[vt][1:v]overlay=W-w-20:H-h-20:shortest=1[out]",
+				"[0:v]scale=1080:-2,pad=1080:1920:0:(oh-ih)/2:color=black,"+
+					"drawtext=text='%s':x=(w-text_w)/2:y=240:fontsize=32:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=6,"+
+					"drawtext=text='%s':x=(w-text_w)/2:y=1310:fontsize=28:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=6[vt];"+
+					"[1:v]scale=140:-1[logo];"+
+					"[vt][logo]overlay=x=W-w-30:y=H-h-40:shortest=1[out]",
 				topText, bottomText,
 			)
 			args = []string{
 				"-y",
 				"-ss", fmt.Sprintf("%.3f", startSec),
-				"-t", fmt.Sprintf("%.3f", clipDur), // hard output duration limit
+				"-t", fmt.Sprintf("%.3f", clipDur),
 				"-i", baseVideoPath,
-				"-loop", "1", // logo PNG loops for full clip duration
+				"-loop", "1", // keep logo PNG looping for full clip duration
 				"-i", logoPath,
 				"-filter_complex", filterComplex,
 				"-map", "[out]",
@@ -201,17 +210,17 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 				outPath,
 			}
 		} else {
+			// Same layout without logo: scale+pad to 1080×1920 with centered movie, text in dark bands.
 			textFilter := fmt.Sprintf(
-				// Scale to 9:16 (1080x1920) with center crop, then add text overlays
-				"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"+
-					"drawtext=text='%s':x=(w-text_w)/2:y=40:fontsize=40:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10,"+
-					"drawtext=text='%s':x=(w-text_w)/2:y=h-text_h-40:fontsize=36:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10",
+				"scale=1080:-2,pad=1080:1920:0:(oh-ih)/2:color=black,"+
+					"drawtext=text='%s':x=(w-text_w)/2:y=240:fontsize=32:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=6,"+
+					"drawtext=text='%s':x=(w-text_w)/2:y=1310:fontsize=28:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=6",
 				topText, bottomText,
 			)
 			args = []string{
 				"-y",
 				"-ss", fmt.Sprintf("%.3f", startSec),
-				"-t", fmt.Sprintf("%.3f", clipDur), // hard output duration limit
+				"-t", fmt.Sprintf("%.3f", clipDur),
 				"-i", baseVideoPath,
 				"-vf", textFilter,
 				"-c:v", "libx264",

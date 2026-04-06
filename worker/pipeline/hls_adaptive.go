@@ -202,19 +202,24 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 	var filterArgs []string
 	var filterDescription string
 	if logoExists {
-		// Second input: the logo PNG (loop=1 so it lasts for the full video)
+		// Second input: the logo PNG.
+		// -loop 1 is required — without it, a PNG is a 1-frame stream; the overlay
+		// would only appear on the first frame and then disappear for the rest of the video.
+		// :shortest=1 terminates the overlay when the video stream ends.
 		filterComplex := fmt.Sprintf(
-			"[0:v]%s[base];[base][1:v]overlay=W-w-20:H-h-20[out]",
+			"[0:v]%s[base];[base][1:v]overlay=W-w-20:H-h-20:shortest=1[out]",
 			videoChain,
 		)
 		filterArgs = []string{
+			"-loop", "1", // keep logo PNG looping for full video duration
 			"-i", logoPath,
 			"-filter_complex", filterComplex,
 			"-map", "[out]",
 			"-map", "0:a?",
 		}
-		filterDescription = fmt.Sprintf("logo overlay (bottom-right, 20px margin) + scale filter")
-		log.Printf("[HLS] APPLYING logo overlay with filter_complex: %s", filterDescription)
+		filterDescription = "logo overlay (bottom-right, 20px margin, loop=1, shortest=1) + scale filter"
+		log.Printf("[HLS] APPLYING logo overlay — logo: %s", logoPath)
+		log.Printf("[HLS] APPLYING logo overlay — filter_complex: %s", filterComplex)
 	} else {
 		filterArgs = []string{"-vf", videoChain}
 		filterDescription = "scale filter only (no logo)"
