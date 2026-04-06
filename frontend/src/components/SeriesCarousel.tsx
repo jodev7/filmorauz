@@ -74,7 +74,7 @@ export default function SeriesCarousel({ series }: SeriesCarouselProps) {
           <Link
             key={s.id}
             href={`/series/${s.slug}`}
-            className="series-card group relative bg-brand-card rounded-xl overflow-hidden border border-brand-border transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl block shrink-0 w-[160px] sm:w-[180px]"
+            className="series-card group relative bg-brand-card rounded-xl overflow-hidden border border-brand-border transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl block shrink-0 w-[140px] sm:w-[160px]"
           >
             {/* Poster */}
             <div className="relative aspect-[2/3] overflow-hidden bg-brand-border">

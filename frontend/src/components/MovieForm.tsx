@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Plus, X, Info } from "lucide-react";
-import { MovieInput, VideoSourceType } from "@/lib/api";
+import { Loader2, Plus, X, Info, Upload, CheckCircle, AlertCircle } from "lucide-react";
+import { MovieInput, VideoSourceType, uploadMovieAsset } from "@/lib/api";
 
 const QUALITIES = ["480p", "720p", "1080p", "1080p Ultra", "4K"];
 const GENRE_OPTIONS = [
@@ -11,7 +11,6 @@ const GENRE_OPTIONS = [
   "Romance", "Sci-Fi", "Thriller", "Western",
 ];
 
-// Video source type options with descriptions
 const SOURCE_TYPE_OPTIONS: { value: VideoSourceType; label: string; description: string }[] = [
   { 
     value: "iframe_embed", 
@@ -35,10 +34,16 @@ const SOURCE_TYPE_OPTIONS: { value: VideoSourceType; label: string; description:
   },
 ];
 
+interface UploadState {
+  status: "idle" | "uploading" | "success" | "error";
+  message?: string;
+}
+
 interface Props {
   initialData?: Partial<MovieInput>;
   onSubmit: (data: MovieInput) => Promise<void>;
   submitLabel?: string;
+  token?: string;
 }
 
 const emptyForm: MovieInput = {
@@ -61,8 +66,8 @@ export default function MovieForm({
   initialData,
   onSubmit,
   submitLabel = "Save Movie",
+  token,
 }: Props) {
-  // Ensure genre is always an array to prevent null/undefined crashes
   const safeInitialData = initialData ? {
     ...initialData,
     genre: Array.isArray(initialData.genre) ? initialData.genre : [],
@@ -72,9 +77,56 @@ export default function MovieForm({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [genreInput, setGenreInput] = useState("");
+  const [uploads, setUploads] = useState<{
+    poster: UploadState;
+    backdrop: UploadState;
+    video: UploadState;
+  }>({
+    poster: { status: "idle" },
+    backdrop: { status: "idle" },
+    video: { status: "idle" },
+  });
 
   const set = (field: keyof MovieInput, value: unknown) => {
     setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleUpload = async (type: "poster" | "backdrop" | "video", file: File) => {
+    if (!token) {
+      setUploads(prev => ({
+        ...prev,
+        [type]: { status: "error", message: "No auth token available" }
+      }));
+      return;
+    }
+
+    setUploads(prev => ({
+      ...prev,
+      [type]: { status: "uploading" }
+    }));
+
+    try {
+      const result = await uploadMovieAsset(token, file, type);
+      setUploads(prev => ({
+        ...prev,
+        [type]: { status: "success", message: result.url }
+      }));
+      if (type === "poster") {
+        set("poster_url", result.url);
+      } else if (type === "backdrop") {
+        set("backdrop_url", result.url);
+      } else {
+        set("video_url", result.url);
+      }
+    } catch (err) {
+      setUploads(prev => ({
+        ...prev,
+        [type]: { 
+          status: "error", 
+          message: err instanceof Error ? err.message : "Upload failed" 
+        }
+      }));
+    }
   };
 
   const addGenre = () => {
@@ -181,20 +233,51 @@ export default function MovieForm({
         />
       </div>
 
-      {/* Poster URL + Backdrop URL */}
+      {/* Poster Upload + Backdrop Upload */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Poster Upload */}
         <div>
           <label className="block text-sm text-gray-400 mb-1.5">
-            Poster URL <span className="text-brand-red">*</span>
+            Upload Poster <span className="text-brand-red">*</span>
           </label>
-          <input
-            type="url"
-            value={form.poster_url}
-            onChange={(e) => set("poster_url", e.target.value)}
-            placeholder="https://..."
-            required
-            className="field"
-          />
+          <div className="upload-box">
+            {uploads.poster.status === "uploading" && (
+              <div className="upload-status">
+                <Loader2 size={20} className="animate-spin" />
+                <span>Uploading poster...</span>
+              </div>
+            )}
+            {uploads.poster.status === "success" && (
+              <div className="upload-status success">
+                <CheckCircle size={20} />
+                <span>Uploaded successfully</span>
+              </div>
+            )}
+            {uploads.poster.status === "error" && (
+              <div className="upload-status error">
+                <AlertCircle size={20} />
+                <span>{uploads.poster.message}</span>
+              </div>
+            )}
+            {uploads.poster.status === "idle" && (
+              <>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleUpload("poster", file);
+                  }}
+                  className="hidden"
+                  id="poster-upload"
+                />
+                <label htmlFor="poster-upload" className="upload-label">
+                  <Upload size={20} />
+                  <span>Choose poster image (jpg, png, webp)</span>
+                </label>
+              </>
+            )}
+          </div>
           {/* Preview */}
           {form.poster_url && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -208,17 +291,50 @@ export default function MovieForm({
             />
           )}
         </div>
+
+        {/* Backdrop Upload */}
         <div>
           <label className="block text-sm text-gray-400 mb-1.5">
-            Backdrop URL
+            Upload Backdrop
           </label>
-          <input
-            type="url"
-            value={form.backdrop_url}
-            onChange={(e) => set("backdrop_url", e.target.value)}
-            placeholder="https://... (optional)"
-            className="field"
-          />
+          <div className="upload-box">
+            {uploads.backdrop.status === "uploading" && (
+              <div className="upload-status">
+                <Loader2 size={20} className="animate-spin" />
+                <span>Uploading backdrop...</span>
+              </div>
+            )}
+            {uploads.backdrop.status === "success" && (
+              <div className="upload-status success">
+                <CheckCircle size={20} />
+                <span>Uploaded successfully</span>
+              </div>
+            )}
+            {uploads.backdrop.status === "error" && (
+              <div className="upload-status error">
+                <AlertCircle size={20} />
+                <span>{uploads.backdrop.message}</span>
+              </div>
+            )}
+            {uploads.backdrop.status === "idle" && (
+              <>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleUpload("backdrop", file);
+                  }}
+                  className="hidden"
+                  id="backdrop-upload"
+                />
+                <label htmlFor="backdrop-upload" className="upload-label">
+                  <Upload size={20} />
+                  <span>Choose backdrop image (jpg, png, webp)</span>
+                </label>
+              </>
+            )}
+          </div>
           {form.backdrop_url && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -282,30 +398,46 @@ export default function MovieForm({
       {requiresVideoURL && (
         <div>
           <label className="block text-sm text-gray-400 mb-1.5">
-            Video URL <span className="text-brand-red">*</span>
+            Upload Video <span className="text-brand-red">*</span>
           </label>
-          <input
-            type="url"
-            value={form.video_url}
-            onChange={(e) => set("video_url", e.target.value)}
-            placeholder={form.source_type === "direct_hls" 
-              ? "https://example.com/stream.m3u8" 
-              : "https://example.com/video.mp4"}
-            required={requiresVideoURL}
-            className="field"
-          />
-          {form.source_type !== "external_restricted" && (
-            <p className="text-xs text-gray-600 mt-1">
-              Note: Some external MP4 links may return HTTP 403 if the CDN blocks hotlinking. 
-              Consider using iframe embed for restricted sources.
-            </p>
-          )}
-          {form.source_type === "external_restricted" && (
-            <p className="text-xs text-amber-500 mt-1">
-              This source type will display a restricted message to users. 
-              Use this when the video source does not allow external playback.
-            </p>
-          )}
+          <div className="upload-box">
+            {uploads.video.status === "uploading" && (
+              <div className="upload-status">
+                <Loader2 size={20} className="animate-spin" />
+                <span>Uploading video...</span>
+              </div>
+            )}
+            {uploads.video.status === "success" && (
+              <div className="upload-status success">
+                <CheckCircle size={20} />
+                <span>Video uploaded successfully</span>
+              </div>
+            )}
+            {uploads.video.status === "error" && (
+              <div className="upload-status error">
+                <AlertCircle size={20} />
+                <span>{uploads.video.message}</span>
+              </div>
+            )}
+            {uploads.video.status === "idle" && (
+              <>
+                <input
+                  type="file"
+                  accept="video/mp4,video/webm,video/ogg,.m3u8"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleUpload("video", file);
+                  }}
+                  className="hidden"
+                  id="video-upload"
+                />
+                <label htmlFor="video-upload" className="upload-label">
+                  <Upload size={20} />
+                  <span>Choose video file (mp4, webm, m3u8)</span>
+                </label>
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -469,6 +601,45 @@ export default function MovieForm({
         }
         select.field option {
           background: #12121a;
+        }
+        .upload-box {
+          border: 2px dashed #1e1e2e;
+          border-radius: 0.5rem;
+          padding: 1rem;
+          text-align: center;
+          background: #0a0a0f;
+          min-height: 80px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .upload-box:hover {
+          border-color: #e63946;
+        }
+        .upload-label {
+          cursor: pointer;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 0.5rem;
+          color: #9ca3af;
+          font-size: 0.875rem;
+        }
+        .upload-label:hover {
+          color: white;
+        }
+        .upload-status {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          color: #9ca3af;
+          font-size: 0.875rem;
+        }
+        .upload-status.success {
+          color: #10b981;
+        }
+        .upload-status.error {
+          color: #ef4444;
         }
       `}</style>
     </form>

@@ -12,7 +12,6 @@ import (
 	"github.com/filmorauz/worker/models"
 	"github.com/filmorauz/worker/pipeline"
 	"github.com/filmorauz/worker/repositories"
-	"github.com/filmorauz/worker/services"
 	"github.com/filmorauz/worker/storage"
 	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -63,7 +62,6 @@ func main() {
 	pipeConfig := pipeline.Config{
 		ParserURL:   getEnv("PARSER_URL", "http://localhost:8082"),
 		TempDir:     getEnv("TEMP_DIR", "./tmp"),
-		AIEndpoint:  getEnv("AI_ENDPOINT", ""),                           // Legacy AI endpoint
 		TMDBAPIKey:  getEnv("TMDB_API_KEY", ""),                          // TMDB API key for metadata enrichment
 		DB:          db,                                                  // Pass database for movie insertion
 		BackendURL:  getEnv("BACKEND_BASE_URL", "http://localhost:8080"), // Backend API URL for Telegram notifications
@@ -78,23 +76,11 @@ func main() {
 			CDNBaseURL: getEnv("CDN_BASE_URL", ""),
 			BaseURL:    getEnv("BASE_URL", "http://localhost:8080"), // Base URL for development mode
 		},
-		// OpenAI configuration for poster generation
-		OpenAIConfig: &services.OpenAIConfig{
-			APIKey:      getEnv("OPENAI_API_KEY", ""),
-			BaseURL:     getEnv("OPENAI_BASE_URL", ""), // For compatible APIs (optional)
-			Model:       getEnv("OPENAI_MODEL", "dall-e-3"),
-			Temperature: 0.7,
-			Timeout:     120 * time.Second,
-			TempDir:     getEnv("TEMP_DIR", "./tmp"),
-		},
 	}
 
-	// Log OpenAI configuration status
-	if pipeConfig.OpenAIConfig.APIKey != "" {
-		log.Printf("[CONFIG] OpenAI configured with model: %s", pipeConfig.OpenAIConfig.Model)
-	} else {
-		log.Printf("[CONFIG] OpenAI API key not set - OpenAI poster generation disabled")
-	}
+	// Log configuration
+	log.Printf("[CONFIG] Pipeline initialized (watermark removal and AI poster generation disabled)")
+	log.Printf("[CONFIG] Storage mode: %s", getStorageMode())
 
 	// Initialize pipeline
 	pipe, err := pipeline.NewPipeline(pipeConfig, jobRepo)

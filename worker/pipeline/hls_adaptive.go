@@ -36,12 +36,13 @@ func DefaultRenditions() []RenditionConfig {
 
 // processAdaptiveHLS generates multi-bitrate adaptive HLS with a master playlist
 // This function:
-// 1. First creates a clean base video with delogo + logo applied
+// 1. First creates a clean base video with logo overlay applied
 // 2. Then generates multiple quality renditions from the base
 // 3. Creates a master.m3u8 playlist referencing all variants
-func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int)) (string, error) {
+// No watermark removal - use source video directly
+func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int)) (masterPlaylistPath, processedMasterPath string, err error) {
 	log.Printf("[HLS] Starting adaptive HLS generation for job %s", jobID)
-	log.Printf("[HLS] Input: %s", inputPath)
+	log.Printf("[CHECKPOINT] hls_raw_input_path: %s", inputPath)
 	log.Printf("[HLS] Output directory: %s", outputDir)
 
 	// Create output directory structure
@@ -54,14 +55,14 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	//   - 720p/
 	//   - 1080p/
 
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create output directory: %w", err)
+	if err = os.MkdirAll(outputDir, 0755); err != nil {
+		return "", "", fmt.Errorf("failed to create output directory: %w", err)
 	}
 
 	// Get input resolution to determine which renditions to generate
-	inputWidth, inputHeight, err := p.getInputResolution(inputPath)
-	if err != nil {
-		log.Printf("[HLS] WARNING: Could not detect input resolution: %v, using defaults", err)
+	inputWidth, inputHeight, resErr := p.getInputResolution(inputPath)
+	if resErr != nil {
+		log.Printf("[HLS] WARNING: Could not detect input resolution: %v, using defaults", resErr)
 		inputWidth = 1920
 		inputHeight = 1080
 	}
@@ -71,40 +72,40 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	renditions := p.getApplicableRenditions(inputWidth, inputHeight)
 	log.Printf("[HLS] Generating %d renditions: %v", len(renditions), getRenditionNames(renditions))
 
-	// Report progress: starting watermark removal stage (~45%)
-	if jobStatusCallback != nil {
-		jobStatusCallback(models.IngestionStatusRemovingWatermark, 45)
+	// Step 1: Cut + logo overlay → processed_master.mp4
+	// This is the single processed master used for both HLS and clip generation.
+	// It is NOT deleted here — the caller cleans it up after clip generation.
+	processedMasterPath = filepath.Join(outputDir, "processed_master.mp4")
+	log.Printf("[CHECKPOINT] processed_master_path: %s", processedMasterPath)
+	log.Printf("[STAGE] logo_overlay start — raw_input: %s → master: %s", inputPath, processedMasterPath)
+	if err = p.createBaseVideo(inputPath, processedMasterPath, cutSeconds, jobStatusCallback); err != nil {
+		return "", "", fmt.Errorf("failed to create processed master: %w", err)
 	}
+	log.Printf("[STAGE] logo_overlay end — processed_master: %s", processedMasterPath)
+	log.Printf("[CHECKPOINT] hls_input_path: %s", processedMasterPath)
 
-	// Step 1: Create intermediate base video with delogo + logo applied
-	// This avoids re-applying filters for each rendition
-	baseVideoPath := filepath.Join(outputDir, "base_video.mp4")
-	if err := p.createBaseVideo(inputPath, baseVideoPath, cutSeconds, jobStatusCallback); err != nil {
-		return "", fmt.Errorf("failed to create base video: %w", err)
-	}
-	defer os.Remove(baseVideoPath) // Clean up base video after processing
-
-	// Report progress: base video created, starting HLS encoding (~55%)
+	// Report progress: master created, starting HLS encoding (~55%)
 	if jobStatusCallback != nil {
 		jobStatusCallback(models.IngestionStatusProcessing, 55)
 	}
 
-	// Step 2: Generate each HLS rendition
+	// Step 2: Generate each HLS rendition from the processed master
+	log.Printf("[STAGE] hls_renditions start — renditions: %d, source: %s", len(renditions), processedMasterPath)
 	totalRenditions := len(renditions)
 	for i, rendition := range renditions {
-		// Map rendition index to progress range 55-85
 		renditionBaseProgress := 55 + (i * 30 / totalRenditions)
 		log.Printf("[HLS] Generating %s rendition (%d/%d) at progress %d%%...", rendition.Name, i+1, totalRenditions, renditionBaseProgress)
 
 		renditionDir := filepath.Join(outputDir, rendition.Name)
-		if err := os.MkdirAll(renditionDir, 0755); err != nil {
-			return "", fmt.Errorf("failed to create rendition directory: %w", err)
+		if err = os.MkdirAll(renditionDir, 0755); err != nil {
+			return "", "", fmt.Errorf("failed to create rendition directory: %w", err)
 		}
 
-		if err := p.generateHLSRendition(jobID, baseVideoPath, renditionDir, rendition, renditionBaseProgress, jobStatusCallback); err != nil {
-			return "", fmt.Errorf("failed to generate %s rendition: %w", rendition.Name, err)
+		if err = p.generateHLSRendition(jobID, processedMasterPath, renditionDir, rendition, renditionBaseProgress, jobStatusCallback); err != nil {
+			return "", "", fmt.Errorf("failed to generate %s rendition: %w", rendition.Name, err)
 		}
 	}
+	log.Printf("[STAGE] hls_renditions end — renditions: %d", len(renditions))
 
 	// Report progress: HLS encoding complete, creating master playlist (~88%)
 	if jobStatusCallback != nil {
@@ -112,10 +113,12 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	}
 
 	// Step 3: Create master playlist
-	masterPath := filepath.Join(outputDir, "master.m3u8")
-	if err := p.createMasterPlaylist(masterPath, renditions); err != nil {
-		return "", fmt.Errorf("failed to create master playlist: %w", err)
+	log.Printf("[STAGE] master_playlist start")
+	masterPlaylistPath = filepath.Join(outputDir, "master.m3u8")
+	if err = p.createMasterPlaylist(masterPlaylistPath, renditions); err != nil {
+		return "", "", fmt.Errorf("failed to create master playlist: %w", err)
 	}
+	log.Printf("[STAGE] master_playlist end")
 
 	// Report progress: HLS generation complete (~92%)
 	if jobStatusCallback != nil {
@@ -123,23 +126,19 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	}
 
 	// Verify output
-	files, err := os.ReadDir(outputDir)
-	if err != nil {
-		return "", fmt.Errorf("failed to read output directory: %w", err)
+	files, dirErr := os.ReadDir(outputDir)
+	if dirErr != nil {
+		return "", "", fmt.Errorf("failed to read output directory: %w", dirErr)
 	}
 	log.Printf("[HLS] Adaptive HLS generation complete. Output files:")
 	for _, f := range files {
-		log.Printf("[HLS]   - %s/", f.Name())
-		subFiles, _ := os.ReadDir(filepath.Join(outputDir, f.Name()))
-		for _, sf := range subFiles {
-			if strings.HasSuffix(sf.Name(), ".m3u8") || strings.HasPrefix(sf.Name(), "segment_") {
-				log.Printf("[HLS]     - %s", sf.Name())
-			}
-		}
+		log.Printf("[HLS]   - %s", f.Name())
 	}
 
-	log.Printf("[HLS] Master playlist: %s", masterPath)
-	return masterPath, nil
+	log.Printf("[HLS] Master playlist: %s", masterPlaylistPath)
+	log.Printf("[CHECKPOINT] hls_master_playlist: %s", masterPlaylistPath)
+	log.Printf("[STAGE] hls_processing end — master: %s, processed_master: %s", masterPlaylistPath, processedMasterPath)
+	return masterPlaylistPath, processedMasterPath, nil
 }
 
 // getApplicableRenditions returns the renditions that should be generated based on input resolution
@@ -172,71 +171,14 @@ func getRenditionNames(renditions []RenditionConfig) []string {
 	return names
 }
 
-// createBaseVideo creates an intermediate base video with delogo + logo filters applied
+// createBaseVideo creates an intermediate base video with logo overlay applied
 func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int)) error {
-	log.Printf("[HLS] Creating base video with delogo + logo filters...")
+	log.Printf("[HLS] Creating base video: cut=%ds, logo overlay, input=%s", cutSeconds, inputPath)
+	log.Printf("[CHECKPOINT] raw_downloaded_input_path: %s", inputPath)
+	log.Printf("[HLS] NOTE: No watermark removal - using source video directly")
 
-	// ---------------------------------------------------------------------------
-	// WATERMARK REMOVAL — FALLBACK ONLY
-	//
-	// Current approach: ffmpeg delogo over fixed pixel regions.
-	// Limitation: only works for static watermarks at known positions.
-	//   Dynamic, moving, fading, or size-changing watermarks are NOT handled.
-	//
-	// TODO: replace with dynamic watermark removal before this function is called.
-	//   Suggested architecture (headless, no GUI required):
-	//
-	//   Stage: DynamicWatermarkRemoval (runs on inputPath, produces cleanPath)
-	//   ├─ 1. Frame sampling      — extract N frames evenly (ffmpeg -vf fps=1/5)
-	//   ├─ 2. Region detection    — per-frame detector (OpenCV or onnxruntime model)
-	//   │                           output: []BoundingBox{frame, x, y, w, h, confidence}
-	//   ├─ 3. Temporal tracking   — cluster boxes across frames; mark regions as
-	//   │                           static / moving / fading
-	//   ├─ 4. Mask generation     — dilated binary mask per frame (or range of frames)
-	//   ├─ 5. Inpainting          — run lama-cleaner / IOPaint headless on each masked
-	//   │                           frame, then re-assemble with ffmpeg concat
-	//   └─ 6. Output              — cleanPath passed into createBaseVideo instead of
-	//                               inputPath; delogo block below becomes a no-op
-	//
-	//   Worker hook point in pipeline.go → processVideo():
-	//     cleanPath, err := p.removeWatermarkDynamic(ctx, job, inputPath)
-	//     if err != nil { cleanPath = inputPath } // fallback to original
-	//     hlsPath, err := p.processAdaptiveHLS(jobID, cleanPath, ...)
-	//
-	// ---------------------------------------------------------------------------
-
-	// FALLBACK: static region delogo via ffmpeg.
-	// Probe dimensions so delogo receives literal integers (iw/ih expressions are
-	// not accepted by all ffmpeg builds and cause "Invalid option" errors).
-	vidW, vidH, probeErr := p.getInputResolution(inputPath)
-	if probeErr != nil {
-		log.Printf("[HLS] WARNING: could not probe resolution for delogo, defaulting to 1920x1080: %v", probeErr)
-		vidW, vidH = 1920, 1080
-	}
-	// top-right  — Asilmedia logo (~200x60px)
-	// bottom-right — Yangi.tv logo (~200x50px)
-	delogoFilter := fmt.Sprintf(
-		"delogo=x=%d:y=5:w=200:h=60,delogo=x=%d:y=%d:w=200:h=50",
-		vidW-205, // top-right x
-		vidW-205, // bottom-right x
-		vidH-55,  // bottom-right y
-	)
-
-	// Shared video chain: delogo → drawtext branding → even-dimension scale.
-	videoChain := fmt.Sprintf(
-		"%s,"+
-			"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"+
-			"text='Filmora':fontcolor=white:fontsize=24:"+
-			"x=W-text_w-85:y=H-text_h-15,"+
-			"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"+
-			"text='Uz':fontcolor=0xFF7A00:fontsize=24:"+
-			"x=W-text_w-58:y=H-text_h-15,"+
-			"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"+
-			"text='.net':fontcolor=white:fontsize=24:"+
-			"x=W-text_w-15:y=H-text_h-15,"+
-			"scale=trunc(iw/2)*2:trunc(ih/2)*2",
-		delogoFilter,
-	)
+	// Video chain: ensure even dimensions for H.264 (required by libx264).
+	videoChain := "scale=trunc(iw/2)*2:trunc(ih/2)*2"
 
 	// Resolve logo path relative to working directory.
 	cwd, _ := os.Getwd()
@@ -258,6 +200,7 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 	}
 
 	var filterArgs []string
+	var filterDescription string
 	if logoExists {
 		// Second input: the logo PNG (loop=1 so it lasts for the full video)
 		filterComplex := fmt.Sprintf(
@@ -270,9 +213,12 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 			"-map", "[out]",
 			"-map", "0:a?",
 		}
-		log.Printf("[HLS] Applying watermark logo overlay (bottom-right, 20px margin)")
+		filterDescription = fmt.Sprintf("logo overlay (bottom-right, 20px margin) + scale filter")
+		log.Printf("[HLS] APPLYING logo overlay with filter_complex: %s", filterDescription)
 	} else {
 		filterArgs = []string{"-vf", videoChain}
+		filterDescription = "scale filter only (no logo)"
+		log.Printf("[HLS] NO logo overlay - using filter: %s", filterDescription)
 	}
 
 	encodeArgs := []string{
@@ -292,10 +238,9 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 
 	// Log the full ffmpeg command so it can be reproduced manually on failure
 	log.Printf("[HLS] ===== BASE VIDEO FFMPEG COMMAND =====")
+	log.Printf("[HLS] Filter description: %s", filterDescription)
+	log.Printf("[CHECKPOINT] logo_applied_video_path: %s", outputPath)
 	log.Printf("[HLS] ffmpeg %s", strings.Join(ffmpegArgs, " "))
-	log.Printf("[HLS] delogo params: top-right x=%d y=5 w=200 h=60 | bottom-right x=%d y=%d w=200 h=50",
-		vidW-205, vidW-205, vidH-55)
-	log.Printf("[HLS] input resolution: %dx%d", vidW, vidH)
 
 	cmd := exec.Command("ffmpeg", ffmpegArgs...)
 	stdout, err := cmd.StdoutPipe()
@@ -373,6 +318,7 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 
 // generateHLSRendition generates a single HLS rendition from the base video
 func (p *Pipeline) generateHLSRendition(jobID, baseVideoPath, outputDir string, rendition RenditionConfig, baseProgress int, jobStatusCallback func(status models.IngestionStatus, progress int)) error {
+	log.Printf("[CHECKPOINT] hls_input_path: %s", baseVideoPath)
 	log.Printf("[HLS] Generating %s rendition: %dx%d, video=%s, audio=%s",
 		rendition.Name, rendition.Width, rendition.Height, rendition.VideoBitrate, rendition.AudioBitrate)
 
@@ -476,6 +422,10 @@ func (p *Pipeline) generateHLSRendition(jobID, baseVideoPath, outputDir string, 
 	// Wait for command to finish
 	err = cmd.Wait()
 	if err != nil {
+		log.Printf("[HLS] ===== FFMPEG %s RENDITION FAILED =====", rendition.Name)
+		log.Printf("[HLS] Error: %v", err)
+		log.Printf("[HLS] Stderr:\n%s", stderrBuf.String())
+		log.Printf("[HLS] Command was: ffmpeg %s", strings.Join(ffmpegArgs, " "))
 		return fmt.Errorf("ffmpeg %s failed: %w, stderr: %s", rendition.Name, err, stderrBuf.String())
 	}
 

@@ -95,6 +95,7 @@ export default function EditMoviePage() {
         initialData={initialData}
         onSubmit={handleSubmit}
         submitLabel="Update Movie"
+        token={token ?? undefined}
       />
     </div>
   );

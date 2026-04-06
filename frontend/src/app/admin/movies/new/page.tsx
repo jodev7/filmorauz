@@ -34,7 +34,7 @@ export default function NewMoviePage() {
         </p>
       </div>
 
-      <MovieForm onSubmit={handleSubmit} submitLabel="Create Movie" />
+      <MovieForm onSubmit={handleSubmit} submitLabel="Create Movie" token={token ?? undefined} />
     </div>
   );
 }

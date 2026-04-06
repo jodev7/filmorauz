@@ -39,7 +39,7 @@ func NewWatermarkRemovalPipeline(config Config, jobRepo *repositories.JobReposit
 
 // processVideoWithWatermarkRemoval processes video with AI-based watermark removal
 // This is an enhanced version of processVideo that includes watermark removal
-func (p *WatermarkRemovalPipeline) processVideoWithWatermarkRemoval(ctx context.Context, job *models.IngestionJob, inputPath string, canonicalFolderName string) (string, error) {
+func (p *WatermarkRemovalPipeline) processVideoWithWatermarkRemoval(ctx context.Context, job *models.IngestionJob, inputPath string, canonicalFolderName string) (string, string, error) {
 	jobID := job.ID.Hex()
 
 	// =============================================================================
@@ -48,12 +48,14 @@ func (p *WatermarkRemovalPipeline) processVideoWithWatermarkRemoval(ctx context.
 	// This stage runs BEFORE the FFmpeg pipeline
 	// It detects and removes watermarks using AI-based inpainting
 
-	// Update status to indicate watermark removal
-	if err := p.updateStatus(jobID, models.IngestionStatusRemovingWatermark, 25); err != nil {
+	// Update status to indicate processing (watermark removal disabled)
+	// Note: Watermark removal is DISABLED in simplified pipeline
+	if err := p.updateStatus(jobID, models.IngestionStatusProcessing, 25); err != nil {
 		log.Printf("[PIPELINE] WARNING: Failed to update status: %v", err)
 	}
-	p.log(jobID, "received_local_video", "info")
-	log.Printf("[WATERMARK] Stage: received_local_video - processing job %s", jobID)
+	p.log(jobID, "processing_video", "info")
+	log.Printf("[PIPELINE] Stage: processing_video - processing job %s", jobID)
+	log.Printf("[PIPELINE] NOTE: Watermark removal is DISABLED - using source video directly")
 
 	// Perform watermark removal
 	cleanVideoPath := inputPath // Default to original

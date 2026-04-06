@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler) {
+func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler) {
 	api := r.Group("/api")
 
 	// Health check
@@ -161,6 +161,9 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	admin := api.Group("/admin")
 	admin.Use(middleware.RequireAdmin(authService))
 	{
+		// Movie asset uploads
+		admin.POST("/movies/upload", uploadHandler.UploadMovieAssets)
+
 		// Movie management
 		admin.POST("/movies", movieHandler.CreateMovie)
 		admin.PUT("/movies/:id", movieHandler.UpdateMovie)
@@ -206,6 +209,12 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 		admin.GET("/collections/:id", collectionHandler.GetCollection)
 		admin.PUT("/collections/:id", collectionHandler.UpdateCollection)
 		admin.DELETE("/collections/:id", collectionHandler.DeleteCollection)
+
+		// Clip management
+		admin.GET("/clips", clipHandler.ListClips)
+		admin.GET("/clips/movie/:movieId", clipHandler.GetClipsByMovie)
+		admin.POST("/clips", clipHandler.SaveClips)
+		admin.DELETE("/clips/movie/:movieId", clipHandler.DeleteClipsByMovie)
 	}
 
 	// Public collection routes

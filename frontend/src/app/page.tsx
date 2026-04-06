@@ -1,15 +1,28 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Play, ChevronRight } from "lucide-react";
+import { Play, ChevronRight, Flame, Clapperboard, Sparkles, Film } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MovieCarousel from "@/components/MovieCarousel";
 import SeriesCarousel from "@/components/SeriesCarousel";
 import ContinueWatchingSection from "@/components/home/ContinueWatchingSection";
 import FeaturedCollectionsSection from "@/components/home/FeaturedCollectionsSection";
+import HeroCarousel from "@/components/home/HeroCarousel";
 import { getMovies, getTrendingMovies, getFeaturedCollections, Movie } from "@/lib/api";
 import { getSeries, Series } from "@/lib/series-api";
 import { getTranslations } from "@/lib/i18n-server";
+
+const GENRE_CHIPS = [
+  { label: "Jangari", slug: "action" },
+  { label: "Drama", slug: "drama" },
+  { label: "Komediya", slug: "comedy" },
+  { label: "Fantastika", slug: "sci-fi" },
+  { label: "Triller", slug: "thriller" },
+  { label: "Multfilm", slug: "animation" },
+  { label: "Romantika", slug: "romance" },
+  { label: "Daxvo", slug: "horror" },
+  { label: "Klassika", slug: "classic" },
+];
 
 export const dynamic = "force-dynamic";
 
@@ -55,7 +68,7 @@ export default async function HomePage() {
   let seriesData: Series[] = [];
   
   try {
-    const res = await getMovies({ limit: 20 });
+    const res = await getMovies({ limit: 30 });
     movies = res.data || [];
   } catch {
     // Silently handle — show empty state
@@ -88,185 +101,122 @@ export default async function HomePage() {
   const hero = movies[0];
   const featured = movies.slice(1, 7);
   const recent = movies.slice(0, 12);
+  const latestMovies = movies.slice(0, 6); // For carousel - newest 6 movies
 
   return (
     <>
       <Navbar />
       <main className="min-h-screen">
-        {/* ── Hero ──────────────────────────────────────────── */}
-        {hero ? (
-          <section className="relative h-[85vh] min-h-[500px] flex items-end">
-            {/* Backdrop */}
-            <div className="absolute inset-0">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={hero.backdrop_url || hero.poster_url}
-                alt={hero.title}
-                className="w-full h-full object-cover"
-              />
-              {/* Gradient overlay */}
-              <div className="absolute inset-0 bg-gradient-to-t from-brand-dark via-brand-dark/60 to-transparent" />
-              <div className="absolute inset-0 bg-gradient-to-r from-brand-dark/80 to-transparent" />
-            </div>
+        {/* ── Hero Carousel (Latest Movies) ─────────────────────── */}
+        <HeroCarousel movies={latestMovies} />
 
-            {/* Content */}
-            <div className="relative max-w-7xl mx-auto px-4 pb-16 sm:pb-20 w-full">
-              <div className="max-w-2xl">
-                {/* Genres */}
-                <div className="flex gap-2 mb-4 flex-wrap">
-                  {hero.genre?.slice(0, 3).map((g) => (
-                    <span
-                      key={g}
-                      className="text-xs border border-brand-red/60 text-brand-red px-3 py-1 rounded-full"
-                    >
-                      {g}
-                    </span>
-                  ))}
-                </div>
-
-                <h1 className="font-display text-4xl sm:text-5xl md:text-7xl tracking-wide text-white leading-none mb-4">
-                  {hero.title}
-                </h1>
-
-                <p className="text-gray-300 text-sm sm:text-base md:text-lg leading-relaxed line-clamp-3 mb-6 max-w-xl">
-                  {hero.description}
-                </p>
-
-                <div className="flex items-center gap-3 flex-wrap">
-                  <Link
-                    href={`/watch/${hero.slug}`}
-                    className="flex items-center gap-2 bg-brand-red hover:bg-orange-700 text-white font-semibold px-5 sm:px-7 py-3 rounded-xl transition-colors text-sm sm:text-base"
-                  >
-                    <Play size={18} fill="white" />
-                    {t("common.watchNow")}
-                  </Link>
-                  <Link
-                    href={`/movies/${hero.slug}`}
-                    className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white font-semibold px-5 sm:px-7 py-3 rounded-xl backdrop-blur-sm transition-colors border border-white/20 text-sm sm:text-base"
-                  >
-                    {t("home.moreInfo")}
-                  </Link>
-                  <div className="flex items-center gap-3 text-sm text-gray-400 ml-2">
-                    <span>{hero.year}</span>
-                    {hero.quality && (
-                      <span className="border border-gray-600 px-2 py-0.5 rounded text-xs">
-                        {hero.quality}
-                      </span>
-                    )}
-                    {hero.duration > 0 && <span>{hero.duration} min</span>}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-        ) : (
-          /* Empty hero state */
-          <section className="h-[60vh] flex items-center justify-center bg-gradient-to-b from-brand-card to-brand-dark">
-            <div className="text-center px-4">
-              <h1 className="font-display text-5xl sm:text-6xl text-white tracking-wide mb-4">
-                FILMORA<span className="text-brand-red">UZ</span>
-              </h1>
-              <p className="text-gray-400 text-base sm:text-lg mb-6">
-                Eng yaxshi filmlar, bitta joyda.
-              </p>
+        {/* ── Genre Chips ──────────────────────────────────────────── */}
+        <section className="max-w-7xl mx-auto px-4 mt-4 mb-2">
+          <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+            {GENRE_CHIPS.map((genre) => (
               <Link
-                href="/movies"
-                className="bg-brand-red hover:bg-orange-700 text-white font-semibold px-8 py-3 rounded-xl transition-colors inline-block"
+                key={genre.slug}
+                href={`/movies?genre=${genre.slug}`}
+                className="shrink-0 px-4 py-1.5 bg-brand-card border border-brand-border text-gray-300 text-sm rounded-full hover:border-brand-red hover:text-brand-red transition-colors"
               >
-                Kinolarni ko'rish
+                {genre.label}
               </Link>
-            </div>
-          </section>
-        )}
+            ))}
+          </div>
+        </section>
 
         {/* ── Continue Watching ─────────────────────────────── */}
         <ContinueWatchingSection />
 
+        {/* ── New Movies ─────────────────────────────────────── */}
+        {recent.length > 0 && (
+          <section className="max-w-7xl mx-auto px-4 py-8">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
+                <Clapperboard size={20} className="text-brand-red" />
+                Yangi filmlar
+              </h2>
+              <Link
+                href="/movies"
+                className="flex items-center gap-1 text-xs text-brand-red hover:text-orange-400 transition-colors"
+              >
+                Hammasi <ChevronRight size={14} />
+              </Link>
+            </div>
+            <MovieCarousel movies={recent} />
+          </section>
+        )}
+
         {/* ── Trending ─────────────────────────────────────── */}
         {trending.length > 0 && (
-          <section className="max-w-7xl mx-auto px-4 py-12">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="font-display text-2xl sm:text-3xl tracking-wide text-white">
-                TRENDING
+          <section className="max-w-7xl mx-auto px-4 py-8">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
+                <Flame size={20} className="text-brand-red" />
+                Trending
               </h2>
             </div>
             <MovieCarousel movies={trending} />
           </section>
         )}
 
+        {/* ── Premium ─────────────────────────────────────── */}
+        {movies.filter(m => m.is_premium).length > 0 && (
+          <section className="max-w-7xl mx-auto px-4 py-8">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
+                <Sparkles size={20} className="text-yellow-500" />
+                Premium
+              </h2>
+              <Link
+                href="/movies?premium=true"
+                className="flex items-center gap-1 text-xs text-yellow-500 hover:text-yellow-400 transition-colors"
+              >
+                Hammasi <ChevronRight size={14} />
+              </Link>
+            </div>
+            <MovieCarousel movies={movies.filter(m => m.is_premium).slice(0, 12)} />
+          </section>
+        )}
+
         {/* ── Featured Collections ──────────────────────────────────── */}
         <FeaturedCollectionsSection collections={featuredCollections} />
 
-        {/* ── Series Sections ──────────────────────────────────── */}
+        {/* ── New Series ──────────────────────────────────── */}
         {seriesData.length > 0 && (
-          <>
-            {/* New Series */}
-            <section className="max-w-7xl mx-auto px-4 py-12">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="font-display text-2xl sm:text-3xl tracking-wide text-white">
-                  Yangi seriallar
-                </h2>
-                <Link
-                  href="/series"
-                  className="flex items-center gap-1 text-sm text-brand-red hover:text-orange-400 transition-colors"
-                >
-                  Hammasi <ChevronRight size={16} />
-                </Link>
-              </div>
-              <SeriesCarousel series={seriesData.slice(0, 10)} />
-            </section>
-
-            {/* Popular Series (reuse same data for now) */}
-            <section className="max-w-7xl mx-auto px-4 pb-12">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="font-display text-2xl sm:text-3xl tracking-wide text-white">
-                  Mashhur seriallar
-                </h2>
-                <Link
-                  href="/series"
-                  className="flex items-center gap-1 text-sm text-brand-red hover:text-orange-400 transition-colors"
-                >
-                  Hammasi <ChevronRight size={16} />
-                </Link>
-              </div>
-              <SeriesCarousel series={seriesData.slice(0, 10)} />
-            </section>
-          </>
+          <section className="max-w-7xl mx-auto px-4 py-8">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
+                <Film size={20} className="text-brand-red" />
+                Yangi seriallar
+              </h2>
+              <Link
+                href="/series"
+                className="flex items-center gap-1 text-xs text-brand-red hover:text-orange-400 transition-colors"
+              >
+                Hammasi <ChevronRight size={14} />
+              </Link>
+            </div>
+            <SeriesCarousel series={seriesData.slice(0, 10)} />
+          </section>
         )}
 
         {/* ── Featured row ──────────────────────────────────── */}
         {featured.length > 0 && (
-          <section className="max-w-7xl mx-auto px-4 py-12">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="font-display text-2xl sm:text-3xl tracking-wide text-white">
+          <section className="max-w-7xl mx-auto px-4 py-8">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
+                <Clapperboard size={20} className="text-brand-red" />
                 {t("home.featuredMovies")}
               </h2>
               <Link
                 href="/movies"
-                className="flex items-center gap-1 text-sm text-brand-red hover:text-orange-400 transition-colors"
+                className="flex items-center gap-1 text-xs text-brand-red hover:text-orange-400 transition-colors"
               >
-                {t("common.seeAll")} <ChevronRight size={16} />
+                {t("common.seeAll")} <ChevronRight size={14} />
               </Link>
             </div>
             <MovieCarousel movies={featured} />
-          </section>
-        )}
-
-        {/* ── New Releases ──────────────────────────────────── */}
-        {recent.length > 0 && (
-          <section className="max-w-7xl mx-auto px-4 pb-16">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="font-display text-2xl sm:text-3xl tracking-wide text-white">
-                {t("home.newReleases")}
-              </h2>
-              <Link
-                href="/movies"
-                className="flex items-center gap-1 text-sm text-brand-red hover:text-orange-400 transition-colors"
-              >
-                Hammasi <ChevronRight size={16} />
-              </Link>
-            </div>
-            <MovieCarousel movies={recent} />
           </section>
         )}
 

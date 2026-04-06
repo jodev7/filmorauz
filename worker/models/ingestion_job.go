@@ -24,17 +24,10 @@ const (
 	IngestionStatusDownloadFailed      IngestionStatus = "download_failed"
 	IngestionStatusParsingComplete     IngestionStatus = "parsing_complete"
 	IngestionStatusEnrichingMetadata   IngestionStatus = "enriching_metadata"
-	IngestionStatusFindingPoster       IngestionStatus = "finding_poster"
-	IngestionStatusGeneratingPoster    IngestionStatus = "generating_poster"
-	IngestionStatusUploadingPoster     IngestionStatus = "uploading_poster"
-	IngestionStatusGeneratingBackdrop  IngestionStatus = "generating_backdrop"
 	IngestionStatusCreatingMovie       IngestionStatus = "creating_movie"
 	IngestionStatusSendingNotification IngestionStatus = "sending_notification"
 
 	// NEW: Video processing detailed statuses
-	IngestionStatusCuttingVideo      IngestionStatus = "cutting_video"
-	IngestionStatusRemovingWatermark IngestionStatus = "removing_watermark"
-	IngestionStatusAddingLogo        IngestionStatus = "adding_logo"
 	IngestionStatusHLSProcessing     IngestionStatus = "hls_processing"
 	IngestionStatusFinalizingStorage IngestionStatus = "finalizing_storage"
 )

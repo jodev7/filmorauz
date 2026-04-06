@@ -187,6 +187,10 @@ func main() {
 	seriesService := services.NewSeriesService(seriesRepo)
 	seriesHandler := handlers.NewSeriesHandler(seriesService)
 
+	// Clip repository and handler
+	clipRepo := repositories.NewClipRepository(db)
+	clipHandler := handlers.NewClipHandler(clipRepo)
+
 	// Serve uploaded files in dev mode
 	if cfg.IsDev {
 		r.Static("/uploads", "./uploads")
@@ -199,7 +203,7 @@ func main() {
 	}
 
 	// Register routes
-	routes.Setup(r, authHandler, movieHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, banAppealHandler, notificationHandler, telegramHandler)
+	routes.Setup(r, authHandler, movieHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler)
 
 	// Start premium cleanup background job (runs every 10 minutes)
 	go startPremiumCleanupJob(userRepo, notificationService)

@@ -73,14 +73,14 @@ export default function MovieCarousel({ movies }: MovieCarouselProps) {
           msOverflowStyle: "none",
         }}
       >
-        {movies.map((movie) => (
-          <div
-            key={movie.id}
-            className="shrink-0 w-[140px] sm:w-[160px] md:w-[180px] lg:w-[200px] snap-start isolate"
-          >
-            <MovieCard movie={movie} />
-          </div>
-        ))}
+{movies.map((movie) => (
+            <div
+              key={movie.id}
+              className="shrink-0 w-[120px] sm:w-[140px] md:w-[160px] lg:w-[180px] snap-start isolate"
+            >
+              <MovieCard movie={movie} />
+            </div>
+          ))}
       </div>
     </div>
   );

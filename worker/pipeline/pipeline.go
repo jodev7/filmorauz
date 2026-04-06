@@ -19,7 +19,6 @@ import (
 
 	"github.com/filmorauz/worker/models"
 	"github.com/filmorauz/worker/repositories"
-	"github.com/filmorauz/worker/services"
 	"github.com/filmorauz/worker/storage"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -32,26 +31,21 @@ type Config struct {
 	ParserURL     string
 	TempDir       string
 	StorageConfig storage.Config
-	AIEndpoint    string                 // Legacy: Optional AI image generation endpoint (custom API)
-	TMDBAPIKey    string                 // TMDB API key for metadata enrichment
-	DB            *mongo.Database        // MongoDB database for movie insertion
-	BackendURL    string                 // Backend API URL for Telegram notifications
-	WorkerToken   string                 // Token for worker-to-backend authentication
-	OpenAIConfig  *services.OpenAIConfig // OpenAI configuration (API key, model, etc.)
+	TMDBAPIKey    string          // TMDB API key for metadata enrichment
+	DB            *mongo.Database // MongoDB database for movie insertion
+	BackendURL    string          // Backend API URL for Telegram notifications
+	WorkerToken   string          // Token for worker-to-backend authentication
 }
 
 // Pipeline handles the video ingestion pipeline
 type Pipeline struct {
-	config           Config
-	jobRepo          *repositories.JobRepository
-	storage          storage.Storage
-	httpClient       *http.Client
-	enricher         *MetadataEnricher
-	posterGen        *PosterGenerator
-	openAIClient     *services.OpenAIClient          // OpenAI client for poster generation
-	movieCol         *mongo.Collection               // MongoDB movies collection for direct insertion
-	dbName           string                          // Database name for logging
-	watermarkService *services.WatermarkRemovalService // Dynamic watermark removal
+	config     Config
+	jobRepo    *repositories.JobRepository
+	storage    storage.Storage
+	httpClient *http.Client
+	enricher   *MetadataEnricher
+	movieCol   *mongo.Collection // MongoDB movies collection for direct insertion
+	dbName     string            // Database name for logging
 }
 
 // NewPipeline creates a new pipeline instance
@@ -64,28 +58,6 @@ func NewPipeline(config Config, jobRepo *repositories.JobRepository) (*Pipeline,
 	// Create metadata enricher with TMDB support
 	enricher := NewMetadataEnricher(config.ParserURL, config.TMDBAPIKey)
 
-	// Initialize OpenAI client if configured
-	var openAIClient *services.OpenAIClient
-	if config.OpenAIConfig != nil && config.OpenAIConfig.APIKey != "" {
-		openAIClient, err = services.NewOpenAIClient(config.OpenAIConfig)
-		if err != nil {
-			log.Printf("[PIPELINE] WARNING: Failed to create OpenAI client: %v", err)
-			// Continue without OpenAI - will use legacy endpoint or skip
-		} else if openAIClient.IsConfigured() {
-			log.Printf("[PIPELINE] OpenAI client initialized successfully")
-		}
-	} else {
-		log.Printf("[PIPELINE] OpenAI not configured - API key not provided")
-	}
-
-	// Create poster generator with optional OpenAI client
-	posterGen, err := NewPosterGeneratorWithOpenAI(config.StorageConfig, config.TempDir, config.AIEndpoint, config.StorageConfig.BaseURL, openAIClient)
-	if err != nil {
-		log.Printf("[PIPELINE] WARNING: Failed to create poster generator: %v", err)
-		// Continue without poster generator - it's optional
-		posterGen = nil
-	}
-
 	// Initialize movie collection for direct MongoDB insertion
 	var movieCol *mongo.Collection
 	dbName := "filmorauz" // Default database name
@@ -97,13 +69,6 @@ func NewPipeline(config Config, jobRepo *repositories.JobRepository) (*Pipeline,
 		log.Printf("[PIPELINE] WARNING: No database provided, movie creation will be skipped")
 	}
 
-	// Initialize watermark removal service
-	watermarkConfig := services.DefaultWatermarkRemovalConfig()
-	if config.TempDir != "" {
-		watermarkConfig.TempDir = config.TempDir
-	}
-	watermarkService := services.NewWatermarkRemovalService(watermarkConfig)
-
 	return &Pipeline{
 		config:  config,
 		jobRepo: jobRepo,
@@ -111,12 +76,9 @@ func NewPipeline(config Config, jobRepo *repositories.JobRepository) (*Pipeline,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Minute, // Very long timeout for parser downloads (can take 10-20+ minutes)
 		},
-		enricher:         enricher,
-		posterGen:        posterGen,
-		openAIClient:     openAIClient,
-		movieCol:         movieCol,
-		dbName:           dbName,
-		watermarkService: watermarkService,
+		enricher: enricher,
+		movieCol: movieCol,
+		dbName:   dbName,
 	}, nil
 }
 
@@ -226,6 +188,7 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	// CRITICAL: Parser contract now requires parser to download the file
 	// If local_path is empty, parser has failed to download - fail immediately
 	if localPath == "" {
+		log.Printf("[STAGE] parser start — source=%s, source_id=%s, detail_url=%s", job.Source, job.SourceID, job.DetailURL)
 		log.Printf("[PIPELINE] No local_path found, calling parser to download video...")
 		log.Printf("[PIPELINE] NOTE: Parser is expected to download and return local_path")
 
@@ -240,6 +203,7 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		// DEFENSIVE: If parser provided local_path, update the job immediately
 		if localPath != "" {
 			log.Printf("[PIPELINE] Parser downloaded file to: %s", localPath)
+			log.Printf("[STAGE] parser end — success, local_path=%s", localPath)
 			// Update job with local_path so worker can find the file
 			if err := p.jobRepo.UpdateLocalPath(ctx, jobID, localPath); err != nil {
 				log.Printf("[PIPELINE] Failed to update local_path: %v", err)
@@ -314,14 +278,18 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	log.Printf("[PIPELINE] Canonical movie folder (computed once): %s", canonicalFolderName)
 	log.Printf("[PIPELINE] Canonical title source: %s", canonicalTitle)
 
-	// Step 3: Process video (watermark removal + HLS conversion)
-	log.Printf("[STAGE] process starting — input: %s, folder: %s", videoPath, canonicalFolderName)
-	hlsPath, err := p.processVideo(job, localPath, canonicalFolderName)
+	// ===== PROCESSING STAGE: FFmpeg logo overlay + HLS =====
+	// Step 3: Process video (FFmpeg logo overlay + HLS conversion)
+	// No watermark removal - use source video directly
+	log.Printf("[CHECKPOINT] raw_downloaded_path: %s", localPath)
+	log.Printf("[STAGE] process start — input: %s, folder: %s", videoPath, canonicalFolderName)
+	hlsPath, processedMasterPath, err := p.processVideo(job, localPath, canonicalFolderName)
 	if err != nil {
 		return fmt.Errorf("processing failed: %w", err)
 	}
-	defer p.cleanupDir(hlsPath)
-	log.Printf("[STAGE] process complete — hlsPath: %s", hlsPath)
+	log.Printf("[CHECKPOINT] processed_master_path: %s", processedMasterPath)
+	log.Printf("[CHECKPOINT] hls_dir: %s", hlsPath)
+	log.Printf("[STAGE] process complete — hlsPath: %s, processedMaster: %s", hlsPath, processedMasterPath)
 
 	// Mark process step done so ClaimNextProcessingJob won't re-pick this job
 	if stepErr := p.jobRepo.UpdateStep(ctx, jobID, "process"); stepErr != nil {
@@ -342,16 +310,16 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		return fmt.Errorf("failed to update status to uploading: %w", err)
 	}
 
-	// Step 4: Upload processed files (MODE-based finalization)
-	log.Printf("[STAGE] upload starting — hlsPath: %s", hlsPath)
-	if err := p.updateStatus(jobID, models.IngestionStatusFinalizingStorage, 65); err != nil {
-		log.Printf("[PIPELINE] WARNING: Failed to update status to finalizing_storage: %v", err)
-	}
-	streamingURL, err := p.uploadProcessedFiles(job, hlsPath, localPath, canonicalFolderName)
+	// Step 4: Upload/save processed files (MODE-based finalization)
+	// Development: save to worker/uploads/movies/<folder>/
+	// Production: upload to B2/CDN
+	log.Printf("[STAGE] upload_save start — hlsPath: %s, mode: %s", hlsPath, p.config.StorageConfig.Mode)
+	streamingURL, finalUploadsPath, err := p.uploadProcessedFiles(job, hlsPath, localPath, canonicalFolderName)
 	if err != nil {
-		return fmt.Errorf("upload failed: %w", err)
+		return fmt.Errorf("upload/save failed: %w", err)
 	}
-	log.Printf("[STAGE] upload complete — streamingURL: %s", streamingURL)
+	log.Printf("[STAGE] upload_save end — streamingURL: %s", streamingURL)
+	log.Printf("[PIPELINE] Final uploads path for clip generation: %s", finalUploadsPath)
 
 	// Update final output path based on MODE
 	// After finalization, the output_path should reflect the final location
@@ -385,8 +353,9 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	movieSlug := sanitizeFilename(title)
 	p.log(jobID, fmt.Sprintf("%s+uploaded", movieSlug), "info")
 
-	// ===== STEP 5: ENRICH METADATA =====
+	// ===== STEP 5: ENRICH METADATA (from TMDB) =====
 	p.log(jobID, "Starting metadata enrichment", "info")
+	log.Printf("[STAGE] enrich_metadata start")
 	if err := p.updateStatus(jobID, models.IngestionStatusEnrichingMetadata, 75); err != nil {
 		return fmt.Errorf("failed to update status to enriching_metadata: %w", err)
 	}
@@ -424,369 +393,33 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	}
 
 	p.log(jobID, fmt.Sprintf("Metadata enriched (source: %s)", metadataSource), "info")
+	log.Printf("[STAGE] enrich_metadata end — title=%s, year=%d, source=%s", enrichedMetadata.Title, enrichedMetadata.Year, metadataSource)
 
-	// ===== STEP 6: GENERATE POSTER =====
-	p.log(jobID, "Starting poster generation", "info")
+	// ===== POSTER / BACKDROP (use TMDB/parser URLs, no generation) =====
+	// No poster generation, no backdrop generation, no AI generation
+	// Use URLs directly from enriched metadata
+	log.Printf("[STAGE] poster_backdrop — using enriched metadata URLs")
+	log.Printf("[STAGE] poster_url=%s backdrop_url=%s", enrichedMetadata.PosterURL, enrichedMetadata.BackdropURL)
+	finalPosterURL := enrichedMetadata.PosterURL
+	finalBackdropURL := enrichedMetadata.BackdropURL
 
-	// Use the canonical folder name computed earlier (same as HLS output)
-	// This ensures ALL assets (HLS, poster, backdrop) are in the SAME folder
-	log.Printf("[PIPELINE] Using canonical movie folder for poster: %s", canonicalFolderName)
-
-	var finalPosterURL string
-	var originalPosterURL string
-	posterGenerated := false
-	posterGenStatus := "not_available"
-	localizationAttempted := false
-	localizationSucceeded := false
-
-	// NOTE: Status update for finding_poster is logged but does NOT fail the job
-	// Poster generation is non-critical - we continue even if status update fails
-	if err := p.updateStatus(jobID, models.IngestionStatusFindingPoster, 80); err != nil {
-		log.Printf("[PIPELINE] WARNING: Failed to update status to finding_poster: %v (continuing anyway)", err)
-	}
-
-	if p.posterGen != nil {
-		log.Printf("[PIPELINE] ===== POSTER GENERATION START =====")
-		log.Printf("[PIPELINE] PosterGenerator available, attempting poster generation")
-
-		posterResult, err := p.posterGen.GeneratePoster(ctx, enrichedMetadata, canonicalFolderName)
-		if err != nil {
-			log.Printf("[PIPELINE] Poster generation error: %v", err)
-			// Fallback to enriched metadata poster
-			finalPosterURL = enrichedMetadata.PosterURL
-			originalPosterURL = enrichedMetadata.PosterURL
-			posterGenerated = false
-			posterGenStatus = "error_fallback_to_original"
-			log.Printf("[PIPELINE] POSTER RESULT: Error occurred, FALLBACK to original poster from parser/enricher")
-			log.Printf("[PIPELINE] POSTER RESULT: Original poster URL: %s", finalPosterURL)
-		} else if posterResult != nil {
-			finalPosterURL = posterResult.GeneratedPosterURL
-			if finalPosterURL == "" {
-				finalPosterURL = posterResult.OriginalPosterURL
-			}
-			originalPosterURL = posterResult.OriginalPosterURL
-			posterGenerated = posterResult.PosterGenerated
-
-			if posterGenerated {
-				posterGenStatus = "ai_generated"
-				localizationAttempted = true
-				localizationSucceeded = true
-				log.Printf("[PIPELINE] POSTER RESULT: AI poster GENERATED successfully")
-				log.Printf("[PIPELINE] POSTER RESULT: Generated poster URL: %s", finalPosterURL)
-				log.Printf("[PIPELINE] POSTER RESULT: Original poster URL: %s", originalPosterURL)
-			} else {
-				posterGenStatus = "fallback_to_original"
-				localizationAttempted = true
-				localizationSucceeded = false
-				log.Printf("[PIPELINE] POSTER RESULT: AI generation was NOT used")
-				log.Printf("[PIPELINE] POSTER RESULT: Reason: AI endpoint not configured or generation skipped")
-				log.Printf("[PIPELINE] POSTER RESULT: FALLBACK to original poster URL: %s", finalPosterURL)
-			}
-		} else {
-			log.Printf("[PIPELINE] POSTER RESULT: No poster result returned")
-			finalPosterURL = enrichedMetadata.PosterURL
-			originalPosterURL = enrichedMetadata.PosterURL
-			posterGenerated = false
-			posterGenStatus = "no_result_fallback"
-			localizationAttempted = true
-			localizationSucceeded = false
-		}
-
-		log.Printf("[PIPELINE] ===== POSTER GENERATION END =====")
-
-		// ===== STEP 6b: ADD LOGO OVERLAY AND LOCALIZATION =====
-		// Use canonicalFolderName for consistent storage in SAME movie folder
-
-		// If we have a generated poster (or original), add logo overlay and localize
-		if finalPosterURL != "" {
-			log.Printf("[PIPELINE] [POSTER-LOGO] Starting logo overlay for: %s", finalPosterURL)
-
-			// First we need the poster as a local file for Go image processing.
-			var posterLocalPath string
-
-			// Priority 1: dev-mode stream URL → resolve to on-disk path directly
-			// avoids HTTP round-trip to backend which may not be running
-			if p.config.StorageConfig.Mode == "dev" {
-				if resolved := p.resolveStreamURLToLocalPath(finalPosterURL); resolved != "" {
-					if _, statErr := os.Stat(resolved); statErr == nil {
-						posterLocalPath = resolved
-						log.Printf("[PIPELINE] [POSTER-LOGO] Resolved local path: %s", posterLocalPath)
-					} else {
-						log.Printf("[PIPELINE] [POSTER-LOGO] Resolved path does not exist: %s (%v)", resolved, statErr)
-					}
-				}
-			}
-
-			// Priority 2: explicit /uploads path
-			if posterLocalPath == "" && (strings.HasPrefix(finalPosterURL, "/uploads") || !strings.HasPrefix(finalPosterURL, "http")) {
-				trimmed := strings.TrimPrefix(finalPosterURL, "/uploads/")
-				baseDir, _ := os.Getwd()
-				posterLocalPath = filepath.Join(baseDir, "uploads", trimmed)
-				log.Printf("[PIPELINE] [POSTER-LOGO] Using /uploads path: %s", posterLocalPath)
-			}
-
-			// Priority 3: HTTP download (remote URL or fallback)
-			if posterLocalPath == "" {
-				dlPath := filepath.Join(p.config.TempDir, "poster_download.jpg")
-				log.Printf("[PIPELINE] [POSTER-LOGO] Downloading poster from URL: %s", finalPosterURL)
-				if err := p.downloadFile(finalPosterURL, dlPath); err != nil {
-					log.Printf("[PIPELINE] [POSTER-LOGO] Download failed: %v — logo overlay will be skipped", err)
-				} else {
-					posterLocalPath = dlPath
-					log.Printf("[PIPELINE] [POSTER-LOGO] Downloaded to: %s", dlPath)
-				}
-			}
-
-			// Add logo overlay and localize if we have a local poster
-			if posterLocalPath != "" {
-				log.Printf("[PIPELINE] Using canonical folder for poster: %s", canonicalFolderName)
-
-				// Localize and add premium branding
-				brandedPath, logoErr := p.posterGen.LocalizeAndBrandPoster(ctx, posterLocalPath, canonicalFolderName, enrichedMetadata)
-				if logoErr != nil {
-					log.Printf("[PIPELINE] Logo overlay/localization failed: %v, trying basic branding", logoErr)
-					// Fallback to basic branding without localization
-					brandedPath, logoErr = p.posterGen.AddLogoOverlay(ctx, posterLocalPath, canonicalFolderName)
-					if logoErr != nil {
-						log.Printf("[PIPELINE] Basic logo overlay also failed: %v, using unbranded poster", logoErr)
-						brandedPath = posterLocalPath
-					}
-				}
-
-				if brandedPath != "" && brandedPath != posterLocalPath {
-					// Upload branded poster
-					brandedURL, uploadErr := p.posterGen.UploadBrandedPoster(ctx, brandedPath, canonicalFolderName)
-					if uploadErr != nil {
-						log.Printf("[PIPELINE] Failed to upload branded poster: %v, using unbranded", uploadErr)
-					} else {
-						finalPosterURL = brandedURL
-						posterGenerated = true // branded+localized poster was produced
-						log.Printf("[PIPELINE] Branded poster ready: %s (poster_generated=true)", brandedURL)
-						log.Printf("[PIPELINE] Localization attempted: %v, succeeded: %v", localizationAttempted, localizationSucceeded)
-
-						// Cleanup temp file
-						if strings.Contains(brandedPath, p.config.TempDir) {
-							os.Remove(brandedPath)
-						}
-					}
-				}
-
-				// Cleanup downloaded original poster
-				if strings.Contains(posterLocalPath, p.config.TempDir) {
-					os.Remove(posterLocalPath)
-				}
-			}
-		}
-
-		// Update job with poster info
-		if err := p.jobRepo.UpdatePosterInfo(ctx, jobID, originalPosterURL, finalPosterURL, posterGenerated); err != nil {
-			log.Printf("[PIPELINE] Failed to update poster info: %v", err)
-		}
-	} else {
-		// Use enriched poster without generation
-		finalPosterURL = enrichedMetadata.PosterURL
-		originalPosterURL = enrichedMetadata.PosterURL
-		posterGenerated = false
-		posterGenStatus = "not_available"
-		log.Printf("[PIPELINE] PosterGenerator NOT available (nil), using original poster from parser: %s", finalPosterURL)
-	}
-
-	// Log poster generation status summary
-	log.Printf("[PIPELINE] ===== POSTER STATUS SUMMARY =====")
-	log.Printf("[PIPELINE] posterGenStatus: %s", posterGenStatus)
-	log.Printf("[PIPELINE] posterGenerated: %v", posterGenerated)
-	log.Printf("[PIPELINE] finalPosterURL: %s", finalPosterURL)
-	log.Printf("[PIPELINE] originalPosterURL: %s", originalPosterURL)
-	log.Printf("[PIPELINE] ===== END POSTER STATUS =====")
-
-	if finalPosterURL == "" {
-		log.Printf("[PIPELINE] WARNING: No poster URL available, will use placeholder or skip")
-	}
-
-	p.log(jobID, fmt.Sprintf("Poster ready (generated=%v)", posterGenerated), "info")
-
-	// ===== STEP 6c: GENERATE BACKDROP =====
-	p.log(jobID, "Starting backdrop generation", "info")
-	if err := p.updateStatus(jobID, models.IngestionStatusGeneratingBackdrop, 85); err != nil {
-		log.Printf("[PIPELINE] WARNING: Failed to update status to generating_backdrop: %v", err)
-	}
-
-	var finalBackdropURL string
-	var originalBackdropURL string
-	backdropGenerated := false
-	backdropGenStatus := "not_available"
-
-	if p.posterGen != nil {
-		log.Printf("[PIPELINE] ===== BACKDROP GENERATION START =====")
-		log.Printf("[PIPELINE] PosterGenerator available, attempting backdrop generation")
-
-		backdropResult, backdropErr := p.posterGen.GenerateBackdrop(ctx, enrichedMetadata, canonicalFolderName)
-		if backdropErr != nil {
-			log.Printf("[PIPELINE] Backdrop generation error: %v", backdropErr)
-			// Fallback to enriched metadata backdrop
-			finalBackdropURL = enrichedMetadata.BackdropURL
-			originalBackdropURL = enrichedMetadata.BackdropURL
-			backdropGenerated = false
-			backdropGenStatus = "error_fallback_to_original"
-			log.Printf("[PIPELINE] BACKDROP RESULT: Error occurred, FALLBACK to original backdrop from parser/enricher")
-			log.Printf("[PIPELINE] BACKDROP RESULT: Original backdrop URL: %s", finalBackdropURL)
-		} else if backdropResult != nil {
-			finalBackdropURL = backdropResult.GeneratedBackdropURL
-			if finalBackdropURL == "" {
-				finalBackdropURL = backdropResult.OriginalBackdropURL
-			}
-			originalBackdropURL = backdropResult.OriginalBackdropURL
-			backdropGenerated = backdropResult.BackdropGenerated
-
-			if backdropGenerated {
-				backdropGenStatus = "ai_generated"
-				log.Printf("[PIPELINE] BACKDROP RESULT: AI backdrop GENERATED successfully")
-				log.Printf("[PIPELINE] BACKDROP RESULT: Generated backdrop URL: %s", finalBackdropURL)
-				log.Printf("[PIPELINE] BACKDROP RESULT: Original backdrop URL: %s", originalBackdropURL)
-			} else {
-				backdropGenStatus = "fallback_to_original"
-				log.Printf("[PIPELINE] BACKDROP RESULT: AI generation was NOT used")
-				log.Printf("[PIPELINE] BACKDROP RESULT: Reason: AI endpoint not configured or generation skipped")
-				log.Printf("[PIPELINE] BACKDROP RESULT: FALLBACK to original backdrop URL: %s", finalBackdropURL)
-			}
-		} else {
-			log.Printf("[PIPELINE] BACKDROP RESULT: No backdrop result returned")
-			finalBackdropURL = enrichedMetadata.BackdropURL
-			originalBackdropURL = enrichedMetadata.BackdropURL
-			backdropGenerated = false
-			backdropGenStatus = "no_result_fallback"
-		}
-
-		log.Printf("[PIPELINE] ===== BACKDROP GENERATION END =====")
-
-		// ===== STEP 6d: ADD LOGO OVERLAY TO BACKDROP =====
-		// If we have a generated backdrop (or original), add logo overlay
-		if finalBackdropURL != "" {
-			log.Printf("[PIPELINE] [BACKDROP-LOGO] Starting logo overlay for: %s", finalBackdropURL)
-
-			var backdropLocalPath string
-
-			// Priority 1: dev-mode stream URL → resolve to on-disk path directly
-			if p.config.StorageConfig.Mode == "dev" {
-				if resolved := p.resolveStreamURLToLocalPath(finalBackdropURL); resolved != "" {
-					if _, statErr := os.Stat(resolved); statErr == nil {
-						backdropLocalPath = resolved
-						log.Printf("[PIPELINE] [BACKDROP-LOGO] Resolved local path: %s", backdropLocalPath)
-					} else {
-						log.Printf("[PIPELINE] [BACKDROP-LOGO] Resolved path does not exist: %s (%v)", resolved, statErr)
-					}
-				}
-			}
-
-			// Priority 2: explicit /uploads path
-			if backdropLocalPath == "" && (strings.HasPrefix(finalBackdropURL, "/uploads") || !strings.HasPrefix(finalBackdropURL, "http")) {
-				trimmed := strings.TrimPrefix(finalBackdropURL, "/uploads/")
-				baseDir, _ := os.Getwd()
-				backdropLocalPath = filepath.Join(baseDir, "uploads", trimmed)
-				log.Printf("[PIPELINE] [BACKDROP-LOGO] Using /uploads path: %s", backdropLocalPath)
-			}
-
-			// Priority 3: HTTP download
-			if backdropLocalPath == "" {
-				dlPath := filepath.Join(p.config.TempDir, "backdrop_download.jpg")
-				log.Printf("[PIPELINE] [BACKDROP-LOGO] Downloading from URL: %s", finalBackdropURL)
-				if err := p.downloadFile(finalBackdropURL, dlPath); err != nil {
-					log.Printf("[PIPELINE] [BACKDROP-LOGO] Download failed: %v — logo overlay will be skipped", err)
-				} else {
-					backdropLocalPath = dlPath
-					log.Printf("[PIPELINE] [BACKDROP-LOGO] Downloaded to: %s", dlPath)
-				}
-			}
-
-			// Add logo overlay if we have a local backdrop
-			if backdropLocalPath != "" {
-				log.Printf("[PIPELINE] [BACKDROP-LOGO] Using canonical folder: %s", canonicalFolderName)
-
-				brandedPath, logoErr := p.posterGen.AddLogoOverlayForBackdrop(ctx, backdropLocalPath, canonicalFolderName)
-				if logoErr != nil {
-					log.Printf("[PIPELINE] Logo overlay failed: %v, using unbranded backdrop", logoErr)
-				} else if brandedPath != "" && brandedPath != backdropLocalPath {
-					// Upload branded backdrop
-					brandedURL, uploadErr := p.posterGen.UploadBrandedBackdrop(ctx, brandedPath, canonicalFolderName)
-					if uploadErr != nil {
-						log.Printf("[PIPELINE] Failed to upload branded backdrop: %v, using unbranded", uploadErr)
-					} else {
-						finalBackdropURL = brandedURL
-						backdropGenerated = true // logo was applied — mark generated regardless of AI
-						log.Printf("[PIPELINE] Branded backdrop ready: %s (backdrop_generated=true)", brandedURL)
-
-						// Cleanup temp file
-						if strings.Contains(brandedPath, p.config.TempDir) {
-							os.Remove(brandedPath)
-						}
-					}
-				}
-
-				// Cleanup downloaded original backdrop
-				if strings.Contains(backdropLocalPath, p.config.TempDir) {
-					os.Remove(backdropLocalPath)
-				}
-			}
-		}
-	} else {
-		// Use enriched backdrop without generation
-		finalBackdropURL = enrichedMetadata.BackdropURL
-		originalBackdropURL = enrichedMetadata.BackdropURL
-		backdropGenerated = false
-		backdropGenStatus = "not_available"
-		log.Printf("[PIPELINE] PosterGenerator NOT available (nil), using original backdrop from parser: %s", finalBackdropURL)
-	}
-
-	// Log backdrop generation status summary
-	log.Printf("[PIPELINE] ===== BACKDROP STATUS SUMMARY =====")
-	log.Printf("[PIPELINE] backdropGenStatus: %s", backdropGenStatus)
-	log.Printf("[PIPELINE] backdropGenerated: %v", backdropGenerated)
-	log.Printf("[PIPELINE] finalBackdropURL: %s", finalBackdropURL)
-	log.Printf("[PIPELINE] originalBackdropURL: %s", originalBackdropURL)
-	log.Printf("[PIPELINE] ===== END BACKDROP STATUS =====")
-
-	if finalBackdropURL == "" {
-		log.Printf("[PIPELINE] WARNING: No backdrop URL available, will use placeholder or skip")
-	}
-
-	p.log(jobID, fmt.Sprintf("Backdrop ready (generated=%v)", backdropGenerated), "info")
-
-	// Update progress to 90%
-	// NOTE: Status update failure is logged but does NOT fail the job
-	// Poster step is non-critical - we continue even if status update fails
-	if err := p.updateStatus(jobID, models.IngestionStatusUploadingPoster, 90); err != nil {
-		log.Printf("[PIPELINE] WARNING: Failed to update status to 90%%: %v (continuing anyway)", err)
-		// Continue processing - poster step is non-critical
-	}
-
-	// ===== STEP 7: CREATE MOVIE IN DATABASE =====
+	// ===== CREATE MOVIE IN DATABASE =====
 	p.log(jobID, "Creating movie in database", "info")
+	log.Printf("[STAGE] mongodb_save start — title=%s, code=%s, streamingURL=%s", enrichedMetadata.Title, "TBD", streamingURL)
 	if err := p.updateStatus(jobID, models.IngestionStatusCreatingMovie, 95); err != nil {
 		log.Printf("[PIPELINE] WARNING: Failed to update status to creating_movie: %v", err)
-		// Continue - movie creation is more important than status update
 	}
 
-	// Log final metadata source before DB write
-	log.Printf("[PIPELINE] ===== FINAL METADATA FOR MONGODB =====")
-	log.Printf("[PIPELINE] metadataSource: %s", metadataSource)
-	log.Printf("[PIPELINE] title: %s", enrichedMetadata.Title)
-	log.Printf("[PIPELINE] originalTitle: %s", enrichedMetadata.OriginalTitle)
-	log.Printf("[PIPELINE] year: %d", enrichedMetadata.Year)
-	log.Printf("[PIPELINE] genres: %v", enrichedMetadata.Genres)
-	log.Printf("[PIPELINE] countries: %v", enrichedMetadata.Countries)
-	log.Printf("[PIPELINE] duration: %d", enrichedMetadata.Duration)
-	log.Printf("[PIPELINE] posterURL: %s", finalPosterURL)
-	log.Printf("[PIPELINE] originalPosterURL: %s", originalPosterURL)
-	log.Printf("[PIPELINE] ===== END METADATA SUMMARY =====")
+	// Log final metadata before DB write
+	log.Printf("[PIPELINE] metadataSource=%s title=%q year=%d posterURL=%s", metadataSource, enrichedMetadata.Title, enrichedMetadata.Year, finalPosterURL)
 
-	// Create movie with all enriched data
-	// This is a CRITICAL step - movie MUST be created
+	// Create movie — CRITICAL step
 	log.Printf("[STAGE] saving movie to MongoDB — title: %s, streamingURL: %s", enrichedMetadata.Title, streamingURL)
-	movieResult, err := p.createMovieInDatabaseWithEnrichment(ctx, job, enrichedMetadata, streamingURL, finalPosterURL, originalPosterURL, posterGenerated, finalBackdropURL, originalBackdropURL, backdropGenerated, metadataSource)
+	movieResult, err := p.createMovieInDatabaseWithEnrichment(ctx, job, enrichedMetadata, streamingURL, finalPosterURL, finalPosterURL, false, finalBackdropURL, finalBackdropURL, false, metadataSource)
 	if err != nil {
 		return fmt.Errorf("failed to create movie in database: %w", err)
 	}
-	log.Printf("[STAGE] movie saved to MongoDB")
+	log.Printf("[STAGE] mongodb_save end — movie_id=%v, code=%s, slug=%s", movieResult.MovieID, movieResult.Code, movieResult.Slug)
 
 	// Both upload and MongoDB save succeeded — safe to delete the original source file
 	log.Printf("[STAGE] deleting source file after full success: %s", videoPath)
@@ -809,17 +442,38 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		}
 	}
 
-	// ===== CLIP GENERATION (development only) =====
-	// Generate 10 promotional clips after successful video + MongoDB save.
-	// Skipped entirely in production — non-critical, never fails the job.
-	if p.config.StorageConfig.Mode != "prod" && p.config.StorageConfig.Mode != "production" {
-		if movieResult != nil && movieResult.Code != "" {
-			log.Printf("[CLIP] Starting clip generation for movie code=%s folder=%s", movieResult.Code, canonicalFolderName)
-			if clipErr := p.generateClips(ctx, canonicalFolderName, movieResult.Code); clipErr != nil {
-				log.Printf("[CLIP] WARNING: Clip generation failed (non-critical): %v", clipErr)
-			}
+	// ===== CLIP GENERATION =====
+	// Generate 12 promotional clips after successful video + MongoDB save.
+	// Clips are generated from the final processed movie (base_video.mp4).
+	var clipGenerationFailed bool
+	log.Printf("[STAGE] clip_generation start — movie code=%s, folder=%s, processed_master=%s", movieResult.Code, canonicalFolderName, processedMasterPath)
+	log.Printf("[CHECKPOINT] clip_input_path: %s", processedMasterPath)
+	if movieResult != nil && movieResult.Code != "" {
+		if clipErr := p.generateClips(ctx, canonicalFolderName, movieResult.Code, movieResult, processedMasterPath, finalUploadsPath); clipErr != nil {
+			log.Printf("[CLIP] ERROR: Clip generation failed: %v", clipErr)
+			clipGenerationFailed = true
+		} else {
+			log.Printf("[STAGE] clip_generation end — clips generated from final movie")
 		}
 	}
+
+	// ===== CLEANUP READYVIDEO FOLDER =====
+	// Delete readyvideo folder after movie save + clip stage complete
+	log.Printf("[STAGE] cleanup start — hlsPath: %s", hlsPath)
+	log.Printf("[CHECKPOINT] cleanup_target_path: %s", hlsPath)
+	if hlsPath != "" {
+		if _, err := os.Stat(hlsPath); err == nil {
+			log.Printf("[CLEANUP] Deleting readyvideo folder: %s", hlsPath)
+			if err := os.RemoveAll(hlsPath); err != nil {
+				log.Printf("[CLEANUP] WARNING: Failed to delete readyvideo folder: %v", err)
+			} else {
+				log.Printf("[CLEANUP] Successfully deleted readyvideo folder: %s", hlsPath)
+			}
+		} else {
+			log.Printf("[CLEANUP] readyvideo folder already deleted or does not exist: %s", hlsPath)
+		}
+	}
+	log.Printf("[STAGE] cleanup end")
 
 	// ===== TELEGRAM NOTIFICATION =====
 	// Send Telegram notification after successful movie creation
@@ -838,13 +492,23 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 
 	// ===== FINAL STATUS UPDATE =====
 	// Mark job as completed - this is critical but we log the result
+	// If clip generation failed, mark job with partial success
+	if clipGenerationFailed {
+		log.Printf("[PIPELINE] WARNING: Job completed with CLIP GENERATION FAILURE")
+		log.Printf("[PIPELINE] Movie created successfully, but clips were not generated")
+		// Keep movie as created, just log the clip failure
+	}
 	if err := p.updateStatus(jobID, models.IngestionStatusCompleted, 100); err != nil {
 		// Even if status update fails, log success because the work is done
 		log.Printf("[PIPELINE] CRITICAL: Failed to update status to COMPLETED: %v", err)
 		log.Printf("[PIPELINE] But job processing SUCCEEDED - movie created, poster handled")
 		log.Printf("[PIPELINE] Please check database connectivity")
 	} else {
-		log.Printf("[PIPELINE] Status updated to COMPLETED (100%%)")
+		if clipGenerationFailed {
+			log.Printf("[PIPELINE] Status updated to COMPLETED (100%%) with CLIP FAILURE")
+		} else {
+			log.Printf("[PIPELINE] Status updated to COMPLETED (100%%)")
+		}
 	}
 
 	// ===== FINAL JOB RESULT =====
@@ -870,14 +534,6 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	log.Printf("[PIPELINE] Final Poster URL: %s", finalPosterURL)
 	log.Printf("[PIPELINE] Final Backdrop URL: %s", finalBackdropURL)
 
-	// Asset generation status
-	log.Printf("[PIPELINE] Poster Generated: %v", posterGenerated)
-	log.Printf("[PIPELINE] Poster Gen Status: %s", posterGenStatus)
-	log.Printf("[PIPELINE] Localization Attempted: %v", localizationAttempted)
-	log.Printf("[PIPELINE] Localization Succeeded: %v", localizationSucceeded)
-	log.Printf("[PIPELINE] Backdrop Generated: %v", backdropGenerated)
-	log.Printf("[PIPELINE] Backdrop Gen Status: %s", backdropGenStatus)
-
 	// Asset storage verification
 	mode = p.config.StorageConfig.Mode
 	if mode == "dev" {
@@ -892,9 +548,24 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	log.Printf("[PIPELINE] Movie Code: %s", movieResult.Code)
 	log.Printf("[PIPELINE] Movie DB: %s", p.dbName)
 	log.Printf("[PIPELINE] Movie Collection: movies")
+
+	// Clip generation status
+	if clipGenerationFailed {
+		log.Printf("[PIPELINE] Clip Generation: FAILED")
+	} else {
+		log.Printf("[PIPELINE] Clip Generation: SUCCESS")
+	}
+
+	// Cleanup status
+	log.Printf("[PIPELINE] Readyvideo Cleanup: %s", hlsPath)
+
 	log.Printf("[PIPELINE] ===== END JOB RESULT =====")
 
-	log.Printf("[PIPELINE] Job %s completed successfully", jobID)
+	if clipGenerationFailed {
+		log.Printf("[PIPELINE] Job %s completed with CLIP FAILURE (movie created successfully)", jobID)
+	} else {
+		log.Printf("[PIPELINE] Job %s completed successfully", jobID)
+	}
 	return nil
 }
 
@@ -906,8 +577,6 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 		return nil, "", fmt.Errorf("job is nil - cannot parse movie details")
 	}
 
-	jobID := job.ID.Hex()
-
 	// Defensive check: source must be provided
 	if job.Source == "" {
 		return nil, "", fmt.Errorf("job source is empty - cannot parse movie details")
@@ -918,6 +587,8 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 		return nil, "", fmt.Errorf("job source_id and detail_url are both empty - cannot parse movie details")
 	}
 
+	jobID := job.ID.Hex()
+	log.Printf("[STAGE] parser start — source=%s, source_id=%s, url=%s", job.Source, job.SourceID, job.DetailURL)
 	log.Printf("[PIPELINE] parseMovieDetails: job=%s, source=%s, sourceID=%s", jobID, job.Source, job.SourceID)
 
 	parserEndpoint := fmt.Sprintf("%s/details", p.config.ParserURL)
@@ -1015,6 +686,7 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 
 	log.Printf("[PIPELINE] parseMovieDetails completed: title=%s, year=%d, video_urls=%d, local_path=%s",
 		result.Title, result.Year, len(result.VideoURLs), localPath)
+	log.Printf("[STAGE] parser end — title=%s, year=%d, local_path=%s", result.Title, result.Year, localPath)
 
 	p.log(jobID, fmt.Sprintf("Parsed: %s (%d)", result.Title, result.Year), "info")
 
@@ -1281,125 +953,71 @@ func (p *Pipeline) validateWithFFprobe(filePath string) error {
 
 // processVideo processes the video with FFmpeg (watermark removal + adaptive HLS)
 // This function now generates multi-bitrate adaptive HLS with a master playlist
-func (p *Pipeline) processVideo(job *models.IngestionJob, inputPath string, canonicalFolderName string) (string, error) {
-	// Defensive check: job must not be nil
+func (p *Pipeline) processVideo(job *models.IngestionJob, inputPath string, canonicalFolderName string) (hlsDir, processedMasterPath string, err error) {
 	if job == nil {
-		return "", fmt.Errorf("job is nil - cannot process video")
+		return "", "", fmt.Errorf("job is nil - cannot process video")
 	}
 
 	jobID := job.ID.Hex()
 
-	// Defensive check: metadata must not be nil
 	metadata := job.Metadata
 	if metadata == nil {
 		log.Printf("[PIPELINE] WARNING: job metadata is nil, using fallback values")
-		// Fallback: use job title if available
-		if job.Title != "" {
-			log.Printf("[PIPELINE] Using job.Title as fallback: %s", job.Title)
-		}
 	}
 
-	// Create safe variables for metadata fields to avoid nil pointer access
 	title := "video"
 	year := 0
 	if metadata != nil {
 		title = metadata.Title
 		year = metadata.Year
 	}
-	// Use job.Title as fallback if title is still empty
 	if title == "" && job.Title != "" {
 		title = job.Title
 	}
-
 	log.Printf("[PIPELINE] Using title=%s, year=%d for processing", title, year)
 
-	// Defensive check: inputPath must not be empty
 	if inputPath == "" {
-		return "", fmt.Errorf("input path is empty - cannot process video")
+		return "", "", fmt.Errorf("input path is empty - cannot process video")
+	}
+	if _, statErr := os.Stat(inputPath); os.IsNotExist(statErr) {
+		return "", "", fmt.Errorf("input file does not exist: %s", inputPath)
 	}
 
-	// Defensive check: input file must exist
-	if _, err := os.Stat(inputPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("input file does not exist: %s", inputPath)
+	log.Printf("[CHECKPOINT] raw_input_path: %s", inputPath)
+	log.Printf("[PIPELINE] processVideo: job=%s", jobID)
+
+	if err = p.validateMediaFile(inputPath, "pre-processing-check"); err != nil {
+		return "", "", fmt.Errorf("pre-processing validation failed: %w", err)
 	}
 
-	log.Printf("[PIPELINE] processVideo: job=%s, inputPath=%s", jobID, inputPath)
-
-	// FINAL VALIDATION: Double-check the file is valid before running ffmpeg
-	// This is a second line of defense in case download validation passed but file changed
-	if err := p.validateMediaFile(inputPath, "pre-processing-check"); err != nil {
-		return "", fmt.Errorf("pre-processing validation failed - file is not a valid media file: %w", err)
-	}
-
-	// CRITICAL: Use the canonical folder name passed from processJobWithRecovery
-	// This ensures ALL assets (HLS, poster, backdrop) are in the SAME folder
 	folderName := canonicalFolderName
 	log.Printf("[WORKER] Using canonical folder name: %s", folderName)
 
-	log.Printf("[WORKER] Using input file: %s", inputPath)
-	log.Printf("[WORKER] Generating adaptive HLS in: worker/readyvideo/%s", folderName)
-
-	// CRITICAL: Build uploads path from actual working directory
-	// This prevents "mkdir worker: not a directory" error
 	baseDir, err := os.Getwd()
 	if err != nil {
-		return "", fmt.Errorf("failed to get working directory: %w", err)
+		return "", "", fmt.Errorf("failed to get working directory: %w", err)
 	}
-	log.Printf("[WORKER] baseDir=%s", baseDir)
 
-	// Create readyvideo directory for HLS processing output
 	readyVideoDir := filepath.Join(baseDir, "readyvideo")
-	if err := os.MkdirAll(readyVideoDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create readyvideo dir: %w", err)
+	if err = os.MkdirAll(readyVideoDir, 0755); err != nil {
+		return "", "", fmt.Errorf("failed to create readyvideo dir: %w", err)
 	}
 
 	outputDir := filepath.Join(readyVideoDir, folderName)
-	log.Printf("[WORKER] readyDir=%s", outputDir)
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create output dir: %w", err)
+	if err = os.MkdirAll(outputDir, 0755); err != nil {
+		return "", "", fmt.Errorf("failed to create output dir: %w", err)
 	}
-
-	log.Printf("[WORKER] Creating adaptive HLS output in %s", outputDir)
-	log.Printf("[WORKER] Generated adaptive HLS in: %s", outputDir)
-
-	// Log where HLS is being generated
-	log.Printf("[WORKER] Generated adaptive HLS in: %s", outputDir)
-
-	// =============================================================================
-	// ADAPTIVE BITRATE HLS PIPELINE
-	// =============================================================================
-	// This new pipeline generates multi-bitrate adaptive HLS with a master playlist.
-	//
-	// Pipeline steps:
-	// 1. Create base video with delogo + logo filters applied (one-time processing)
-	// 2. Generate multiple quality renditions from the base video
-	// 3. Create master.m3u8 playlist referencing all variants
-	//
-	// Renditions generated:
-	// - 360p -> ~800k video, 480x360
-	// - 480p -> ~1400k video, 854x480
-	// - 720p -> ~2800k video, 1280x720
-	// - 1080p -> ~5000k video, 1920x1080 (if input supports it)
-	//
-	// Key features:
-	// - Consistent GOP across all renditions (2-second keyframe interval)
-	// - -sc_threshold 0 to disable scene cut detection
-	// - 6-second HLS segments
-	// - VOD playlist type
-	// - Master playlist for quality switching
-	// =============================================================================
+	log.Printf("[WORKER] readyDir=%s", outputDir)
 
 	p.log(jobID, fmt.Sprintf("%s+adaptive-hls", folderName), "info")
-	if err := p.updateStatus(jobID, models.IngestionStatusProcessing, 35); err != nil {
+	if err = p.updateStatus(jobID, models.IngestionStatusProcessing, 35); err != nil {
 		log.Printf("[PIPELINE] WARNING: Failed to update status to processing: %v", err)
 	}
-	log.Printf("[WORKER] ADAPTIVE HLS PIPELINE: Generating multi-bitrate HLS with master playlist")
+	log.Printf("[STAGE] hls_processing start — raw_input: %s", inputPath)
 
-	// Cut first 10 seconds from every imported video by default
 	const defaultCutSeconds = 10
 
-	// Progress callback to update backend
-	var lastProgress int = 0
+	var lastProgress int
 	progressCallback := func(status models.IngestionStatus, progress int) {
 		if progress-lastProgress >= 5 || progress == 100 {
 			lastProgress = progress
@@ -1411,41 +1029,30 @@ func (p *Pipeline) processVideo(job *models.IngestionJob, inputPath string, cano
 		}
 	}
 
-	// Dynamic watermark removal — runs before HLS encoding
-	// Falls back to original inputPath on any error
-	hlsInput := inputPath
-	if p.watermarkService != nil {
-		if err := p.updateStatus(jobID, models.IngestionStatusRemovingWatermark, 33); err != nil {
-			log.Printf("[PIPELINE] WARNING: Failed to update status to removing_watermark: %v", err)
-		}
-		cleanPath, wmErr := p.removeWatermarkDynamic(context.Background(), job, inputPath)
-		if wmErr != nil {
-			log.Printf("[PIPELINE] Dynamic watermark removal failed, using original: %v", wmErr)
-		} else {
-			hlsInput = cleanPath
-		}
-	}
-
-	// Call the adaptive HLS generation function
-	masterPath, err := p.processAdaptiveHLS(jobID, hlsInput, outputDir, defaultCutSeconds, progressCallback)
+	// processAdaptiveHLS returns the HLS master playlist path AND the processed master video path.
+	// The processed master (cut + logo) is NOT deleted inside processAdaptiveHLS;
+	// it stays alive so clip generation can use it, then the whole readyvideo dir is cleaned up.
+	var masterPlaylistPath string
+	masterPlaylistPath, processedMasterPath, err = p.processAdaptiveHLS(jobID, inputPath, outputDir, defaultCutSeconds, progressCallback)
 	if err != nil {
-		return "", fmt.Errorf("adaptive HLS processing failed: %w", err)
+		return "", "", fmt.Errorf("adaptive HLS processing failed: %w", err)
 	}
+	log.Printf("[CHECKPOINT] processed_master_path: %s", processedMasterPath)
+	log.Printf("[CHECKPOINT] hls_master_playlist: %s", masterPlaylistPath)
 
-	// Verify the output directory has files
-	files, err := os.ReadDir(outputDir)
-	if err != nil {
-		return "", fmt.Errorf("failed to read output dir: %w", err)
+	files, readErr := os.ReadDir(outputDir)
+	if readErr != nil {
+		return "", "", fmt.Errorf("failed to read output dir: %w", readErr)
 	}
 	if len(files) == 0 {
-		return "", fmt.Errorf("no output files generated")
+		return "", "", fmt.Errorf("no output files generated")
 	}
 
 	log.Printf("[PIPELINE] processVideo completed: %d files/dirs in %s", len(files), outputDir)
-	log.Printf("[WORKER] Adaptive HLS master playlist created: %s", masterPath)
+	log.Printf("[STAGE] hls_processing end — master: %s", masterPlaylistPath)
 	p.log(jobID, fmt.Sprintf("%s+processed", folderName), "info")
 
-	return outputDir, nil
+	return outputDir, processedMasterPath, nil
 }
 
 // uploadProcessedFiles handles finalization based on MODE
@@ -1459,10 +1066,13 @@ func (p *Pipeline) processVideo(job *models.IngestionJob, inputPath string, cano
 // - 480p/index.m3u8 + segments/
 // - 720p/index.m3u8 + segments/
 // - 1080p/index.m3u8 + segments/
-func (p *Pipeline) uploadProcessedFiles(job *models.IngestionJob, hlsDir string, inputPath string, canonicalFolderName string) (string, error) {
+//
+// Returns: (streamingURL, finalUploadsPath, error)
+// finalUploadsPath is the local path where base_video.mp4 can be found for clip generation
+func (p *Pipeline) uploadProcessedFiles(job *models.IngestionJob, hlsDir string, inputPath string, canonicalFolderName string) (string, string, error) {
 	// Defensive check: job must not be nil
 	if job == nil {
-		return "", fmt.Errorf("job is nil - cannot upload files")
+		return "", "", fmt.Errorf("job is nil - cannot upload files")
 	}
 
 	jobID := job.ID.Hex()
@@ -1475,12 +1085,12 @@ func (p *Pipeline) uploadProcessedFiles(job *models.IngestionJob, hlsDir string,
 
 	// Defensive check: hlsDir must not be empty
 	if hlsDir == "" {
-		return "", fmt.Errorf("hls directory is empty - nothing to upload")
+		return "", "", fmt.Errorf("hls directory is empty - nothing to upload")
 	}
 
 	// Defensive check: hlsDir must exist
 	if _, err := os.Stat(hlsDir); os.IsNotExist(err) {
-		return "", fmt.Errorf("hls directory does not exist: %s", hlsDir)
+		return "", "", fmt.Errorf("hls directory does not exist: %s", hlsDir)
 	}
 
 	log.Printf("[PIPELINE] uploadProcessedFiles: job=%s, hlsDir=%s", jobID, hlsDir)
@@ -1496,6 +1106,7 @@ func (p *Pipeline) uploadProcessedFiles(job *models.IngestionJob, hlsDir string,
 	log.Printf("[WORKER] MODE=%s", mode)
 
 	var streamingURL string
+	var finalUploadsPath string
 
 	if mode == "prod" || mode == "production" {
 		// === PRODUCTION MODE: Upload to B2/CDN ===
@@ -1503,45 +1114,80 @@ func (p *Pipeline) uploadProcessedFiles(job *models.IngestionJob, hlsDir string,
 		log.Printf("[WORKER] Generated adaptive HLS in: %s", hlsDir)
 		log.Printf("[WORKER] Uploading adaptive HLS folder from readyvideo/%s to B2", folderName)
 
+		// Preserve base_video.mp4 for clip generation before deleting readyvideo
+		baseVideoPath := filepath.Join(hlsDir, "base_video.mp4")
+		if _, err := os.Stat(baseVideoPath); err == nil {
+			// Copy base_video.mp4 to a permanent location
+			clipsBaseDir := filepath.Join(p.config.StorageConfig.LocalPath, "movies", "clips_base", folderName)
+			if err := os.MkdirAll(clipsBaseDir, 0755); err != nil {
+				log.Printf("[WORKER] WARNING: Failed to create clips_base directory: %v", err)
+			} else {
+				destPath := filepath.Join(clipsBaseDir, "base_video.mp4")
+				if err := copyFile(baseVideoPath, destPath); err != nil {
+					log.Printf("[WORKER] WARNING: Failed to copy base_video.mp4 for clips: %v", err)
+				} else {
+					finalUploadsPath = clipsBaseDir
+					log.Printf("[WORKER] Preserved base_video.mp4 for clip generation: %s", destPath)
+				}
+			}
+		}
+
 		// Use the adaptive HLS upload function which handles recursive directory structure
 		var err error
 		streamingURL, err = p.uploadAdaptiveHLSFiles(job, hlsDir, folderName)
 		if err != nil {
-			return "", fmt.Errorf("failed to upload adaptive HLS files: %w", err)
+			return "", "", fmt.Errorf("failed to upload adaptive HLS files: %w", err)
 		}
 
 		if streamingURL == "" {
-			return "", fmt.Errorf("no master playlist found")
+			return "", "", fmt.Errorf("no master playlist found")
 		}
 
 		log.Printf("[WORKER] Final CDN master playlist URL: %s", streamingURL)
 		log.Printf("[PIPELINE] uploadProcessedFiles completed: streamingURL=%s", streamingURL)
 
-		// Cleanup: Remove temporary readyvideo folder after successful upload
-		log.Printf("[WORKER] Removing temporary readyvideo folder: %s", hlsDir)
-		if err := os.RemoveAll(hlsDir); err != nil {
-			log.Printf("[WORKER] WARNING: Failed to remove readyvideo folder: %v", err)
-		} else {
-			log.Printf("[WORKER] Removed temporary readyvideo folder: %s", hlsDir)
-		}
-
 	} else {
 		// === DEVELOPMENT MODE: Copy to worker/uploads/movies/<slug>/ ===
 		log.Printf("[WORKER] MODE=development")
+
+		// Preserve base_video.mp4 for clip generation before copying readyvideo
+		baseVideoPath := filepath.Join(hlsDir, "base_video.mp4")
+		if _, err := os.Stat(baseVideoPath); err == nil {
+			clipsBaseDir := filepath.Join(p.config.StorageConfig.LocalPath, "movies", "clips_base", folderName)
+			if err := os.MkdirAll(clipsBaseDir, 0755); err != nil {
+				log.Printf("[WORKER] WARNING: Failed to create clips_base directory: %v", err)
+			} else {
+				destPath := filepath.Join(clipsBaseDir, "base_video.mp4")
+				if err := copyFile(baseVideoPath, destPath); err != nil {
+					log.Printf("[WORKER] WARNING: Failed to copy base_video.mp4 for clips: %v", err)
+				} else {
+					finalUploadsPath = clipsBaseDir
+					log.Printf("[WORKER] Preserved base_video.mp4 for clip generation: %s", destPath)
+				}
+			}
+		} else {
+			log.Printf("[WORKER] WARNING: base_video.mp4 not found at %s for clip generation", baseVideoPath)
+		}
 
 		// Use the adaptive HLS upload function which handles recursive directory structure
 		var err error
 		streamingURL, err = p.uploadAdaptiveHLSFiles(job, hlsDir, folderName)
 		if err != nil {
-			return "", fmt.Errorf("failed to copy adaptive HLS files: %w", err)
+			return "", "", fmt.Errorf("failed to copy adaptive HLS files: %w", err)
 		}
 
 		if streamingURL == "" {
-			return "", fmt.Errorf("no master playlist found")
+			return "", "", fmt.Errorf("no master playlist found")
+		}
+
+		// Set finalUploadsPath for development mode (where files are copied)
+		// NOTE: clips_base takes priority for clip generation
+		if finalUploadsPath == "" {
+			finalUploadsPath = filepath.Join(p.config.StorageConfig.LocalPath, "movies", folderName)
 		}
 
 		log.Printf("[WORKER] Development master playlist URL: %s", streamingURL)
-		log.Printf("[PIPELINE] uploadProcessedFiles completed: streamingURL=%s", streamingURL)
+		log.Printf("[PIPELINE] uploadProcessedFiles completed: streamingURL=%s, finalUploadsPath=%s", streamingURL, finalUploadsPath)
 	}
 
 	// Cleanup: Delete original downloaded file after successful HLS finalization
@@ -1554,7 +1200,7 @@ func (p *Pipeline) uploadProcessedFiles(job *models.IngestionJob, hlsDir string,
 		}
 	}
 
-	return streamingURL, nil
+	return streamingURL, finalUploadsPath, nil
 }
 
 // createMovieInDatabase creates the movie entry in the main database
@@ -1664,6 +1310,7 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 		"views":              0,
 		"rating_avg":         0,
 		"rating_count":       0,
+		"website_url":        calculateWebsiteURL(displaySlug),
 		"created_at":         time.Now(),
 		"updated_at":         time.Now(),
 	}
@@ -1843,45 +1490,90 @@ func (p *Pipeline) failJobWithStatus(jobID string, status models.IngestionStatus
 }
 
 // cleanupFile removes a temporary file
-// getNextMovieCode gets the next sequential movie code from MongoDB atomic counter.
-// Skips codes that already exist in the movies collection to handle pre-existing data.
-// Returns zero-padded string (e.g., "0001", "0008", "0100").
+// getNextMovieCode gets the next sequential movie code from MongoDB.
+// Finds the highest existing numeric code in the movies collection and returns code+1.
+// Returns zero-padded string (e.g., "0009", "0010", "0100").
 func (p *Pipeline) getNextMovieCode(ctx context.Context) (string, error) {
 	if p.movieCol == nil {
 		return "", fmt.Errorf("movie collection not initialized")
 	}
 
-	countersCol := p.movieCol.Database().Collection("counters")
-	filter := bson.M{"_id": "movieCode"}
-	update := bson.M{"$inc": bson.M{"seq": 1}}
-	opts := options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After)
+	// Find all existing codes and determine the highest numeric value
+	cursor, err := p.movieCol.Find(ctx, bson.M{})
+	if err != nil {
+		return "", fmt.Errorf("failed to query movies collection: %w", err)
+	}
+	defer cursor.Close(ctx)
 
-	var result struct {
-		ID  string `bson:"_id"`
-		Seq int    `bson:"seq"`
+	var highestSeq int64 = 0
+	for cursor.Next(ctx) {
+		var doc struct {
+			Code string `bson:"code"`
+		}
+		if err := cursor.Decode(&doc); err != nil {
+			continue
+		}
+
+		// Parse code as integer safely
+		code := doc.Code
+		if code == "" {
+			continue
+		}
+
+		// Extract numeric part from code (e.g., "0009" -> 9, "0100" -> 100)
+		var seq int64
+		_, err := fmt.Sscanf(code, "%d", &seq)
+		if err != nil || seq <= 0 {
+			// Try to parse by removing leading zeros
+			seq = parseNumericCode(code)
+		}
+
+		if seq > highestSeq {
+			highestSeq = seq
+		}
 	}
 
-	const maxRetries = 100
-	for i := 0; i < maxRetries; i++ {
-		if err := countersCol.FindOneAndUpdate(ctx, filter, update, opts).Decode(&result); err != nil {
-			return "", fmt.Errorf("failed to increment movie code counter: %w", err)
-		}
-
-		code := fmt.Sprintf("%04d", result.Seq)
-
-		// Check if this code is already taken by an existing movie
-		count, err := p.movieCol.CountDocuments(ctx, bson.M{"code": code})
-		if err != nil {
-			return "", fmt.Errorf("failed to check code uniqueness: %w", err)
-		}
-		if count == 0 {
-			log.Printf("[PIPELINE] Movie code counter: seq=%d, formatted=%s", result.Seq, code)
-			return code, nil
-		}
-		log.Printf("[PIPELINE] Movie code %s already exists, skipping to next", code)
+	if err := cursor.Err(); err != nil {
+		return "", fmt.Errorf("cursor error while finding highest code: %w", err)
 	}
 
-	return "", fmt.Errorf("failed to find unique movie code after %d attempts", maxRetries)
+	// Generate next code
+	nextSeq := highestSeq + 1
+
+	// Format with appropriate zero-padding based on magnitude
+	var formattedCode string
+	switch {
+	case nextSeq <= 9999:
+		formattedCode = fmt.Sprintf("%04d", nextSeq)
+	case nextSeq <= 99999:
+		formattedCode = fmt.Sprintf("%05d", nextSeq)
+	case nextSeq <= 999999:
+		formattedCode = fmt.Sprintf("%06d", nextSeq)
+	default:
+		return "", fmt.Errorf("movie code limit exceeded: %d", nextSeq)
+	}
+
+	log.Printf("[PIPELINE] Movie code generated: highest_existing=%d, next=%d, formatted=%s", highestSeq, nextSeq, formattedCode)
+	return formattedCode, nil
+}
+
+// parseNumericCode parses a zero-padded code string to its numeric value
+func parseNumericCode(code string) int64 {
+	if code == "" {
+		return 0
+	}
+
+	// Remove leading zeros
+	var result int64
+	for _, c := range code {
+		if c == '0' && result == 0 {
+			continue
+		}
+		if c >= '0' && c <= '9' {
+			result = result*10 + int64(c-'0')
+		}
+	}
+	return result
 }
 
 // sendTelegramNotification sends a Telegram notification after successful movie creation
@@ -2256,53 +1948,47 @@ func (p *Pipeline) resolveStreamURLToLocalPath(streamURL string) string {
 func (p *Pipeline) downloadFile(url, localPath string) error {
 	resp, err := p.httpClient.Get(url)
 	if err != nil {
-		return fmt.Errorf("failed to download: %w", err)
+		return fmt.Errorf("failed to download %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download returned status %d", resp.StatusCode)
+		return fmt.Errorf("download %s returned HTTP %d", url, resp.StatusCode)
+	}
+
+	// Reject non-image responses (HTML error pages, JSON, etc.) before writing to disk.
+	// TMDB occasionally returns an HTML page when an image path is wrong or expired.
+	ct := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "image/") {
+		return fmt.Errorf("download %s returned non-image content-type %q — not saving", url, ct)
 	}
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		return fmt.Errorf("failed to read response for %s: %w", url, err)
 	}
 
 	if err := os.WriteFile(localPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write file: %w", err)
+		return fmt.Errorf("failed to write file %s: %w", localPath, err)
 	}
 
-	log.Printf("[PIPELINE] Downloaded file to: %s", localPath)
+	log.Printf("[PIPELINE] Downloaded %d bytes (%s) → %s", len(data), ct, localPath)
 	return nil
-}
-
-// sanitizeFilename creates a safe filename from a movie title
-func sanitizeFilename(title string) string {
-	// Replace spaces with underscores and remove unsafe characters
-	s := strings.ToLower(title)
-	s = strings.ReplaceAll(s, " ", "+")
-	// Keep only alphanumeric and some safe chars
-	var result strings.Builder
-	for _, c := range s {
-		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '+' || c == '-' || c == '_' {
-			result.WriteRune(c)
-		}
-	}
-	return result.String()
 }
 
 // createMovieSlug creates a safe filesystem slug from movie title
 // Examples:
 //   - "Forsaj 8" -> "forsaj8"
 //   - "Spider-Man: No Way Home" -> "spidermannowayhome"
-// junkPattern matches quality tags, episode markers, and filler words common in
-// Uzbek source titles: "480p", "1080p", "1-qism", "+41", "seriali", etc.
+//
+// junkPattern matches quality tags, episode markers, year numbers, and filler words common in
+// Uzbek source titles: "480p", "1080p", "2021", "1-qism", "+41", "seriali", etc.
 var junkPattern = regexp.MustCompile(
 	`(?i)\b(` +
 		`\d{3,4}p` + // 480p 720p 1080p
 		`|4k` +
 		`|hd|fhd` +
+		`|\d{4}` + // 4-digit years like 2021, 2020, 2022, etc.
 		`|\d+-?qism\b` + // 1-qism, 2qism
 		`|qism\s*\d*` +
 		`|\+\d+` + // +41
@@ -2331,17 +2017,21 @@ func createMovieSlug(title string) string {
 	// Convert to lowercase
 	s := strings.ToLower(title)
 
-	// Remove unsafe characters and normalize spaces
-	var result strings.Builder
-	for _, c := range s {
-		// Allow alphanumeric, hyphens, and underscores
-		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
-			result.WriteRune(c)
-		} else if c == ' ' || c == ':' || c == '.' || c == ',' || c == '!' || c == '?' {
-			// Skip special chars, just remove them
-			// e.g., "Spider-Man: No Way Home" -> "spidermannotwayhome"
-		}
-	}
+	// Replace non-alphanumeric chars with hyphens
+	re := regexp.MustCompile(`[^a-z0-9]+`)
+	slug := re.ReplaceAllString(s, "-")
+	// Trim leading/trailing dashes
+	slug = strings.Trim(slug, "-")
 
-	return result.String()
+	return slug
+}
+
+// calculateWebsiteURL generates the website URL for a movie based on its slug
+// Uses the same format as backend service for consistency
+func calculateWebsiteURL(slug string) string {
+	baseURL := os.Getenv("BASE_SITE_URL")
+	if baseURL == "" {
+		baseURL = "https://filmorauz.uz"
+	}
+	return fmt.Sprintf("%s/movies/%s", baseURL, slug)
 }

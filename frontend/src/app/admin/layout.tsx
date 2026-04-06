@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { Film, LayoutDashboard, List, LogOut, PlusCircle, Download, Users, FolderHeart, MessageSquare, Settings, Tv, Ban, History, MessageCircle } from "lucide-react";
+import { Film, LayoutDashboard, List, LogOut, PlusCircle, Download, Users, FolderHeart, MessageSquare, Settings, Tv, Ban, History, MessageCircle, Video } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
 export default function AdminLayout({
@@ -50,6 +50,7 @@ export default function AdminLayout({
     { href: "/admin/series/new", icon: PlusCircle, label: "Add Series" },
     { href: "/admin/collections", icon: FolderHeart, label: "Collections" },
     { href: "/admin/ingestion", icon: Download, label: "Import Movies" },
+    { href: "/admin/clips", icon: Video, label: "Clips" },
     { href: "/admin/users", icon: Users, label: "Users" },
     { href: "/admin/users/banned", icon: Ban, label: "Ban olganlar" },
     { href: "/admin/users/ban-history", icon: History, label: "Ban tarixi" },

@@ -60,12 +60,12 @@ func (r *MovieRepository) CountTotalViews() (int64, error) {
 
 func NewMovieRepository(db *mongo.Database) *MovieRepository {
 	repo := &MovieRepository{col: db.Collection("movies")}
-	repo.ensureIndexes()
+	repo.EnsureIndexes()
 	return repo
 }
 
-// ensureIndexes creates required indexes on the movies collection
-func (r *MovieRepository) ensureIndexes() {
+// EnsureIndexes creates required indexes on the movies collection
+func (r *MovieRepository) EnsureIndexes() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -82,8 +82,9 @@ func (r *MovieRepository) ensureIndexes() {
 
 	_, err := r.col.Indexes().CreateMany(ctx, []mongo.IndexModel{codeIndex, slugIndex})
 	if err != nil {
-		log.Printf("Warning: failed to create movie indexes: %v", err)
+		return err
 	}
+	return nil
 }
 
 // normalizeFieldToString safely converts a mixed-type field to string
@@ -289,15 +290,22 @@ func (r *MovieRepository) List(genre string, page, limit int) ([]models.Movie, i
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	log.Printf("[ListMovies] === DEBUG START ===")
+	log.Printf("[ListMovies] Request: genre=%q, page=%d, limit=%d", genre, page, limit)
+
 	filter := bson.M{}
 	if genre != "" {
 		filter["genre"] = bson.M{"$in": []string{genre}}
 	}
+	log.Printf("[ListMovies] Query filter: %v", filter)
 
 	total, err := r.col.CountDocuments(ctx, filter)
 	if err != nil {
+		log.Printf("[ListMovies] ERROR counting: %v", err)
+		log.Printf("[ListMovies] === DEBUG END ===")
 		return nil, 0, fmt.Errorf("count documents: %w", err)
 	}
+	log.Printf("[ListMovies] Total matching movies: %d", total)
 
 	// Use simple find with legacy field handling
 	opts := options.Find().
@@ -307,6 +315,8 @@ func (r *MovieRepository) List(genre string, page, limit int) ([]models.Movie, i
 
 	cursor, err := r.col.Find(ctx, filter, opts)
 	if err != nil {
+		log.Printf("[ListMovies] ERROR finding: %v", err)
+		log.Printf("[ListMovies] === DEBUG END ===")
 		return nil, 0, fmt.Errorf("find movies: %w", err)
 	}
 	defer cursor.Close(ctx)
@@ -314,20 +324,26 @@ func (r *MovieRepository) List(genre string, page, limit int) ([]models.Movie, i
 	// Decode into bson.M first, then normalize
 	var rawDocs []bson.M
 	if err := cursor.All(ctx, &rawDocs); err != nil {
+		log.Printf("[ListMovies] ERROR decoding: %v", err)
+		log.Printf("[ListMovies] === DEBUG END ===")
 		return nil, 0, fmt.Errorf("decode raw movies: %w", err)
 	}
+	log.Printf("[ListMovies] Raw docs fetched: %d", len(rawDocs))
 
 	// Normalize each document
 	movies := make([]models.Movie, 0, len(rawDocs))
 	for _, doc := range rawDocs {
 		movie, err := normalizeMovieFromBSON(doc)
 		if err != nil {
-			log.Printf("Warning: failed to normalize movie document: %v", err)
+			log.Printf("[ListMovies] WARN: failed to normalize: %v", err)
 			continue
 		}
+		log.Printf("[ListMovies] Movie: id=%v, slug=%q, source_type=%q", movie.ID, movie.Slug, movie.SourceType)
 		movies = append(movies, *movie)
 	}
 
+	log.Printf("[ListMovies] RETURNING: %d movies", len(movies))
+	log.Printf("[ListMovies] === DEBUG END ===")
 	return movies, total, nil
 }
 
@@ -336,16 +352,28 @@ func (r *MovieRepository) FindBySlug(slug string) (*models.Movie, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	log.Printf("[FindBySlug] === DEBUG START ===")
+	log.Printf("[FindBySlug] Requested slug: %q", slug)
+	log.Printf("[FindBySlug] Query filter: {\"slug\": %q}", slug)
+
 	// Decode directly into Movie struct - this ensures all fields are mapped correctly
 	var movie models.Movie
 	err := r.col.FindOne(ctx, bson.M{"slug": slug}).Decode(&movie)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
+			log.Printf("[FindBySlug] RESULT: No document found for slug: %q", slug)
+			log.Printf("[FindBySlug] === DEBUG END (not found) ===")
 			return nil, err
 		}
+		log.Printf("[FindBySlug] ERROR finding slug %q: %v", slug, err)
+		log.Printf("[FindBySlug] === DEBUG END (error) ===")
 		return nil, fmt.Errorf("find by slug: %w", err)
 	}
 
+	log.Printf("[FindBySlug] RESULT: Found movie id=%v, slug=%q, title=%s", movie.ID, movie.Slug, movie.Title)
+	log.Printf("[FindBySlug] RESULT: source_type=%q, video_url=%q, embed_url=%q", movie.SourceType, movie.VideoURL, movie.EmbedURL)
+	log.Printf("[FindBySlug] RESULT: views=%d, is_premium=%v", movie.Views, movie.IsPremium)
+	log.Printf("[FindBySlug] === DEBUG END (found) ===")
 	return &movie, nil
 }
 
@@ -662,6 +690,43 @@ func (r *MovieRepository) CodeExists(code string) (bool, error) {
 
 	count, err := r.col.CountDocuments(ctx, bson.M{"code": code})
 	return count > 0, err
+}
+
+// FindHighestCode finds the highest numeric code in the movies collection
+// Returns the numeric value (e.g., 8 for "0008", 100 for "0100")
+func (r *MovieRepository) FindHighestCode() (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cursor, err := r.col.Find(ctx, bson.M{})
+	if err != nil {
+		return 0, fmt.Errorf("failed to query movies: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var highestSeq int64 = 0
+	for cursor.Next(ctx) {
+		var doc struct {
+			Code string `bson:"code"`
+		}
+		if err := cursor.Decode(&doc); err != nil {
+			continue
+		}
+
+		code := doc.Code
+		if code == "" {
+			continue
+		}
+
+		// Parse code as integer safely
+		var seq int64
+		_, err := fmt.Sscanf(code, "%d", &seq)
+		if err == nil && seq > highestSeq {
+			highestSeq = seq
+		}
+	}
+
+	return highestSeq, nil
 }
 
 // FindMoviesWithoutCode returns movies that have no code assigned

@@ -178,17 +178,19 @@ export interface LocalizedMovie {
 /**
  * Get localized display title for a movie (always Uzbek)
  */
-export function getLocalizedTitle(movie: LocalizedMovie, _locale: Locale = "uz"): string {
+export function getLocalizedTitle(movie: LocalizedMovie | null, _locale: Locale = "uz"): string {
+	if (!movie) return "";
 	if (movie.title_uz) {
 		return movie.title_uz;
 	}
-	return movie.title;
+	return movie.title || "";
 }
 
 /**
  * Get localized display description for a movie (always Uzbek)
  */
-export function getLocalizedDescription(movie: LocalizedMovie, _locale: Locale = "uz"): string {
+export function getLocalizedDescription(movie: LocalizedMovie | null, _locale: Locale = "uz"): string {
+	if (!movie) return "";
 	if (movie.description_uz) {
 		return movie.description_uz;
 	}
@@ -198,7 +200,8 @@ export function getLocalizedDescription(movie: LocalizedMovie, _locale: Locale =
 /**
  * Get localized genres for a movie (always Uzbek)
  */
-export function getLocalizedGenres(movie: LocalizedMovie, _locale: Locale = "uz"): string[] {
+export function getLocalizedGenres(movie: LocalizedMovie | null, _locale: Locale = "uz"): string[] {
+	if (!movie) return [];
 	// First try backend-provided Uzbek genres
 	if (movie.genres_uz && movie.genres_uz.length > 0) {
 		return movie.genres_uz;
@@ -210,7 +213,8 @@ export function getLocalizedGenres(movie: LocalizedMovie, _locale: Locale = "uz"
 /**
  * Get localized country for a movie (always Uzbek)
  */
-export function getLocalizedCountry(movie: LocalizedMovie, _locale: Locale = "uz"): string {
+export function getLocalizedCountry(movie: LocalizedMovie | null, _locale: Locale = "uz"): string {
+	if (!movie) return "";
 	// First try backend-provided Uzbek countries
 	if (movie.countries_uz && movie.countries_uz.length > 0) {
 		return movie.countries_uz[0];

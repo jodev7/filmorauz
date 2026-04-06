@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
@@ -35,6 +36,31 @@ func (h *MovieHandler) ListMovies(c *gin.Context) {
 		return
 	}
 
+	// Map source_type "ingestion" to valid public type for all movies in list
+	mappedCount := 0
+	for i := range movies {
+		if movies[i].SourceType == "ingestion" {
+			originalType := movies[i].SourceType
+			if movies[i].VideoURL != "" {
+				if strings.HasSuffix(movies[i].VideoURL, ".m3u8") || strings.Contains(movies[i].VideoURL, "manifest") {
+					movies[i].SourceType = "direct_hls"
+				} else if strings.HasSuffix(movies[i].VideoURL, ".mp4") {
+					movies[i].SourceType = "direct_mp4"
+				} else if movies[i].EmbedURL != "" {
+					movies[i].SourceType = "iframe_embed"
+				}
+			}
+			if movies[i].SourceType == "ingestion" {
+				movies[i].SourceType = "direct_hls"
+			}
+			mappedCount++
+			log.Printf("[ListMovies] Mapped movie[%d] source_type: %q -> %q", i, originalType, movies[i].SourceType)
+		}
+	}
+	if mappedCount > 0 {
+		log.Printf("[ListMovies] Total mapped: %d/%d movies", mappedCount, len(movies))
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"data":  movies,
 		"total": total,
@@ -51,10 +77,29 @@ func (h *MovieHandler) GetMovieBySlug(c *gin.Context) {
 		return
 	}
 
+	log.Printf("[GetMovieBySlug] Looking up slug: %s", slug)
 	movie, err := h.movieService.GetMovieBySlug(slug)
 	if err != nil {
+		log.Printf("[GetMovieBySlug] Movie not found for slug: %s, error: %v", slug, err)
 		c.JSON(http.StatusNotFound, gin.H{"error": "movie not found"})
 		return
+	}
+	log.Printf("[GetMovieBySlug] Found movie: id=%v, slug=%s, title=%s, source_type=%s", movie.ID, movie.Slug, movie.Title, movie.SourceType)
+
+	// Map source_type "ingestion" to valid public type for frontend compatibility
+	// Ingestion movies have video uploaded to CDN - detect type from URL extension
+	if movie.SourceType == "ingestion" {
+		originalType := movie.SourceType
+		if movie.VideoURL != "" {
+			if strings.HasSuffix(movie.VideoURL, ".m3u8") || strings.Contains(movie.VideoURL, "manifest") {
+				movie.SourceType = "direct_hls"
+			} else if strings.HasSuffix(movie.VideoURL, ".mp4") {
+				movie.SourceType = "direct_mp4"
+			} else if movie.EmbedURL != "" {
+				movie.SourceType = "iframe_embed"
+			}
+		}
+		log.Printf("[GetMovieBySlug] Mapped source_type: %q -> %q", originalType, movie.SourceType)
 	}
 
 	// Get current user if authenticated (for access check)
@@ -85,6 +130,21 @@ func (h *MovieHandler) GetMovieByID(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "movie not found"})
 		return
+	}
+
+	// Map source_type "ingestion" to valid public type for frontend compatibility
+	if movie.SourceType == "ingestion" {
+		originalType := movie.SourceType
+		if movie.VideoURL != "" {
+			if strings.HasSuffix(movie.VideoURL, ".m3u8") || strings.Contains(movie.VideoURL, "manifest") {
+				movie.SourceType = "direct_hls"
+			} else if strings.HasSuffix(movie.VideoURL, ".mp4") {
+				movie.SourceType = "direct_mp4"
+			} else if movie.EmbedURL != "" {
+				movie.SourceType = "iframe_embed"
+			}
+		}
+		log.Printf("[GetMovieByID] Mapped source_type: %q -> %q", originalType, movie.SourceType)
 	}
 
 	// Get current user if authenticated (for access check)

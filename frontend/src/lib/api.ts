@@ -7,7 +7,8 @@ export type VideoSourceType =
   | "iframe_embed" 
   | "direct_mp4" 
   | "direct_hls" 
-  | "external_restricted";
+  | "external_restricted"
+  | "ingestion";
 
 export interface Movie {
   id: string;
@@ -77,11 +78,15 @@ export async function getMovies(params?: {
 
 export async function getMovie(slug: string): Promise<Movie> {
   const timestamp = Date.now();
+  console.log("[getMovie] Requesting movie with slug:", slug);
   const res = await fetch(`${API_URL}/movies/slug/${slug}?_t=${timestamp}`, {
     cache: "no-store",
   });
-  if (!res.ok) throw new Error("Movie not found");
+  console.log("[getMovie] Response for slug:", slug, "status:", res.status);
+  if (!res.ok) throw new Error(`Movie not found: ${slug} (HTTP ${res.status})`);
   const json = await res.json();
+  if (!json.data) throw new Error(`Movie not found: ${slug} (null data)`);
+  console.log("[getMovie] Found movie:", json.data.id, "slug:", json.data.slug);
   return json.data;
 }
 
@@ -776,6 +781,40 @@ export async function adminGetMovies(token: string): Promise<Movie[]> {
   if (!res.ok) throw new Error("Failed to fetch");
   const json = await res.json();
   return json.data;
+}
+
+export type MovieAssetType = "poster" | "backdrop" | "video";
+
+export interface MovieAssetUploadResponse {
+  message: string;
+  url: string;
+  type: MovieAssetType;
+  filename: string;
+}
+
+export async function uploadMovieAsset(
+  token: string,
+  file: File,
+  type: MovieAssetType
+): Promise<MovieAssetUploadResponse> {
+  const formData = new FormData();
+  formData.append("type", type);
+  formData.append("file", file);
+
+  const res = await fetch(`${API_URL}/admin/movies/upload`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+    },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: "Upload failed" }));
+    throw new Error(error.error || "Failed to upload asset");
+  }
+
+  return res.json();
 }
 
 // ── Ingestion API ────────────────────────────────────────────────
@@ -2058,4 +2097,52 @@ export async function markAllNotificationsAsRead(token: string): Promise<{ messa
     throw new Error(err.error || "Failed to mark all notifications as read");
   }
   return res.json();
+}
+
+// ── Clips API ────────────────────────────────────────────────────────────────
+
+export interface Clip {
+  id: string;
+  movie_id: string;
+  movie_title: string;
+  movie_slug: string;
+  movie_code: string;
+  filename: string;
+  path: string;
+  url: string;
+  duration: number;
+  sequence: number;
+  storage_type: string;
+  created_at: string;
+}
+
+export async function adminGetClips(token: string, limit = 100): Promise<Clip[]> {
+  const res = await fetch(`${API_URL}/admin/clips?limit=${limit}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch clips");
+  const json = await res.json();
+  return json.data || [];
+}
+
+export async function adminGetClipsByMovie(token: string, movieId: string): Promise<Clip[]> {
+  const res = await fetch(`${API_URL}/admin/clips/movie/${movieId}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch clips");
+  const json = await res.json();
+  return json.data || [];
+}
+
+export async function adminDeleteClipsByMovie(token: string, movieId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/clips/movie/${movieId}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to delete clips");
+  }
 }

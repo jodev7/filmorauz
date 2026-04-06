@@ -479,35 +479,27 @@ func (s *MovieService) BackfillMovieCodes() {
 }
 
 // generateUniqueCode generates a unique sequential numeric code
-// Uses counter-based approach: 0001-9999 (4 digits), 10000-99999 (5 digits), 100000-999999 (6 digits)
+// Finds the highest existing numeric code from movies collection and returns code+1
+// Uses: 0001-9999 (4 digits), 10000-99999 (5 digits), 100000-999999 (6 digits)
 func (s *MovieService) generateUniqueCode() (string, error) {
-	// Get next sequence number
-	seq, err := s.counterRepo.NextSequence(movieCodeSequenceKey)
+	// Find highest existing code from movies collection directly
+	highestSeq, err := s.repo.FindHighestCode()
 	if err != nil {
-		return "", fmt.Errorf("failed to get next sequence: %w", err)
+		return "", fmt.Errorf("failed to find highest code: %w", err)
 	}
 
+	// Generate next code
+	nextSeq := highestSeq + 1
+
 	// Check if we've exceeded the maximum
-	if seq > codeMaxLimit {
-		return "", fmt.Errorf("movie code limit exceeded: %d > %d", seq, codeMaxLimit)
+	if nextSeq > codeMaxLimit {
+		return "", fmt.Errorf("movie code limit exceeded: %d > %d", nextSeq, codeMaxLimit)
 	}
 
 	// Format the code based on the sequence range
-	code := formatMovieCode(seq)
+	code := formatMovieCode(nextSeq)
 
-	// Double-check that the code doesn't already exist (safety check)
-	// This handles edge cases like manual insertions or data migration
-	exists, err := s.repo.CodeExists(code)
-	if err != nil {
-		return "", fmt.Errorf("failed to check code existence: %w", err)
-	}
-	if exists {
-		// Code already exists - this shouldn't happen with counter-based approach
-		// but handle it gracefully by returning an error
-		return "", fmt.Errorf("code %s already exists (sequence: %d)", code, seq)
-	}
-
-	log.Printf("Generated sequential movie code: %s (sequence: %d)", code, seq)
+	log.Printf("Generated sequential movie code: %s (highest_existing: %d, next: %d)", code, highestSeq, nextSeq)
 	return code, nil
 }
 

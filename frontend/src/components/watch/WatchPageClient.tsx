@@ -28,7 +28,7 @@ async function getWatchProgressForResume(token: string, movieId: string): Promis
 }
 
 interface WatchPageClientProps {
-  movie: Movie;
+  movie: Movie | null;
 }
 
 function RecommendationsRow({ movies }: { movies: Movie[] }) {
@@ -69,6 +69,14 @@ function RecommendationsRow({ movies }: { movies: Movie[] }) {
 }
 
 export default function WatchPageClient({ movie }: WatchPageClientProps) {
+  if (!movie) {
+    return (
+      <div className="flex items-center justify-center min-h-[50vh]">
+        <p className="text-gray-400">Film topilmadi</p>
+      </div>
+    );
+  }
+
   const { t } = useI18n();
   const { user, token } = useAuth();
   const [isFavorite, setIsFavorite] = useState(false);

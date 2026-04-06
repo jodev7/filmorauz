@@ -187,6 +187,111 @@ func (h *UploadHandler) saveToCDN(file multipart.File, filename string, contentT
 	return fmt.Sprintf("https://cdn.filmorauz.uz/images/%s", filename), nil
 }
 
+// UploadMovieAssets handles file uploads for movie assets (poster, backdrop, video)
+func (h *UploadHandler) UploadMovieAssets(c *gin.Context) {
+	fileType := c.PostForm("type")
+	if fileType != "poster" && fileType != "backdrop" && fileType != "video" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid type: must be 'poster', 'backdrop', or 'video'"})
+		return
+	}
+
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no file provided"})
+		return
+	}
+	defer file.Close()
+
+	var maxSize int64 = 10 * 1024 * 1024 // 10MB for images, override for video
+	var allowedTypes map[string]bool
+
+	switch fileType {
+	case "poster", "backdrop":
+		maxSize = 10 * 1024 * 1024 // 10MB
+		allowedTypes = allowedImageTypes
+	case "video":
+		maxSize = 5 * 1024 * 1024 * 1024 // 5GB for videos
+		allowedTypes = map[string]bool{
+			"video/mp4":             true,
+			"video/webm":            true,
+			"video/ogg":             true,
+			"application/x-mpegURL": true,
+		}
+	}
+
+	if header.Size > maxSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", maxSize/1024/1024)})
+		return
+	}
+
+	contentType := header.Header.Get("Content-Type")
+	if !allowedTypes[contentType] {
+		if fileType == "video" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file type. allowed: mp4, webm, ogg, m3u8"})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file type. allowed: jpg, jpeg, png, webp"})
+		}
+		return
+	}
+
+	ext := filepath.Ext(header.Filename)
+	if ext == "" && fileType == "video" {
+		ext = ".mp4"
+	}
+
+	filename := fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), fileType, ext)
+
+	var savedURL string
+
+	if h.config.IsDev {
+		savedURL, err = h.saveMovieAssetLocal(file, filename, fileType)
+		if err != nil {
+			log.Printf("[UPLOAD] Error saving movie asset locally: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save file"})
+			return
+		}
+	} else {
+		savedURL, err = h.saveToCDN(file, filename, contentType)
+		if err != nil {
+			log.Printf("[UPLOAD] Error saving movie asset to CDN: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":  fmt.Sprintf("%s uploaded successfully", fileType),
+		"url":      savedURL,
+		"type":     fileType,
+		"filename": filename,
+	})
+}
+
+// saveMovieAssetLocal saves movie asset to local storage organized by type
+func (h *UploadHandler) saveMovieAssetLocal(file multipart.File, filename string, fileType string) (string, error) {
+	subDir := fileType + "s" // posters, backdrops, videos
+	storageDir := filepath.Join(h.config.UploadsDir, "movies", subDir)
+
+	if err := os.MkdirAll(storageDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create storage directory: %w", err)
+	}
+
+	filePath := filepath.Join(storageDir, filename)
+
+	dst, err := os.Create(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create file: %w", err)
+	}
+	defer dst.Close()
+
+	_, err = io.Copy(dst, file)
+	if err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return fmt.Sprintf("http://localhost:%s/uploads/movies/%s/%s", h.config.Port, subDir, filename), nil
+}
+
 // isValidURL validates a basic URL
 func isValidURL(url string) bool {
 	if url == "" {

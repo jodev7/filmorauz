@@ -91,15 +91,23 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function MovieDetailPage({ params }: Props) {
   const { slug } = params;
+  console.log("[MovieDetailPage] Rendering for slug:", slug);
   const { t } = getTranslations("uz");
-  let movie;
-  let recommendations: any[] = [];
   
+  let movie;
   try {
     movie = await getMovie(slug);
-  } catch {
+  } catch (error) {
+    console.error("[MovieDetailPage] Movie not found for slug:", slug, error);
     notFound();
   }
+  
+  if (!movie) {
+    notFound();
+  }
+
+  console.log("[MovieDetailPage] Movie found:", movie.id, "slug:", movie.slug);
+  let recommendations: any[] = [];
 
   // Fetch recommendations
   try {
