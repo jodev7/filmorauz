@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/filmorauz/backend/models"
@@ -282,6 +283,70 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 		}
 	}
 
+	// Handle is_premium
+	if isPremium, ok := doc["is_premium"].(bool); ok {
+		movie.IsPremium = isPremium
+	}
+
+	// Handle title_uz
+	if titleUz, ok := doc["title_uz"].(string); ok {
+		movie.TitleUz = titleUz
+	}
+
+	// Handle description_uz
+	if descUz, ok := doc["description_uz"].(string); ok {
+		movie.DescriptionUz = descUz
+	}
+
+	// Handle genres_uz — stored as []string or []interface{}
+	if gUz, ok := doc["genres_uz"]; ok && gUz != nil {
+		switch g := gUz.(type) {
+		case []interface{}:
+			arr := make([]string, 0, len(g))
+			for _, item := range g {
+				if s, ok := item.(string); ok {
+					arr = append(arr, s)
+				}
+			}
+			movie.GenresUz = arr
+		case []string:
+			movie.GenresUz = g
+		}
+	}
+
+	// Handle countries_uz — may be stored as string (legacy) or []string/[]interface{}
+	if cUz, ok := doc["countries_uz"]; ok && cUz != nil {
+		switch c := cUz.(type) {
+		case string:
+			if c != "" {
+				movie.CountriesUz = strings.Split(c, ", ")
+			}
+		case []interface{}:
+			arr := make([]string, 0, len(c))
+			for _, item := range c {
+				if s, ok := item.(string); ok {
+					arr = append(arr, s)
+				}
+			}
+			movie.CountriesUz = arr
+		case []string:
+			movie.CountriesUz = c
+		}
+	}
+
+	// Handle original_title
+	if origTitle, ok := doc["original_title"].(string); ok {
+		movie.OriginalTitle = origTitle
+	}
+
+	// Handle tmdb_id
+	movie.TMDBID = normalizeFieldToInt(doc["tmdb_id"])
+
+	// Handle metadata_source
+	if ms, ok := doc["metadata_source"].(string); ok {
+		movie.MetadataSource = ms
+	}
+
 	return movie, nil
 }
 
@@ -356,9 +421,9 @@ func (r *MovieRepository) FindBySlug(slug string) (*models.Movie, error) {
 	log.Printf("[FindBySlug] Requested slug: %q", slug)
 	log.Printf("[FindBySlug] Query filter: {\"slug\": %q}", slug)
 
-	// Decode directly into Movie struct - this ensures all fields are mapped correctly
-	var movie models.Movie
-	err := r.col.FindOne(ctx, bson.M{"slug": slug}).Decode(&movie)
+	// Decode into bson.M first to handle type mismatches (e.g. countries_uz stored as string vs []string)
+	var raw bson.M
+	err := r.col.FindOne(ctx, bson.M{"slug": slug}).Decode(&raw)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			log.Printf("[FindBySlug] RESULT: No document found for slug: %q", slug)
@@ -370,11 +435,18 @@ func (r *MovieRepository) FindBySlug(slug string) (*models.Movie, error) {
 		return nil, fmt.Errorf("find by slug: %w", err)
 	}
 
+	movie, err := normalizeMovieFromBSON(raw)
+	if err != nil {
+		log.Printf("[FindBySlug] ERROR normalizing document for slug %q: %v", slug, err)
+		log.Printf("[FindBySlug] === DEBUG END (normalize error) ===")
+		return nil, fmt.Errorf("normalize movie: %w", err)
+	}
+
 	log.Printf("[FindBySlug] RESULT: Found movie id=%v, slug=%q, title=%s", movie.ID, movie.Slug, movie.Title)
 	log.Printf("[FindBySlug] RESULT: source_type=%q, video_url=%q, embed_url=%q", movie.SourceType, movie.VideoURL, movie.EmbedURL)
 	log.Printf("[FindBySlug] RESULT: views=%d, is_premium=%v", movie.Views, movie.IsPremium)
 	log.Printf("[FindBySlug] === DEBUG END (found) ===")
-	return &movie, nil
+	return movie, nil
 }
 
 // FindByID returns a single movie by ObjectID

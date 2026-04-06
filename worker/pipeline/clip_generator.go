@@ -3,18 +3,18 @@ package pipeline
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"math/rand"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 const clipCount = 12
@@ -34,9 +34,6 @@ type ClipInfo struct {
 	StorageType string `json:"storage_type"`
 }
 
-type ClipSaveRequest struct {
-	Clips []ClipInfo `json:"clips"`
-}
 
 func sanitizeSlug(slug string) string {
 	re := regexp.MustCompile(`[^a-zA-Z0-9\-]`)
@@ -169,17 +166,28 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 		log.Printf("[CLIP] Generating clip %d/%d: start=%.1fs (offset=%.1fs) dur=%.1fs -> %s",
 			i+1, clipCount, startSec, randomOffset, clipDur, outPath)
 
+		// Build ffmpeg args.
+		// Key points:
+		//   -ss / -t before -i  → input-level seek + hard duration limit (fast, reliable)
+		//   -loop 1 before logo → PNG loops for the full clip so overlay never runs out of frames
+		//   :shortest=1 on overlay → stop compositing when the video stream ends
+		//   No -progress pipe:1 → stdout not consumed in this path; omit to avoid pipe stalls
 		var args []string
 		if logoExists {
 			filterComplex := fmt.Sprintf(
-				"[0:v]drawtext=text='%s':x=(w-text_w)/2:y=20:fontsize=40:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10,"+
-					"drawtext=text='%s':x=(w-text_w)/2:y=h-text_h-20:fontsize=36:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10[text];[text][1:v]overlay=W-w-20:H-h-20[out]",
+				// Scale to 9:16 (1080x1920) with center crop, then add text overlays, then logo
+				"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"+
+					"drawtext=text='%s':x=(w-text_w)/2:y=40:fontsize=40:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10,"+
+					"drawtext=text='%s':x=(w-text_w)/2:y=h-text_h-40:fontsize=36:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10[vt];"+
+					"[vt][1:v]overlay=W-w-20:H-h-20:shortest=1[out]",
 				topText, bottomText,
 			)
 			args = []string{
 				"-y",
 				"-ss", fmt.Sprintf("%.3f", startSec),
+				"-t", fmt.Sprintf("%.3f", clipDur), // hard output duration limit
 				"-i", baseVideoPath,
+				"-loop", "1", // logo PNG loops for full clip duration
 				"-i", logoPath,
 				"-filter_complex", filterComplex,
 				"-map", "[out]",
@@ -190,18 +198,20 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 				"-c:a", "aac",
 				"-b:a", "128k",
 				"-movflags", "+faststart",
-				"-progress", "pipe:1",
 				outPath,
 			}
 		} else {
 			textFilter := fmt.Sprintf(
-				"drawtext=text='%s':x=(w-text_w)/2:y=20:fontsize=40:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10,"+
-					"drawtext=text='%s':x=(w-text_w)/2:y=h-text_h-20:fontsize=36:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10",
+				// Scale to 9:16 (1080x1920) with center crop, then add text overlays
+				"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"+
+					"drawtext=text='%s':x=(w-text_w)/2:y=40:fontsize=40:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10,"+
+					"drawtext=text='%s':x=(w-text_w)/2:y=h-text_h-40:fontsize=36:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10",
 				topText, bottomText,
 			)
 			args = []string{
 				"-y",
 				"-ss", fmt.Sprintf("%.3f", startSec),
+				"-t", fmt.Sprintf("%.3f", clipDur), // hard output duration limit
 				"-i", baseVideoPath,
 				"-vf", textFilter,
 				"-c:v", "libx264",
@@ -210,7 +220,6 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 				"-c:a", "aac",
 				"-b:a", "128k",
 				"-movflags", "+faststart",
-				"-progress", "pipe:1",
 				outPath,
 			}
 		}
@@ -234,6 +243,25 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 			log.Printf("[CLIP] Command was: ffmpeg %s", strings.Join(args, " "))
 			failedClips = append(failedClips, i+1)
 			continue
+		}
+
+		// Validate the generated clip: probe actual duration and resolution.
+		// Fail the clip if duration exceeds the allowed maximum.
+		if actualMs, probeErr := p.getVideoDurationMs(outPath); probeErr != nil {
+			log.Printf("[CLIP] WARNING: Could not probe clip %d duration: %v", i+1, probeErr)
+		} else {
+			actualSec := float64(actualMs) / 1000.0
+			if w, h, _ := p.getInputResolution(outPath); w > 0 {
+				log.Printf("[CLIP] Clip %d validated — duration=%.1fs resolution=%dx%d", i+1, actualSec, w, h)
+			} else {
+				log.Printf("[CLIP] Clip %d validated — duration=%.1fs", i+1, actualSec)
+			}
+			if actualSec > float64(maxClipSeconds)+1 {
+				log.Printf("[CLIP] ERROR: Clip %d duration %.1fs exceeds max %ds — discarding", i+1, actualSec, maxClipSeconds)
+				os.Remove(outPath)
+				failedClips = append(failedClips, i+1)
+				continue
+			}
 		}
 
 		clipDuration := int(clipDur)
@@ -320,43 +348,43 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 }
 
 func (p *Pipeline) saveClipsToMongoDB(ctx context.Context, clips []ClipInfo) error {
-	apiURL := os.Getenv("API_URL")
-	if apiURL == "" {
-		apiURL = "http://localhost:8080"
+	if p.config.DB == nil {
+		return fmt.Errorf("database not configured — cannot save clips")
 	}
 
-	saveURL := fmt.Sprintf("%s/api/admin/clips", apiURL)
+	col := p.config.DB.Collection("clips")
 
-	reqBody := ClipSaveRequest{Clips: clips}
-	jsonData, err := json.Marshal(reqBody)
+	docs := make([]interface{}, 0, len(clips))
+	for _, clip := range clips {
+		var movieObjID primitive.ObjectID
+		if oid, err := primitive.ObjectIDFromHex(clip.MovieID); err == nil {
+			movieObjID = oid
+		} else {
+			log.Printf("[CLIP] WARNING: could not parse movie_id %q as ObjectID: %v", clip.MovieID, err)
+		}
+
+		doc := bson.M{
+			"_id":          primitive.NewObjectID(),
+			"movie_id":     movieObjID,
+			"movie_title":  clip.MovieTitle,
+			"movie_slug":   clip.MovieSlug,
+			"movie_code":   clip.MovieCode,
+			"filename":     clip.Filename,
+			"path":         clip.Path,
+			"url":          clip.URL,
+			"duration":     clip.Duration,
+			"sequence":     clip.Sequence,
+			"storage_type": clip.StorageType,
+			"created_at":   time.Now(),
+		}
+		docs = append(docs, doc)
+	}
+
+	result, err := col.InsertMany(ctx, docs)
 	if err != nil {
-		return fmt.Errorf("failed to marshal clip data: %w", err)
+		return fmt.Errorf("failed to insert clips into MongoDB: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", saveURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	log.Printf("[CLIP] Sending clip data to: %s", saveURL)
-	log.Printf("[CLIP] Clip data: %s", string(jsonData))
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[CLIP] MongoDB save response status: %d", resp.StatusCode)
-	log.Printf("[CLIP] MongoDB save response body: %s", string(body))
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
+	log.Printf("[CLIP] Saved %d clips to MongoDB", len(result.InsertedIDs))
 	return nil
 }

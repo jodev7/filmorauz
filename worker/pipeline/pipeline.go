@@ -1288,8 +1288,8 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 		"year":                  enrichedMetadata.Year,
 		"genre":                 enrichedMetadata.Genres,                          // English genres for search/filter
 		"genres_uz":             enrichedMetadata.GenresUz,                        // Uzbek genres for display
-		"country":               strings.Join(enrichedMetadata.Countries, ", "),   // English countries for storage
-		"countries_uz":          strings.Join(enrichedMetadata.CountriesUz, ", "), // Uzbek countries for display
+		"country":      strings.Join(enrichedMetadata.Countries, ", "), // English countries for storage (joined string)
+		"countries_uz": enrichedMetadata.CountriesUz,                 // Uzbek countries as array for frontend display
 		"duration":              enrichedMetadata.Duration,
 		"quality":               enrichedMetadata.Quality,
 		"translation":           enrichedMetadata.Translation,
@@ -1298,7 +1298,7 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 		"backdrop_url":          backdropURL,         // Generated/localized backdrop
 		"original_backdrop_url": originalBackdropURL, // Original TMDB backdrop
 		"video_url":             streamingURL,
-		"source_type":           "ingestion",
+		"source_type":           "direct_hls",
 		"source": bson.M{
 			"provider":   job.Source,
 			"source_url": job.DetailURL,
