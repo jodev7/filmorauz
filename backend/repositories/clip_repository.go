@@ -138,3 +138,32 @@ func (r *ClipRepository) DeleteByMovieID(ctx context.Context, movieID primitive.
 func (r *ClipRepository) CountByMovieID(ctx context.Context, movieID primitive.ObjectID) (int64, error) {
 	return r.col.CountDocuments(ctx, bson.M{"movie_id": movieID})
 }
+
+// RecordInstagramUpload increments the upload counter and sets status/timestamp.
+// status must be "success" or "failed".
+func (r *ClipRepository) RecordInstagramUpload(ctx context.Context, clipID primitive.ObjectID, status string) error {
+	now := time.Now()
+	uploaded := status == "success"
+	_, err := r.col.UpdateOne(ctx,
+		bson.M{"_id": clipID},
+		bson.M{
+			"$inc": bson.M{"instagram_upload_count": 1},
+			"$set": bson.M{
+				"uploaded_to_instagram":        uploaded,
+				"last_instagram_upload_at":     now,
+				"last_instagram_upload_status": status,
+			},
+		},
+	)
+	return err
+}
+
+// FindByID returns a single clip by its ObjectID.
+func (r *ClipRepository) FindByID(ctx context.Context, id primitive.ObjectID) (*models.Clip, error) {
+	var clip models.Clip
+	err := r.col.FindOne(ctx, bson.M{"_id": id}).Decode(&clip)
+	if err != nil {
+		return nil, err
+	}
+	return &clip, nil
+}

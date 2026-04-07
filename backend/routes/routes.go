@@ -215,6 +215,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 		admin.GET("/clips/movie/:movieId", clipHandler.GetClipsByMovie)
 		admin.POST("/clips", clipHandler.SaveClips)
 		admin.DELETE("/clips/movie/:movieId", clipHandler.DeleteClipsByMovie)
+		admin.POST("/clips/:id/instagram", clipHandler.UploadToInstagram)
 	}
 
 	// Public collection routes

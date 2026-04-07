@@ -457,6 +457,23 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		}
 	}
 
+	// ===== CLEANUP PROCESSED MASTER =====
+	// Delete processed_master.mp4 now that HLS is uploaded and clips are saved.
+	// Only reached here if HLS succeeded (processedMasterPath is set).
+	log.Printf("[CLEANUP] processed_master cleanup start — path: %s", processedMasterPath)
+	if processedMasterPath != "" {
+		if _, statErr := os.Stat(processedMasterPath); statErr == nil {
+			if rmErr := os.Remove(processedMasterPath); rmErr != nil {
+				log.Printf("[CLEANUP] WARNING: failed to delete processed_master.mp4: %v", rmErr)
+			} else {
+				log.Printf("[CLEANUP] processed_master.mp4 deleted successfully: %s", processedMasterPath)
+			}
+		} else {
+			log.Printf("[CLEANUP] processed_master.mp4 already gone: %s", processedMasterPath)
+		}
+	}
+	log.Printf("[CLEANUP] processed_master cleanup end")
+
 	// ===== CLEANUP READYVIDEO FOLDER =====
 	// Delete readyvideo folder after movie save + clip stage complete
 	log.Printf("[STAGE] cleanup start — hlsPath: %s", hlsPath)

@@ -131,6 +131,57 @@ func (h *ClipHandler) SaveClips(c *gin.Context) {
 	})
 }
 
+// UploadToInstagram POST /api/admin/clips/:id/instagram
+// Triggers an Instagram upload for the given clip and records the result.
+// The actual upload logic is delegated to instagramUpload() below — replace
+// that function body when the real Instagram API is integrated.
+func (h *ClipHandler) UploadToInstagram(c *gin.Context) {
+	idStr := c.Param("id")
+	clipID, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid clip id"})
+		return
+	}
+
+	ctx := context.Background()
+
+	clip, err := h.clipRepo.FindByID(ctx, clipID)
+	if err != nil {
+		log.Printf("[Instagram] clip not found: %s — %v", idStr, err)
+		c.JSON(http.StatusNotFound, gin.H{"error": "clip not found"})
+		return
+	}
+
+	log.Printf("[Instagram] upload requested — clip=%s url=%s", clip.ID.Hex(), clip.URL)
+
+	status := instagramUpload(clip)
+
+	log.Printf("[Instagram] upload result — clip=%s status=%s", clip.ID.Hex(), status)
+
+	if err := h.clipRepo.RecordInstagramUpload(ctx, clipID, status); err != nil {
+		log.Printf("[Instagram] failed to record upload: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "upload tracking failed"})
+		return
+	}
+
+	if status == "success" {
+		c.JSON(http.StatusOK, gin.H{"message": "uploaded to Instagram", "status": status})
+	} else {
+		c.JSON(http.StatusOK, gin.H{"message": "upload failed", "status": status})
+	}
+}
+
+// instagramUpload is the integration point for the real Instagram API.
+// Replace the body of this function when the API is ready.
+// Returns "success" or "failed".
+func instagramUpload(clip interface{}) string {
+	// TODO: integrate Instagram Graph API here.
+	// clip has fields: URL, Filename, MovieTitle, etc.
+	// For now, return "success" so the tracking flow is exercised end-to-end.
+	log.Printf("[Instagram] placeholder upload — real API not connected yet")
+	return "success"
+}
+
 func (h *ClipHandler) DeleteClipsByMovie(c *gin.Context) {
 	movieIDStr := c.Param("movieId")
 	movieID, err := primitive.ObjectIDFromHex(movieIDStr)

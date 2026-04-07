@@ -19,6 +19,12 @@ type Clip struct {
 	Sequence    int                `bson:"sequence" json:"sequence"`
 	StorageType string             `bson:"storage_type" json:"storage_type"`
 	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
+
+	// Instagram upload tracking
+	UploadedToInstagram       bool       `bson:"uploaded_to_instagram" json:"uploaded_to_instagram"`
+	InstagramUploadCount      int        `bson:"instagram_upload_count" json:"instagram_upload_count"`
+	LastInstagramUploadAt     *time.Time `bson:"last_instagram_upload_at,omitempty" json:"last_instagram_upload_at,omitempty"`
+	LastInstagramUploadStatus string     `bson:"last_instagram_upload_status" json:"last_instagram_upload_status"` // "success" | "failed" | ""
 }
 
 type ClipResult struct {
