@@ -45,10 +45,11 @@ func GetInstagramAccount(name string) *InstagramAccount {
 // The parser handles the actual instagrapi call so Go doesn't need Python deps.
 func UploadReelToInstagram(parserURL, videoURL, caption string, account *InstagramAccount) error {
 	payload := map[string]string{
-		"username":  account.Username,
-		"password":  account.Password,
-		"video_url": videoURL,
-		"caption":   caption,
+		"account_name": account.Name,
+		"username":     account.Username,
+		"password":     account.Password,
+		"video_url":    videoURL,
+		"caption":      caption,
 	}
 	body, _ := json.Marshal(payload)
 

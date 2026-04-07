@@ -1575,20 +1575,51 @@ class ParserHandler(BaseHTTPRequestHandler):
                     return
 
                 import tempfile, os, urllib.request as _urlreq
+                from pathlib import Path
+
+                account_name = body.get("account_name", "") or username
+                session_dir = Path(__file__).parent / "ig_sessions"
+                session_dir.mkdir(exist_ok=True)
+                session_file = session_dir / f"{account_name}.json"
+
                 tmp_path = None
                 try:
+                    cl = Client()
+                    cl.delay_range = [1, 3]
+
+                    if session_file.exists():
+                        cl.load_settings(session_file)
+                        logger.info(f"[Instagram] loaded session for account={account_name}")
+                        # Verify session is still valid without triggering challenge
+                        try:
+                            cl.get_timeline_feed()
+                        except Exception as e:
+                            logger.warning(f"[Instagram] session expired for account={account_name}, falling back to password login: {e}")
+                            cl = Client()
+                            cl.delay_range = [1, 3]
+                            cl.login(username, password)
+                            cl.dump_settings(session_file)
+                            logger.info(f"[Instagram] re-authenticated and session updated for account={account_name}")
+                    else:
+                        if not password:
+                            raise Exception(f"No session file found for account={account_name} and no password provided. Run ig_login.py first.")
+                        logger.warning(f"[Instagram] no session for account={account_name}, logging in with password (may trigger challenge)")
+                        cl.login(username, password)
+                        cl.dump_settings(session_file)
+                        logger.info(f"[Instagram] session saved for account={account_name}")
+
                     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
                         tmp_path = f.name
                     _urlreq.urlretrieve(video_url, tmp_path)
 
-                    cl = Client()
-                    cl.login(username, password)
-                    from pathlib import Path
                     media = cl.clip_upload(Path(tmp_path), caption)
-                    logger.info(f"[Instagram] upload success media_id={media.pk}")
+                    logger.info(f"[Instagram] upload success media_id={media.pk} account={account_name}")
                     self._send_json({"status": "success", "media_id": str(media.pk)})
                 except Exception as e:
-                    logger.error(f"[Instagram] upload error: {e}", exc_info=True)
+                    if "challenge_required" in str(e).lower():
+                        logger.error(f"[Instagram] challenge_required for account={account_name} — run ig_login.py to create a session file first")
+                    else:
+                        logger.error(f"[Instagram] upload error for account={account_name}: {e}", exc_info=True)
                     self._send_json({"status": "failed", "error": str(e)})
                 finally:
                     if tmp_path and os.path.exists(tmp_path):
