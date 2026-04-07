@@ -1553,6 +1553,51 @@ class ParserHandler(BaseHTTPRequestHandler):
                 self._send_error(f"Download failed: {str(e)}", 500)
             return
         
+        # /instagram/upload — upload a video clip as an Instagram Reel
+        elif path == "/instagram/upload":
+            try:
+                body = self._read_json_body()
+                username = body.get("username", "")
+                password = body.get("password", "")
+                video_url = body.get("video_url", "")
+                caption = body.get("caption", "")
+
+                if not username or not password or not video_url:
+                    self._send_error("username, password and video_url are required", 400)
+                    return
+
+                logger.info(f"[Instagram] upload requested for account={username} url={video_url}")
+
+                try:
+                    from instagrapi import Client
+                except ImportError:
+                    self._send_error("instagrapi not installed — run: pip install instagrapi", 500)
+                    return
+
+                import tempfile, os, urllib.request as _urlreq
+                tmp_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+                        tmp_path = f.name
+                    _urlreq.urlretrieve(video_url, tmp_path)
+
+                    cl = Client()
+                    cl.login(username, password)
+                    from pathlib import Path
+                    media = cl.clip_upload(Path(tmp_path), caption)
+                    logger.info(f"[Instagram] upload success media_id={media.pk}")
+                    self._send_json({"status": "success", "media_id": str(media.pk)})
+                except Exception as e:
+                    logger.error(f"[Instagram] upload error: {e}", exc_info=True)
+                    self._send_json({"status": "failed", "error": str(e)})
+                finally:
+                    if tmp_path and os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+            except Exception as e:
+                logger.error(f"[Instagram] endpoint error: {e}", exc_info=True)
+                self._send_error(str(e), 500)
+            return
+
         # 404 for unknown POST endpoints
         self._send_error("Not found", 404)
     

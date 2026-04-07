@@ -11,6 +11,7 @@ import {
   CheckCircle,
   XCircle,
   MinusCircle,
+  X,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
@@ -87,11 +88,25 @@ function groupByMovie(clips: Clip[]): Record<string, Clip[]> {
   return grouped;
 }
 
+interface AccountResult {
+  account: string;
+  status: "success" | "failed";
+  error?: string;
+}
+
+interface UploadModal {
+  clip: Clip;
+  selectedAccounts: string[];
+  results: AccountResult[] | null;
+}
+
 export default function AdminClipsPage() {
   const { token } = useAuth();
   const [clips, setClips] = useState<Clip[]>([]);
   const [loading, setLoading] = useState(true);
+  const [igAccounts, setIgAccounts] = useState<string[]>([]);
   const [uploading, setUploading] = useState<Record<string, boolean>>({});
+  const [modal, setModal] = useState<UploadModal | null>(null);
 
   const fetchClips = useCallback(async () => {
     if (!token) return;
@@ -110,25 +125,57 @@ export default function AdminClipsPage() {
     }
   }, [token]);
 
+  const fetchAccounts = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${API}/admin/instagram/accounts`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setIgAccounts(data.accounts || []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch Instagram accounts:", err);
+    }
+  }, [token]);
+
   useEffect(() => {
     fetchClips();
-  }, [fetchClips]);
+    fetchAccounts();
+  }, [fetchClips, fetchAccounts]);
 
-  const handleUpload = async (clip: Clip) => {
-    if (!token || uploading[clip.id]) return;
+  const openUploadModal = (clip: Clip) => {
+    setModal({ clip, selectedAccounts: igAccounts.slice(0, 1), results: null });
+  };
+
+  const toggleAccount = (name: string) => {
+    if (!modal) return;
+    setModal((prev) => {
+      if (!prev) return prev;
+      const selected = prev.selectedAccounts.includes(name)
+        ? prev.selectedAccounts.filter((a) => a !== name)
+        : [...prev.selectedAccounts, name];
+      return { ...prev, selectedAccounts: selected };
+    });
+  };
+
+  const handleUpload = async () => {
+    if (!token || !modal || modal.selectedAccounts.length === 0) return;
+    const { clip, selectedAccounts } = modal;
     setUploading((prev) => ({ ...prev, [clip.id]: true }));
     try {
       const res = await fetch(`${API}/admin/clips/${clip.id}/instagram`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ account_names: selectedAccounts }),
       });
       const data = await res.json();
-      if (res.ok) {
-        // Refresh clips to get updated tracking fields
-        await fetchClips();
-      } else {
-        console.error("Upload failed:", data.error);
-      }
+      setModal((prev) => prev ? { ...prev, results: data.results || [] } : prev);
+      await fetchClips();
     } catch (err) {
       console.error("Upload error:", err);
     } finally {
@@ -286,7 +333,7 @@ export default function AdminClipsPage() {
 
                               {/* Instagram upload */}
                               <button
-                                onClick={() => handleUpload(clip)}
+                                onClick={() => openUploadModal(clip)}
                                 disabled={uploading[clip.id]}
                                 title="Instagramga yuklash"
                                 className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors ${
@@ -313,6 +360,121 @@ export default function AdminClipsPage() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Instagram account picker modal */}
+      {modal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-brand-card border border-brand-border rounded-xl w-full max-w-sm shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-brand-border">
+              <div>
+                <h2 className="text-white font-semibold text-sm">Instagramga yuklash</h2>
+                <p className="text-gray-500 text-xs mt-0.5 truncate max-w-[220px]">
+                  {modal.clip.movie_title} — klip #{modal.clip.sequence}
+                </p>
+              </div>
+              <button
+                onClick={() => setModal(null)}
+                className="text-gray-500 hover:text-white transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Results view */}
+            {modal.results ? (
+              <div className="px-5 py-4 space-y-2">
+                <p className="text-gray-400 text-xs mb-3">Yuklash natijalari:</p>
+                {modal.results.map((r) => (
+                  <div key={r.account} className="flex items-center justify-between">
+                    <span className="text-gray-300 text-sm font-mono">{r.account}</span>
+                    {r.status === "success" ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-green-400">
+                        <CheckCircle size={13} /> Muvaffaqiyatli
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-xs text-red-400" title={r.error}>
+                        <XCircle size={13} /> Xato
+                      </span>
+                    )}
+                  </div>
+                ))}
+                <div className="pt-3">
+                  <button
+                    onClick={() => setModal(null)}
+                    className="w-full py-2 rounded-lg bg-brand-border text-gray-300 text-sm hover:bg-white/10 transition-colors"
+                  >
+                    Yopish
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Account picker view */
+              <div className="px-5 py-4 space-y-3">
+                {igAccounts.length === 0 ? (
+                  <p className="text-gray-500 text-sm text-center py-4">
+                    Instagram akkauntlar sozlanmagan.<br />
+                    <span className="text-xs text-gray-600">INSTAGRAM_ACCOUNTS_JSON env o&apos;rnatilmagan.</span>
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-gray-400 text-xs">Akkaunt(lar)ni tanlang:</p>
+                    <div className="space-y-2">
+                      {igAccounts.map((name) => {
+                        const checked = modal.selectedAccounts.includes(name);
+                        return (
+                          <label
+                            key={name}
+                            className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-brand-border hover:border-gray-500 cursor-pointer transition-colors"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleAccount(name)}
+                              className="accent-brand-red w-4 h-4 cursor-pointer"
+                            />
+                            <span className="text-gray-200 text-sm font-mono">{name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+
+                <div className="flex gap-2 pt-1">
+                  <button
+                    onClick={() => setModal(null)}
+                    className="flex-1 py-2 rounded-lg border border-brand-border text-gray-400 text-sm hover:bg-white/5 transition-colors"
+                  >
+                    Bekor
+                  </button>
+                  <button
+                    onClick={handleUpload}
+                    disabled={
+                      modal.selectedAccounts.length === 0 ||
+                      uploading[modal.clip.id] ||
+                      igAccounts.length === 0
+                    }
+                    className="flex-1 py-2 rounded-lg bg-brand-red text-white text-sm font-medium hover:bg-brand-red/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
+                  >
+                    {uploading[modal.clip.id] ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin" />
+                        Yuklanmoqda...
+                      </>
+                    ) : (
+                      <>
+                        <Upload size={14} />
+                        Yuklash
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

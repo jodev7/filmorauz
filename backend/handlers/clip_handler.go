@@ -2,22 +2,25 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
+	"github.com/filmorauz/backend/services"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type ClipHandler struct {
-	clipRepo *repositories.ClipRepository
+	clipRepo  *repositories.ClipRepository
+	parserURL string
 }
 
-func NewClipHandler(clipRepo *repositories.ClipRepository) *ClipHandler {
-	return &ClipHandler{clipRepo: clipRepo}
+func NewClipHandler(clipRepo *repositories.ClipRepository, parserURL string) *ClipHandler {
+	return &ClipHandler{clipRepo: clipRepo, parserURL: parserURL}
 }
 
 func (h *ClipHandler) ListClips(c *gin.Context) {
@@ -131,10 +134,20 @@ func (h *ClipHandler) SaveClips(c *gin.Context) {
 	})
 }
 
+// ListInstagramAccounts GET /api/admin/instagram/accounts
+// Returns account names from INSTAGRAM_ACCOUNTS_JSON env (no credentials exposed).
+func (h *ClipHandler) ListInstagramAccounts(c *gin.Context) {
+	accounts := services.LoadInstagramAccounts()
+	names := make([]string, len(accounts))
+	for i, a := range accounts {
+		names[i] = a.Name
+	}
+	c.JSON(http.StatusOK, gin.H{"accounts": names})
+}
+
 // UploadToInstagram POST /api/admin/clips/:id/instagram
-// Triggers an Instagram upload for the given clip and records the result.
-// The actual upload logic is delegated to instagramUpload() below — replace
-// that function body when the real Instagram API is integrated.
+// Body: {"account_names": ["main", "backup1"]}
+// Uploads the clip as a Reel to each selected account via the parser service.
 func (h *ClipHandler) UploadToInstagram(c *gin.Context) {
 	idStr := c.Param("id")
 	clipID, err := primitive.ObjectIDFromHex(idStr)
@@ -143,43 +156,56 @@ func (h *ClipHandler) UploadToInstagram(c *gin.Context) {
 		return
 	}
 
-	ctx := context.Background()
+	var req struct {
+		AccountNames []string `json:"account_names"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.AccountNames) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "account_names required"})
+		return
+	}
 
+	ctx := context.Background()
 	clip, err := h.clipRepo.FindByID(ctx, clipID)
 	if err != nil {
-		log.Printf("[Instagram] clip not found: %s — %v", idStr, err)
 		c.JSON(http.StatusNotFound, gin.H{"error": "clip not found"})
 		return
 	}
 
-	log.Printf("[Instagram] upload requested — clip=%s url=%s", clip.ID.Hex(), clip.URL)
+	caption := fmt.Sprintf("%s\n\nKinoni profildagi botdan toping!", clip.MovieTitle)
 
-	status := instagramUpload(clip)
+	type accountResult struct {
+		Account string `json:"account"`
+		Status  string `json:"status"`
+		Error   string `json:"error,omitempty"`
+	}
+	results := make([]accountResult, 0, len(req.AccountNames))
+	overallStatus := "success"
 
-	log.Printf("[Instagram] upload result — clip=%s status=%s", clip.ID.Hex(), status)
+	for _, name := range req.AccountNames {
+		account := services.GetInstagramAccount(name)
+		if account == nil {
+			log.Printf("[Instagram] account not found: %s", name)
+			results = append(results, accountResult{Account: name, Status: "failed", Error: "account not configured"})
+			overallStatus = "failed"
+			continue
+		}
+		log.Printf("[Instagram] uploading clip=%s to account=%s url=%s", clip.ID.Hex(), name, clip.URL)
+		uploadErr := services.UploadReelToInstagram(h.parserURL, clip.URL, caption, account)
+		if uploadErr != nil {
+			log.Printf("[Instagram] upload failed account=%s: %v", name, uploadErr)
+			results = append(results, accountResult{Account: name, Status: "failed", Error: uploadErr.Error()})
+			overallStatus = "failed"
+		} else {
+			log.Printf("[Instagram] upload success account=%s", name)
+			results = append(results, accountResult{Account: name, Status: "success"})
+		}
+	}
 
-	if err := h.clipRepo.RecordInstagramUpload(ctx, clipID, status); err != nil {
+	if err := h.clipRepo.RecordInstagramUpload(ctx, clipID, overallStatus); err != nil {
 		log.Printf("[Instagram] failed to record upload: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "upload tracking failed"})
-		return
 	}
 
-	if status == "success" {
-		c.JSON(http.StatusOK, gin.H{"message": "uploaded to Instagram", "status": status})
-	} else {
-		c.JSON(http.StatusOK, gin.H{"message": "upload failed", "status": status})
-	}
-}
-
-// instagramUpload is the integration point for the real Instagram API.
-// Replace the body of this function when the API is ready.
-// Returns "success" or "failed".
-func instagramUpload(clip interface{}) string {
-	// TODO: integrate Instagram Graph API here.
-	// clip has fields: URL, Filename, MovieTitle, etc.
-	// For now, return "success" so the tracking flow is exercised end-to-end.
-	log.Printf("[Instagram] placeholder upload — real API not connected yet")
-	return "success"
+	c.JSON(http.StatusOK, gin.H{"results": results, "overall_status": overallStatus})
 }
 
 func (h *ClipHandler) DeleteClipsByMovie(c *gin.Context) {

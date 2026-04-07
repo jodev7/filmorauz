@@ -189,7 +189,7 @@ func main() {
 
 	// Clip repository and handler
 	clipRepo := repositories.NewClipRepository(db)
-	clipHandler := handlers.NewClipHandler(clipRepo)
+	clipHandler := handlers.NewClipHandler(clipRepo, parserURL)
 
 	// Serve uploaded files in dev mode
 	if cfg.IsDev {
