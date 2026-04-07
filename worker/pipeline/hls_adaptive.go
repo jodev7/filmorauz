@@ -206,8 +206,9 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 		// -loop 1 is required — without it, a PNG is a 1-frame stream; the overlay
 		// would only appear on the first frame and then disappear for the rest of the video.
 		// :shortest=1 terminates the overlay when the video stream ends.
+		// scale=120:-1 keeps the logo compact — a subtle watermark, not a banner.
 		filterComplex := fmt.Sprintf(
-			"[0:v]%s[base];[base][1:v]overlay=W-w-20:H-h-20:shortest=1[out]",
+			"[0:v]%s[base];[1:v]scale=120:-1[logo];[base][logo]overlay=W-w-20:H-h-20:shortest=1[out]",
 			videoChain,
 		)
 		filterArgs = []string{
@@ -217,7 +218,7 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 			"-map", "[out]",
 			"-map", "0:a?",
 		}
-		filterDescription = "logo overlay (bottom-right, 20px margin, loop=1, shortest=1) + scale filter"
+		filterDescription = "logo watermark 120px bottom-right (loop=1, shortest=1) + scale filter"
 		log.Printf("[HLS] APPLYING logo overlay — logo: %s", logoPath)
 		log.Printf("[HLS] APPLYING logo overlay — filter_complex: %s", filterComplex)
 	} else {

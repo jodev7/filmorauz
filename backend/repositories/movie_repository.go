@@ -372,9 +372,10 @@ func (r *MovieRepository) List(genre string, page, limit int) ([]models.Movie, i
 	}
 	log.Printf("[ListMovies] Total matching movies: %d", total)
 
-	// Use simple find with legacy field handling
+	// Sort by updated_at desc (most recently edited/added first); fall back to
+	// created_at for documents that have never been edited.
 	opts := options.Find().
-		SetSort(bson.D{{Key: "created_at", Value: -1}}).
+		SetSort(bson.D{{Key: "updated_at", Value: -1}, {Key: "created_at", Value: -1}}).
 		SetSkip(int64((page - 1) * limit)).
 		SetLimit(int64(limit))
 
@@ -480,7 +481,6 @@ func (r *MovieRepository) IncrementViews(id primitive.ObjectID) error {
 	filter := bson.M{"_id": id}
 	update := bson.M{
 		"$inc": bson.M{"views": 1},
-		"$set": bson.M{"updated_at": time.Now()},
 	}
 
 	_, err := r.col.UpdateOne(ctx, filter, update)

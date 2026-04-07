@@ -24,6 +24,8 @@ func (h *ClipHandler) ListClips(c *gin.Context) {
 	limit, _ := strconv.ParseInt(c.DefaultQuery("limit", "50"), 10, 64)
 	offset, _ := strconv.ParseInt(c.DefaultQuery("offset", "0"), 10, 64)
 
+	log.Printf("[ClipHandler] ListClips: limit=%d, offset=%d", limit, offset)
+
 	ctx := context.Background()
 	clips, total, err := h.clipRepo.List(ctx, limit, offset)
 	if err != nil {
@@ -31,6 +33,8 @@ func (h *ClipHandler) ListClips(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch clips"})
 		return
 	}
+
+	log.Printf("[ClipHandler] ListClips: returning %d clips (total=%d)", len(clips), total)
 
 	c.JSON(http.StatusOK, gin.H{
 		"data":   clips,

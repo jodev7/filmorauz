@@ -71,25 +71,59 @@ func (r *ClipRepository) List(ctx context.Context, limit, offset int64) ([]model
 		limit = 100
 	}
 
+	filter := bson.M{}
+
+	// Debug: log database and collection info
+	log.Printf("[ClipRepo] List: db=%s, coll=%s", r.col.Database().Name(), r.col.Name())
+
+	total, countErr := r.col.CountDocuments(ctx, filter)
+	if countErr != nil {
+		log.Printf("[ClipRepo] List: CountDocuments error=%v", countErr)
+	} else {
+		log.Printf("[ClipRepo] List: total clips in DB=%d, limit=%d, offset=%d", total, limit, offset)
+	}
+
+	// Try raw bson.M to see if there's a struct mismatch
+	var rawDocs []bson.M
+	rawCursor, rawErr := r.col.Find(ctx, filter)
+	if rawErr != nil {
+		log.Printf("[ClipRepo] List: Raw Find error=%v", rawErr)
+	} else {
+		if err := rawCursor.All(ctx, &rawDocs); err != nil {
+			log.Printf("[ClipRepo] List: Raw decode error=%v", err)
+		} else {
+			log.Printf("[ClipRepo] List: Raw query returned %d docs", len(rawDocs))
+			for i, doc := range rawDocs {
+				log.Printf("[ClipRepo] List: doc[%d] _id=%v, movie_id=%v", i, doc["_id"], doc["movie_id"])
+				if i >= 2 {
+					break // Only log first 3
+				}
+			}
+		}
+		rawCursor.Close(ctx)
+	}
+
 	opts := options.Find().
 		SetSort(bson.M{"created_at": -1}).
 		SetLimit(limit).
 		SetSkip(offset)
 
-	cursor, err := r.col.Find(ctx, bson.M{}, opts)
+	cursor, err := r.col.Find(ctx, filter, opts)
 	if err != nil {
+		log.Printf("[ClipRepo] List: Find error=%v", err)
 		return nil, 0, err
 	}
 	defer cursor.Close(ctx)
 
 	var clips []models.Clip
 	if err := cursor.All(ctx, &clips); err != nil {
+		log.Printf("[ClipRepo] List: Decode error=%v", err)
 		return nil, 0, err
 	}
 
-	total, err := r.col.CountDocuments(ctx, bson.M{})
-	if err != nil {
-		log.Printf("[ClipRepo] Warning: failed to count clips: %v", err)
+	log.Printf("[ClipRepo] List: returned %d clips (countErr=%v)", len(clips), countErr)
+
+	if countErr != nil {
 		total = int64(len(clips))
 	}
 

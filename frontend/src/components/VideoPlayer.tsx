@@ -163,40 +163,65 @@ function IframePlayer({ src, title }: { src: string; title: string }) {
   );
 }
 
-// HLS Player (basic support - for more robust HLS, consider using hls.js)
+// HLS Player with hls.js and manual quality selector (360p / 480p / 720p)
 function HLSPlayer({ src, title, poster }: { src: string; title: string; poster?: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const hlsRef = useRef<import("hls.js").default | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [hlsSupported, setHlsSupported] = useState(true);
+  const [levels, setLevels] = useState<{ height: number; index: number }[]>([]);
+  const [currentLevel, setCurrentLevel] = useState<number>(-1); // -1 = auto
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    // Check if HLS is natively supported
+    // Native HLS (Safari) — no quality selector needed
     if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      // Native HLS support (Safari)
+      video.src = src;
       return;
     }
 
-    // For non-Safari browsers, HLS.js would be needed
-    // For now, show error suggesting to use a different browser
-    setHlsSupported(false);
-  }, []);
+    let Hls: typeof import("hls.js").default;
+    import("hls.js").then((mod) => {
+      Hls = mod.default;
+      if (!Hls.isSupported()) {
+        setError("HLS is not supported in this browser.");
+        return;
+      }
+      const hls = new Hls({ startLevel: -1 });
+      hlsRef.current = hls;
+      hls.loadSource(src);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, (_evt, data) => {
+        const lvls = data.levels.map((l, i) => ({ height: l.height, index: i }));
+        setLevels(lvls);
+        setCurrentLevel(-1);
+        video.play().catch(() => {});
+      });
+      hls.on(Hls.Events.ERROR, (_evt, data) => {
+        if (data.fatal) setError("Video playback error. Please try again.");
+      });
+    });
 
-  if (!hlsSupported) {
-    return (
-      <ErrorFallback 
-        message="HLS streaming requires Safari or a browser with HLS support. Consider using a direct MP4 or iframe embed instead." 
-      />
-    );
-  }
+    return () => {
+      hlsRef.current?.destroy();
+      hlsRef.current = null;
+    };
+  }, [src]);
+
+  const handleQualityChange = (level: number) => {
+    if (hlsRef.current) {
+      hlsRef.current.currentLevel = level;
+      setCurrentLevel(level);
+    }
+  };
+
+  if (error) return <ErrorFallback message={error} />;
 
   return (
-    <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden">
+    <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden group">
       <video
         ref={videoRef}
-        src={src}
         title={title}
         controls
         autoPlay
@@ -205,6 +230,23 @@ function HLSPlayer({ src, title, poster }: { src: string; title: string; poster?
       >
         Your browser does not support HLS streaming.
       </video>
+
+      {levels.length > 1 && (
+        <div className="absolute top-3 right-3 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+          <select
+            value={currentLevel}
+            onChange={(e) => handleQualityChange(Number(e.target.value))}
+            className="bg-black/80 text-white text-xs px-2 py-1 rounded border border-white/20 cursor-pointer"
+          >
+            <option value={-1}>Auto</option>
+            {levels.map((l) => (
+              <option key={l.index} value={l.index}>
+                {l.height}p
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
     </div>
   );
 }

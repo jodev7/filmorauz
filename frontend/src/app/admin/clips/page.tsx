@@ -28,7 +28,7 @@ export default function AdminClipsPage() {
   const fetchClips = async () => {
     if (!token) return;
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/admin/clips?limit=100`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api'}/admin/clips?limit=100`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {

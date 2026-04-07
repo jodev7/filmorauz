@@ -62,7 +62,11 @@ export default function EditMoviePage() {
     );
   }
 
-  // Map movie to form initial data
+  // Map movie to form initial data.
+  // "ingestion" is a legacy source_type not shown in the form dropdown;
+  // treat it as "direct_hls" since ingested movies stream via HLS.
+  const sourceType = movie.source_type === "ingestion" ? "direct_hls" : movie.source_type;
+
   const initialData: Partial<MovieInput> = {
     title: movie.title,
     description: movie.description,
@@ -72,6 +76,8 @@ export default function EditMoviePage() {
     genre: movie.genre,
     country: movie.country,
     video_url: movie.video_url,
+    embed_url: movie.embed_url,
+    source_type: sourceType,
     duration: movie.duration,
     quality: movie.quality,
   };
