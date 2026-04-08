@@ -242,14 +242,26 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
             </div>
           </div>
         ) : (
-          <VideoPlayer
-            videoUrl={movie.video_url}
-            embedUrl={movie.embed_url}
-            sourceType={movie.source_type}
-            title={localizedTitle}
-            posterUrl={movie.backdrop_url || movie.poster_url}
-          />
+          // future preroll ad hook — insert player_preroll_placeholder slot here before VideoPlayer
+          <div className="relative">
+            <VideoPlayer
+              videoUrl={movie.video_url}
+              embedUrl={movie.embed_url}
+              sourceType={movie.source_type}
+              title={localizedTitle}
+              posterUrl={movie.backdrop_url || movie.poster_url}
+            />
+            {/* Player overlay banner ad — rendered inside player container */}
+            <div className="absolute bottom-12 left-0 right-0 flex justify-center pointer-events-none">
+              <div className="pointer-events-auto max-w-sm w-full mx-4">
+                <WebsiteAdSlot placement="player_overlay_banner" className="opacity-90" />
+              </div>
+            </div>
+          </div>
         )}
+
+        {/* Player popup ad — rendered below player, auto-dismissed */}
+        <WebsiteAdSlot placement="player_popup" popup />
 
         <div className="mt-4 sm:mt-6 flex flex-col md:flex-row gap-4 sm:gap-6">
           <div className="flex-1">

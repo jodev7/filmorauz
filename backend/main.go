@@ -166,9 +166,8 @@ func main() {
 	banAppealRepo := repositories.NewBanAppealRepository(db)
 	banAppealHandler := handlers.NewBanAppealHandler(banAppealRepo, banHistoryRepo, userRepo, notificationService)
 
-	// Ad repository and handler
+	// Ad repository and handler (Phase 2: telegramService wired after it's initialized below)
 	adRepo := repositories.NewAdRepository(db)
-	adHandler := handlers.NewAdHandler(adRepo)
 	if err := adRepo.EnsureIndexes(); err != nil {
 		log.Printf("Warning: Failed to ensure ad indexes: %v", err)
 	}
@@ -188,6 +187,9 @@ func main() {
 		log.Printf("Warning: Failed to initialize Telegram service: %v", err)
 	}
 	telegramHandler := handlers.NewTelegramHandler(telegramService)
+
+	// Ad handler (wired after telegramService is available)
+	adHandler := handlers.NewAdHandler(adRepo, telegramService)
 
 	// Series repository, service, and handler
 	// seriesRepo already initialized above for rating service

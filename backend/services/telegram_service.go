@@ -395,6 +395,163 @@ func (s *TelegramService) buildAdminNotification(movie *TelegramMovieData) strin
 	return b.String()
 }
 
+// AdPostResult holds the result of posting a single ad to Telegram
+type AdPostResult struct {
+	Target    string `json:"target"`
+	Status    string `json:"status"` // "success" | "failed"
+	MessageID int    `json:"message_id,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// SendAdToChannel sends an ad to a specific Telegram channel (by @username or chat_id string)
+func (s *TelegramService) SendAdToChannel(channelTarget, title, description, imageURL, targetURL, cta string) AdPostResult {
+	if s.botToken == "" {
+		return AdPostResult{Target: channelTarget, Status: "failed", Error: "bot token not configured"}
+	}
+
+	api, err := tgbotapi.NewBotAPI(s.botToken)
+	if err != nil {
+		return AdPostResult{Target: channelTarget, Status: "failed", Error: err.Error()}
+	}
+
+	caption := buildAdCaption(title, description, targetURL, cta)
+
+	// Inline keyboard with CTA button
+	var keyboard *tgbotapi.InlineKeyboardMarkup
+	if targetURL != "" {
+		ctaText := cta
+		if ctaText == "" {
+			ctaText = "Ko'proq bilish ›"
+		}
+		kb := tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonURL(ctaText, targetURL),
+			),
+		)
+		keyboard = &kb
+	}
+
+	var sentMsg tgbotapi.Message
+	var sendErr error
+
+	if imageURL != "" {
+		msg := tgbotapi.NewPhotoToChannel(channelTarget, tgbotapi.FileURL(imageURL))
+		msg.Caption = caption
+		msg.ParseMode = "HTML"
+		if keyboard != nil {
+			msg.ReplyMarkup = keyboard
+		}
+		sentMsg, sendErr = api.Send(msg)
+		if sendErr != nil {
+			// Fallback to text
+			txtMsg := tgbotapi.NewMessageToChannel(channelTarget, caption)
+			txtMsg.ParseMode = "HTML"
+			if keyboard != nil {
+				txtMsg.ReplyMarkup = keyboard
+			}
+			sentMsg, sendErr = api.Send(txtMsg)
+		}
+	} else {
+		msg := tgbotapi.NewMessageToChannel(channelTarget, caption)
+		msg.ParseMode = "HTML"
+		if keyboard != nil {
+			msg.ReplyMarkup = keyboard
+		}
+		sentMsg, sendErr = api.Send(msg)
+	}
+
+	if sendErr != nil {
+		log.Printf("[TELEGRAM AD] Failed to post ad to %s: %v", channelTarget, sendErr)
+		return AdPostResult{Target: channelTarget, Status: "failed", Error: sendErr.Error()}
+	}
+
+	log.Printf("[TELEGRAM AD] ✓ Ad posted to %s (msg_id=%d)", channelTarget, sentMsg.MessageID)
+	return AdPostResult{Target: channelTarget, Status: "success", MessageID: sentMsg.MessageID}
+}
+
+// SendAdToBot sends an ad to the admin/bot chat (for bot placement)
+func (s *TelegramService) SendAdToBot(chatID int64, title, description, imageURL, targetURL, cta string) AdPostResult {
+	target := fmt.Sprintf("bot:%d", chatID)
+	if s.botToken == "" {
+		return AdPostResult{Target: target, Status: "failed", Error: "bot token not configured"}
+	}
+	if chatID == 0 {
+		return AdPostResult{Target: target, Status: "failed", Error: "chatID is 0"}
+	}
+
+	api, err := tgbotapi.NewBotAPI(s.botToken)
+	if err != nil {
+		return AdPostResult{Target: target, Status: "failed", Error: err.Error()}
+	}
+
+	caption := buildAdCaption(title, description, targetURL, cta)
+
+	var keyboard *tgbotapi.InlineKeyboardMarkup
+	if targetURL != "" {
+		ctaText := cta
+		if ctaText == "" {
+			ctaText = "Ko'proq bilish ›"
+		}
+		kb := tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonURL(ctaText, targetURL),
+			),
+		)
+		keyboard = &kb
+	}
+
+	var sentMsg tgbotapi.Message
+	var sendErr error
+
+	if imageURL != "" {
+		msg := tgbotapi.NewPhoto(chatID, tgbotapi.FileURL(imageURL))
+		msg.Caption = caption
+		msg.ParseMode = "HTML"
+		if keyboard != nil {
+			msg.ReplyMarkup = keyboard
+		}
+		sentMsg, sendErr = api.Send(msg)
+		if sendErr != nil {
+			txtMsg := tgbotapi.NewMessage(chatID, caption)
+			txtMsg.ParseMode = "HTML"
+			if keyboard != nil {
+				txtMsg.ReplyMarkup = keyboard
+			}
+			sentMsg, sendErr = api.Send(txtMsg)
+		}
+	} else {
+		msg := tgbotapi.NewMessage(chatID, caption)
+		msg.ParseMode = "HTML"
+		if keyboard != nil {
+			msg.ReplyMarkup = keyboard
+		}
+		sentMsg, sendErr = api.Send(msg)
+	}
+
+	if sendErr != nil {
+		return AdPostResult{Target: target, Status: "failed", Error: sendErr.Error()}
+	}
+	return AdPostResult{Target: target, Status: "success", MessageID: sentMsg.MessageID}
+}
+
+// buildAdCaption creates a sponsored message caption for an ad
+func buildAdCaption(title, description, targetURL, cta string) string {
+	var b strings.Builder
+	b.WriteString("📢 <b>Reklama</b>\n\n")
+	b.WriteString("<b>")
+	b.WriteString(title)
+	b.WriteString("</b>")
+	if description != "" {
+		b.WriteString("\n")
+		b.WriteString(description)
+	}
+	if targetURL != "" && cta == "" {
+		b.WriteString("\n\n🔗 ")
+		b.WriteString(targetURL)
+	}
+	return b.String()
+}
+
 // NotifyMovieCreated is called via HTTP from worker after successful movie creation
 // This is the main entry point for the backend API
 func (s *TelegramService) NotifyMovieCreated(movie *TelegramMovieData) *TelegramNotificationResult {

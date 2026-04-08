@@ -46,10 +46,32 @@ type Ad struct {
 	Impressions int64 `bson:"impressions" json:"impressions"`
 	Clicks      int64 `bson:"clicks" json:"clicks"`
 
+	// Phase 2: Telegram targeting
+	TelegramChannels       []string   `bson:"telegram_channels,omitempty" json:"telegram_channels,omitempty"`
+	TelegramBotEnabled     bool       `bson:"telegram_bot_enabled" json:"telegram_bot_enabled"`
+	TelegramChannelEnabled bool       `bson:"telegram_channel_enabled" json:"telegram_channel_enabled"`
+	TelegramDeliveries     int64      `bson:"telegram_deliveries" json:"telegram_deliveries"`
+	TelegramLastSentAt     *time.Time `bson:"telegram_last_sent_at,omitempty" json:"telegram_last_sent_at,omitempty"`
+
+	// Phase 2: Player targeting
+	PlayerEnabled bool `bson:"player_enabled" json:"player_enabled"`
+
 	// Metadata
 	CreatedBy primitive.ObjectID `bson:"created_by" json:"created_by"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt time.Time          `bson:"updated_at" json:"updated_at"`
+}
+
+// AdDelivery is a lightweight delivery log record (stored in ad_deliveries collection)
+type AdDelivery struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	AdID      primitive.ObjectID `bson:"ad_id" json:"ad_id"`
+	Placement string             `bson:"placement" json:"placement"` // telegram_channel_post, telegram_bot_message, player_overlay_banner, etc.
+	Target    string             `bson:"target" json:"target"`       // channel username, "bot", or "player"
+	Status    string             `bson:"status" json:"status"`       // "success" | "failed"
+	MessageID int                `bson:"message_id,omitempty" json:"message_id,omitempty"`
+	SentAt    time.Time          `bson:"sent_at" json:"sent_at"`
+	Error     string             `bson:"error,omitempty" json:"error,omitempty"`
 }
 
 // AdStats is the aggregated stats response for the ads dashboard
@@ -60,4 +82,7 @@ type AdStats struct {
 	Impressions int64   `json:"impressions"`
 	Clicks      int64   `json:"clicks"`
 	Revenue     float64 `json:"revenue"`
+	// Phase 2
+	TelegramDeliveries int64 `json:"telegram_deliveries"`
+	TelegramFailed     int64 `json:"telegram_failed"`
 }

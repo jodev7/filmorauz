@@ -14,10 +14,15 @@ import {
   Play,
   Pause,
   Upload,
+  Send,
+  History,
+  Bot,
+  Tv2,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
   Ad,
+  AdDelivery,
   AdInput,
   AdStats,
   AdStatus,
@@ -26,6 +31,8 @@ import {
   adminCreateAd,
   adminUpdateAd,
   adminDeleteAd,
+  adminSendTelegramAd,
+  adminGetAdDelivery,
   uploadAdMedia,
 } from "@/lib/api";
 
@@ -37,6 +44,10 @@ const PLACEMENTS = [
   { value: "profile_page_banner", label: "Profile Page Banner" },
   { value: "player_overlay_banner", label: "Player Overlay Banner" },
   { value: "player_popup", label: "Player Popup" },
+  { value: "player_preroll_placeholder", label: "Player Preroll (placeholder)" },
+  { value: "telegram_channel_post", label: "Telegram Channel Post" },
+  { value: "telegram_bot_message", label: "Telegram Bot Message" },
+  { value: "telegram_bot_inline", label: "Telegram Bot Inline" },
 ];
 
 const STATUS_COLORS: Record<AdStatus, string> = {
@@ -64,6 +75,10 @@ const emptyForm = (): AdInput => ({
   status: "draft",
   duration_days: 30,
   price: 0,
+  telegram_channels: [],
+  telegram_bot_enabled: false,
+  telegram_channel_enabled: false,
+  player_enabled: false,
 });
 
 export default function AdminAdsPage() {
@@ -78,6 +93,11 @@ export default function AdminAdsPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadingVideo, setUploadingVideo] = useState(false);
+  const [sendingTg, setSendingTg] = useState<string | null>(null);
+  const [deliveryAd, setDeliveryAd] = useState<Ad | null>(null);
+  const [deliveries, setDeliveries] = useState<AdDelivery[]>([]);
+  const [loadingDelivery, setLoadingDelivery] = useState(false);
+  const [tgChannelsInput, setTgChannelsInput] = useState("");
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -99,14 +119,10 @@ export default function AdminAdsPage() {
     load();
   }, [load]);
 
-  const openCreate = () => {
-    setEditAd(null);
-    setForm(emptyForm());
-    setShowModal(true);
-  };
-
   const openEdit = (ad: Ad) => {
     setEditAd(ad);
+    const channels = ad.telegram_channels || [];
+    setTgChannelsInput(channels.join(", "));
     setForm({
       title: ad.title,
       description: ad.description || "",
@@ -118,7 +134,18 @@ export default function AdminAdsPage() {
       status: ad.status,
       duration_days: ad.duration_days || 30,
       price: ad.price,
+      telegram_channels: channels,
+      telegram_bot_enabled: ad.telegram_bot_enabled || false,
+      telegram_channel_enabled: ad.telegram_channel_enabled || false,
+      player_enabled: ad.player_enabled || false,
     });
+    setShowModal(true);
+  };
+
+  const openCreate = () => {
+    setEditAd(null);
+    setTgChannelsInput("");
+    setForm(emptyForm());
     setShowModal(true);
   };
 
@@ -126,10 +153,16 @@ export default function AdminAdsPage() {
     if (!token) return;
     setSaving(true);
     try {
+      // Parse telegram channels from comma-separated input
+      const channels = tgChannelsInput
+        .split(",")
+        .map((s) => s.trim().replace(/^@/, ""))
+        .filter(Boolean);
+      const payload = { ...form, telegram_channels: channels };
       if (editAd) {
-        await adminUpdateAd(token, editAd.id, form);
+        await adminUpdateAd(token, editAd.id, payload);
       } else {
-        await adminCreateAd(token, form);
+        await adminCreateAd(token, payload);
       }
       setShowModal(false);
       await load();
@@ -137,6 +170,36 @@ export default function AdminAdsPage() {
       alert(err instanceof Error ? err.message : "Failed to save ad");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSendTelegram = async (ad: Ad) => {
+    if (!token) return;
+    setSendingTg(ad.id);
+    try {
+      const res = await adminSendTelegramAd(token, ad.id);
+      const ok = res.results.filter((r) => r.status === "success").length;
+      const fail = res.results.filter((r) => r.status === "failed").length;
+      alert(`Telegram: ${ok} muvaffaqiyatli, ${fail} xato`);
+      await load();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Telegram yuborishda xato");
+    } finally {
+      setSendingTg(null);
+    }
+  };
+
+  const openDelivery = async (ad: Ad) => {
+    setDeliveryAd(ad);
+    setLoadingDelivery(true);
+    setDeliveries([]);
+    try {
+      const data = await adminGetAdDelivery(token!, ad.id);
+      setDeliveries(data);
+    } catch {
+      setDeliveries([]);
+    } finally {
+      setLoadingDelivery(false);
     }
   };
 
@@ -181,13 +244,15 @@ export default function AdminAdsPage() {
 
       {/* Stats */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-          <StatCard icon={<Megaphone size={18} />} label="Total Ads" value={stats.total_ads} />
-          <StatCard icon={<Play size={18} className="text-green-400" />} label="Active" value={stats.active_ads} />
-          <StatCard icon={<TrendingUp size={18} className="text-red-400" />} label="Expired" value={stats.expired_ads} />
-          <StatCard icon={<Eye size={18} className="text-blue-400" />} label="Impressions" value={stats.impressions.toLocaleString()} />
-          <StatCard icon={<MousePointerClick size={18} className="text-yellow-400" />} label="Clicks" value={stats.clicks.toLocaleString()} />
-          <StatCard icon={<DollarSign size={18} className="text-green-400" />} label="Revenue" value={`$${stats.revenue.toFixed(2)}`} />
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
+          <StatCard icon={<Megaphone size={18} />} label="Jami" value={stats.total_ads} />
+          <StatCard icon={<Play size={18} className="text-green-400" />} label="Faol" value={stats.active_ads} />
+          <StatCard icon={<TrendingUp size={18} className="text-red-400" />} label="Tugagan" value={stats.expired_ads} />
+          <StatCard icon={<Eye size={18} className="text-blue-400" />} label="Ko'rishlar" value={stats.impressions.toLocaleString()} />
+          <StatCard icon={<MousePointerClick size={18} className="text-yellow-400" />} label="Bosishlar" value={stats.clicks.toLocaleString()} />
+          <StatCard icon={<DollarSign size={18} className="text-green-400" />} label="Daromad" value={`$${stats.revenue.toFixed(2)}`} />
+          <StatCard icon={<Send size={18} className="text-blue-400" />} label="TG Yetkazish" value={(stats.telegram_deliveries || 0).toLocaleString()} />
+          <StatCard icon={<Send size={18} className="text-red-400" />} label="TG Xato" value={(stats.telegram_failed || 0).toLocaleString()} />
         </div>
       )}
 
@@ -248,7 +313,24 @@ export default function AdminAdsPage() {
                   <td className="px-4 py-3 text-right text-gray-300">{ad.clicks.toLocaleString()}</td>
                   <td className="px-4 py-3 text-right text-gray-300">${ad.price.toFixed(2)}</td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex items-center justify-end gap-1">
+                      {(ad.telegram_channel_enabled || ad.telegram_bot_enabled) && (
+                        <button
+                          onClick={() => handleSendTelegram(ad)}
+                          disabled={sendingTg === ad.id}
+                          title="Telegramga yuborish"
+                          className="p-1.5 text-gray-400 hover:text-blue-400 hover:bg-brand-border rounded transition disabled:opacity-50"
+                        >
+                          {sendingTg === ad.id ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => openDelivery(ad)}
+                        title="Yetkazish tarixi"
+                        className="p-1.5 text-gray-400 hover:text-yellow-400 hover:bg-brand-border rounded transition"
+                      >
+                        <History size={14} />
+                      </button>
                       <button
                         onClick={() => openEdit(ad)}
                         className="p-1.5 text-gray-400 hover:text-white hover:bg-brand-border rounded transition"
@@ -442,6 +524,62 @@ export default function AdminAdsPage() {
               <p className="text-xs text-gray-500">
                 Reklama hozirdan boshlab tanlangan kun davomida ishlaydi
               </p>
+
+              {/* ── Phase 2: Telegram ── */}
+              <div className="border-t border-brand-border pt-4 space-y-3">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-1">
+                  <Send size={12} /> Telegram
+                </p>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={form.telegram_channel_enabled}
+                      onChange={(e) => setForm((f) => ({ ...f, telegram_channel_enabled: e.target.checked }))}
+                      className="accent-brand-red"
+                    />
+                    <span className="text-gray-300 text-sm">Kanallarga yuborish</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={form.telegram_bot_enabled}
+                      onChange={(e) => setForm((f) => ({ ...f, telegram_bot_enabled: e.target.checked }))}
+                      className="accent-brand-red"
+                    />
+                    <span className="text-gray-300 text-sm flex items-center gap-1"><Bot size={12} /> Bot orqali</span>
+                  </label>
+                </div>
+                {form.telegram_channel_enabled && (
+                  <Field label="Kanallar (@username, vergul bilan ajrating)">
+                    <input
+                      value={tgChannelsInput}
+                      onChange={(e) => setTgChannelsInput(e.target.value)}
+                      className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-brand-red"
+                      placeholder="filmora_uz, seriallar_uz, kinolar_uz"
+                    />
+                  </Field>
+                )}
+              </div>
+
+              {/* ── Phase 2: Player ── */}
+              <div className="border-t border-brand-border pt-4">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-1 mb-3">
+                  <Tv2 size={12} /> Player
+                </p>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.player_enabled}
+                    onChange={(e) => setForm((f) => ({ ...f, player_enabled: e.target.checked }))}
+                    className="accent-brand-red"
+                  />
+                  <span className="text-gray-300 text-sm">Player ichida ko&apos;rsatish</span>
+                </label>
+                <p className="text-xs text-gray-600 mt-1">
+                  player_overlay_banner va player_popup joylashuvlarida ishlaydi
+                </p>
+              </div>
             </div>
             <div className="px-6 py-4 border-t border-brand-border flex justify-end gap-3">
               <button
@@ -458,6 +596,52 @@ export default function AdminAdsPage() {
                 {saving ? <Loader2 size={14} className="animate-spin" /> : null}
                 {editAd ? "Save Changes" : "Create Ad"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Delivery History Modal */}
+      {deliveryAd && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="bg-brand-card border border-brand-border rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <div className="px-6 py-4 border-b border-brand-border flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                <History size={16} /> Yetkazish tarixi — {deliveryAd.title}
+              </h2>
+              <button onClick={() => setDeliveryAd(null)} className="text-gray-400 hover:text-white text-xl">✕</button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4">
+              {loadingDelivery ? (
+                <div className="flex justify-center py-8"><Loader2 className="animate-spin text-brand-red" size={24} /></div>
+              ) : deliveries.length === 0 ? (
+                <p className="text-center text-gray-500 py-8">Hali yetkazish yo&apos;q</p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="border-b border-brand-border text-gray-400">
+                    <tr>
+                      <th className="pb-2 text-left">Joylashuv</th>
+                      <th className="pb-2 text-left">Maqsad</th>
+                      <th className="pb-2 text-left">Holat</th>
+                      <th className="pb-2 text-left">Vaqt</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {deliveries.map((d) => (
+                      <tr key={d.id} className="border-b border-brand-border/30">
+                        <td className="py-2 text-gray-300 text-xs">{d.placement.replace(/_/g, " ")}</td>
+                        <td className="py-2 text-gray-300 text-xs">{d.target}</td>
+                        <td className="py-2">
+                          <span className={`px-1.5 py-0.5 rounded text-xs ${d.status === "success" ? "bg-green-900 text-green-300" : "bg-red-900 text-red-300"}`}>
+                            {d.status === "success" ? "✓" : "✗"} {d.status}
+                          </span>
+                          {d.error && <span className="text-xs text-red-400 ml-1">{d.error}</span>}
+                        </td>
+                        <td className="py-2 text-gray-500 text-xs">{new Date(d.sent_at).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
         </div>

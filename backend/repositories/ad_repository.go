@@ -14,11 +14,15 @@ import (
 )
 
 type AdRepository struct {
-	col *mongo.Collection
+	col      *mongo.Collection
+	delivCol *mongo.Collection
 }
 
 func NewAdRepository(db *mongo.Database) *AdRepository {
-	return &AdRepository{col: db.Collection("ads")}
+	return &AdRepository{
+		col:      db.Collection("ads"),
+		delivCol: db.Collection("ad_deliveries"),
+	}
 }
 
 func (r *AdRepository) EnsureIndexes() error {
@@ -151,6 +155,48 @@ func (r *AdRepository) Delete(id primitive.ObjectID) error {
 	return err
 }
 
+// LogDelivery stores a delivery record and atomically increments telegram_deliveries
+func (r *AdRepository) LogDelivery(d *models.AdDelivery) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	d.ID = primitive.NewObjectID()
+	if d.SentAt.IsZero() {
+		d.SentAt = time.Now()
+	}
+	if _, err := r.delivCol.InsertOne(ctx, d); err != nil {
+		return err
+	}
+	// Atomically increment counter + set last_sent_at
+	inc := bson.M{"telegram_deliveries": 1}
+	upd := bson.M{
+		"$inc": inc,
+		"$set": bson.M{"telegram_last_sent_at": d.SentAt},
+	}
+	_, err := r.col.UpdateOne(ctx, bson.M{"_id": d.AdID}, upd)
+	return err
+}
+
+// GetDeliveryHistory returns recent delivery records for an ad
+func (r *AdRepository) GetDeliveryHistory(adID primitive.ObjectID, limit int) ([]models.AdDelivery, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	l := int64(limit)
+	cursor, err := r.delivCol.Find(ctx, bson.M{"ad_id": adID},
+		options.Find().SetSort(bson.D{{Key: "sent_at", Value: -1}}).SetLimit(l))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var records []models.AdDelivery
+	if err := cursor.All(ctx, &records); err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
 // IncrementImpression atomically increments the impression counter
 func (r *AdRepository) IncrementImpression(id primitive.ObjectID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -187,13 +233,14 @@ func (r *AdRepository) GetStats() (*models.AdStats, error) {
 		return nil, err
 	}
 
-	// Aggregate impressions, clicks, revenue
+	// Aggregate impressions, clicks, revenue, telegram deliveries
 	pipeline := mongo.Pipeline{
 		{{Key: "$group", Value: bson.D{
 			{Key: "_id", Value: nil},
 			{Key: "impressions", Value: bson.D{{Key: "$sum", Value: "$impressions"}}},
 			{Key: "clicks", Value: bson.D{{Key: "$sum", Value: "$clicks"}}},
 			{Key: "revenue", Value: bson.D{{Key: "$sum", Value: "$price"}}},
+			{Key: "telegram_deliveries", Value: bson.D{{Key: "$sum", Value: "$telegram_deliveries"}}},
 		}}},
 	}
 
@@ -204,23 +251,29 @@ func (r *AdRepository) GetStats() (*models.AdStats, error) {
 	defer cursor.Close(ctx)
 
 	var aggResult []struct {
-		Impressions int64   `bson:"impressions"`
-		Clicks      int64   `bson:"clicks"`
-		Revenue     float64 `bson:"revenue"`
+		Impressions        int64   `bson:"impressions"`
+		Clicks             int64   `bson:"clicks"`
+		Revenue            float64 `bson:"revenue"`
+		TelegramDeliveries int64   `bson:"telegram_deliveries"`
 	}
 	if err := cursor.All(ctx, &aggResult); err != nil {
 		return nil, err
 	}
 
+	// Count failed deliveries from ad_deliveries collection
+	telegramFailed, _ := r.delivCol.CountDocuments(ctx, bson.M{"status": "failed"})
+
 	stats := &models.AdStats{
-		TotalAds:   totalAds,
-		ActiveAds:  activeAds,
-		ExpiredAds: expiredAds,
+		TotalAds:       totalAds,
+		ActiveAds:      activeAds,
+		ExpiredAds:     expiredAds,
+		TelegramFailed: telegramFailed,
 	}
 	if len(aggResult) > 0 {
 		stats.Impressions = aggResult[0].Impressions
 		stats.Clicks = aggResult[0].Clicks
 		stats.Revenue = aggResult[0].Revenue
+		stats.TelegramDeliveries = aggResult[0].TelegramDeliveries
 	}
 	return stats, nil
 }

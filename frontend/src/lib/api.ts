@@ -2170,6 +2170,24 @@ export interface Ad {
   created_by: string;
   created_at: string;
   updated_at: string;
+  // Phase 2
+  telegram_channels?: string[];
+  telegram_bot_enabled?: boolean;
+  telegram_channel_enabled?: boolean;
+  player_enabled?: boolean;
+  telegram_deliveries?: number;
+  telegram_last_sent_at?: string;
+}
+
+export interface AdDelivery {
+  id: string;
+  ad_id: string;
+  placement: string;
+  target: string;
+  status: "success" | "failed";
+  message_id?: number;
+  sent_at: string;
+  error?: string;
 }
 
 export interface AdStats {
@@ -2179,6 +2197,8 @@ export interface AdStats {
   impressions: number;
   clicks: number;
   revenue: number;
+  telegram_deliveries?: number;
+  telegram_failed?: number;
 }
 
 export interface AdInput {
@@ -2192,6 +2212,11 @@ export interface AdInput {
   status: AdStatus;
   duration_days: number;
   price: number;
+  // Phase 2
+  telegram_channels?: string[];
+  telegram_bot_enabled?: boolean;
+  telegram_channel_enabled?: boolean;
+  player_enabled?: boolean;
 }
 
 export async function adminListAds(token: string): Promise<Ad[]> {
@@ -2265,6 +2290,28 @@ export async function recordAdImpression(id: string): Promise<void> {
 
 export async function recordAdClick(id: string): Promise<void> {
   await fetch(`${API_URL}/ads/${id}/click`, { method: "POST" });
+}
+
+export async function adminSendTelegramAd(token: string, id: string): Promise<{ results: { target: string; placement: string; status: string; error?: string }[] }> {
+  const res = await fetch(`${API_URL}/superadmin/ads/${id}/send-telegram`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to send telegram ad");
+  }
+  return res.json();
+}
+
+export async function adminGetAdDelivery(token: string, id: string): Promise<AdDelivery[]> {
+  const res = await fetch(`${API_URL}/superadmin/ads/${id}/delivery`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) return [];
+  const json = await res.json();
+  return json.deliveries || [];
 }
 
 export async function uploadAdMedia(
