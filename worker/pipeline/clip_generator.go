@@ -19,8 +19,8 @@ import (
 )
 
 const clipCount = 15
-const minClipSeconds = 20
-const maxClipSeconds = 60
+const minClipSeconds = 30
+const maxClipSeconds = 90
 
 type ClipInfo struct {
 	MovieID     string `json:"movie_id"`
@@ -499,56 +499,28 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 		return 0
 	}
 
-	// emotionBoost detects high-energy/emotional audio using RMS dynamic range.
-	// High peak + high variance within the clip window → shouting / emotional speech.
-	emotionBoost := func(t, dur float64) float64 {
-		var minR, maxR float64
-		count := 0
-		for _, w := range windows {
-			if w.t >= t && w.t < t+dur {
-				if count == 0 {
-					minR, maxR = w.rms, w.rms
-				} else {
-					if w.rms < minR {
-						minR = w.rms
-					}
-					if w.rms > maxR {
-						maxR = w.rms
-					}
-				}
-				count++
-			}
-		}
-		if count < 2 {
-			return 0
-		}
-		rmsRange := maxR - minR                     // dynamic range = pitch/energy variance proxy
-		peakEnergy := max64(0, maxR-medianRMS)      // how loud the peak is
-		dynamism := min64(1.0, rmsRange/10.0)       // >10 dB range = fully dynamic
-		energy := min64(1.0, peakEnergy/10.0)       // >10 dB above median = loud/shouting
-		return (dynamism*0.5 + energy*0.5) * 0.15   // max +0.15 contribution to viral score
-	}
-
 	// dynamicDur assigns clip length based on content type.
-	// fast/action → 8–15s, dialogue → 15–25s, mixed → 20–35s.
+	// action-heavy → 30–45s, dialogue-heavy → 35–60s, mixed → 40–70s.
+	// Hard bounds: min 30s, max 90s.
 	dynamicDur := func(t, score, speechSc float64) float64 {
-		end := t + 30.0
+		end := t + 45.0
 		sceneCuts := 0
 		for sc := range sceneTimes {
 			if sc >= t && sc < end {
 				sceneCuts++
 			}
 		}
+		norm := min64(1.0, max64(0, score/100.0))
 		switch {
-		case sceneCuts >= 3 && speechSc < 0.3:
-			// fast/action: many cuts, little speech
-			return min64(15.0, max64(8.0, 8.0+(score/100.0)*7.0))
-		case speechSc >= 0.5 && sceneCuts < 2:
-			// dialogue: high speech, few cuts
-			return min64(25.0, max64(15.0, 15.0+(score/100.0)*10.0))
+		case sceneCuts >= 4 && speechSc < 0.3:
+			// action-heavy: rapid cuts, little speech → 30–45s
+			return min64(45.0, max64(30.0, 30.0+norm*15.0))
+		case speechSc >= 0.5 && sceneCuts < 3:
+			// dialogue-heavy: sustained speech, few cuts → 35–60s
+			return min64(60.0, max64(35.0, 35.0+norm*25.0))
 		default:
-			// mixed/adaptive
-			return min64(float64(maxClipSeconds), max64(float64(minClipSeconds), 20.0+(score/100.0)*15.0))
+			// mixed/engaging → 40–70s
+			return min64(70.0, max64(40.0, 40.0+norm*30.0))
 		}
 	}
 
@@ -647,21 +619,82 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 		}
 		candidates = append(candidates, candidateMoment{startSec: t, score: score, reason: reason})
 	}
-	log.Printf("[CLIP-AI] candidates: %d", len(candidates))
+	log.Printf("[CLIP-BEST] scene+audio candidates: %d", len(candidates))
 
-	// ── Compute viral_score for each candidate ────────────────────────────────
-	// viral_score = hook*0.25 + scene*0.15 + audio_energy*0.10 + spike*0.10 +
-	//               speech*0.15 + face*0.10 + emotion*0.10 + non_silence*0.05
+	// ── Pass C: best-moment peak detection ───────────────────────────────────
+	// Scan the usable range at 1-second ticks, compute a combined signal strength,
+	// detect local maxima, then place the clip so the peak falls in the first 2–8s.
+	const peakTick = 1.0
+	const peakWindow = 30.0 // signal window used for peak scoring
+	type peakT struct {
+		t     float64
+		score float64
+	}
+	var allPeaks []peakT
+	for t := usableStart; t <= usableEnd; t += peakTick {
+		// Combined signal: speech + face + audio + scene
+		sp := aiSpeechScore(ai, t, peakWindow)
+		fc := aiFaceScore(ai, t, peakWindow)
+		rms := windowRMSAt(t)
+		ae := min64(1.0, max64(0, rms-medianRMS)/20.0)
+		sc := 0.0
+		if isNearSceneCut(t) {
+			sc = 1.0
+		}
+		sig := sp*0.35 + fc*0.25 + ae*0.25 + sc*0.15
+		allPeaks = append(allPeaks, peakT{t: t, score: sig})
+	}
+	// Keep local maxima (score > both neighbours and > 0.15 threshold)
+	for i := 1; i < len(allPeaks)-1; i++ {
+		p := allPeaks[i]
+		if p.score < 0.15 {
+			continue
+		}
+		if p.score <= allPeaks[i-1].score || p.score <= allPeaks[i+1].score {
+			continue
+		}
+		// candidate_start = peak_time - offset so peak lands in first 2–8s of clip
+		offset := 3.0 // default: peak at 3s into clip
+		if ai != nil && len(ai.FaceFrames) > 0 {
+			offset = 2.0 // face-heavy content: lead even earlier
+		}
+		startT := max64(usableStart, p.t-offset)
+		if startT > usableEnd || isSilent(startT, minSpacing) {
+			continue
+		}
+		candidates = append(candidates, candidateMoment{
+			startSec: startT,
+			score:    p.score * 20, // initial rough score in legacy range
+			reason:   "best_moment_peak",
+		})
+	}
+	log.Printf("[CLIP-BEST] candidates after peak pass: %d", len(candidates))
+
+	// ── Determine scoring mode for logging ───────────────────────────────────
+	scoringMode := "fallback-scene"
+	if ai != nil && len(ai.SpeechSegments) > 0 && len(ai.FaceFrames) > 0 {
+		scoringMode = "full-ai"
+	} else if ai != nil && (len(ai.SpeechSegments) > 0 || len(ai.FaceFrames) > 0) {
+		scoringMode = "partial-ai"
+	} else if len(sceneTimes) > 0 && len(windows) > 0 {
+		scoringMode = "scene+audio"
+	} else if len(sceneTimes) > 0 {
+		scoringMode = "fallback-scene"
+	}
+	log.Printf("[CLIP-BEST] scoring mode: %s", scoringMode)
+
+	// ── Compute best_moment_score for each candidate ──────────────────────────
+	// best_moment_score = hook*0.25 + speech*0.20 + face*0.15 + scene*0.15 +
+	//                     audio_energy*0.10 + spike*0.05 + mid_boost*0.05 + non_silence*0.05
 	for i := range candidates {
 		c := &candidates[i]
-		clipDur := 30.0 // use 30s window for scoring; final dur assigned after selection
+		clipDur := 45.0 // use 45s scoring window (midpoint of 30–90 range)
 
 		hook := hookStrength(c.startSec)
 		sceneAct := 0.0
 		if isNearSceneCut(c.startSec) {
 			sceneAct = 1.0
 		}
-		// normalize audio energy: clamp rms-median to [0,20] → 0–1
 		rms := windowRMSAt(c.startSec)
 		audioEnergy := min64(1.0, max64(0, rms-medianRMS)/20.0)
 		spike := 0.0
@@ -673,22 +706,21 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 		}
 		speechSc := aiSpeechScore(ai, c.startSec, clipDur)
 		faceSc := aiFaceScore(ai, c.startSec, clipDur)
-		c.speechScore = speechSc // store for dynamicDur at selection time
-		emBoost := emotionBoost(c.startSec, clipDur)
+		c.speechScore = speechSc
 		nonSilence := 1.0
 		if isSilent(c.startSec, clipDur) {
 			nonSilence = 0.0
 		}
-
 		midBoost := midClipBoost(c.startSec, clipDur)
-		viralScore := hook*0.25 + sceneAct*0.15 + audioEnergy*0.10 + spike*0.10 +
-			speechSc*0.15 + faceSc*0.10 + emBoost + nonSilence*0.05 + midBoost
 
-		// Blend with legacy score for continuity when AI is unavailable.
+		bestMomentScore := hook*0.25 + speechSc*0.20 + faceSc*0.15 + sceneAct*0.15 +
+			audioEnergy*0.10 + spike*0.05 + midBoost*0.05 + nonSilence*0.05
+
+		// Degrade gracefully: blend with legacy score when AI unavailable
 		if ai == nil {
-			viralScore = viralScore*0.3 + (c.score/20.0)*0.7
+			bestMomentScore = bestMomentScore*0.3 + (c.score/20.0)*0.7
 		}
-		c.score = viralScore * 100 // scale to legacy range for duration thresholds
+		c.score = bestMomentScore * 100
 	}
 
 	// Sort by viral score descending.
