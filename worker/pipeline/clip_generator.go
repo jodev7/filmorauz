@@ -63,6 +63,7 @@ type candidateMoment struct {
 	durationSec float64 // per-moment clip length (varies by score)
 	score       float64
 	reason      string
+	speechScore float64 // stored during scoring for dynamicDur at selection time
 }
 
 // AI analysis types — populated by parser /clip/analyze endpoint.
@@ -383,37 +384,46 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 		return min64(1.0, s)
 	}
 
-	// isWeakHook rejects clips whose first 3s have no speech, no face, no scene change.
-	isWeakHook := func(t float64) bool {
-		hasScene := false
-		for dt := 0.0; dt < 3.0; dt += 0.5 {
-			if isNearSceneCut(t + dt) {
-				hasScene = true
+	// hookScore2s scores the first 2 seconds of a clip for viral hook quality.
+	// Additive: speech start→+1.0, face→+0.8, motion spike→+0.6, scene cut→+0.5.
+	// Clips with score < 0.8 are rejected.
+	hookScore2s := func(t float64) float64 {
+		score := 0.0
+		// speech start in first 2s → +1.0
+		if ai != nil {
+			for _, seg := range ai.SpeechSegments {
+				if seg.Start >= t && seg.Start < t+2 {
+					score += 1.0
+					break
+				}
+			}
+		} else if windowRMSAt(t) > medianRMS-3 {
+			score += 0.5 // audio-energy proxy when AI unavailable
+		}
+		// face in first 1s → +0.8
+		if ai != nil {
+			for _, ff := range ai.FaceFrames {
+				if ff.Time >= t && ff.Time < t+1 && ff.FaceCount > 0 {
+					score += 0.8
+					break
+				}
+			}
+		}
+		// audio motion spike in first 2s → +0.6
+		for i, w := range windows {
+			if w.t >= t && w.t < t+2 && isAudioSpike(i) {
+				score += 0.6
 				break
 			}
 		}
-		hasSpeech := false
-		if ai != nil {
-			for _, seg := range ai.SpeechSegments {
-				if seg.Start >= t && seg.Start < t+3 {
-					hasSpeech = true
-					break
-				}
-			}
-		} else {
-			// No AI: use audio energy as speech proxy
-			hasSpeech = windowRMSAt(t) > medianRMS-5
-		}
-		hasFace := false
-		if ai != nil {
-			for _, ff := range ai.FaceFrames {
-				if ff.Time >= t && ff.Time < t+3 && ff.FaceCount > 0 {
-					hasFace = true
-					break
-				}
+		// scene cut in first 2s → +0.5
+		for dt := 0.0; dt < 2.0; dt += 0.5 {
+			if isNearSceneCut(t + dt) {
+				score += 0.5
+				break
 			}
 		}
-		return !hasScene && !hasSpeech && !hasFace
+		return score
 	}
 
 	// midClipBoost returns extra score if a second engagement peak exists inside [t+5, t+dur-5].
@@ -423,7 +433,6 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 		if innerEnd <= innerStart {
 			return 0
 		}
-		// Check for scene cut or audio spike inside the clip body (not at start)
 		for sc := range sceneTimes {
 			if sc > innerStart && sc < innerEnd {
 				return 0.08
@@ -437,13 +446,87 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 		return 0
 	}
 
+	// emotionBoost detects high-energy/emotional audio using RMS dynamic range.
+	// High peak + high variance within the clip window → shouting / emotional speech.
+	emotionBoost := func(t, dur float64) float64 {
+		var minR, maxR float64
+		count := 0
+		for _, w := range windows {
+			if w.t >= t && w.t < t+dur {
+				if count == 0 {
+					minR, maxR = w.rms, w.rms
+				} else {
+					if w.rms < minR {
+						minR = w.rms
+					}
+					if w.rms > maxR {
+						maxR = w.rms
+					}
+				}
+				count++
+			}
+		}
+		if count < 2 {
+			return 0
+		}
+		rmsRange := maxR - minR                     // dynamic range = pitch/energy variance proxy
+		peakEnergy := max64(0, maxR-medianRMS)      // how loud the peak is
+		dynamism := min64(1.0, rmsRange/10.0)       // >10 dB range = fully dynamic
+		energy := min64(1.0, peakEnergy/10.0)       // >10 dB above median = loud/shouting
+		return (dynamism*0.5 + energy*0.5) * 0.15   // max +0.15 contribution to viral score
+	}
+
+	// dynamicDur assigns clip length based on content type.
+	// fast/action → 8–15s, dialogue → 15–25s, mixed → 20–35s.
+	dynamicDur := func(t, score, speechSc float64) float64 {
+		end := t + 30.0
+		sceneCuts := 0
+		for sc := range sceneTimes {
+			if sc >= t && sc < end {
+				sceneCuts++
+			}
+		}
+		switch {
+		case sceneCuts >= 3 && speechSc < 0.3:
+			// fast/action: many cuts, little speech
+			return min64(15.0, max64(8.0, 8.0+(score/100.0)*7.0))
+		case speechSc >= 0.5 && sceneCuts < 2:
+			// dialogue: high speech, few cuts
+			return min64(25.0, max64(15.0, 15.0+(score/100.0)*10.0))
+		default:
+			// mixed/adaptive
+			return min64(float64(maxClipSeconds), max64(float64(minClipSeconds), 20.0+(score/100.0)*15.0))
+		}
+	}
+
+	// hasLongSilence checks for any silence gap >3s inside [t, t+dur].
+	hasLongSilence := func(t, dur float64) bool {
+		end := t + dur
+		for _, iv := range silentIntervals {
+			olStart := max64(t, iv.start)
+			olEnd := min64(end, iv.end)
+			if olEnd-olStart > 3.0 {
+				return true
+			}
+		}
+		return false
+	}
+
 	// isBadClip filters obviously poor clips.
 	isBadClip := func(t, dur float64) bool {
-		// >40% silence
+		// first 2s silent → reject
+		if silenceRatio(t, 2.0) > 0.8 {
+			return true
+		}
+		// silence gap >3s inside clip → reject
+		if hasLongSilence(t, dur) {
+			return true
+		}
+		// >40% overall silence
 		if silenceRatio(t, dur) > 0.40 {
 			return true
 		}
-		// no speech AND no face AND flat scene (no change in window)
+		// no speech AND no face AND flat scene
 		hasSpeech := ai != nil && aiSpeechScore(ai, t, dur) > 0.05
 		hasFace := ai != nil && aiFaceScore(ai, t, dur) > 0.05
 		if !hasSpeech && !hasFace {
@@ -537,15 +620,8 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 		}
 		speechSc := aiSpeechScore(ai, c.startSec, clipDur)
 		faceSc := aiFaceScore(ai, c.startSec, clipDur)
-		// emotion proxy: high audio + face present → emotional
-		emotionSc := 0.0
-		if audioEnergy > 0.5 && faceSc > 0.2 {
-			emotionSc += 0.6
-		}
-		if speechSc > 0.4 && faceSc > 0.15 {
-			emotionSc += 0.4
-		}
-		emotionSc = min64(1.0, emotionSc)
+		c.speechScore = speechSc // store for dynamicDur at selection time
+		emBoost := emotionBoost(c.startSec, clipDur)
 		nonSilence := 1.0
 		if isSilent(c.startSec, clipDur) {
 			nonSilence = 0.0
@@ -553,7 +629,7 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 
 		midBoost := midClipBoost(c.startSec, clipDur)
 		viralScore := hook*0.25 + sceneAct*0.15 + audioEnergy*0.10 + spike*0.10 +
-			speechSc*0.15 + faceSc*0.10 + emotionSc*0.10 + nonSilence*0.05 + midBoost
+			speechSc*0.15 + faceSc*0.10 + emBoost + nonSilence*0.05 + midBoost
 
 		// Blend with legacy score for continuity when AI is unavailable.
 		if ai == nil {
@@ -600,31 +676,14 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 		if regionCount[region] >= maxPerRegion {
 			continue
 		}
-		// Hook rejection: skip if first 3s have no speech, face, or scene change.
-		if isWeakHook(c.startSec) {
-			log.Printf("[CLIP-ANALYSIS] Rejected weak-hook at %.1fs", c.startSec)
+		// Hook rejection: strict 2s hook score must be ≥ 0.8.
+		if hs := hookScore2s(c.startSec); hs < 0.8 {
+			log.Printf("[CLIP-ANALYSIS] Rejected weak-hook at %.1fs  hook2s=%.2f", c.startSec, hs)
 			continue
 		}
 
-		// Assign per-moment duration based on viral score.
-		var dur float64
-		switch {
-		case c.score > 70:
-			dur = 60
-		case c.score > 50:
-			dur = 45
-		case c.score > 30:
-			dur = 30
-		default:
-			dur = float64(minClipSeconds)
-		}
-		if dur > maxClipSeconds {
-			dur = maxClipSeconds
-		}
-		if dur < minClipSeconds {
-			dur = minClipSeconds
-		}
-		c.durationSec = dur
+		// Dynamic duration based on content type (action/dialogue/mixed).
+		c.durationSec = dynamicDur(c.startSec, c.score, c.speechScore)
 
 		// Bad-clip filter (applied with final dur).
 		if isBadClip(c.startSec, c.durationSec) {
