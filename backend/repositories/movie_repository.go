@@ -228,21 +228,18 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 		movie.Quality = quality
 	}
 
-	// Handle views - may be int or float (MongoDB can return float for numeric)
+	// Handle views - bson.M decodes int32/int64/float64 depending on stored type
 	if views, ok := doc["views"]; ok && views != nil {
-		log.Printf("[DEBUG] Found views field in doc, value=%v, type=%T", views, views)
 		switch v := views.(type) {
 		case int64:
 			movie.Views = v
+		case int32:
+			movie.Views = int64(v)
 		case int:
 			movie.Views = int64(v)
 		case float64:
 			movie.Views = int64(v)
-		default:
-			log.Printf("[DEBUG] Unknown views type: %T", views)
 		}
-	} else {
-		log.Printf("[DEBUG] views field NOT FOUND in doc")
 	}
 
 	// Handle rating_avg
@@ -250,9 +247,11 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 		switch v := ratingAvg.(type) {
 		case float64:
 			movie.RatingAvg = v
-		case int:
+		case int32:
 			movie.RatingAvg = float64(v)
 		case int64:
+			movie.RatingAvg = float64(v)
+		case int:
 			movie.RatingAvg = float64(v)
 		}
 	}
@@ -262,6 +261,8 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 		switch v := ratingCount.(type) {
 		case int64:
 			movie.RatingCount = v
+		case int32:
+			movie.RatingCount = int64(v)
 		case int:
 			movie.RatingCount = int64(v)
 		case float64:
@@ -269,17 +270,23 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 		}
 	}
 
-	// Handle created_at
+	// Handle created_at — bson.M decodes BSON Date as primitive.DateTime, not time.Time
 	if createdAt, ok := doc["created_at"]; ok && createdAt != nil {
-		if t, ok := createdAt.(time.Time); ok {
-			movie.CreatedAt = t
+		switch v := createdAt.(type) {
+		case primitive.DateTime:
+			movie.CreatedAt = v.Time()
+		case time.Time:
+			movie.CreatedAt = v
 		}
 	}
 
-	// Handle updated_at
+	// Handle updated_at — same as created_at
 	if updatedAt, ok := doc["updated_at"]; ok && updatedAt != nil {
-		if t, ok := updatedAt.(time.Time); ok {
-			movie.UpdatedAt = t
+		switch v := updatedAt.(type) {
+		case primitive.DateTime:
+			movie.UpdatedAt = v.Time()
+		case time.Time:
+			movie.UpdatedAt = v
 		}
 	}
 
