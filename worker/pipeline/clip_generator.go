@@ -3,8 +3,10 @@ package pipeline
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,6 +65,124 @@ type candidateMoment struct {
 	reason      string
 }
 
+// AI analysis types — populated by parser /clip/analyze endpoint.
+type speechSegment struct {
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+	Text  string  `json:"text"`
+}
+
+type faceFrame struct {
+	Time      float64 `json:"time"`
+	FaceCount int     `json:"face_count"`
+	MaxSize   float64 `json:"max_size"` // fraction of frame area, 0–1
+	CenterX   float64 `json:"cx"`       // 0–1, 0.5 = horizontal center
+	CenterY   float64 `json:"cy"`       // 0–1, 0.5 = vertical center
+}
+
+type aiVideoData struct {
+	SpeechSegments []speechSegment `json:"speech_segments"`
+	FaceFrames     []faceFrame     `json:"face_frames"`
+}
+
+// windowScore is a package-level type so AI helpers can reference it.
+type windowScore struct {
+	t   float64
+	rms float64
+}
+
+// fetchAIAnalysis calls the parser service for Whisper + face analysis.
+// Returns nil on any failure — callers treat nil as "AI unavailable".
+func (p *Pipeline) fetchAIAnalysis(videoPath string, durationSec float64) *aiVideoData {
+	if p.config.ParserURL == "" {
+		return nil
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"video_path": videoPath,
+		"duration":   durationSec,
+	})
+	client := &http.Client{Timeout: 20 * time.Minute}
+	resp, err := client.Post(p.config.ParserURL+"/clip/analyze", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		log.Printf("[CLIP-AI] analyzer unavailable: %v", err)
+		return nil
+	}
+	defer resp.Body.Close()
+	var data aiVideoData
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		log.Printf("[CLIP-AI] analyzer response parse error: %v", err)
+		return nil
+	}
+	log.Printf("[CLIP-AI] speech segments: %d", len(data.SpeechSegments))
+	log.Printf("[CLIP-AI] faces detected: %d frames", len(data.FaceFrames))
+	return &data
+}
+
+// aiSpeechScore returns 0–1 speech presence score for clip window [t, t+dur].
+func aiSpeechScore(ai *aiVideoData, t, dur float64) float64 {
+	if ai == nil || len(ai.SpeechSegments) == 0 {
+		return 0
+	}
+	end := t + dur
+	totalSpeech := 0.0
+	earlyBonus := 0.0
+	for _, seg := range ai.SpeechSegments {
+		ol := min64(seg.End, end) - max64(seg.Start, t)
+		if ol <= 0 {
+			continue
+		}
+		totalSpeech += ol
+		// punchy phrases (2–8 words) get bonus
+		if wc := len(strings.Fields(seg.Text)); wc >= 2 && wc <= 8 {
+			totalSpeech += ol * 0.3
+		}
+		if seg.Start < t+3 {
+			earlyBonus = 0.2
+		}
+	}
+	return min64(1.0, totalSpeech/dur+earlyBonus)
+}
+
+// aiFaceScore returns 0–1 face engagement score for clip window [t, t+dur].
+// Close-up faces (large bbox) and center-positioned faces score highest.
+func aiFaceScore(ai *aiVideoData, t, dur float64) float64 {
+	if ai == nil || len(ai.FaceFrames) == 0 {
+		return 0
+	}
+	end := t + dur
+	total, scoreSum := 0.0, 0.0
+	for _, ff := range ai.FaceFrames {
+		if ff.Time < t || ff.Time > end || ff.FaceCount == 0 {
+			continue
+		}
+		total++
+		// Base score by face size: close-up (>8% frame) → 1.0, medium → 0.5, small → 0.2
+		var base float64
+		switch {
+		case ff.MaxSize > 0.08:
+			base = 1.0 // close-up
+		case ff.MaxSize > 0.03:
+			base = 0.5
+		default:
+			base = 0.2
+		}
+		// Center bonus: max +0.3 when face is at exact center (cx=0.5, cy=0.5)
+		dx := abs64(ff.CenterX - 0.5)
+		dy := abs64(ff.CenterY - 0.5)
+		centerBonus := max64(0, 0.3*(1.0-(dx+dy)/0.7))
+		// Multi-face bonus
+		multiFaceBonus := 0.0
+		if ff.FaceCount > 1 {
+			multiFaceBonus = 0.1
+		}
+		scoreSum += min64(1.0, base+centerBonus+multiFaceBonus)
+	}
+	if total == 0 {
+		return 0
+	}
+	return min64(1.0, scoreSum/total)
+}
+
 // detectEngagingMoments analyses the video with ffmpeg and returns candidate
 // start times ranked by estimated audience interest.
 //
@@ -77,7 +197,7 @@ type candidateMoment struct {
 //
 /// Each selected moment gets a suggested duration based on its score:
 // score>10 → 60s, score>6 → 45s, score>2 → 30s, else minClipSeconds (20s).
-func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, want int) []candidateMoment {
+func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, want int, ai *aiVideoData) []candidateMoment {
 	log.Printf("[CLIP-ANALYSIS] Analysing %s (%.0fs) for engaging moments", videoPath, durationSec)
 
 	minSpacing := float64(minClipSeconds) // minimum gap between selected moments
@@ -95,7 +215,6 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 	log.Printf("[CLIP-ANALYSIS] Usable window: %.1fs – %.1fs", usableStart, usableEnd)
 
 	// ── Pass 1: silence detection ─────────────────────────────────────────────
-	// ffmpeg stderr lines: "silence_start: T" and "silence_end: T | ..."
 	silenceArgs := []string{"-i", videoPath, "-af", "silencedetect=n=-35dB:d=1.5", "-f", "null", "-"}
 	silenceCmd := exec.Command("ffmpeg", silenceArgs...)
 	var silenceOut bytes.Buffer
@@ -119,26 +238,25 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 	}
 	log.Printf("[CLIP-ANALYSIS] Silence intervals: %d", len(silentIntervals))
 
-	isSilent := func(t, dur float64) bool {
-		threshold := dur * 0.5
+	silenceRatio := func(t, dur float64) float64 {
+		total := 0.0
 		for _, iv := range silentIntervals {
 			ol := min64(t+dur, iv.end) - max64(t, iv.start)
-			if ol > threshold {
-				return true
+			if ol > 0 {
+				total += ol
 			}
 		}
-		return false
+		return total / dur
+	}
+
+	isSilent := func(t, dur float64) bool {
+		return silenceRatio(t, dur) > 0.5
 	}
 
 	// ── Pass 2: RMS energy per 4-second window via astats ────────────────────
-	// ffmpeg writes one "Overall:" block per reset window to stderr.
-	// Format inside each block:  "  RMS level dB: -18.34"
-	// (NOT "lavfi.astats.Overall.RMS_level=" — that is frame-metadata format.)
-	// Strategy: split the whole stderr on "Overall:" and take the first
-	// "RMS level dB:" match from each section → one value per window.
 	const windowSec = 4.0
 	const sampRate = 22050
-	resetN := int(windowSec * sampRate) // samples per window = 88200
+	resetN := int(windowSec * sampRate)
 
 	astatArgs := []string{
 		"-i", videoPath,
@@ -151,16 +269,11 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 	_ = astatCmd.Run()
 	astatOutput := astatOut.String()
 
-	// Split on "Overall:" — each section[1:] corresponds to one 4-second window.
 	overallSections := strings.Split(astatOutput, "Overall:")
 	reRMSLine := regexp.MustCompile(`RMS level dB:\s*([-\d.]+)`)
 
-	type windowScore struct {
-		t   float64
-		rms float64
-	}
 	var windows []windowScore
-	for idx, section := range overallSections[1:] { // section[0] is pre-amble
+	for idx, section := range overallSections[1:] {
 		m := reRMSLine.FindStringSubmatch(section)
 		if m == nil {
 			continue
@@ -169,12 +282,10 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 		if rmsDB < -91 {
 			rmsDB = -91
 		}
-		t := float64(idx) * windowSec
-		windows = append(windows, windowScore{t: t, rms: rmsDB})
+		windows = append(windows, windowScore{t: float64(idx) * windowSec, rms: rmsDB})
 	}
 	log.Printf("[CLIP-ANALYSIS] RMS windows parsed: %d", len(windows))
 
-	// Compute median RMS.
 	medianRMS := -40.0
 	if len(windows) > 0 {
 		sorted := make([]float64, len(windows))
@@ -191,8 +302,6 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 	log.Printf("[CLIP-ANALYSIS] Median RMS: %.1f dB", medianRMS)
 
 	// ── Pass 3: scene-change detection ───────────────────────────────────────
-	// Downscale to 320p before diff to keep this pass fast on long movies.
-	// showinfo writes: "[showinfo] n:N pts:P pts_time:T.TTT ..."
 	sceneArgs := []string{
 		"-i", videoPath,
 		"-vf", "scale=320:-1,select=gt(scene\\,0.35),showinfo",
@@ -212,7 +321,6 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 	}
 	log.Printf("[CLIP-ANALYSIS] Scene cuts detected: %d", len(sceneTimes))
 
-	// isNearSceneCut returns true if t falls within 2 s of a detected cut.
 	isNearSceneCut := func(t float64) bool {
 		for sc := range sceneTimes {
 			if abs64(t-sc) < 2.0 {
@@ -222,14 +330,152 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 		return false
 	}
 
+	// windowRMSAt returns the RMS in the window containing t.
+	windowRMSAt := func(t float64) float64 {
+		for _, w := range windows {
+			if t >= w.t && t < w.t+windowSec {
+				return w.rms
+			}
+		}
+		return medianRMS
+	}
+
+	// isAudioSpike returns true if t shows a ≥6 dB jump from previous window.
+	isAudioSpike := func(idx int) bool {
+		return idx > 0 && windows[idx].rms-windows[idx-1].rms >= 6
+	}
+
+	// ── AI-based hook + filter helpers ───────────────────────────────────────
+
+	// hookStrength returns 0–1: high = strong opening hook for clip starting at t.
+	hookStrength := func(t float64) float64 {
+		s := 0.0
+		// scene cut in first 5s of clip
+		for dt := 0.0; dt < 5.0; dt += 0.5 {
+			if isNearSceneCut(t + dt) {
+				s += 0.4
+				break
+			}
+		}
+		// early speech (first 3s of clip)
+		if ai != nil {
+			for _, seg := range ai.SpeechSegments {
+				if seg.Start >= t && seg.Start < t+3 {
+					s += 0.3
+					break
+				}
+			}
+		}
+		// early face (first 3s of clip)
+		if ai != nil {
+			for _, ff := range ai.FaceFrames {
+				if ff.Time >= t && ff.Time < t+3 && ff.FaceCount > 0 {
+					s += 0.2
+					break
+				}
+			}
+		}
+		// early audio energy
+		rms := windowRMSAt(t)
+		if rms > medianRMS+3 {
+			s += 0.1
+		}
+		return min64(1.0, s)
+	}
+
+	// isWeakHook rejects clips whose first 3s have no speech, no face, no scene change.
+	isWeakHook := func(t float64) bool {
+		hasScene := false
+		for dt := 0.0; dt < 3.0; dt += 0.5 {
+			if isNearSceneCut(t + dt) {
+				hasScene = true
+				break
+			}
+		}
+		hasSpeech := false
+		if ai != nil {
+			for _, seg := range ai.SpeechSegments {
+				if seg.Start >= t && seg.Start < t+3 {
+					hasSpeech = true
+					break
+				}
+			}
+		} else {
+			// No AI: use audio energy as speech proxy
+			hasSpeech = windowRMSAt(t) > medianRMS-5
+		}
+		hasFace := false
+		if ai != nil {
+			for _, ff := range ai.FaceFrames {
+				if ff.Time >= t && ff.Time < t+3 && ff.FaceCount > 0 {
+					hasFace = true
+					break
+				}
+			}
+		}
+		return !hasScene && !hasSpeech && !hasFace
+	}
+
+	// midClipBoost returns extra score if a second engagement peak exists inside [t+5, t+dur-5].
+	midClipBoost := func(t, dur float64) float64 {
+		innerStart := t + 5
+		innerEnd := t + dur - 5
+		if innerEnd <= innerStart {
+			return 0
+		}
+		// Check for scene cut or audio spike inside the clip body (not at start)
+		for sc := range sceneTimes {
+			if sc > innerStart && sc < innerEnd {
+				return 0.08
+			}
+		}
+		for i, w := range windows {
+			if w.t > innerStart && w.t < innerEnd && isAudioSpike(i) {
+				return 0.06
+			}
+		}
+		return 0
+	}
+
+	// isBadClip filters obviously poor clips.
+	isBadClip := func(t, dur float64) bool {
+		// >40% silence
+		if silenceRatio(t, dur) > 0.40 {
+			return true
+		}
+		// no speech AND no face AND flat scene (no change in window)
+		hasSpeech := ai != nil && aiSpeechScore(ai, t, dur) > 0.05
+		hasFace := ai != nil && aiFaceScore(ai, t, dur) > 0.05
+		if !hasSpeech && !hasFace {
+			hasMotion := false
+			for sc := range sceneTimes {
+				if sc >= t && sc <= t+dur {
+					hasMotion = true
+					break
+				}
+			}
+			if !hasMotion {
+				return true
+			}
+		}
+		return false
+	}
+
 	// ── Build candidates ──────────────────────────────────────────────────────
-	// Scene cuts are the PRIMARY source: they exist even when audio analysis
-	// returns 0 windows. Audio windows are a SECONDARY (bonus) source.
 	var candidates []candidateMoment
 
-	// Pass A: one candidate per scene cut (score=5 baseline).
+	// Pass A: scene-cut candidates — align with nearby speech segment start if AI available.
 	for sc := range sceneTimes {
 		t := sc
+		// Snap to nearby speech segment start (within 3s before cut) for better hooks.
+		if ai != nil {
+			for _, seg := range ai.SpeechSegments {
+				if seg.Start >= t-3 && seg.Start < t && seg.Start >= usableStart {
+					t = seg.Start
+					break
+				}
+			}
+		}
 		if t < usableStart || t > usableEnd {
 			continue
 		}
@@ -240,8 +486,7 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 	}
 	log.Printf("[CLIP-ANALYSIS] Scene-cut candidates added: %d", len(candidates))
 
-	// Pass B: audio-window candidates (merged alongside scene-cut candidates;
-	// spacing filter below handles deduplication when they land near each other).
+	// Pass B: audio-window candidates.
 	for i, w := range windows {
 		t := w.t
 		if t < usableStart || t > usableEnd {
@@ -252,7 +497,7 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 		}
 		score := w.rms - medianRMS
 		reason := "audio_energy"
-		if i > 0 && w.rms-windows[i-1].rms >= 6 {
+		if isAudioSpike(i) {
 			score += 8
 			reason = "audio_spike"
 		}
@@ -266,9 +511,58 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 		}
 		candidates = append(candidates, candidateMoment{startSec: t, score: score, reason: reason})
 	}
-	log.Printf("[CLIP-ANALYSIS] Total candidates (scene+audio): %d", len(candidates))
+	log.Printf("[CLIP-AI] candidates: %d", len(candidates))
 
-	// Sort by score descending.
+	// ── Compute viral_score for each candidate ────────────────────────────────
+	// viral_score = hook*0.25 + scene*0.15 + audio_energy*0.10 + spike*0.10 +
+	//               speech*0.15 + face*0.10 + emotion*0.10 + non_silence*0.05
+	for i := range candidates {
+		c := &candidates[i]
+		clipDur := 30.0 // use 30s window for scoring; final dur assigned after selection
+
+		hook := hookStrength(c.startSec)
+		sceneAct := 0.0
+		if isNearSceneCut(c.startSec) {
+			sceneAct = 1.0
+		}
+		// normalize audio energy: clamp rms-median to [0,20] → 0–1
+		rms := windowRMSAt(c.startSec)
+		audioEnergy := min64(1.0, max64(0, rms-medianRMS)/20.0)
+		spike := 0.0
+		for j, w := range windows {
+			if abs64(w.t-c.startSec) < windowSec && isAudioSpike(j) {
+				spike = 1.0
+				break
+			}
+		}
+		speechSc := aiSpeechScore(ai, c.startSec, clipDur)
+		faceSc := aiFaceScore(ai, c.startSec, clipDur)
+		// emotion proxy: high audio + face present → emotional
+		emotionSc := 0.0
+		if audioEnergy > 0.5 && faceSc > 0.2 {
+			emotionSc += 0.6
+		}
+		if speechSc > 0.4 && faceSc > 0.15 {
+			emotionSc += 0.4
+		}
+		emotionSc = min64(1.0, emotionSc)
+		nonSilence := 1.0
+		if isSilent(c.startSec, clipDur) {
+			nonSilence = 0.0
+		}
+
+		midBoost := midClipBoost(c.startSec, clipDur)
+		viralScore := hook*0.25 + sceneAct*0.15 + audioEnergy*0.10 + spike*0.10 +
+			speechSc*0.15 + faceSc*0.10 + emotionSc*0.10 + nonSilence*0.05 + midBoost
+
+		// Blend with legacy score for continuity when AI is unavailable.
+		if ai == nil {
+			viralScore = viralScore*0.3 + (c.score/20.0)*0.7
+		}
+		c.score = viralScore * 100 // scale to legacy range for duration thresholds
+	}
+
+	// Sort by viral score descending.
 	for i := 1; i < len(candidates); i++ {
 		for j := i; j > 0 && candidates[j].score > candidates[j-1].score; j-- {
 			candidates[j], candidates[j-1] = candidates[j-1], candidates[j]
@@ -280,12 +574,17 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 	}
 	log.Printf("[CLIP-ANALYSIS] Scored candidates: %d  top_score=%.1f", len(candidates), topScore)
 
-	// ── Select top N with no-overlap spacing ─────────────────────────────────
+	// ── Select top N with spacing + hook/bad-clip filters ────────────────────
+	const regionSec = 300.0 // 5-minute regions for diversity
+	const maxPerRegion = 2
+	regionCount := make(map[int]int)
+
 	selected := make([]candidateMoment, 0, want)
 	for _, c := range candidates {
 		if len(selected) >= want {
 			break
 		}
+		// Spacing: enforce minimum 20s gap between clips.
 		tooClose := false
 		for _, s := range selected {
 			if abs64(c.startSec-s.startSec) < minSpacing {
@@ -296,16 +595,25 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 		if tooClose {
 			continue
 		}
+		// Region diversity: max 2 clips per 5-minute region.
+		region := int(c.startSec / regionSec)
+		if regionCount[region] >= maxPerRegion {
+			continue
+		}
+		// Hook rejection: skip if first 3s have no speech, face, or scene change.
+		if isWeakHook(c.startSec) {
+			log.Printf("[CLIP-ANALYSIS] Rejected weak-hook at %.1fs", c.startSec)
+			continue
+		}
 
-		// Assign per-moment duration based on score.
-		// High-energy moments (spike+scene) get up to 60s; low-energy get minimum.
+		// Assign per-moment duration based on viral score.
 		var dur float64
 		switch {
-		case c.score > 10:
+		case c.score > 70:
 			dur = 60
-		case c.score > 6:
+		case c.score > 50:
 			dur = 45
-		case c.score > 2:
+		case c.score > 30:
 			dur = 30
 		default:
 			dur = float64(minClipSeconds)
@@ -318,13 +626,20 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 		}
 		c.durationSec = dur
 
+		// Bad-clip filter (applied with final dur).
+		if isBadClip(c.startSec, c.durationSec) {
+			log.Printf("[CLIP-ANALYSIS] Rejected bad clip at %.1fs", c.startSec)
+			continue
+		}
+
 		selected = append(selected, c)
-		log.Printf("[CLIP-ANALYSIS] Selected %.1fs  score=%.1f  dur=%.0fs  reason=%s",
-			c.startSec, c.score, c.durationSec, c.reason)
+		regionCount[region]++
+		log.Printf("[CLIP-ANALYSIS] Selected %.1fs  score=%.1f  dur=%.0fs  reason=%s  region=%d",
+			c.startSec, c.score, c.durationSec, c.reason, region)
 	}
+	log.Printf("[CLIP-AI] selected: %d", len(selected))
 
 	// ── Fallback: pad with evenly-spaced moments if too few smart moments ────
-	// Vary durations so fallback clips are not all identical length.
 	if len(selected) < want {
 		log.Printf("[CLIP-ANALYSIS] Smart moments: %d/%d — padding with evenly-spaced fallbacks", len(selected), want)
 		fallbackDurs := []float64{30, 45, 25, 40, 35, 20, 50, 30, 45, 25}
@@ -464,10 +779,16 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 		log.Printf("[CLIP] WARNING: logo not found at %s, clips will not have logo", logoPath)
 	}
 
-	// Smart moment detection: analyse audio energy and silence to find the most
-	// engaging segments. Falls back to uniform spacing if analysis yields too few.
-	// Each moment carries its own durationSec (variable 20–45s based on score).
-	moments := p.detectEngagingMoments(baseVideoPath, durationSec, clipCount)
+	// AI analysis: Whisper speech + face detection via parser service.
+	// Runs concurrently with no blocking if parser is unavailable.
+	log.Printf("[CLIP-AI] Starting AI analysis via parser...")
+	aiData := p.fetchAIAnalysis(baseVideoPath, durationSec)
+	if aiData == nil {
+		log.Printf("[CLIP-AI] AI analysis unavailable — using audio/scene scoring only")
+	}
+
+	// Smart moment detection with AI-enhanced viral scoring.
+	moments := p.detectEngagingMoments(baseVideoPath, durationSec, clipCount, aiData)
 	if len(moments) == 0 {
 		return fmt.Errorf("no valid clip moments found in video")
 	}

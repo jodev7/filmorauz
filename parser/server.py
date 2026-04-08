@@ -1629,6 +1629,97 @@ class ParserHandler(BaseHTTPRequestHandler):
                 self._send_error(str(e), 500)
             return
 
+        elif path == "/clip/analyze":
+            try:
+                import os as _os, subprocess as _sp, tempfile as _tmp
+                from pathlib import Path as _Path
+
+                body = self._read_json_body()
+                video_path = body.get("video_path", "")
+                if not video_path or not _os.path.exists(video_path):
+                    self._send_error("video_path not found", 400)
+                    return
+
+                result = {"speech_segments": [], "face_frames": []}
+
+                # ── Whisper speech analysis (full video, chunked) ─────────────
+                tmp_audio = None
+                try:
+                    import whisper as _whisper
+                    tmp_audio = _tmp.mktemp(suffix=".wav")
+                    # Extract full audio — no duration limit
+                    _sp.run(
+                        ["ffmpeg", "-y", "-i", video_path, "-ac", "1", "-ar", "16000", tmp_audio],
+                        capture_output=True,
+                    )
+                    model = _whisper.load_model("base")
+                    wresult = model.transcribe(tmp_audio, fp16=False, verbose=False)
+                    result["speech_segments"] = [
+                        {"start": s["start"], "end": s["end"], "text": s["text"].strip()}
+                        for s in wresult.get("segments", [])
+                    ]
+                    logger.info(f"[CLIP-AI] speech segments: {len(result['speech_segments'])}")
+                except ImportError:
+                    logger.warning("[CLIP-AI] whisper not installed — skipping speech analysis")
+                except Exception as e:
+                    logger.warning(f"[CLIP-AI] whisper failed (skipping): {e}")
+                finally:
+                    if tmp_audio and _os.path.exists(tmp_audio):
+                        _os.unlink(tmp_audio)
+
+                # ── Face detection (opencv haarcascade, 0.75s sampling) ───────
+                try:
+                    import cv2 as _cv2
+                    cap = _cv2.VideoCapture(video_path)
+                    fps = cap.get(_cv2.CAP_PROP_FPS) or 25.0
+                    # Sample every ~0.75s for better temporal resolution
+                    sample_interval = max(1, int(fps * 0.75))
+                    face_cascade = _cv2.CascadeClassifier(
+                        _cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+                    )
+                    face_frames = []
+                    frame_idx = 0
+                    while True:
+                        ret, frame = cap.read()
+                        if not ret:
+                            break
+                        if frame_idx % sample_interval == 0:
+                            t = frame_idx / fps
+                            fh_img, fw_img = frame.shape[:2]
+                            gray = _cv2.cvtColor(frame, _cv2.COLOR_BGR2GRAY)
+                            faces = face_cascade.detectMultiScale(gray, 1.1, 4, minSize=(30, 30))
+                            max_size = 0.0
+                            cx = 0.5  # default center
+                            cy = 0.5
+                            if len(faces) > 0:
+                                # Pick largest face for size/center metrics
+                                largest = max(faces, key=lambda f: f[2] * f[3])
+                                x, y, fw, fh = largest
+                                max_size = (fw * fh) / (fw_img * fh_img)
+                                cx = (x + fw / 2) / fw_img
+                                cy = (y + fh / 2) / fh_img
+                            face_frames.append({
+                                "time": t,
+                                "face_count": int(len(faces)),
+                                "max_size": max_size,
+                                "cx": cx,
+                                "cy": cy,
+                            })
+                        frame_idx += 1
+                    cap.release()
+                    result["face_frames"] = face_frames
+                    logger.info(f"[CLIP-AI] faces detected: {len(face_frames)} frames sampled")
+                except ImportError:
+                    logger.warning("[CLIP-AI] opencv not installed — skipping face detection")
+                except Exception as e:
+                    logger.warning(f"[CLIP-AI] face detection failed (skipping): {e}")
+
+                self._send_json(result)
+            except Exception as e:
+                logger.error(f"[CLIP-AI] analyze endpoint error: {e}", exc_info=True)
+                self._send_error(str(e), 500)
+            return
+
         # 404 for unknown POST endpoints
         self._send_error("Not found", 404)
     
