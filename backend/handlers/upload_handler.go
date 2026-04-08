@@ -295,18 +295,30 @@ func (h *UploadHandler) saveMovieAssetLocal(file multipart.File, filename string
 // UploadAdMedia handles image/video uploads for ads
 // POST /api/superadmin/ads/upload  (superadmin only)
 func (h *UploadHandler) UploadAdMedia(c *gin.Context) {
-	mediaType := c.PostForm("media_type") // "image" or "video"
-	if mediaType != "image" && mediaType != "video" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "media_type must be 'image' or 'video'"})
-		return
-	}
-
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no file provided"})
 		return
 	}
 	defer file.Close()
+
+	// Detect media_type from MIME or extension — manual input is optional
+	mediaType := c.PostForm("media_type")
+	if mediaType != "image" && mediaType != "video" {
+		ct := header.Header.Get("Content-Type")
+		ext := strings.ToLower(filepath.Ext(header.Filename))
+		switch {
+		case strings.HasPrefix(ct, "image/") ||
+			ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp" || ext == ".gif":
+			mediaType = "image"
+		case strings.HasPrefix(ct, "video/") ||
+			ext == ".mp4" || ext == ".webm" || ext == ".mov":
+			mediaType = "video"
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported file type"})
+			return
+		}
+	}
 
 	var maxSize int64
 	var allowedTypes map[string]bool

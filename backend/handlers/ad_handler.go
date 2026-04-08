@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -13,12 +15,14 @@ import (
 )
 
 type AdHandler struct {
-	adRepo   *repositories.AdRepository
-	telegram *services.TelegramService
+	adRepo          *repositories.AdRepository
+	telegram        *services.TelegramService
+	defaultChannels []string // loaded from TELEGRAM_CHANNELS env
+	userRepo        *repositories.UserRepository
 }
 
-func NewAdHandler(adRepo *repositories.AdRepository, telegram *services.TelegramService) *AdHandler {
-	return &AdHandler{adRepo: adRepo, telegram: telegram}
+func NewAdHandler(adRepo *repositories.AdRepository, telegram *services.TelegramService, defaultChannels []string, userRepo *repositories.UserRepository) *AdHandler {
+	return &AdHandler{adRepo: adRepo, telegram: telegram, defaultChannels: defaultChannels, userRepo: userRepo}
 }
 
 // -- Admin endpoints --
@@ -66,6 +70,7 @@ func (h *AdHandler) AdminCreateAd(c *gin.Context) {
 		Price                  float64  `json:"price"`
 		TelegramChannels       []string `json:"telegram_channels"`
 		TelegramBotEnabled     bool     `json:"telegram_bot_enabled"`
+		TelegramBotChatIDs     []int64  `json:"telegram_bot_chat_ids"`
 		TelegramChannelEnabled bool     `json:"telegram_channel_enabled"`
 		PlayerEnabled          bool     `json:"player_enabled"`
 	}
@@ -113,6 +118,7 @@ func (h *AdHandler) AdminCreateAd(c *gin.Context) {
 		Price:                  req.Price,
 		TelegramChannels:       req.TelegramChannels,
 		TelegramBotEnabled:     req.TelegramBotEnabled,
+		TelegramBotChatIDs:     req.TelegramBotChatIDs,
 		TelegramChannelEnabled: req.TelegramChannelEnabled,
 		PlayerEnabled:          req.PlayerEnabled,
 		CreatedBy:              createdBy,
@@ -146,6 +152,7 @@ func (h *AdHandler) AdminUpdateAd(c *gin.Context) {
 		Price                  float64  `json:"price"`
 		TelegramChannels       []string `json:"telegram_channels"`
 		TelegramBotEnabled     *bool    `json:"telegram_bot_enabled"`
+		TelegramBotChatIDs     []int64  `json:"telegram_bot_chat_ids"`
 		TelegramChannelEnabled *bool    `json:"telegram_channel_enabled"`
 		PlayerEnabled          *bool    `json:"player_enabled"`
 	}
@@ -177,6 +184,9 @@ func (h *AdHandler) AdminUpdateAd(c *gin.Context) {
 	}
 	if req.TelegramBotEnabled != nil {
 		update["telegram_bot_enabled"] = *req.TelegramBotEnabled
+	}
+	if req.TelegramBotChatIDs != nil {
+		update["telegram_bot_chat_ids"] = req.TelegramBotChatIDs
 	}
 	if req.TelegramChannelEnabled != nil {
 		update["telegram_channel_enabled"] = *req.TelegramChannelEnabled
@@ -220,6 +230,7 @@ func (h *AdHandler) AdminDeleteAd(c *gin.Context) {
 // -- Public endpoints --
 
 // GetAdsByPlacement GET /api/ads?placement=...
+// Returns the next ad in round-robin rotation for the placement (single element array).
 func (h *AdHandler) GetAdsByPlacement(c *gin.Context) {
 	placement := c.Query("placement")
 	if placement == "" {
@@ -227,15 +238,16 @@ func (h *AdHandler) GetAdsByPlacement(c *gin.Context) {
 		return
 	}
 
-	ads, err := h.adRepo.FindByPlacement(placement)
+	ad, err := h.adRepo.NextAdForPlacement(placement)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if ads == nil {
-		ads = []models.Ad{}
+	if ad == nil {
+		c.JSON(http.StatusOK, gin.H{"ads": []models.Ad{}})
+		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ads": ads})
+	c.JSON(http.StatusOK, gin.H{"ads": []models.Ad{*ad}})
 }
 
 // RecordImpression POST /api/ads/:id/impression
@@ -291,53 +303,100 @@ func (h *AdHandler) SendTelegramAd(c *gin.Context) {
 	var results []map[string]interface{}
 
 	// Post to Telegram channels
-	if ad.TelegramChannelEnabled && len(ad.TelegramChannels) > 0 {
-		for _, ch := range ad.TelegramChannels {
-			target := ch
-			if len(target) > 0 && target[0] != '@' {
-				target = "@" + target
-			}
-			res := h.telegram.SendAdToChannel(target, ad.Title, ad.Description, ad.ImageURL, ad.TargetURL, ad.CallToAction)
-			delivery := &models.AdDelivery{
-				AdID:      id,
-				Placement: "telegram_channel_post",
-				Target:    ch,
-				Status:    res.Status,
-				MessageID: res.MessageID,
-				SentAt:    time.Now(),
-				Error:     res.Error,
-			}
-			_ = h.adRepo.LogDelivery(delivery)
+	if ad.TelegramChannelEnabled {
+		// Use env channels by default; fall back to ad's explicit list
+		targetChannels := h.defaultChannels
+		if len(targetChannels) == 0 {
+			targetChannels = ad.TelegramChannels
+		}
+		log.Printf("[AD-TELEGRAM] channel delivery: %d targets (env=%d, ad=%d)",
+			len(targetChannels), len(h.defaultChannels), len(ad.TelegramChannels))
+
+		if len(targetChannels) == 0 {
+			log.Printf("[AD-TELEGRAM] channel delivery skipped for ad %s: no channels configured", id.Hex())
 			results = append(results, map[string]interface{}{
-				"target":     ch,
-				"placement":  "telegram_channel_post",
-				"status":     res.Status,
-				"message_id": res.MessageID,
-				"error":      res.Error,
+				"target":    "channels",
+				"placement": "telegram_channel_post",
+				"status":    "failed",
+				"error":     "no channels configured — set TELEGRAM_CHANNELS in .env",
 			})
+		} else {
+			for _, ch := range targetChannels {
+				target := ch
+				if len(target) > 0 && target[0] != '@' {
+					target = "@" + target
+				}
+				log.Printf("[AD-TELEGRAM] sending channel ad to %s", target)
+				res := h.telegram.SendAdToChannel(target, ad.Title, ad.Description, ad.ImageURL, ad.VideoURL, ad.TargetURL, ad.CallToAction)
+				delivery := &models.AdDelivery{
+					AdID:      id,
+					Placement: "telegram_channel_post",
+					Target:    ch,
+					Status:    res.Status,
+					MessageID: res.MessageID,
+					SentAt:    time.Now(),
+					Error:     res.Error,
+				}
+				_ = h.adRepo.LogDelivery(delivery)
+				results = append(results, map[string]interface{}{
+					"target":     ch,
+					"placement":  "telegram_channel_post",
+					"status":     res.Status,
+					"message_id": res.MessageID,
+					"error":      res.Error,
+				})
+			}
 		}
 	}
 
-	// Post to bot (admin chat as representative bot delivery)
+	// Post to bot — fetch user chat_ids from MongoDB
 	if ad.TelegramBotEnabled {
-		res := h.telegram.SendAdToBot(0, ad.Title, ad.Description, ad.ImageURL, ad.TargetURL, ad.CallToAction)
-		// Note: chatID=0 will fail gracefully; real bot delivery uses bot update handlers
-		delivery := &models.AdDelivery{
-			AdID:      id,
-			Placement: "telegram_bot_message",
-			Target:    "bot",
-			Status:    res.Status,
-			MessageID: res.MessageID,
-			SentAt:    time.Now(),
-			Error:     res.Error,
+		chatIDs, err := h.userRepo.FindChatIDs(500)
+		if err != nil {
+			log.Printf("[AD-TELEGRAM] failed to load user chat_ids for ad %s: %v", id.Hex(), err)
+			chatIDs = nil
 		}
-		_ = h.adRepo.LogDelivery(delivery)
-		results = append(results, map[string]interface{}{
-			"target":    "bot",
-			"placement": "telegram_bot_message",
-			"status":    res.Status,
-			"error":     res.Error,
-		})
+		log.Printf("[AD-TELEGRAM] bot delivery: %d valid user chat_ids found", len(chatIDs))
+
+		if len(chatIDs) == 0 {
+			log.Printf("[AD-TELEGRAM] bot delivery skipped for ad %s: no valid user chat_ids", id.Hex())
+			_ = h.adRepo.LogDelivery(&models.AdDelivery{
+				AdID:      id,
+				Placement: "telegram_bot_message",
+				Target:    "bot",
+				Status:    "failed",
+				SentAt:    time.Now(),
+				Error:     "no_valid_chat_ids",
+			})
+			results = append(results, map[string]interface{}{
+				"target":    "bot",
+				"placement": "telegram_bot_message",
+				"status":    "failed",
+				"error":     "no valid user chat_ids — users must send /start to the bot first",
+			})
+		} else {
+			for _, chatID := range chatIDs {
+				log.Printf("[AD-TELEGRAM] sending bot ad to chat_id=%d", chatID)
+				res := h.telegram.SendAdToBot(chatID, ad.Title, ad.Description, ad.ImageURL, ad.VideoURL, ad.TargetURL, ad.CallToAction)
+				target := fmt.Sprintf("bot:%d", chatID)
+				_ = h.adRepo.LogDelivery(&models.AdDelivery{
+					AdID:      id,
+					Placement: "telegram_bot_message",
+					Target:    target,
+					Status:    res.Status,
+					MessageID: res.MessageID,
+					SentAt:    time.Now(),
+					Error:     res.Error,
+				})
+				results = append(results, map[string]interface{}{
+					"target":     target,
+					"placement":  "telegram_bot_message",
+					"status":     res.Status,
+					"message_id": res.MessageID,
+					"error":      res.Error,
+				})
+			}
+		}
 	}
 
 	if len(results) == 0 {

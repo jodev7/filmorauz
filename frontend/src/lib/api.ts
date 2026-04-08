@@ -2173,6 +2173,7 @@ export interface Ad {
   // Phase 2
   telegram_channels?: string[];
   telegram_bot_enabled?: boolean;
+  telegram_bot_chat_ids?: number[];
   telegram_channel_enabled?: boolean;
   player_enabled?: boolean;
   telegram_deliveries?: number;
@@ -2215,6 +2216,7 @@ export interface AdInput {
   // Phase 2
   telegram_channels?: string[];
   telegram_bot_enabled?: boolean;
+  telegram_bot_chat_ids?: number[];
   telegram_channel_enabled?: boolean;
   player_enabled?: boolean;
 }
@@ -2322,9 +2324,10 @@ export async function uploadAdMedia(
   const body = new FormData();
   body.append("file", file);
   body.append("media_type", mediaType);
+  // Do NOT set Content-Type — browser must set multipart/form-data with boundary automatically
   const res = await fetch(`${API_URL}/superadmin/ads/upload`, {
     method: "POST",
-    headers: authHeaders(token),
+    headers: { Authorization: `Bearer ${token}` },
     body,
   });
   if (!res.ok) {

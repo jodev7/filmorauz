@@ -16,6 +16,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	})
 
 	// Telegram Auth routes (public)
+	api.POST("/auth/telegram/register", authHandler.RegisterBotUser)
 	api.POST("/auth/telegram/start", authHandler.TelegramAuthStart)
 	api.POST("/auth/telegram/complete", authHandler.TelegramAuthComplete)
 	api.GET("/auth/telegram/status/:code", authHandler.TelegramAuthStatus)

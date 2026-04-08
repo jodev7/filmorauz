@@ -403,10 +403,32 @@ type AdPostResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// SendAdToChannel sends an ad to a specific Telegram channel (by @username or chat_id string)
-func (s *TelegramService) SendAdToChannel(channelTarget, title, description, imageURL, targetURL, cta string) AdPostResult {
+// buildAdKeyboard returns an inline keyboard with a CTA button, or nil if no targetURL.
+func buildAdKeyboard(targetURL, cta string) *tgbotapi.InlineKeyboardMarkup {
+	if targetURL == "" {
+		return nil
+	}
+	ctaText := cta
+	if ctaText == "" {
+		ctaText = "Batafsil ›"
+	}
+	kb := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonURL(ctaText, targetURL),
+		),
+	)
+	return &kb
+}
+
+// SendAdToChannel sends an ad to a specific Telegram channel.
+// Requires imageURL or videoURL — rejects with missing_media_for_telegram if neither present.
+func (s *TelegramService) SendAdToChannel(channelTarget, title, description, imageURL, videoURL, targetURL, cta string) AdPostResult {
 	if s.botToken == "" {
 		return AdPostResult{Target: channelTarget, Status: "failed", Error: "bot token not configured"}
+	}
+	if imageURL == "" && videoURL == "" {
+		log.Printf("[TELEGRAM AD] channel %s skipped: missing_media_for_telegram", channelTarget)
+		return AdPostResult{Target: channelTarget, Status: "failed", Error: "missing_media_for_telegram"}
 	}
 
 	api, err := tgbotapi.NewBotAPI(s.botToken)
@@ -415,26 +437,13 @@ func (s *TelegramService) SendAdToChannel(channelTarget, title, description, ima
 	}
 
 	caption := buildAdCaption(title, description, targetURL, cta)
-
-	// Inline keyboard with CTA button
-	var keyboard *tgbotapi.InlineKeyboardMarkup
-	if targetURL != "" {
-		ctaText := cta
-		if ctaText == "" {
-			ctaText = "Ko'proq bilish ›"
-		}
-		kb := tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonURL(ctaText, targetURL),
-			),
-		)
-		keyboard = &kb
-	}
+	keyboard := buildAdKeyboard(targetURL, cta)
 
 	var sentMsg tgbotapi.Message
 	var sendErr error
 
-	if imageURL != "" {
+	switch {
+	case imageURL != "":
 		msg := tgbotapi.NewPhotoToChannel(channelTarget, tgbotapi.FileURL(imageURL))
 		msg.Caption = caption
 		msg.ParseMode = "HTML"
@@ -442,17 +451,15 @@ func (s *TelegramService) SendAdToChannel(channelTarget, title, description, ima
 			msg.ReplyMarkup = keyboard
 		}
 		sentMsg, sendErr = api.Send(msg)
-		if sendErr != nil {
-			// Fallback to text
-			txtMsg := tgbotapi.NewMessageToChannel(channelTarget, caption)
-			txtMsg.ParseMode = "HTML"
-			if keyboard != nil {
-				txtMsg.ReplyMarkup = keyboard
-			}
-			sentMsg, sendErr = api.Send(txtMsg)
+
+	case videoURL != "":
+		msg := tgbotapi.VideoConfig{
+			BaseFile: tgbotapi.BaseFile{
+				BaseChat: tgbotapi.BaseChat{ChannelUsername: channelTarget},
+				File:     tgbotapi.FileURL(videoURL),
+			},
 		}
-	} else {
-		msg := tgbotapi.NewMessageToChannel(channelTarget, caption)
+		msg.Caption = caption
 		msg.ParseMode = "HTML"
 		if keyboard != nil {
 			msg.ReplyMarkup = keyboard
@@ -469,14 +476,19 @@ func (s *TelegramService) SendAdToChannel(channelTarget, title, description, ima
 	return AdPostResult{Target: channelTarget, Status: "success", MessageID: sentMsg.MessageID}
 }
 
-// SendAdToBot sends an ad to the admin/bot chat (for bot placement)
-func (s *TelegramService) SendAdToBot(chatID int64, title, description, imageURL, targetURL, cta string) AdPostResult {
+// SendAdToBot sends an ad to a specific chat via the bot.
+// Requires imageURL or videoURL — rejects with missing_media_for_telegram if neither present.
+func (s *TelegramService) SendAdToBot(chatID int64, title, description, imageURL, videoURL, targetURL, cta string) AdPostResult {
 	target := fmt.Sprintf("bot:%d", chatID)
 	if s.botToken == "" {
 		return AdPostResult{Target: target, Status: "failed", Error: "bot token not configured"}
 	}
 	if chatID == 0 {
 		return AdPostResult{Target: target, Status: "failed", Error: "chatID is 0"}
+	}
+	if imageURL == "" && videoURL == "" {
+		log.Printf("[TELEGRAM AD] bot chat_id=%d skipped: missing_media_for_telegram", chatID)
+		return AdPostResult{Target: target, Status: "failed", Error: "missing_media_for_telegram"}
 	}
 
 	api, err := tgbotapi.NewBotAPI(s.botToken)
@@ -485,25 +497,13 @@ func (s *TelegramService) SendAdToBot(chatID int64, title, description, imageURL
 	}
 
 	caption := buildAdCaption(title, description, targetURL, cta)
-
-	var keyboard *tgbotapi.InlineKeyboardMarkup
-	if targetURL != "" {
-		ctaText := cta
-		if ctaText == "" {
-			ctaText = "Ko'proq bilish ›"
-		}
-		kb := tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonURL(ctaText, targetURL),
-			),
-		)
-		keyboard = &kb
-	}
+	keyboard := buildAdKeyboard(targetURL, cta)
 
 	var sentMsg tgbotapi.Message
 	var sendErr error
 
-	if imageURL != "" {
+	switch {
+	case imageURL != "":
 		msg := tgbotapi.NewPhoto(chatID, tgbotapi.FileURL(imageURL))
 		msg.Caption = caption
 		msg.ParseMode = "HTML"
@@ -511,16 +511,10 @@ func (s *TelegramService) SendAdToBot(chatID int64, title, description, imageURL
 			msg.ReplyMarkup = keyboard
 		}
 		sentMsg, sendErr = api.Send(msg)
-		if sendErr != nil {
-			txtMsg := tgbotapi.NewMessage(chatID, caption)
-			txtMsg.ParseMode = "HTML"
-			if keyboard != nil {
-				txtMsg.ReplyMarkup = keyboard
-			}
-			sentMsg, sendErr = api.Send(txtMsg)
-		}
-	} else {
-		msg := tgbotapi.NewMessage(chatID, caption)
+
+	case videoURL != "":
+		msg := tgbotapi.NewVideo(chatID, tgbotapi.FileURL(videoURL))
+		msg.Caption = caption
 		msg.ParseMode = "HTML"
 		if keyboard != nil {
 			msg.ReplyMarkup = keyboard
@@ -529,8 +523,10 @@ func (s *TelegramService) SendAdToBot(chatID int64, title, description, imageURL
 	}
 
 	if sendErr != nil {
+		log.Printf("[TELEGRAM AD] Failed to send ad to bot chat_id=%d: %v", chatID, sendErr)
 		return AdPostResult{Target: target, Status: "failed", Error: sendErr.Error()}
 	}
+	log.Printf("[TELEGRAM AD] ✓ Ad sent to bot chat_id=%d (msg_id=%d)", chatID, sentMsg.MessageID)
 	return AdPostResult{Target: target, Status: "success", MessageID: sentMsg.MessageID}
 }
 

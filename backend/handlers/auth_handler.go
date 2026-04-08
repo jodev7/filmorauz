@@ -31,6 +31,28 @@ type TelegramAuthStartResponse struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
+// RegisterBotUser godoc
+// POST /api/auth/telegram/register
+// Upserts a user record when they send /start to the bot.
+func (h *AuthHandler) RegisterBotUser(c *gin.Context) {
+	var req struct {
+		TelegramID int64  `json:"telegram_id" binding:"required"`
+		ChatID     int64  `json:"chat_id" binding:"required"`
+		Username   string `json:"username"`
+		FirstName  string `json:"first_name"`
+		LastName   string `json:"last_name"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.authService.UpsertBotUser(req.TelegramID, req.ChatID, req.Username, req.FirstName, req.LastName); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 // TelegramAuthStart godoc
 // POST /api/auth/telegram/start
 // Creates a new Telegram auth session and returns the deep link

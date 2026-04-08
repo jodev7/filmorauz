@@ -185,6 +185,83 @@ func (r *UserRepository) Create(telegramID int64, firstName, lastName, username,
 	return &user, nil
 }
 
+// FindChatIDs returns up to limit valid Telegram chat_ids from non-banned users,
+// ordered by most recently updated. Used for bot ad delivery.
+func (r *UserRepository) FindChatIDs(limit int) ([]int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	filter := bson.M{
+		"telegram_chat_id": bson.M{"$exists": true, "$ne": 0},
+		"$or": []bson.M{
+			{"ban": nil},
+			{"ban.is_banned": bson.M{"$ne": true}},
+		},
+	}
+	limitInt64 := int64(limit)
+	cursor, err := r.col.Find(ctx, filter, &options.FindOptions{
+		Sort:       bson.D{{Key: "updated_at", Value: -1}},
+		Limit:      &limitInt64,
+		Projection: bson.D{{Key: "telegram_chat_id", Value: 1}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var rows []struct {
+		TelegramChatID int64 `bson:"telegram_chat_id"`
+	}
+	if err := cursor.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	chatIDs := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		if row.TelegramChatID != 0 {
+			chatIDs = append(chatIDs, row.TelegramChatID)
+		}
+	}
+	return chatIDs, nil
+}
+
+// UpsertTelegramUser saves or updates a user by telegram_id.
+// Called when a user sends /start to the bot. Persists chat_id for later bot messaging.
+func (r *UserRepository) UpsertTelegramUser(telegramID, chatID int64, username, firstName, lastName string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	now := time.Now()
+	result, err := r.col.UpdateOne(ctx,
+		bson.M{"telegram_id": telegramID},
+		bson.M{
+			"$set": bson.M{
+				"telegram_chat_id": chatID,
+				"telegram_user":    username,
+				"first_name":       firstName,
+				"last_name":        lastName,
+				"updated_at":       now,
+			},
+			"$setOnInsert": bson.M{
+				"telegram_id":   telegramID,
+				"role":          "user",
+				"auth_provider": "telegram",
+				"is_active":     true,
+				"created_at":    now,
+			},
+		},
+		options.Update().SetUpsert(true),
+	)
+	if err != nil {
+		return err
+	}
+	if result.UpsertedCount > 0 {
+		log.Printf("[USER] created bot user telegram_id=%d chat_id=%d", telegramID, chatID)
+	} else {
+		log.Printf("[USER] updated bot user telegram_id=%d chat_id=%d", telegramID, chatID)
+	}
+	return nil
+}
+
 func (r *UserRepository) UpdateLastLogin(userID primitive.ObjectID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

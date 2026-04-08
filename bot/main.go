@@ -141,7 +141,7 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 		}
 
 		// Regular /start
-		b.handleStart(chatID, userID)
+		b.handleStart(chatID, userID, msg.From)
 		return
 	}
 
@@ -158,7 +158,13 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 }
 
 // handleStart handles the /start command
-func (b *Bot) handleStart(chatID int64, userID int64) {
+func (b *Bot) handleStart(chatID int64, userID int64, from *tgbotapi.User) {
+	// Save/update user in backend (best-effort, non-blocking)
+	go func() {
+		if err := b.authClient.RegisterBotUser(chatID, from); err != nil {
+			log.Printf("[START] Failed to save user telegram_id=%d chat_id=%d: %v", from.ID, chatID, err)
+		}
+	}()
 	log.Printf("[START] User %d sent /start", userID)
 	log.Printf("[START] Required channels configured: %d", b.subscriptionService.RequiredChannelCount())
 
@@ -449,6 +455,13 @@ func (b *Bot) parseLoginCode(text string) string {
 // This is triggered by /start login_<AUTH_CODE>
 func (b *Bot) handleLogin(chatID int64, userID int64, user *tgbotapi.User, authCode string) {
 	log.Printf("[LOGIN] >>> Handling login for user %d with code %s", userID, authCode)
+
+	// Save/update user in backend (best-effort, non-blocking)
+	go func() {
+		if err := b.authClient.RegisterBotUser(chatID, user); err != nil {
+			log.Printf("[LOGIN] Failed to save user telegram_id=%d chat_id=%d: %v", user.ID, chatID, err)
+		}
+	}()
 
 	// First, check subscription (required before login)
 	log.Printf("[LOGIN] Checking subscription for user %d", userID)

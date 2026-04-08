@@ -18,8 +18,9 @@ type User struct {
 	ProfileImageURL string `bson:"profile_image_url,omitempty" json:"profile_image_url,omitempty"`
 
 	// Telegram-specific fields (Telegram-only auth)
-	TelegramID   int64  `bson:"telegram_id,omitempty" json:"telegram_id,omitempty"`
-	TelegramUser string `bson:"telegram_user,omitempty" json:"telegram_user,omitempty"` // username without @
+	TelegramID     int64  `bson:"telegram_id,omitempty" json:"telegram_id,omitempty"`
+	TelegramChatID int64  `bson:"telegram_chat_id,omitempty" json:"telegram_chat_id,omitempty"` // chat.id from /start
+	TelegramUser   string `bson:"telegram_user,omitempty" json:"telegram_user,omitempty"`       // username without @
 	FirstName    string `bson:"first_name,omitempty" json:"first_name,omitempty"`
 	LastName     string `bson:"last_name,omitempty" json:"last_name,omitempty"`
 	PhotoURL     string `bson:"photo_url,omitempty" json:"photo_url,omitempty"`

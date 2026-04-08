@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"errors"
+	"log"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -16,13 +17,86 @@ import (
 type AdRepository struct {
 	col      *mongo.Collection
 	delivCol *mongo.Collection
+	rotCol   *mongo.Collection
 }
 
 func NewAdRepository(db *mongo.Database) *AdRepository {
 	return &AdRepository{
 		col:      db.Collection("ads"),
 		delivCol: db.Collection("ad_deliveries"),
+		rotCol:   db.Collection("ad_rotation"),
 	}
+}
+
+// activeAdsFilter returns the filter for active, non-expired, in-schedule ads for a placement.
+func activeAdsFilter(placement string) bson.M {
+	now := time.Now()
+	return bson.M{
+		"status":     models.AdStatusActive,
+		"placements": placement,
+		"$and": []bson.M{
+			{
+				"$or": []bson.M{
+					{"starts_at": bson.M{"$exists": false}},
+					{"starts_at": bson.M{"$lte": now}},
+				},
+			},
+			{
+				"$or": []bson.M{
+					{"ends_at": nil},
+					{"ends_at": bson.M{"$exists": false}},
+					{"ends_at": bson.M{"$gte": now}},
+				},
+			},
+		},
+	}
+}
+
+// NextAdForPlacement returns the next ad in round-robin order for the placement.
+// Rotation state (last_index) is persisted in the ad_rotation collection.
+func (r *AdRepository) NextAdForPlacement(placement string) (*models.Ad, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Load ordered active ads: stable order by _id ASC
+	cursor, err := r.col.Find(ctx, activeAdsFilter(placement),
+		options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var ads []models.Ad
+	if err := cursor.All(ctx, &ads); err != nil {
+		return nil, err
+	}
+	if len(ads) == 0 {
+		return nil, nil
+	}
+	if len(ads) == 1 {
+		return &ads[0], nil
+	}
+
+	// Fetch current rotation state
+	var state models.AdRotationState
+	err = r.rotCol.FindOne(ctx, bson.M{"placement": placement}).Decode(&state)
+	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, err
+	}
+	// state.LastIndex is 0 on first call (ErrNoDocuments) — next will be index 0
+	nextIdx := (state.LastIndex + 1) % len(ads)
+
+	// Persist updated index (non-fatal on failure)
+	_, updErr := r.rotCol.UpdateOne(ctx,
+		bson.M{"placement": placement},
+		bson.M{"$set": bson.M{"last_index": nextIdx, "updated_at": time.Now()}},
+		options.Update().SetUpsert(true),
+	)
+	if updErr != nil {
+		log.Printf("[AD-ROTATION] failed to persist state for %s: %v", placement, updErr)
+	}
+
+	return &ads[nextIdx], nil
 }
 
 func (r *AdRepository) EnsureIndexes() error {
@@ -35,6 +109,15 @@ func (r *AdRepository) EnsureIndexes() error {
 		{Keys: bson.D{{Key: "created_at", Value: -1}}},
 	}
 	_, err := r.col.Indexes().CreateMany(ctx, indexes)
+	if err != nil {
+		return err
+	}
+	_, err = r.rotCol.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "placement", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		},
+	})
 	return err
 }
 
@@ -104,43 +187,13 @@ func (r *AdRepository) List() ([]models.Ad, error) {
 	return ads, nil
 }
 
-// FindByPlacement returns active ads for a given placement (respects schedule)
+// FindByPlacement returns all active ads for a placement (used internally / admin).
 func (r *AdRepository) FindByPlacement(placement string) ([]models.Ad, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	now := time.Now()
-	filter := bson.M{
-		"status":     models.AdStatusActive,
-		"placements": placement,
-		"$or": []bson.M{
-			{"starts_at": bson.M{"$exists": false}},
-			{"starts_at": bson.M{"$lte": now}},
-		},
-	}
-	// Also check ends_at
-	filter2 := bson.M{
-		"status":     models.AdStatusActive,
-		"placements": placement,
-		"$and": []bson.M{
-			{
-				"$or": []bson.M{
-					{"starts_at": bson.M{"$exists": false}},
-					{"starts_at": bson.M{"$lte": now}},
-				},
-			},
-			{
-				"$or": []bson.M{
-					{"ends_at": nil},
-					{"ends_at": bson.M{"$exists": false}},
-					{"ends_at": bson.M{"$gte": now}},
-				},
-			},
-		},
-	}
-	_ = filter
-
-	cursor, err := r.col.Find(ctx, filter2)
+	cursor, err := r.col.Find(ctx, activeAdsFilter(placement),
+		options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}

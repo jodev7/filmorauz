@@ -49,6 +49,36 @@ func NewAuthClient(baseURL string, botAPI *tgbotapi.BotAPI) *AuthClient {
 	}
 }
 
+// RegisterBotUser calls the backend to save/update a user on bot /start.
+func (c *AuthClient) RegisterBotUser(chatID int64, user *tgbotapi.User) error {
+	req := struct {
+		TelegramID int64  `json:"telegram_id"`
+		ChatID     int64  `json:"chat_id"`
+		Username   string `json:"username"`
+		FirstName  string `json:"first_name"`
+		LastName   string `json:"last_name"`
+	}{
+		TelegramID: user.ID,
+		ChatID:     chatID,
+		Username:   user.UserName,
+		FirstName:  user.FirstName,
+		LastName:   user.LastName,
+	}
+	jsonBody, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/api/auth/telegram/register", c.baseURL)
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		log.Printf("[AUTH CLIENT] RegisterBotUser error: %v", err)
+		return err
+	}
+	defer resp.Body.Close()
+	log.Printf("[AUTH CLIENT] RegisterBotUser telegram_id=%d chat_id=%d status=%d", user.ID, chatID, resp.StatusCode)
+	return nil
+}
+
 // CompleteAuthSession calls the backend to complete a Telegram auth session
 func (c *AuthClient) CompleteAuthSession(authCode string, user *tgbotapi.User) (*AuthCompleteResponse, error) {
 	// Extract username (without @)

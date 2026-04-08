@@ -47,9 +47,10 @@ type Ad struct {
 	Clicks      int64 `bson:"clicks" json:"clicks"`
 
 	// Phase 2: Telegram targeting
-	TelegramChannels       []string   `bson:"telegram_channels,omitempty" json:"telegram_channels,omitempty"`
-	TelegramBotEnabled     bool       `bson:"telegram_bot_enabled" json:"telegram_bot_enabled"`
-	TelegramChannelEnabled bool       `bson:"telegram_channel_enabled" json:"telegram_channel_enabled"`
+	TelegramChannels       []string `bson:"telegram_channels,omitempty" json:"telegram_channels,omitempty"`
+	TelegramBotEnabled     bool     `bson:"telegram_bot_enabled" json:"telegram_bot_enabled"`
+	TelegramBotChatIDs     []int64  `bson:"telegram_bot_chat_ids,omitempty" json:"telegram_bot_chat_ids,omitempty"` // explicit target chat IDs for bot delivery
+	TelegramChannelEnabled bool     `bson:"telegram_channel_enabled" json:"telegram_channel_enabled"`
 	TelegramDeliveries     int64      `bson:"telegram_deliveries" json:"telegram_deliveries"`
 	TelegramLastSentAt     *time.Time `bson:"telegram_last_sent_at,omitempty" json:"telegram_last_sent_at,omitempty"`
 
@@ -72,6 +73,14 @@ type AdDelivery struct {
 	MessageID int                `bson:"message_id,omitempty" json:"message_id,omitempty"`
 	SentAt    time.Time          `bson:"sent_at" json:"sent_at"`
 	Error     string             `bson:"error,omitempty" json:"error,omitempty"`
+}
+
+// AdRotationState persists the last-shown index per placement for sequential round-robin rotation.
+type AdRotationState struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Placement string             `bson:"placement" json:"placement"`
+	LastIndex int                `bson:"last_index" json:"last_index"`
+	UpdatedAt time.Time          `bson:"updated_at" json:"updated_at"`
 }
 
 // AdStats is the aggregated stats response for the ads dashboard

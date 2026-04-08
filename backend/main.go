@@ -189,7 +189,7 @@ func main() {
 	telegramHandler := handlers.NewTelegramHandler(telegramService)
 
 	// Ad handler (wired after telegramService is available)
-	adHandler := handlers.NewAdHandler(adRepo, telegramService)
+	adHandler := handlers.NewAdHandler(adRepo, telegramService, cfg.TelegramChannels, userRepo)
 
 	// Series repository, service, and handler
 	// seriesRepo already initialized above for rating service

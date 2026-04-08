@@ -145,6 +145,11 @@ func (s *AuthService) CompleteAuthSession(req *models.AuthSessionRequest) (*mode
 	return session, user, nil
 }
 
+// UpsertBotUser saves/updates a user from a bot /start interaction.
+func (s *AuthService) UpsertBotUser(telegramID, chatID int64, username, firstName, lastName string) error {
+	return s.userRepo.UpsertTelegramUser(telegramID, chatID, username, firstName, lastName)
+}
+
 // GetAuthSessionStatus returns the status of an auth session
 func (s *AuthService) GetAuthSessionStatus(code string) (*models.AuthSession, error) {
 	session, err := s.authSessionRepo.FindByCode(code)

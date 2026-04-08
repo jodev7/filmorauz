@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -34,6 +35,7 @@ type Config struct {
 	B2ApplicationKey        string
 	B2BucketName            string
 	B2CDNURL                string
+	TelegramChannels        []string // loaded from TELEGRAM_CHANNELS env (comma-separated)
 }
 
 func Load() *Config {
@@ -67,6 +69,7 @@ func Load() *Config {
 		B2ApplicationKey:        getEnv("B2_APPLICATION_KEY", ""),
 		B2BucketName:            getEnv("B2_BUCKET_NAME", ""),
 		B2CDNURL:                getEnv("B2_CDN_URL", ""),
+		TelegramChannels:        parseTelegramChannels(getEnv("TELEGRAM_CHANNELS", "")),
 	}
 
 	// Validate required fields
@@ -108,4 +111,16 @@ func parseTelegramID(s string) int64 {
 // GetEnv is exported for use in main.go
 func GetEnv(key, fallback string) string {
 	return getEnv(key, fallback)
+}
+
+// parseTelegramChannels splits a comma-separated channel list, trims spaces, drops empty values.
+func parseTelegramChannels(s string) []string {
+	var channels []string
+	for _, ch := range strings.Split(s, ",") {
+		ch = strings.TrimSpace(ch)
+		if ch != "" {
+			channels = append(channels, ch)
+		}
+	}
+	return channels
 }
