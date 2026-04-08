@@ -16,6 +16,7 @@ import WatchButton from "@/components/WatchButton";
 import ShareButton from "@/components/ShareButton";
 import { isMoviePremium, PremiumBadge } from "@/components/PremiumComponents";
 import { getMovie, getRecommendations, getRatingSummary } from "@/lib/api";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getTranslations } from "@/lib/i18n-server";
 import {
 	getLocalizedTitle,
@@ -294,6 +295,11 @@ export default async function MovieDetailPage({ params }: Props) {
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Movie Page Banner Ad */}
+        <div className="max-w-7xl mx-auto px-4 pb-6">
+          <WebsiteAdSlot placement="movie_page_banner" />
         </div>
 
         {/* Recommendations Section */}

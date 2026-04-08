@@ -11,6 +11,7 @@ import Link from "next/link";
 import { Heart, History, User as UserIcon, Crown, Calendar, Shield, Clock, Camera, Edit2, Check, X, Send, Hash, LayoutDashboard, BadgeCheck, Sparkles, RefreshCw, Zap, Palette, Eye, EyeOff, Lock, Star } from "lucide-react";
 import { PremiumBadge, PremiumButton, PremiumAvatarRing, resolveIsPremium, resolvePremiumStatus } from "@/components/PremiumComponents";
 import { getFavorites, getWatchHistory, getCurrentUser, updateProfile, uploadProfileImage, updateProfileStyle, updatePrivacySettings, ProfileStyle } from "@/lib/api";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { CurrentUser } from "@/lib/api";
 
 // Subtle premium animations (luxury, not flashy)
@@ -1108,6 +1109,11 @@ export default function UserPage() {
 
           {/* Bottom padding */}
           <div className="pb-12" />
+
+          {/* Profile page banner ad */}
+          <div className="max-w-5xl mx-auto px-4 pb-8">
+            <WebsiteAdSlot placement="profile_page_banner" />
+          </div>
         </div>
       </main>
       <Footer />

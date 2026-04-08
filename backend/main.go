@@ -166,6 +166,13 @@ func main() {
 	banAppealRepo := repositories.NewBanAppealRepository(db)
 	banAppealHandler := handlers.NewBanAppealHandler(banAppealRepo, banHistoryRepo, userRepo, notificationService)
 
+	// Ad repository and handler
+	adRepo := repositories.NewAdRepository(db)
+	adHandler := handlers.NewAdHandler(adRepo)
+	if err := adRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure ad indexes: %v", err)
+	}
+
 	// Notification handler
 	notificationHandler := handlers.NewNotificationHandler(notificationService)
 
@@ -203,7 +210,7 @@ func main() {
 	}
 
 	// Register routes
-	routes.Setup(r, authHandler, movieHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler)
+	routes.Setup(r, authHandler, movieHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler)
 
 	// Start premium cleanup background job (runs every 10 minutes)
 	go startPremiumCleanupJob(userRepo, notificationService)

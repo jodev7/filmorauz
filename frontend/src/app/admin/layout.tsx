@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { Film, LayoutDashboard, List, LogOut, PlusCircle, Download, Users, FolderHeart, MessageSquare, Settings, Tv, Ban, History, MessageCircle, Video } from "lucide-react";
+import { Film, LayoutDashboard, List, LogOut, PlusCircle, Download, Users, FolderHeart, MessageSquare, Settings, Tv, Ban, History, MessageCircle, Video, Megaphone } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
 export default function AdminLayout({
@@ -17,6 +17,7 @@ export default function AdminLayout({
   
   // SECURITY FIX: Check if user has admin/superadmin role
   const isAdmin = user?.role === "admin" || user?.role === "superadmin";
+  const isSuperAdmin = user?.role === "superadmin";
 
   // Protect all /admin/* except /admin/login
   useEffect(() => {
@@ -57,6 +58,7 @@ export default function AdminLayout({
     { href: "/admin/appeals", icon: MessageCircle, label: "Apellyatsiyalar" },
     { href: "/admin/comments", icon: MessageSquare, label: "Comments" },
     { href: "/admin/comments/settings", icon: Settings, label: "Comment Settings" },
+    ...(isSuperAdmin ? [{ href: "/admin/ads", icon: Megaphone, label: "Ads" }] : []),
   ];
 
   return (

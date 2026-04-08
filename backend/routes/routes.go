@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler) {
+func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler) {
 	api := r.Group("/api")
 
 	// Health check
@@ -313,4 +313,20 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	{
 		adminEpisodes.DELETE("/:id", seriesHandler.DeleteEpisode)
 	}
+
+	// Superadmin-only ad management
+	superadmin := api.Group("/superadmin")
+	superadmin.Use(middleware.RequireSuperAdmin(authService))
+	{
+		superadmin.GET("/ads", adHandler.AdminListAds)
+		superadmin.GET("/ads/stats", adHandler.AdminGetStats)
+		superadmin.POST("/ads", adHandler.AdminCreateAd)
+		superadmin.PUT("/ads/:id", adHandler.AdminUpdateAd)
+		superadmin.DELETE("/ads/:id", adHandler.AdminDeleteAd)
+	}
+
+	// Public ad routes
+	api.GET("/ads", adHandler.GetAdsByPlacement)
+	api.POST("/ads/:id/impression", adHandler.RecordImpression)
+	api.POST("/ads/:id/click", adHandler.RecordClick)
 }

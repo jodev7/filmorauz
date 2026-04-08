@@ -8,6 +8,7 @@ import SeriesCarousel from "@/components/SeriesCarousel";
 import ContinueWatchingSection from "@/components/home/ContinueWatchingSection";
 import FeaturedCollectionsSection from "@/components/home/FeaturedCollectionsSection";
 import HeroCarousel from "@/components/home/HeroCarousel";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getMovies, getTrendingMovies, getFeaturedCollections, Movie } from "@/lib/api";
 import { getSeries, Series } from "@/lib/series-api";
 import { getTranslations } from "@/lib/i18n-server";
@@ -124,6 +125,11 @@ export default async function HomePage() {
             ))}
           </div>
         </section>
+
+        {/* ── Homepage Banner Ad ────────────────────────────── */}
+        <div className="max-w-7xl mx-auto px-4 mt-4">
+          <WebsiteAdSlot placement="homepage_banner" />
+        </div>
 
         {/* ── Continue Watching ─────────────────────────────── */}
         <ContinueWatchingSection />

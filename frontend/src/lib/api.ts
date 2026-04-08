@@ -2146,3 +2146,123 @@ export async function adminDeleteClipsByMovie(token: string, movieId: string): P
     throw new Error(err.error || "Failed to delete clips");
   }
 }
+
+// ── Ads API ────────────────────────────────────────────────────────────────
+
+export type AdStatus = "draft" | "active" | "paused" | "expired";
+
+export interface Ad {
+  id: string;
+  title: string;
+  description?: string;
+  image_url?: string;
+  video_url?: string;
+  target_url: string;
+  call_to_action?: string;
+  placements: string[];
+  status: AdStatus;
+  starts_at?: string;
+  ends_at?: string;
+  duration_days?: number;
+  price: number;
+  impressions: number;
+  clicks: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdStats {
+  total_ads: number;
+  active_ads: number;
+  expired_ads: number;
+  impressions: number;
+  clicks: number;
+  revenue: number;
+}
+
+export interface AdInput {
+  title: string;
+  description?: string;
+  image_url?: string;
+  video_url?: string;
+  target_url: string;
+  call_to_action?: string;
+  placements: string[];
+  status: AdStatus;
+  duration_days: number;
+  price: number;
+}
+
+export async function adminListAds(token: string): Promise<Ad[]> {
+  const res = await fetch(`${API_URL}/superadmin/ads`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch ads");
+  const json = await res.json();
+  return json.ads || [];
+}
+
+export async function adminGetAdStats(token: string): Promise<AdStats> {
+  const res = await fetch(`${API_URL}/superadmin/ads/stats`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch ad stats");
+  return res.json();
+}
+
+export async function adminCreateAd(token: string, input: AdInput): Promise<Ad> {
+  const res = await fetch(`${API_URL}/superadmin/ads`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to create ad");
+  }
+  return res.json();
+}
+
+export async function adminUpdateAd(token: string, id: string, input: Partial<AdInput>): Promise<Ad> {
+  const res = await fetch(`${API_URL}/superadmin/ads/${id}`, {
+    method: "PUT",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to update ad");
+  }
+  return res.json();
+}
+
+export async function adminDeleteAd(token: string, id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/superadmin/ads/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to delete ad");
+  }
+}
+
+export async function getAdsByPlacement(placement: string): Promise<Ad[]> {
+  const res = await fetch(`${API_URL}/ads?placement=${placement}`, {
+    cache: "no-store",
+  });
+  if (!res.ok) return [];
+  const json = await res.json();
+  return json.ads || [];
+}
+
+export async function recordAdImpression(id: string): Promise<void> {
+  await fetch(`${API_URL}/ads/${id}/impression`, { method: "POST" });
+}
+
+export async function recordAdClick(id: string): Promise<void> {
+  await fetch(`${API_URL}/ads/${id}/click`, { method: "POST" });
+}

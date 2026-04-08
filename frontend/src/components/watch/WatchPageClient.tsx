@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ChevronLeft, Clock, Calendar, Heart, Eye, Crown } from "lucide-react";
 import VideoPlayer from "@/components/VideoPlayer";
 import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveWatchProgress, markWatchComplete, Movie } from "@/lib/api";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n";
 import { isMoviePremium, isUserPremium, PremiumLockOverlay, PremiumButton, PremiumBadge } from "@/components/PremiumComponents";
@@ -319,6 +320,11 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
               </button>
             )}
           </div>
+        </div>
+
+        {/* Watch page banner ad */}
+        <div className="mt-6">
+          <WebsiteAdSlot placement="watch_page_banner" />
         </div>
 
         {/* Recommendations */}
