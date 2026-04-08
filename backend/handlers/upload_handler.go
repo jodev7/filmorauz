@@ -292,6 +292,102 @@ func (h *UploadHandler) saveMovieAssetLocal(file multipart.File, filename string
 	return fmt.Sprintf("http://localhost:%s/uploads/movies/%s/%s", h.config.Port, subDir, filename), nil
 }
 
+// UploadAdMedia handles image/video uploads for ads
+// POST /api/superadmin/ads/upload  (superadmin only)
+func (h *UploadHandler) UploadAdMedia(c *gin.Context) {
+	mediaType := c.PostForm("media_type") // "image" or "video"
+	if mediaType != "image" && mediaType != "video" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "media_type must be 'image' or 'video'"})
+		return
+	}
+
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no file provided"})
+		return
+	}
+	defer file.Close()
+
+	var maxSize int64
+	var allowedTypes map[string]bool
+
+	if mediaType == "image" {
+		maxSize = 10 * 1024 * 1024 // 10 MB
+		allowedTypes = map[string]bool{
+			"image/jpeg": true,
+			"image/jpg":  true,
+			"image/png":  true,
+			"image/webp": true,
+			"image/gif":  true,
+		}
+	} else {
+		maxSize = 500 * 1024 * 1024 // 500 MB
+		allowedTypes = map[string]bool{
+			"video/mp4":  true,
+			"video/webm": true,
+		}
+	}
+
+	if header.Size > maxSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", maxSize/1024/1024)})
+		return
+	}
+
+	contentType := header.Header.Get("Content-Type")
+	if !allowedTypes[contentType] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported file type"})
+		return
+	}
+
+	ext := filepath.Ext(header.Filename)
+	if ext == "" {
+		if mediaType == "image" {
+			ext = ".jpg"
+		} else {
+			ext = ".mp4"
+		}
+	}
+
+	filename := fmt.Sprintf("%d_ad_%s%s", time.Now().UnixNano(), mediaType, ext)
+
+	var savedURL string
+	if h.config.IsDev {
+		savedURL, err = h.saveAdMediaLocal(file, filename, mediaType)
+	} else {
+		savedURL, err = h.saveToCDN(file, filename, contentType)
+	}
+	if err != nil {
+		log.Printf("[UPLOAD] Ad media upload error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload file"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"url": savedURL, "media_type": mediaType})
+}
+
+// saveAdMediaLocal saves ad media to local storage under uploads/ads/{images|videos}/
+func (h *UploadHandler) saveAdMediaLocal(file multipart.File, filename string, mediaType string) (string, error) {
+	subDir := mediaType + "s" // images or videos
+	storageDir := filepath.Join(h.config.UploadsDir, "ads", subDir)
+
+	if err := os.MkdirAll(storageDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	filePath := filepath.Join(storageDir, filename)
+	dst, err := os.Create(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create file: %w", err)
+	}
+	defer dst.Close()
+
+	if _, err = io.Copy(dst, file); err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return fmt.Sprintf("http://localhost:%s/uploads/ads/%s/%s", h.config.Port, subDir, filename), nil
+}
+
 // isValidURL validates a basic URL
 func isValidURL(url string) bool {
 	if url == "" {

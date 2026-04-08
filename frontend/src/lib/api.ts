@@ -2266,3 +2266,24 @@ export async function recordAdImpression(id: string): Promise<void> {
 export async function recordAdClick(id: string): Promise<void> {
   await fetch(`${API_URL}/ads/${id}/click`, { method: "POST" });
 }
+
+export async function uploadAdMedia(
+  token: string,
+  file: File,
+  mediaType: "image" | "video"
+): Promise<string> {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("media_type", mediaType);
+  const res = await fetch(`${API_URL}/superadmin/ads/upload`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Upload failed");
+  }
+  const json = await res.json();
+  return json.url as string;
+}

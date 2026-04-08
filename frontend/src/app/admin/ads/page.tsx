@@ -13,6 +13,7 @@ import {
   TrendingUp,
   Play,
   Pause,
+  Upload,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -25,6 +26,7 @@ import {
   adminCreateAd,
   adminUpdateAd,
   adminDeleteAd,
+  uploadAdMedia,
 } from "@/lib/api";
 
 const PLACEMENTS = [
@@ -74,6 +76,8 @@ export default function AdminAdsPage() {
   const [form, setForm] = useState<AdInput>(emptyForm());
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [uploadingVideo, setUploadingVideo] = useState(false);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -296,29 +300,86 @@ export default function AdminAdsPage() {
                 />
               </Field>
               <div className="grid grid-cols-2 gap-4">
-                <Field label="Image URL">
-                  <input
-                    value={form.image_url}
-                    onChange={(e) => setForm((f) => ({ ...f, image_url: e.target.value }))}
-                    className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-brand-red"
-                    placeholder="https://..."
-                  />
+                <Field label="Rasm (Image)">
+                  <div className="space-y-1">
+                    <label className="flex items-center gap-2 cursor-pointer w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-sm hover:border-brand-red transition">
+                      {uploadingImage ? (
+                        <Loader2 size={14} className="animate-spin text-brand-red shrink-0" />
+                      ) : (
+                        <Upload size={14} className="text-gray-400 shrink-0" />
+                      )}
+                      <span className="text-gray-400 truncate">
+                        {form.image_url ? "Rasm yuklandi ✓" : "Rasm tanlang..."}
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/gif"
+                        className="hidden"
+                        disabled={uploadingImage}
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file || !token) return;
+                          setUploadingImage(true);
+                          try {
+                            const url = await uploadAdMedia(token, file, "image");
+                            setForm((f) => ({ ...f, image_url: url }));
+                          } catch (err) {
+                            alert(err instanceof Error ? err.message : "Upload failed");
+                          } finally {
+                            setUploadingImage(false);
+                          }
+                        }}
+                      />
+                    </label>
+                    {form.image_url && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={form.image_url} alt="preview" className="w-full h-20 object-cover rounded border border-brand-border" />
+                    )}
+                  </div>
                 </Field>
-                <Field label="Video URL">
-                  <input
-                    value={form.video_url}
-                    onChange={(e) => setForm((f) => ({ ...f, video_url: e.target.value }))}
-                    className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-brand-red"
-                    placeholder="https://..."
-                  />
+                <Field label="Video">
+                  <div className="space-y-1">
+                    <label className="flex items-center gap-2 cursor-pointer w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-sm hover:border-brand-red transition">
+                      {uploadingVideo ? (
+                        <Loader2 size={14} className="animate-spin text-brand-red shrink-0" />
+                      ) : (
+                        <Upload size={14} className="text-gray-400 shrink-0" />
+                      )}
+                      <span className="text-gray-400 truncate">
+                        {form.video_url ? "Video yuklandi ✓" : "Video tanlang..."}
+                      </span>
+                      <input
+                        type="file"
+                        accept="video/mp4,video/webm"
+                        className="hidden"
+                        disabled={uploadingVideo}
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file || !token) return;
+                          setUploadingVideo(true);
+                          try {
+                            const url = await uploadAdMedia(token, file, "video");
+                            setForm((f) => ({ ...f, video_url: url }));
+                          } catch (err) {
+                            alert(err instanceof Error ? err.message : "Upload failed");
+                          } finally {
+                            setUploadingVideo(false);
+                          }
+                        }}
+                      />
+                    </label>
+                    {form.video_url && (
+                      <p className="text-xs text-green-400 truncate">{form.video_url.split("/").pop()}</p>
+                    )}
+                  </div>
                 </Field>
               </div>
-              <Field label="Target URL *">
+              <Field label="Havola (bosilganda ochiladi) *">
                 <input
                   value={form.target_url}
                   onChange={(e) => setForm((f) => ({ ...f, target_url: e.target.value }))}
                   className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-brand-red"
-                  placeholder="https://..."
+                  placeholder="https://... (kino sahifasi, Telegram, tashqi sayt)"
                 />
               </Field>
               <Field label="Call to Action">

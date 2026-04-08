@@ -323,6 +323,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 		superadmin.POST("/ads", adHandler.AdminCreateAd)
 		superadmin.PUT("/ads/:id", adHandler.AdminUpdateAd)
 		superadmin.DELETE("/ads/:id", adHandler.AdminDeleteAd)
+		superadmin.POST("/ads/upload", uploadHandler.UploadAdMedia)
 	}
 
 	// Public ad routes
