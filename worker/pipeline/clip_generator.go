@@ -255,37 +255,90 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 	}
 
 	// ── Pass 2: RMS energy per 4-second window via astats ────────────────────
+	// Extract audio to a temp mono WAV first so astats runs on a clean stream.
 	const windowSec = 4.0
-	const sampRate = 22050
+	const sampRate = 16000
 	resetN := int(windowSec * sampRate)
 
-	astatArgs := []string{
-		"-i", videoPath,
-		"-af", fmt.Sprintf("aresample=%d,astats=reset=%d", sampRate, resetN),
-		"-f", "null", "-",
-	}
-	astatCmd := exec.Command("ffmpeg", astatArgs...)
-	var astatOut bytes.Buffer
-	astatCmd.Stderr = &astatOut
-	_ = astatCmd.Run()
-	astatOutput := astatOut.String()
-
-	overallSections := strings.Split(astatOutput, "Overall:")
-	reRMSLine := regexp.MustCompile(`RMS level dB:\s*([-\d.]+)`)
-
 	var windows []windowScore
-	for idx, section := range overallSections[1:] {
-		m := reRMSLine.FindStringSubmatch(section)
-		if m == nil {
-			continue
+
+	tmpWav, tmpErr := os.CreateTemp("", "clip-rms-*.wav")
+	if tmpErr != nil {
+		log.Printf("[CLIP-ANALYSIS] WARN: cannot create temp wav: %v — RMS pass skipped", tmpErr)
+	} else {
+		tmpWavPath := tmpWav.Name()
+		tmpWav.Close()
+		defer os.Remove(tmpWavPath)
+
+		// Extract mono 16 kHz WAV — reliable input for astats.
+		extractCmd := exec.Command("ffmpeg",
+			"-i", videoPath,
+			"-vn", "-ac", "1", "-ar", fmt.Sprintf("%d", sampRate),
+			"-y", tmpWavPath,
+		)
+		var extractStderr bytes.Buffer
+		extractCmd.Stderr = &extractStderr
+		if err := extractCmd.Run(); err != nil {
+			log.Printf("[CLIP-ANALYSIS] WARN: audio extract failed: %v", err)
+		} else {
+			astatCmd := exec.Command("ffmpeg",
+				"-i", tmpWavPath,
+				"-af", fmt.Sprintf("astats=reset=%d", resetN),
+				"-f", "null", "-",
+			)
+			var astatOut bytes.Buffer
+			astatCmd.Stderr = &astatOut
+			_ = astatCmd.Run()
+			astatOutput := astatOut.String()
+			log.Printf("[CLIP-ANALYSIS] astats output: %d chars", len(astatOutput))
+
+			// Split on "Overall" — handles both "Overall:" (older ffmpeg) and "Overall\n" (newer).
+			reOverall := regexp.MustCompile(`Overall[:\s]`)
+			reRMSLine := regexp.MustCompile(`RMS level dB:\s*([-\d.]+)`)
+			sections := reOverall.Split(astatOutput, -1)
+
+			for idx, section := range sections[1:] { // sections[0] is pre-amble
+				m := reRMSLine.FindStringSubmatch(section)
+				if m == nil {
+					continue
+				}
+				rmsDB := parseFloat(m[1])
+				if rmsDB < -91 {
+					rmsDB = -91
+				}
+				windows = append(windows, windowScore{t: float64(idx) * windowSec, rms: rmsDB})
+			}
+			log.Printf("[CLIP-ANALYSIS] RMS windows parsed: %d", len(windows))
+			if len(windows) > 0 {
+				log.Printf("[CLIP-ANALYSIS] RMS sample: first=%.1f dB  last=%.1f dB",
+					windows[0].rms, windows[len(windows)-1].rms)
+			}
 		}
-		rmsDB := parseFloat(m[1])
-		if rmsDB < -91 {
-			rmsDB = -91
-		}
-		windows = append(windows, windowScore{t: float64(idx) * windowSec, rms: rmsDB})
 	}
-	log.Printf("[CLIP-ANALYSIS] RMS windows parsed: %d", len(windows))
+
+	// Fallback: if astats yielded nothing, use volumedetect for a single mean-volume estimate
+	// and synthesise uniform windows so spike/energy logic degrades gracefully.
+	if len(windows) == 0 {
+		log.Printf("[CLIP-ANALYSIS] WARN: 0 RMS windows — attempting volumedetect fallback")
+		vdCmd := exec.Command("ffmpeg", "-i", videoPath, "-vn", "-af", "volumedetect", "-f", "null", "-")
+		var vdOut bytes.Buffer
+		vdCmd.Stderr = &vdOut
+		_ = vdCmd.Run()
+		reMeanVol := regexp.MustCompile(`mean_volume:\s*([-\d.]+)\s*dB`)
+		if m := reMeanVol.FindStringSubmatch(vdOut.String()); m != nil {
+			meanDB := parseFloat(m[1])
+			log.Printf("[CLIP-ANALYSIS] volumedetect mean_volume: %.1f dB — creating synthetic windows", meanDB)
+			nWin := int(durationSec / windowSec)
+			if nWin < 1 {
+				nWin = 1
+			}
+			for i := 0; i < nWin; i++ {
+				windows = append(windows, windowScore{t: float64(i) * windowSec, rms: meanDB})
+			}
+		} else {
+			log.Printf("[CLIP-ANALYSIS] WARN: volumedetect also failed — audio scoring disabled")
+		}
+	}
 
 	medianRMS := -40.0
 	if len(windows) > 0 {
@@ -300,7 +353,7 @@ func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, 
 		}
 		medianRMS = sorted[len(sorted)/2]
 	}
-	log.Printf("[CLIP-ANALYSIS] Median RMS: %.1f dB", medianRMS)
+	log.Printf("[CLIP-ANALYSIS] Median RMS: %.1f dB  (from %d windows)", medianRMS, len(windows))
 
 	// ── Pass 3: scene-change detection ───────────────────────────────────────
 	sceneArgs := []string{

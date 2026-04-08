@@ -100,7 +100,7 @@ parser:
 	cd $(ROOT_DIR)parser && $(PARSER_PYTHON) server.py
 
 worker:
-	cd $(ROOT_DIR)worker && go run .
+	cd $(ROOT_DIR)worker && go mod download && go mod tidy && go build && go run .
 
 yusuf:
 	cd $(ROOT_DIR)backend && go mod tidy && go mod download && cd $(ROOT_DIR)worker && go mod tidy && go mod download && cd $(ROOT_DIR)bot && go mod tidy && go mod download && cd $(ROOT_DIR) parser && pip install -r $(ROOT_DIR)parser/requirements.txt && cd $(ROOT_DIR)frontend && npm install
