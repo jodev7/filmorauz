@@ -206,11 +206,11 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 		// -loop 1 is required — without it, a PNG is a 1-frame stream; the overlay
 		// would only appear on the first frame and then disappear for the rest of the video.
 		// :shortest=1 terminates the overlay when the video stream ends.
-		// scale2ref=w=iw/7 → logo is 1/7th of video width at every rendition:
-		//   1080p(1920px)→274px  720p(1280px)→183px  360p(640px)→91px
+		// scale2ref=w=iw*0.18 → logo is 18% of video width (~3× larger than iw/7):
+		//   1080p(1920px)→346px  720p(1280px)→230px  360p(640px)→115px
 		// overlay=W-w-20:H-h-20 → bottom-right corner, 20px padding.
 		filterComplex := fmt.Sprintf(
-			"[0:v]%s[vscaled];[1:v][vscaled]scale2ref=w=iw/7:h=-1[logo][vref];[vref][logo]overlay=W-w-20:H-h-20:shortest=1[out]",
+			"[0:v]%s[vscaled];[1:v][vscaled]scale2ref=w=iw*0.18:h=-1[logo][vref];[vref][logo]overlay=W-w-20:H-h-20:shortest=1[out]",
 			videoChain,
 		)
 		filterArgs = []string{
@@ -220,8 +220,8 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 			"-map", "[out]",
 			"-map", "0:a?",
 		}
-		filterDescription = "logo watermark 1/7 video-width bottom-right 20px padding"
-		log.Printf("[HLS] APPLYING logo overlay — scale=video_width/7  position=bottom-right+20px")
+		filterDescription = "logo watermark 18%-video-width bottom-right 20px padding"
+		log.Printf("[HLS] APPLYING logo overlay — scale=video_width*0.18  position=bottom-right+20px")
 		log.Printf("[HLS] APPLYING logo overlay — filter_complex: %s", filterComplex)
 	} else {
 		filterArgs = []string{"-vf", videoChain}
