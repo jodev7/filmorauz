@@ -69,6 +69,23 @@ func (r *AdRepository) FindByID(id primitive.ObjectID) (*models.Ad, error) {
 	return &ad, nil
 }
 
+// ExpireEnded flips status from active → expired for all ads whose ends_at has passed.
+// Call this before List() and GetStats() so counts stay accurate without a background job.
+func (r *AdRepository) ExpireEnded() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	now := time.Now()
+	_, err := r.col.UpdateMany(ctx,
+		bson.M{
+			"status":  models.AdStatusActive,
+			"ends_at": bson.M{"$lt": now, "$ne": nil},
+		},
+		bson.M{"$set": bson.M{"status": models.AdStatusExpired, "updated_at": now}},
+	)
+	return err
+}
+
 // List returns all ads, sorted by created_at desc
 func (r *AdRepository) List() ([]models.Ad, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -25,6 +25,9 @@ func NewAdHandler(adRepo *repositories.AdRepository, telegram *services.Telegram
 
 // AdminListAds GET /api/admin/ads
 func (h *AdHandler) AdminListAds(c *gin.Context) {
+	// Persist expiry for any ended active ads before returning list
+	_ = h.adRepo.ExpireEnded()
+
 	ads, err := h.adRepo.List()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -38,6 +41,8 @@ func (h *AdHandler) AdminListAds(c *gin.Context) {
 
 // AdminGetStats GET /api/admin/ads/stats
 func (h *AdHandler) AdminGetStats(c *gin.Context) {
+	_ = h.adRepo.ExpireEnded()
+
 	stats, err := h.adRepo.GetStats()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

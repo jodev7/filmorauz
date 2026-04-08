@@ -64,6 +64,25 @@ const STATUS_LABELS: Record<AdStatus, string> = {
   expired: "Tugagan",
 };
 
+function getEffectiveStatus(ad: Ad): AdStatus {
+  if (ad.status === "active" && ad.ends_at && new Date(ad.ends_at) < new Date()) {
+    return "expired";
+  }
+  return ad.status;
+}
+
+function getRemainingText(endsAt?: string): string {
+  if (!endsAt) return "—";
+  const now = new Date();
+  const end = new Date(endsAt);
+  const diffMs = end.getTime() - now.getTime();
+  const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays < 0) return "Tugagan";
+  if (diffDays === 0) return "Bugun tugaydi";
+  if (diffDays === 1) return "1 kun qoldi";
+  return `${diffDays} kun qoldi`;
+}
+
 const emptyForm = (): AdInput => ({
   title: "",
   description: "",
@@ -269,7 +288,7 @@ export default function AdminAdsPage() {
                 <th className="px-4 py-3 font-medium">Title</th>
                 <th className="px-4 py-3 font-medium">Placements</th>
                 <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium text-right">Muddat</th>
+                <th className="px-4 py-3 font-medium text-right">Qolgan vaqt</th>
                 <th className="px-4 py-3 font-medium text-right">Impressions</th>
                 <th className="px-4 py-3 font-medium text-right">Clicks</th>
                 <th className="px-4 py-3 font-medium text-right">Price</th>
@@ -302,12 +321,17 @@ export default function AdminAdsPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[ad.status]}`}>
-                      {STATUS_LABELS[ad.status]}
-                    </span>
+                    {(() => { const eff = getEffectiveStatus(ad); return (
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[eff]}`}>
+                        {STATUS_LABELS[eff]}
+                      </span>
+                    ); })()}
                   </td>
-                  <td className="px-4 py-3 text-right text-gray-300">
-                    {ad.duration_days ? `${ad.duration_days} kun` : "—"}
+                  <td className="px-4 py-3 text-right text-gray-300 text-xs">
+                    {getEffectiveStatus(ad) === "expired"
+                      ? <span className="text-red-400">Tugagan</span>
+                      : <span className={ad.ends_at && new Date(ad.ends_at) < new Date(Date.now() + 3 * 86400000) ? "text-yellow-400" : ""}>{getRemainingText(ad.ends_at)}</span>
+                    }
                   </td>
                   <td className="px-4 py-3 text-right text-gray-300">{ad.impressions.toLocaleString()}</td>
                   <td className="px-4 py-3 text-right text-gray-300">{ad.clicks.toLocaleString()}</td>
