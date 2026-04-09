@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -395,6 +398,25 @@ func (s *TelegramService) buildAdminNotification(movie *TelegramMovieData) strin
 	return b.String()
 }
 
+// resolveMedia returns the appropriate RequestFileData for a media URL.
+// For localhost/127.0.0.1 URLs it maps the URL path to a local file and uses
+// multipart upload. For public URLs it uses URL-based delivery.
+func resolveMedia(mediaURL string) (tgbotapi.RequestFileData, string, error) {
+	u, err := url.Parse(mediaURL)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid media URL: %w", err)
+	}
+	host := u.Hostname()
+	if host == "localhost" || host == "127.0.0.1" {
+		localPath := "." + u.Path
+		if _, statErr := os.Stat(localPath); statErr != nil {
+			return nil, "", fmt.Errorf("local_media_file_not_found: %s", localPath)
+		}
+		return tgbotapi.FilePath(localPath), "local_file", nil
+	}
+	return tgbotapi.FileURL(mediaURL), "public_url", nil
+}
+
 // AdPostResult holds the result of posting a single ad to Telegram
 type AdPostResult struct {
 	Target    string `json:"target"`
@@ -444,7 +466,13 @@ func (s *TelegramService) SendAdToChannel(channelTarget, title, description, ima
 
 	switch {
 	case imageURL != "":
-		msg := tgbotapi.NewPhotoToChannel(channelTarget, tgbotapi.FileURL(imageURL))
+		media, mode, resolveErr := resolveMedia(imageURL)
+		if resolveErr != nil {
+			log.Printf("[TELEGRAM AD] FAILED channel=%s resolve error: %v", channelTarget, resolveErr)
+			return AdPostResult{Target: channelTarget, Status: "failed", Error: resolveErr.Error()}
+		}
+		log.Printf("[TELEGRAM AD] channel=%s method=sendPhoto mode=%s", channelTarget, mode)
+		msg := tgbotapi.NewPhotoToChannel(channelTarget, media)
 		msg.Caption = caption
 		msg.ParseMode = "HTML"
 		if keyboard != nil {
@@ -453,10 +481,16 @@ func (s *TelegramService) SendAdToChannel(channelTarget, title, description, ima
 		sentMsg, sendErr = api.Send(msg)
 
 	case videoURL != "":
+		media, mode, resolveErr := resolveMedia(videoURL)
+		if resolveErr != nil {
+			log.Printf("[TELEGRAM AD] FAILED channel=%s resolve error: %v", channelTarget, resolveErr)
+			return AdPostResult{Target: channelTarget, Status: "failed", Error: resolveErr.Error()}
+		}
+		log.Printf("[TELEGRAM AD] channel=%s method=sendVideo mode=%s", channelTarget, mode)
 		msg := tgbotapi.VideoConfig{
 			BaseFile: tgbotapi.BaseFile{
 				BaseChat: tgbotapi.BaseChat{ChannelUsername: channelTarget},
-				File:     tgbotapi.FileURL(videoURL),
+				File:     media,
 			},
 		}
 		msg.Caption = caption
@@ -468,11 +502,11 @@ func (s *TelegramService) SendAdToChannel(channelTarget, title, description, ima
 	}
 
 	if sendErr != nil {
-		log.Printf("[TELEGRAM AD] Failed to post ad to %s: %v", channelTarget, sendErr)
+		log.Printf("[TELEGRAM AD] FAILED channel=%s error=%v", channelTarget, sendErr)
 		return AdPostResult{Target: channelTarget, Status: "failed", Error: sendErr.Error()}
 	}
 
-	log.Printf("[TELEGRAM AD] ✓ Ad posted to %s (msg_id=%d)", channelTarget, sentMsg.MessageID)
+	log.Printf("[TELEGRAM AD] ✓ channel=%s msg_id=%d", channelTarget, sentMsg.MessageID)
 	return AdPostResult{Target: channelTarget, Status: "success", MessageID: sentMsg.MessageID}
 }
 
@@ -504,7 +538,13 @@ func (s *TelegramService) SendAdToBot(chatID int64, title, description, imageURL
 
 	switch {
 	case imageURL != "":
-		msg := tgbotapi.NewPhoto(chatID, tgbotapi.FileURL(imageURL))
+		media, mode, resolveErr := resolveMedia(imageURL)
+		if resolveErr != nil {
+			log.Printf("[TELEGRAM AD] FAILED bot chat_id=%d resolve error: %v", chatID, resolveErr)
+			return AdPostResult{Target: target, Status: "failed", Error: resolveErr.Error()}
+		}
+		log.Printf("[TELEGRAM AD] bot chat_id=%d method=sendPhoto mode=%s", chatID, mode)
+		msg := tgbotapi.NewPhoto(chatID, media)
 		msg.Caption = caption
 		msg.ParseMode = "HTML"
 		if keyboard != nil {
@@ -513,7 +553,13 @@ func (s *TelegramService) SendAdToBot(chatID int64, title, description, imageURL
 		sentMsg, sendErr = api.Send(msg)
 
 	case videoURL != "":
-		msg := tgbotapi.NewVideo(chatID, tgbotapi.FileURL(videoURL))
+		media, mode, resolveErr := resolveMedia(videoURL)
+		if resolveErr != nil {
+			log.Printf("[TELEGRAM AD] FAILED bot chat_id=%d resolve error: %v", chatID, resolveErr)
+			return AdPostResult{Target: target, Status: "failed", Error: resolveErr.Error()}
+		}
+		log.Printf("[TELEGRAM AD] bot chat_id=%d method=sendVideo mode=%s", chatID, mode)
+		msg := tgbotapi.NewVideo(chatID, media)
 		msg.Caption = caption
 		msg.ParseMode = "HTML"
 		if keyboard != nil {
@@ -523,27 +569,28 @@ func (s *TelegramService) SendAdToBot(chatID int64, title, description, imageURL
 	}
 
 	if sendErr != nil {
-		log.Printf("[TELEGRAM AD] Failed to send ad to bot chat_id=%d: %v", chatID, sendErr)
+		log.Printf("[TELEGRAM AD] FAILED bot chat_id=%d error=%v", chatID, sendErr)
 		return AdPostResult{Target: target, Status: "failed", Error: sendErr.Error()}
 	}
-	log.Printf("[TELEGRAM AD] ✓ Ad sent to bot chat_id=%d (msg_id=%d)", chatID, sentMsg.MessageID)
+	log.Printf("[TELEGRAM AD] ✓ bot chat_id=%d msg_id=%d", chatID, sentMsg.MessageID)
 	return AdPostResult{Target: target, Status: "success", MessageID: sentMsg.MessageID}
 }
 
-// buildAdCaption creates a sponsored message caption for an ad
+// buildAdCaption creates a sponsored message caption for an ad.
+// title and description are HTML-escaped to prevent parse_mode errors.
 func buildAdCaption(title, description, targetURL, cta string) string {
 	var b strings.Builder
 	b.WriteString("📢 <b>Reklama</b>\n\n")
 	b.WriteString("<b>")
-	b.WriteString(title)
+	b.WriteString(html.EscapeString(title))
 	b.WriteString("</b>")
 	if description != "" {
 		b.WriteString("\n")
-		b.WriteString(description)
+		b.WriteString(html.EscapeString(description))
 	}
 	if targetURL != "" && cta == "" {
 		b.WriteString("\n\n🔗 ")
-		b.WriteString(targetURL)
+		b.WriteString(html.EscapeString(targetURL))
 	}
 	return b.String()
 }

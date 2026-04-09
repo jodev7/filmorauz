@@ -116,8 +116,6 @@ export default function AdminAdsPage() {
   const [deliveryAd, setDeliveryAd] = useState<Ad | null>(null);
   const [deliveries, setDeliveries] = useState<AdDelivery[]>([]);
   const [loadingDelivery, setLoadingDelivery] = useState(false);
-  const [tgChannelsInput, setTgChannelsInput] = useState("");
-  const [tgBotChatIDsInput, setTgBotChatIDsInput] = useState("");
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -141,9 +139,6 @@ export default function AdminAdsPage() {
 
   const openEdit = (ad: Ad) => {
     setEditAd(ad);
-    const channels = ad.telegram_channels || [];
-    setTgChannelsInput(channels.join(", "));
-    setTgBotChatIDsInput((ad.telegram_bot_chat_ids || []).join(", "));
     setForm({
       title: ad.title,
       description: ad.description || "",
@@ -155,7 +150,7 @@ export default function AdminAdsPage() {
       status: ad.status,
       duration_days: ad.duration_days || 30,
       price: ad.price,
-      telegram_channels: channels,
+      telegram_channels: [],
       telegram_bot_enabled: ad.telegram_bot_enabled || false,
       telegram_channel_enabled: ad.telegram_channel_enabled || false,
       player_enabled: ad.player_enabled || false,
@@ -165,8 +160,6 @@ export default function AdminAdsPage() {
 
   const openCreate = () => {
     setEditAd(null);
-    setTgChannelsInput("");
-    setTgBotChatIDsInput("");
     setForm(emptyForm());
     setShowModal(true);
   };
@@ -175,15 +168,7 @@ export default function AdminAdsPage() {
     if (!token) return;
     setSaving(true);
     try {
-      const channels = tgChannelsInput
-        .split(",")
-        .map((s) => s.trim().replace(/^@/, ""))
-        .filter(Boolean);
-      const botChatIDs = tgBotChatIDsInput
-        .split(",")
-        .map((s) => parseInt(s.trim(), 10))
-        .filter((n) => !isNaN(n) && n !== 0);
-      const payload = { ...form, telegram_channels: channels, telegram_bot_chat_ids: botChatIDs };
+      const payload = { ...form };
       if (editAd) {
         await adminUpdateAd(token, editAd.id, payload);
       } else {
@@ -580,27 +565,6 @@ export default function AdminAdsPage() {
                     <span className="text-gray-300 text-sm flex items-center gap-1"><Bot size={12} /> Bot orqali</span>
                   </label>
                 </div>
-                {form.telegram_bot_enabled && (
-                  <Field label="Bot chat ID-lari (vergul bilan, masalan: 123456789, 987654321)">
-                    <input
-                      value={tgBotChatIDsInput}
-                      onChange={(e) => setTgBotChatIDsInput(e.target.value)}
-                      className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-brand-red"
-                      placeholder="123456789, 987654321"
-                    />
-                    <p className="text-xs text-gray-600 mt-1">Foydalanuvchining Telegram chat_id si. Bo&apos;sh qolsa bot yubormaydi.</p>
-                  </Field>
-                )}
-                {form.telegram_channel_enabled && (
-                  <Field label="Kanallar (@username, vergul bilan ajrating)">
-                    <input
-                      value={tgChannelsInput}
-                      onChange={(e) => setTgChannelsInput(e.target.value)}
-                      className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-brand-red"
-                      placeholder="filmora_uz, seriallar_uz, kinolar_uz"
-                    />
-                  </Field>
-                )}
               </div>
 
               {/* ── Phase 2: Player ── */}
