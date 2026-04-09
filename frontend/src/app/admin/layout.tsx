@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { Film, LayoutDashboard, List, LogOut, PlusCircle, Download, Users, FolderHeart, MessageSquare, Settings, Tv, Ban, History, MessageCircle, Video, Megaphone } from "lucide-react";
+import { Film, LayoutDashboard, List, LogOut, PlusCircle, Download, Users, FolderHeart, MessageSquare, Settings, Tv, Ban, History, MessageCircle, Video, Megaphone, Send } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
 export default function AdminLayout({
@@ -58,7 +58,12 @@ export default function AdminLayout({
     { href: "/admin/appeals", icon: MessageCircle, label: "Apellyatsiyalar" },
     { href: "/admin/comments", icon: MessageSquare, label: "Comments" },
     { href: "/admin/comments/settings", icon: Settings, label: "Comment Settings" },
-    ...(isSuperAdmin ? [{ href: "/admin/ads", icon: Megaphone, label: "Ads" }] : []),
+    ...(isSuperAdmin ? [
+      { href: "/admin/ads", icon: Megaphone, label: "Ads" },
+    ] : []),
+    ...(isAdmin ? [
+      { href: "/admin/telegram-post", icon: Send, label: "Telegram Post" },
+    ] : []),
   ];
 
   return (

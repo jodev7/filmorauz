@@ -17,6 +17,7 @@ import ShareButton from "@/components/ShareButton";
 import { isMoviePremium, PremiumBadge } from "@/components/PremiumComponents";
 import { getMovie, getRecommendations, getRatingSummary } from "@/lib/api";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
+import FixedBottomAd from "@/components/ads/FixedBottomAd";
 import { getTranslations } from "@/lib/i18n-server";
 import {
 	getLocalizedTitle,
@@ -297,14 +298,13 @@ export default async function MovieDetailPage({ params }: Props) {
           </div>
         </div>
 
-        {/* Movie Page Banner Ad */}
-        <div className="max-w-7xl mx-auto px-4 pb-6">
-          <WebsiteAdSlot placement="movie_page_banner" />
+        <div className="max-w-7xl mx-auto px-4 mt-8 mb-6">
+          <WebsiteAdSlot placement="movie_detail_banner" variant="banner" />
         </div>
 
         {/* Recommendations Section */}
         {recommendations.length > 0 && (
-          <section className="max-w-7xl mx-auto px-4 pb-12">
+          <section className="max-w-7xl mx-auto px-4 pb-8">
             <h2 className="font-display text-2xl sm:text-3xl tracking-wide text-white mb-6">
               {t("movie.recommendations")}
             </h2>
@@ -318,6 +318,7 @@ export default async function MovieDetailPage({ params }: Props) {
         </section>
       </main>
       <Footer />
+      <FixedBottomAd placement="movie_page_fixed_bottom" />
     </>
   );
 }

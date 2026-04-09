@@ -5,6 +5,7 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { User as UserIcon, Crown, Shield, Send, Hash, LayoutDashboard, BadgeCheck, Sparkles, Clock, Calendar } from "lucide-react";
 import { PremiumAvatarRing, resolveIsPremium, resolvePremiumStatus } from "@/components/PremiumComponents";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getPublicUser, getCurrentUser, PublicUserProfile } from "@/lib/api";
 
 interface PageProps {
@@ -256,6 +257,10 @@ export default async function UserProfilePage({ params }: PageProps) {
                 </Link>
               </div>
             )}
+          </div>
+
+          <div className="mb-6">
+            <WebsiteAdSlot placement="user_profile_page_banner" variant="banner" />
           </div>
 
           {/* Profile details card - only show if profile is not private or viewer can see it */}

@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import SeriesCarousel from "@/components/SeriesCarousel";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getSeries } from "@/lib/series-api";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.uz";
@@ -39,6 +40,10 @@ export default async function SeriesPage() {
             <p className="text-gray-500 text-sm">
               {seriesData.length} ta serial topildi
             </p>
+          </div>
+
+          <div className="mb-6">
+            <WebsiteAdSlot placement="series_page_banner" variant="banner" />
           </div>
 
           {seriesData.length > 0 ? (

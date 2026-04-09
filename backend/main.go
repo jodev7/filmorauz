@@ -168,6 +168,7 @@ func main() {
 
 	// Ad repository and handler (Phase 2: telegramService wired after it's initialized below)
 	adRepo := repositories.NewAdRepository(db)
+	telegramPostRepo := repositories.NewTelegramPostRepository(db)
 	if err := adRepo.EnsureIndexes(); err != nil {
 		log.Printf("Warning: Failed to ensure ad indexes: %v", err)
 	}
@@ -191,6 +192,9 @@ func main() {
 	// Ad handler (wired after telegramService is available)
 	adHandler := handlers.NewAdHandler(adRepo, telegramService, cfg.TelegramChannels, userRepo)
 
+	// Telegram post handler
+	telegramPostHandler := handlers.NewTelegramPostHandler(telegramService, userRepo, telegramPostRepo)
+
 	// Series repository, service, and handler
 	// seriesRepo already initialized above for rating service
 	seriesService := services.NewSeriesService(seriesRepo)
@@ -212,7 +216,7 @@ func main() {
 	}
 
 	// Register routes
-	routes.Setup(r, authHandler, movieHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler)
+	routes.Setup(r, authHandler, movieHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler)
 
 	// Start premium cleanup background job (runs every 10 minutes)
 	go startPremiumCleanupJob(userRepo, notificationService)

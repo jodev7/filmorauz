@@ -7,6 +7,7 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import SeasonList from "@/components/SeasonList";
 import SeriesCarousel from "@/components/SeriesCarousel";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getSeriesBySlug, getSeries } from "@/lib/series-api";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.uz";
@@ -132,6 +133,10 @@ export default async function SeriesDetailPage({ params }: Props) {
                 {series.description}
               </p>
             </div>
+          </div>
+
+          <div className="mb-6">
+            <WebsiteAdSlot placement="series_detail_page_banner" variant="banner" />
           </div>
 
           {/* Seasons */}

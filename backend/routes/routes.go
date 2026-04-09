@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler) {
+func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler) {
 	api := r.Group("/api")
 
 	// Health check
@@ -328,6 +328,11 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 		superadmin.POST("/ads/:id/send-telegram", adHandler.SendTelegramAd)
 		superadmin.GET("/ads/:id/delivery", adHandler.GetAdDelivery)
 	}
+
+	// Superadmin-only telegram post
+	superadmin.GET("/telegram-posts", telegramPostHandler.ListPosts)
+	superadmin.POST("/telegram-post", telegramPostHandler.SendPost)
+	superadmin.POST("/telegram-post/upload", uploadHandler.UploadTelegramPostMedia)
 
 	// Public ad routes
 	api.GET("/ads", adHandler.GetAdsByPlacement)

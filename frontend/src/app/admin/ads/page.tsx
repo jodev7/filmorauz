@@ -36,19 +36,76 @@ import {
   uploadAdMedia,
 } from "@/lib/api";
 
-const PLACEMENTS = [
-  { value: "homepage_banner", label: "Homepage Banner" },
-  { value: "homepage_popup", label: "Homepage Popup" },
-  { value: "movie_page_banner", label: "Movie Page Banner" },
-  { value: "watch_page_banner", label: "Watch Page Banner" },
-  { value: "profile_page_banner", label: "Profile Page Banner" },
-  { value: "player_overlay_banner", label: "Player Overlay Banner" },
-  { value: "player_popup", label: "Player Popup" },
-  { value: "player_preroll_placeholder", label: "Player Preroll (placeholder)" },
-  { value: "telegram_channel_post", label: "Telegram Channel Post" },
-  { value: "telegram_bot_message", label: "Telegram Bot Message" },
-  { value: "telegram_bot_inline", label: "Telegram Bot Inline" },
+const SIMPLIFIED_PLACEMENTS = [
+  { value: "website", label: "Website" },
+  { value: "telegram_channel", label: "Telegram Channel" },
+  { value: "telegram_bot", label: "Telegram Bot" },
 ];
+
+function MediaUpload({
+  value,
+  uploading,
+  onUpload,
+  onClear,
+  acceptImage,
+  acceptVideo,
+}: {
+  value: string;
+  uploading: boolean;
+  onUpload: (file: File, type: string) => Promise<void>;
+  onClear: () => void;
+  acceptImage?: boolean;
+  acceptVideo?: boolean;
+}) {
+  const accept = acceptImage && acceptVideo ? "image/*,video/*" : acceptImage ? "image/jpeg,image/png,image/webp,image/gif" : "video/mp4,video/webm";
+  
+  return (
+    <div className="space-y-1">
+      <label className="flex items-center gap-2 cursor-pointer w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-sm hover:border-brand-red transition">
+        {uploading ? (
+          <Loader2 size={14} className="animate-spin text-brand-red shrink-0" />
+        ) : (
+          <Upload size={14} className="text-gray-400 shrink-0" />
+        )}
+        <span className="text-gray-400 truncate">
+          {value ? "Yuklandi ✓" : "Tanlang..."}
+        </span>
+        <input
+          type="file"
+          accept={accept}
+          className="hidden"
+          disabled={uploading}
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const type = accept.startsWith("image") ? "image" : "video";
+            await onUpload(file, type);
+          }}
+        />
+      </label>
+      {value && (
+        <>
+          {accept.startsWith("image") ? (
+            <img src={value} alt="preview" className="w-full h-20 object-cover rounded border border-brand-border" />
+          ) : (
+            <p className="text-xs text-green-400 truncate">{value.split("/").pop()}</p>
+          )}
+          <button type="button" onClick={onClear} className="text-xs text-red-400 hover:text-red-300">Tozalash</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+const PLACEMENT_LABELS: Record<string, string> = {
+  website: "Website",
+  telegram_channel: "Telegram Channel",
+  telegram_bot: "Telegram Bot",
+};
+
+function getPlacementLabel(placement: string): string {
+  return PLACEMENT_LABELS[placement] || placement.replace(/_/g, " ");
+}
 
 const STATUS_COLORS: Record<AdStatus, string> = {
   draft: "bg-gray-700 text-gray-300",
@@ -94,6 +151,19 @@ const emptyForm = (): AdInput => ({
   status: "draft",
   duration_days: 30,
   price: 0,
+  priority: 0,
+  banner_media_url: "",
+  banner_media_type: "image",
+  inline_media_url: "",
+  inline_media_type: "image",
+  fixed_bottom_media_url: "",
+  fixed_bottom_media_type: "image",
+  popup_media_url: "",
+  popup_media_type: "image",
+  player_overlay_media_url: "",
+  player_overlay_media_type: "image",
+  telegram_media_url: "",
+  telegram_media_type: "image",
   telegram_channels: [],
   telegram_bot_enabled: false,
   telegram_channel_enabled: false,
@@ -112,6 +182,12 @@ export default function AdminAdsPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadingVideo, setUploadingVideo] = useState(false);
+  const [uploadingBanner, setUploadingBanner] = useState(false);
+  const [uploadingInline, setUploadingInline] = useState(false);
+  const [uploadingFixedBottom, setUploadingFixedBottom] = useState(false);
+  const [uploadingPopup, setUploadingPopup] = useState(false);
+  const [uploadingPlayerOverlay, setUploadingPlayerOverlay] = useState(false);
+  const [uploadingTelegram, setUploadingTelegram] = useState(false);
   const [sendingTg, setSendingTg] = useState<string | null>(null);
   const [deliveryAd, setDeliveryAd] = useState<Ad | null>(null);
   const [deliveries, setDeliveries] = useState<AdDelivery[]>([]);
@@ -150,6 +226,19 @@ export default function AdminAdsPage() {
       status: ad.status,
       duration_days: ad.duration_days || 30,
       price: ad.price,
+      priority: (ad as any).priority || 0,
+      banner_media_url: ad.banner_media_url || "",
+      banner_media_type: ad.banner_media_type || "image",
+      inline_media_url: ad.inline_media_url || "",
+      inline_media_type: ad.inline_media_type || "image",
+      fixed_bottom_media_url: ad.fixed_bottom_media_url || "",
+      fixed_bottom_media_type: ad.fixed_bottom_media_type || "image",
+      popup_media_url: ad.popup_media_url || "",
+      popup_media_type: ad.popup_media_type || "image",
+      player_overlay_media_url: ad.player_overlay_media_url || "",
+      player_overlay_media_type: ad.player_overlay_media_type || "image",
+      telegram_media_url: ad.telegram_media_url || "",
+      telegram_media_type: ad.telegram_media_type || "image",
       telegram_channels: [],
       telegram_bot_enabled: ad.telegram_bot_enabled || false,
       telegram_channel_enabled: ad.telegram_channel_enabled || false,
@@ -306,7 +395,7 @@ export default function AdminAdsPage() {
                     <div className="flex flex-wrap gap-1">
                       {ad.placements.map((p) => (
                         <span key={p} className="px-1.5 py-0.5 bg-brand-border rounded text-xs text-gray-300">
-                          {p.replace(/_/g, " ")}
+                          {getPlacementLabel(p)}
                         </span>
                       ))}
                     </div>
@@ -396,81 +485,123 @@ export default function AdminAdsPage() {
                   placeholder="Short description"
                 />
               </Field>
-              <div className="grid grid-cols-2 gap-4">
-                <Field label="Rasm (Image)">
-                  <div className="space-y-1">
-                    <label className="flex items-center gap-2 cursor-pointer w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-sm hover:border-brand-red transition">
-                      {uploadingImage ? (
-                        <Loader2 size={14} className="animate-spin text-brand-red shrink-0" />
-                      ) : (
-                        <Upload size={14} className="text-gray-400 shrink-0" />
-                      )}
-                      <span className="text-gray-400 truncate">
-                        {form.image_url ? "Rasm yuklandi ✓" : "Rasm tanlang..."}
-                      </span>
-                      <input
-                        type="file"
-                        accept="image/jpeg,image/png,image/webp,image/gif"
-                        className="hidden"
-                        disabled={uploadingImage}
-                        onChange={async (e) => {
-                          const file = e.target.files?.[0];
-                          if (!file || !token) return;
-                          setUploadingImage(true);
-                          try {
-                            const url = await uploadAdMedia(token, file, "image");
-                            setForm((f) => ({ ...f, image_url: url }));
-                          } catch (err) {
-                            alert(err instanceof Error ? err.message : "Upload failed");
-                          } finally {
-                            setUploadingImage(false);
-                          }
+              {/* Media uploads based on placement */}
+              {form.placements.includes("website") && (
+                <div className="space-y-4 p-4 bg-brand-dark/50 rounded-lg border border-brand-border">
+                  <p className="text-sm font-medium text-white">Website Creatives</p>
+                  
+                  <Field label="Banner (top of page)">
+                    <div className="space-y-1">
+                      <p className="text-xs text-gray-500">Recommended: 1200x300 (4:1)</p>
+                      <MediaUpload
+                        value={form.banner_media_url || ""}
+                        uploading={uploadingBanner}
+                        onUpload={async (file, type) => {
+                          if (!token) return;
+                          setUploadingBanner(true);
+                          const url = (await uploadAdMedia(token, file, type as "image" | "video")) || "";
+                          setForm(f => ({ ...f, banner_media_url: url, banner_media_type: type as "image" | "video" }));
+                          setUploadingBanner(false);
                         }}
+                        onClear={() => setForm(f => ({ ...f, banner_media_url: "" }))}
                       />
-                    </label>
-                    {form.image_url && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={form.image_url} alt="preview" className="w-full h-20 object-cover rounded border border-brand-border" />
-                    )}
-                  </div>
-                </Field>
-                <Field label="Video">
-                  <div className="space-y-1">
-                    <label className="flex items-center gap-2 cursor-pointer w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-sm hover:border-brand-red transition">
-                      {uploadingVideo ? (
-                        <Loader2 size={14} className="animate-spin text-brand-red shrink-0" />
-                      ) : (
-                        <Upload size={14} className="text-gray-400 shrink-0" />
-                      )}
-                      <span className="text-gray-400 truncate">
-                        {form.video_url ? "Video yuklandi ✓" : "Video tanlang..."}
-                      </span>
-                      <input
-                        type="file"
-                        accept="video/mp4,video/webm"
-                        className="hidden"
-                        disabled={uploadingVideo}
-                        onChange={async (e) => {
-                          const file = e.target.files?.[0];
-                          if (!file || !token) return;
-                          setUploadingVideo(true);
-                          try {
-                            const url = await uploadAdMedia(token, file, "video");
-                            setForm((f) => ({ ...f, video_url: url }));
-                          } catch (err) {
-                            alert(err instanceof Error ? err.message : "Upload failed");
-                          } finally {
-                            setUploadingVideo(false);
-                          }
+                    </div>
+                  </Field>
+                  
+                  <Field label="Inline (between content)">
+                    <div className="space-y-1">
+                      <p className="text-xs text-gray-500">Recommended: 1200x400 (3:1)</p>
+                      <MediaUpload
+                        value={form.inline_media_url || ""}
+                        uploading={uploadingInline}
+                        onUpload={async (file, type) => {
+                          if (!token) return;
+                          setUploadingInline(true);
+                          const url = (await uploadAdMedia(token, file, type as "image" | "video")) || "";
+                          setForm(f => ({ ...f, inline_media_url: url, inline_media_type: type as "image" | "video" }));
+                          setUploadingInline(false);
                         }}
+                        onClear={() => setForm(f => ({ ...f, inline_media_url: "" }))}
                       />
-                    </label>
-                    {form.video_url && (
-                      <p className="text-xs text-green-400 truncate">{form.video_url.split("/").pop()}</p>
-                    )}
-                  </div>
-                </Field>
-              </div>
+                    </div>
+                  </Field>
+                  
+                  <Field label="Fixed Bottom">
+                    <div className="space-y-1">
+                      <p className="text-xs text-gray-500">Recommended: 1200x180</p>
+                      <MediaUpload
+                        value={form.fixed_bottom_media_url || ""}
+                        uploading={uploadingFixedBottom}
+                        onUpload={async (file, type) => {
+                          if (!token) return;
+                          setUploadingFixedBottom(true);
+                          const url = (await uploadAdMedia(token, file, type as "image" | "video")) || "";
+                          setForm(f => ({ ...f, fixed_bottom_media_url: url, fixed_bottom_media_type: type as "image" | "video" }));
+                          setUploadingFixedBottom(false);
+                        }}
+                        onClear={() => setForm(f => ({ ...f, fixed_bottom_media_url: "" }))}
+                      />
+                    </div>
+                  </Field>
+                  
+                  <Field label="Popup">
+                    <div className="space-y-1">
+                      <p className="text-xs text-gray-500">Recommended: 900x600</p>
+                      <MediaUpload
+                        value={form.popup_media_url || ""}
+                        uploading={uploadingPopup}
+                        onUpload={async (file, type) => {
+                          if (!token) return;
+                          setUploadingPopup(true);
+                          const url = (await uploadAdMedia(token, file, type as "image" | "video")) || "";
+                          setForm(f => ({ ...f, popup_media_url: url, popup_media_type: type as "image" | "video" }));
+                          setUploadingPopup(false);
+                        }}
+                        onClear={() => setForm(f => ({ ...f, popup_media_url: "" }))}
+                      />
+                    </div>
+                  </Field>
+                  
+                  <Field label="Player Overlay">
+                    <div className="space-y-1">
+                      <p className="text-xs text-gray-500">Recommended: 600x120</p>
+                      <MediaUpload
+                        value={form.player_overlay_media_url || ""}
+                        uploading={uploadingPlayerOverlay}
+                        onUpload={async (file, type) => {
+                          if (!token) return;
+                          setUploadingPlayerOverlay(true);
+                          const url = (await uploadAdMedia(token, file, type as "image" | "video")) || "";
+                          setForm(f => ({ ...f, player_overlay_media_url: url, player_overlay_media_type: type as "image" | "video" }));
+                          setUploadingPlayerOverlay(false);
+                        }}
+                        onClear={() => setForm(f => ({ ...f, player_overlay_media_url: "" }))}
+                      />
+                    </div>
+                  </Field>
+                </div>
+              )}
+              
+              {form.placements.includes("telegram_channel") || form.placements.includes("telegram_bot") ? (
+                <div className="space-y-4 p-4 bg-brand-dark/50 rounded-lg border border-brand-border">
+                  <p className="text-sm font-medium text-white">Telegram Media</p>
+                  <p className="text-xs text-gray-500">Recommended: 1:1 or 16:9</p>
+                  <MediaUpload
+                    value={form.telegram_media_url || ""}
+                    uploading={uploadingTelegram}
+                    acceptImage
+                    acceptVideo
+                    onUpload={async (file, type) => {
+                      if (!token) return;
+                      setUploadingTelegram(true);
+                      const url = (await uploadAdMedia(token, file, type as "image" | "video")) || "";
+                      setForm(f => ({ ...f, telegram_media_url: url, telegram_media_type: type as "image" | "video" }));
+                      setUploadingTelegram(false);
+                    }}
+                    onClear={() => setForm(f => ({ ...f, telegram_media_url: "", telegram_media_type: "image" }))}
+                  />
+                </div>
+              ) : null}
               <Field label="Havola (bosilganda ochiladi) *">
                 <input
                   value={form.target_url}
@@ -488,21 +619,21 @@ export default function AdminAdsPage() {
                 />
               </Field>
               <Field label="Placements *">
-                <div className="grid grid-cols-2 gap-2">
-                  {PLACEMENTS.map((p) => (
-                    <label key={p.value} className="flex items-center gap-2 cursor-pointer">
+                <div className="grid grid-cols-3 gap-3">
+                  {SIMPLIFIED_PLACEMENTS.map((p) => (
+                    <label key={p.value} className="flex items-center gap-2 cursor-pointer p-3 bg-brand-dark border border-brand-border rounded-lg hover:border-brand-red/50 transition">
                       <input
                         type="checkbox"
                         checked={form.placements.includes(p.value)}
                         onChange={() => togglePlacement(p.value)}
                         className="accent-brand-red"
                       />
-                      <span className="text-gray-300 text-sm">{p.label}</span>
+                      <span className="text-white text-sm font-medium">{p.label}</span>
                     </label>
                   ))}
                 </div>
               </Field>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-4 gap-4">
                 <Field label="Holat">
                   <select
                     value={form.status}
@@ -532,6 +663,15 @@ export default function AdminAdsPage() {
                     step="0.01"
                     value={form.price}
                     onChange={(e) => setForm((f) => ({ ...f, price: parseFloat(e.target.value) || 0 }))}
+                    className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-brand-red"
+                  />
+                </Field>
+                <Field label="Priority">
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.priority}
+                    onChange={(e) => setForm((f) => ({ ...f, priority: parseInt(e.target.value) || 0 }))}
                     className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-brand-red"
                   />
                 </Field>

@@ -2165,11 +2165,26 @@ export interface Ad {
   ends_at?: string;
   duration_days?: number;
   price: number;
+  priority: number;
   impressions: number;
   clicks: number;
   created_by: string;
   created_at: string;
   updated_at: string;
+  // Website creatives (structured)
+  banner_media_url?: string;
+  banner_media_type?: "image" | "video";
+  inline_media_url?: string;
+  inline_media_type?: "image" | "video";
+  fixed_bottom_media_url?: string;
+  fixed_bottom_media_type?: "image" | "video";
+  popup_media_url?: string;
+  popup_media_type?: "image" | "video";
+  player_overlay_media_url?: string;
+  player_overlay_media_type?: "image" | "video";
+  // Telegram shared media
+  telegram_media_url?: string;
+  telegram_media_type?: "image" | "video";
   // Phase 2
   telegram_channels?: string[];
   telegram_bot_enabled?: boolean;
@@ -2213,6 +2228,21 @@ export interface AdInput {
   status: AdStatus;
   duration_days: number;
   price: number;
+  priority: number;
+  // Website creatives (structured)
+  banner_media_url?: string;
+  banner_media_type?: "image" | "video";
+  inline_media_url?: string;
+  inline_media_type?: "image" | "video";
+  fixed_bottom_media_url?: string;
+  fixed_bottom_media_type?: "image" | "video";
+  popup_media_url?: string;
+  popup_media_type?: "image" | "video";
+  player_overlay_media_url?: string;
+  player_overlay_media_type?: "image" | "video";
+  // Telegram shared media
+  telegram_media_url?: string;
+  telegram_media_type?: "image" | "video";
   // Phase 2
   telegram_channels?: string[];
   telegram_bot_enabled?: boolean;
@@ -2286,6 +2316,48 @@ export async function getAdsByPlacement(placement: string): Promise<Ad[]> {
   return json.ads || [];
 }
 
+const WEBSITE_PLACEMENTS = [
+  "website",
+  "homepage_top_banner",
+  "homepage_inline_block_1",
+  "homepage_inline_block_2",
+  "homepage_fixed_bottom",
+  "movie_page_top_banner",
+  "movie_page_inline_block",
+  "movie_page_fixed_bottom",
+  "movie_detail_banner",
+  "watch_page_top_banner",
+  "watch_page_inline_block",
+  "watch_page_fixed_bottom",
+  "profile_page_top_banner",
+  "profile_page_inline_block",
+  "profile_page_fixed_bottom",
+  "list_page_banner",
+  "series_page_banner",
+  "series_detail_page_banner",
+  "collections_page_banner",
+  "collection_detail_page_banner",
+  "user_profile_page_banner",
+  "global_banner",
+  "global_inline",
+  "global_fixed_bottom",
+];
+
+export async function getAdsForWebsite(placement: string): Promise<Ad[]> {
+  const placementsToFetch = [placement, ...WEBSITE_PLACEMENTS];
+  const uniquePlacements = Array.from(new Set(placementsToFetch));
+  const results = await Promise.all(
+    uniquePlacements.map(p => getAdsByPlacement(p))
+  );
+  const allAds = results.flat();
+  const seen = new Set<string>();
+  return allAds.filter(ad => {
+    if (seen.has(ad.id)) return false;
+    seen.add(ad.id);
+    return true;
+  });
+}
+
 export async function recordAdImpression(id: string): Promise<void> {
   await fetch(`${API_URL}/ads/${id}/impression`, { method: "POST" });
 }
@@ -2326,6 +2398,84 @@ export async function uploadAdMedia(
   body.append("media_type", mediaType);
   // Do NOT set Content-Type — browser must set multipart/form-data with boundary automatically
   const res = await fetch(`${API_URL}/superadmin/ads/upload`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Upload failed");
+  }
+  const json = await res.json();
+  return json.url as string;
+}
+
+// ── Telegram Post API ──────────────────────────────────────────────────────────
+
+export interface TelegramPostRequest {
+  text: string;
+  image_url?: string;
+  send_to_channels: boolean;
+  send_to_bot: boolean;
+}
+
+export interface TelegramPostResult {
+  channels_sent: number;
+  channels_failed: number;
+  bot_sent: number;
+  bot_failed: number;
+  errors?: string[];
+}
+
+export interface TelegramPost {
+  id: string;
+  text: string;
+  image_url?: string;
+  send_to_channels: boolean;
+  send_to_bot_users: boolean;
+  channels_sent_count: number;
+  channels_failed_count: number;
+  bot_sent_count: number;
+  bot_failed_count: number;
+  sent_by_user_id: string;
+  sent_by_name: string;
+  sent_at: string;
+  created_at: string;
+}
+
+export async function listTelegramPosts(token: string): Promise<TelegramPost[]> {
+  const res = await fetch(`${API_URL}/superadmin/telegram-posts`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch telegram posts");
+  const json = await res.json();
+  return json.posts || [];
+}
+
+export async function sendTelegramPost(
+  token: string,
+  data: TelegramPostRequest
+): Promise<TelegramPostResult> {
+  const res = await fetch(`${API_URL}/superadmin/telegram-post`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to send telegram post");
+  }
+  return res.json();
+}
+
+export async function uploadTelegramPostMedia(
+  token: string,
+  file: File
+): Promise<string> {
+  const body = new FormData();
+  body.append("file", file);
+  const res = await fetch(`${API_URL}/superadmin/telegram-post/upload`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body,

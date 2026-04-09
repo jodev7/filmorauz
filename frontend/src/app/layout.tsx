@@ -3,6 +3,7 @@ import { Bebas_Neue, Inter } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
 import { I18nProvider } from "@/lib/i18n";
+import { AdSlotProvider } from "@/components/ads/AdSlotContext";
 import BanGuardWrapper from "@/components/BanGuardWrapper";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.uz";
@@ -87,9 +88,11 @@ export default function RootLayout({
       <body className="bg-brand-dark text-white font-body antialiased">
         <AuthProvider>
           <I18nProvider>
-            <BanGuardWrapper>
-              {children}
-            </BanGuardWrapper>
+            <AdSlotProvider>
+              <BanGuardWrapper>
+                {children}
+              </BanGuardWrapper>
+            </AdSlotProvider>
           </I18nProvider>
         </AuthProvider>
       </body>

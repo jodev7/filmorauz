@@ -6,6 +6,7 @@ import { ChevronLeft, Clock, Calendar, Heart, Eye, Crown } from "lucide-react";
 import VideoPlayer from "@/components/VideoPlayer";
 import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveWatchProgress, markWatchComplete, Movie } from "@/lib/api";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
+import FixedBottomAd from "@/components/ads/FixedBottomAd";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n";
 import { isMoviePremium, isUserPremium, PremiumLockOverlay, PremiumButton, PremiumBadge } from "@/components/PremiumComponents";
@@ -251,17 +252,8 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
               title={localizedTitle}
               posterUrl={movie.backdrop_url || movie.poster_url}
             />
-            {/* Player overlay banner ad — rendered inside player container */}
-            <div className="absolute bottom-12 left-0 right-0 flex justify-center pointer-events-none">
-              <div className="pointer-events-auto max-w-sm w-full mx-4">
-                <WebsiteAdSlot placement="player_overlay_banner" className="opacity-90" />
-              </div>
-            </div>
           </div>
         )}
-
-        {/* Player popup ad — rendered below player, auto-dismissed */}
-        <WebsiteAdSlot placement="player_popup" popup />
 
         <div className="mt-4 sm:mt-6 flex flex-col md:flex-row gap-4 sm:gap-6">
           <div className="flex-1">
@@ -334,9 +326,9 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
           </div>
         </div>
 
-        {/* Watch page banner ad */}
-        <div className="mt-6">
-          <WebsiteAdSlot placement="watch_page_banner" />
+        {/* Watch page inline block ad */}
+        <div className="max-w-7xl mx-auto px-4 mt-6 mb-4">
+          <WebsiteAdSlot placement="watch_page_inline_block" variant="inline" />
         </div>
 
         {/* Recommendations */}
@@ -344,6 +336,7 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
           <RecommendationsRow movies={recommendations} />
         )}
       </div>
+      <FixedBottomAd placement="watch_page_fixed_bottom" />
     </>
   );
 }

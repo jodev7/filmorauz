@@ -23,10 +23,26 @@ type Ad struct {
 	Description string             `bson:"description,omitempty" json:"description,omitempty"`
 
 	// Display content
-	ImageURL    string `bson:"image_url,omitempty" json:"image_url,omitempty"`
-	VideoURL    string `bson:"video_url,omitempty" json:"video_url,omitempty"`
-	TargetURL   string `bson:"target_url" json:"target_url"`
+	ImageURL     string `bson:"image_url,omitempty" json:"image_url,omitempty"`
+	VideoURL     string `bson:"video_url,omitempty" json:"video_url,omitempty"`
+	TargetURL    string `bson:"target_url" json:"target_url"`
 	CallToAction string `bson:"call_to_action,omitempty" json:"call_to_action,omitempty"`
+
+	// Website creatives (structured media)
+	BannerMediaURL         string `bson:"banner_media_url,omitempty" json:"banner_media_url,omitempty"`
+	BannerMediaType        string `bson:"banner_media_type,omitempty" json:"banner_media_type,omitempty"`
+	InlineMediaURL         string `bson:"inline_media_url,omitempty" json:"inline_media_url,omitempty"`
+	InlineMediaType        string `bson:"inline_media_type,omitempty" json:"inline_media_type,omitempty"`
+	FixedBottomMediaURL    string `bson:"fixed_bottom_media_url,omitempty" json:"fixed_bottom_media_url,omitempty"`
+	FixedBottomMediaType   string `bson:"fixed_bottom_media_type,omitempty" json:"fixed_bottom_media_type,omitempty"`
+	PopupMediaURL          string `bson:"popup_media_url,omitempty" json:"popup_media_url,omitempty"`
+	PopupMediaType         string `bson:"popup_media_type,omitempty" json:"popup_media_type,omitempty"`
+	PlayerOverlayMediaURL  string `bson:"player_overlay_media_url,omitempty" json:"player_overlay_media_url,omitempty"`
+	PlayerOverlayMediaType string `bson:"player_overlay_media_type,omitempty" json:"player_overlay_media_type,omitempty"`
+
+	// Telegram shared media
+	TelegramMediaURL  string `bson:"telegram_media_url,omitempty" json:"telegram_media_url,omitempty"`
+	TelegramMediaType string `bson:"telegram_media_type,omitempty" json:"telegram_media_type,omitempty"`
 
 	// Placement — which page slots this ad appears on
 	Placements []string `bson:"placements" json:"placements"`
@@ -40,17 +56,18 @@ type Ad struct {
 	DurationDays int        `bson:"duration_days,omitempty" json:"duration_days,omitempty"`
 
 	// Revenue tracking (manual price set by superadmin)
-	Price float64 `bson:"price" json:"price"` // in USD
+	Price    float64 `bson:"price" json:"price"`       // in USD
+	Priority int     `bson:"priority" json:"priority"` // higher = shown first in rotation
 
 	// Stats (atomic increments)
 	Impressions int64 `bson:"impressions" json:"impressions"`
 	Clicks      int64 `bson:"clicks" json:"clicks"`
 
 	// Phase 2: Telegram targeting
-	TelegramChannels       []string `bson:"telegram_channels,omitempty" json:"telegram_channels,omitempty"`
-	TelegramBotEnabled     bool     `bson:"telegram_bot_enabled" json:"telegram_bot_enabled"`
-	TelegramBotChatIDs     []int64  `bson:"telegram_bot_chat_ids,omitempty" json:"telegram_bot_chat_ids,omitempty"` // explicit target chat IDs for bot delivery
-	TelegramChannelEnabled bool     `bson:"telegram_channel_enabled" json:"telegram_channel_enabled"`
+	TelegramChannels       []string   `bson:"telegram_channels,omitempty" json:"telegram_channels,omitempty"`
+	TelegramBotEnabled     bool       `bson:"telegram_bot_enabled" json:"telegram_bot_enabled"`
+	TelegramBotChatIDs     []int64    `bson:"telegram_bot_chat_ids,omitempty" json:"telegram_bot_chat_ids,omitempty"` // explicit target chat IDs for bot delivery
+	TelegramChannelEnabled bool       `bson:"telegram_channel_enabled" json:"telegram_channel_enabled"`
 	TelegramDeliveries     int64      `bson:"telegram_deliveries" json:"telegram_deliveries"`
 	TelegramLastSentAt     *time.Time `bson:"telegram_last_sent_at,omitempty" json:"telegram_last_sent_at,omitempty"`
 

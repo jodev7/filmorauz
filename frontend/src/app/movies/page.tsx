@@ -5,6 +5,7 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MovieCard from "@/components/MovieCard";
 import GenreFilter from "@/components/GenreFilter";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getMovies, searchMovies, Movie } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
 import Link from "next/link";
@@ -82,6 +83,10 @@ export default async function MoviesPage({ searchParams }: Props) {
             <p className="text-gray-500 text-sm">
               {total} ta film topildi
             </p>
+          </div>
+
+          <div className="mb-6">
+            <WebsiteAdSlot placement="list_page_banner" variant="banner" />
           </div>
 
           {!search && (

@@ -12,6 +12,7 @@ import { Heart, History, User as UserIcon, Crown, Calendar, Shield, Clock, Camer
 import { PremiumBadge, PremiumButton, PremiumAvatarRing, resolveIsPremium, resolvePremiumStatus } from "@/components/PremiumComponents";
 import { getFavorites, getWatchHistory, getCurrentUser, updateProfile, uploadProfileImage, updateProfileStyle, updatePrivacySettings, ProfileStyle } from "@/lib/api";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
+import FixedBottomAd from "@/components/ads/FixedBottomAd";
 import { CurrentUser } from "@/lib/api";
 
 // Subtle premium animations (luxury, not flashy)
@@ -1108,15 +1109,16 @@ export default function UserPage() {
           )}
 
           {/* Bottom padding */}
-          <div className="pb-12" />
+          <div className="pb-16" />
 
-          {/* Profile page banner ad */}
-          <div className="max-w-5xl mx-auto px-4 pb-8">
-            <WebsiteAdSlot placement="profile_page_banner" />
+          {/* Profile Page Inline Block Ad */}
+          <div className="max-w-7xl mx-auto px-4 mt-6 mb-4">
+            <WebsiteAdSlot placement="profile_page_inline_block" variant="inline" />
           </div>
         </div>
       </main>
       <Footer />
+      <FixedBottomAd placement="profile_page_fixed_bottom" />
     </>
   );
 }

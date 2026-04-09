@@ -9,6 +9,7 @@ import ContinueWatchingSection from "@/components/home/ContinueWatchingSection";
 import FeaturedCollectionsSection from "@/components/home/FeaturedCollectionsSection";
 import HeroCarousel from "@/components/home/HeroCarousel";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
+import FixedBottomAd from "@/components/ads/FixedBottomAd";
 import { getMovies, getTrendingMovies, getFeaturedCollections, Movie } from "@/lib/api";
 import { getSeries, Series } from "@/lib/series-api";
 import { getTranslations } from "@/lib/i18n-server";
@@ -126,9 +127,9 @@ export default async function HomePage() {
           </div>
         </section>
 
-        {/* ── Homepage Banner Ad ────────────────────────────── */}
-        <div className="max-w-7xl mx-auto px-4 mt-4">
-          <WebsiteAdSlot placement="homepage_banner" />
+        {/* ── Homepage Top Banner Ad ────────────────────────── */}
+        <div className="max-w-7xl mx-auto px-4 mt-8 mb-6">
+          <WebsiteAdSlot placement="homepage_top_banner" variant="banner" />
         </div>
 
         {/* ── Continue Watching ─────────────────────────────── */}
@@ -207,6 +208,11 @@ export default async function HomePage() {
           </section>
         )}
 
+        {/* ── Homepage Inline Block ────────────────────────── */}
+        <div className="max-w-7xl mx-auto px-4 mt-10 mb-8">
+          <WebsiteAdSlot placement="homepage_inline_block_1" variant="inline" />
+        </div>
+
         {/* ── Featured row ──────────────────────────────────── */}
         {featured.length > 0 && (
           <section className="max-w-7xl mx-auto px-4 py-8">
@@ -239,6 +245,7 @@ export default async function HomePage() {
         )}
       </main>
       <Footer />
+      <FixedBottomAd placement="homepage_fixed_bottom" />
     </>
   );
 }

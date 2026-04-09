@@ -193,7 +193,10 @@ func (r *AdRepository) FindByPlacement(placement string) ([]models.Ad, error) {
 	defer cancel()
 
 	cursor, err := r.col.Find(ctx, activeAdsFilter(placement),
-		options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
+		options.Find().SetSort(bson.D{
+			{Key: "priority", Value: -1},
+			{Key: "created_at", Value: 1},
+		}))
 	if err != nil {
 		return nil, err
 	}

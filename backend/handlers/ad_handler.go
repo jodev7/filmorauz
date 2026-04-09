@@ -68,6 +68,19 @@ func (h *AdHandler) AdminCreateAd(c *gin.Context) {
 		Status                 string   `json:"status"`
 		DurationDays           int      `json:"duration_days"`
 		Price                  float64  `json:"price"`
+		Priority               int      `json:"priority"`
+		BannerMediaURL         string   `json:"banner_media_url"`
+		BannerMediaType        string   `json:"banner_media_type"`
+		InlineMediaURL         string   `json:"inline_media_url"`
+		InlineMediaType        string   `json:"inline_media_type"`
+		FixedBottomMediaURL    string   `json:"fixed_bottom_media_url"`
+		FixedBottomMediaType   string   `json:"fixed_bottom_media_type"`
+		PopupMediaURL          string   `json:"popup_media_url"`
+		PopupMediaType         string   `json:"popup_media_type"`
+		PlayerOverlayMediaURL  string   `json:"player_overlay_media_url"`
+		PlayerOverlayMediaType string   `json:"player_overlay_media_type"`
+		TelegramMediaURL       string   `json:"telegram_media_url"`
+		TelegramMediaType      string   `json:"telegram_media_type"`
 		TelegramChannels       []string `json:"telegram_channels"`
 		TelegramBotEnabled     bool     `json:"telegram_bot_enabled"`
 		TelegramBotChatIDs     []int64  `json:"telegram_bot_chat_ids"`
@@ -116,6 +129,19 @@ func (h *AdHandler) AdminCreateAd(c *gin.Context) {
 		EndsAt:                 endsAt,
 		DurationDays:           req.DurationDays,
 		Price:                  req.Price,
+		Priority:               req.Priority,
+		BannerMediaURL:         req.BannerMediaURL,
+		BannerMediaType:        req.BannerMediaType,
+		InlineMediaURL:         req.InlineMediaURL,
+		InlineMediaType:        req.InlineMediaType,
+		FixedBottomMediaURL:    req.FixedBottomMediaURL,
+		FixedBottomMediaType:   req.FixedBottomMediaType,
+		PopupMediaURL:          req.PopupMediaURL,
+		PopupMediaType:         req.PopupMediaType,
+		PlayerOverlayMediaURL:  req.PlayerOverlayMediaURL,
+		PlayerOverlayMediaType: req.PlayerOverlayMediaType,
+		TelegramMediaURL:       req.TelegramMediaURL,
+		TelegramMediaType:      req.TelegramMediaType,
 		TelegramChannels:       req.TelegramChannels,
 		TelegramBotEnabled:     req.TelegramBotEnabled,
 		TelegramBotChatIDs:     req.TelegramBotChatIDs,
@@ -150,6 +176,19 @@ func (h *AdHandler) AdminUpdateAd(c *gin.Context) {
 		Status                 string   `json:"status"`
 		DurationDays           int      `json:"duration_days"`
 		Price                  float64  `json:"price"`
+		Priority               *int     `json:"priority"`
+		BannerMediaURL         string   `json:"banner_media_url"`
+		BannerMediaType        string   `json:"banner_media_type"`
+		InlineMediaURL         string   `json:"inline_media_url"`
+		InlineMediaType        string   `json:"inline_media_type"`
+		FixedBottomMediaURL    string   `json:"fixed_bottom_media_url"`
+		FixedBottomMediaType   string   `json:"fixed_bottom_media_type"`
+		PopupMediaURL          string   `json:"popup_media_url"`
+		PopupMediaType         string   `json:"popup_media_type"`
+		PlayerOverlayMediaURL  string   `json:"player_overlay_media_url"`
+		PlayerOverlayMediaType string   `json:"player_overlay_media_type"`
+		TelegramMediaURL       string   `json:"telegram_media_url"`
+		TelegramMediaType      string   `json:"telegram_media_type"`
 		TelegramChannels       []string `json:"telegram_channels"`
 		TelegramBotEnabled     *bool    `json:"telegram_bot_enabled"`
 		TelegramBotChatIDs     []int64  `json:"telegram_bot_chat_ids"`
@@ -178,7 +217,24 @@ func (h *AdHandler) AdminUpdateAd(c *gin.Context) {
 	if req.Status != "" {
 		update["status"] = req.Status
 	}
-	update["price"] = req.Price
+	if req.Price != 0 {
+		update["price"] = req.Price
+	}
+	if req.Priority != nil {
+		update["priority"] = *req.Priority
+	}
+	update["banner_media_url"] = req.BannerMediaURL
+	update["banner_media_type"] = req.BannerMediaType
+	update["inline_media_url"] = req.InlineMediaURL
+	update["inline_media_type"] = req.InlineMediaType
+	update["fixed_bottom_media_url"] = req.FixedBottomMediaURL
+	update["fixed_bottom_media_type"] = req.FixedBottomMediaType
+	update["popup_media_url"] = req.PopupMediaURL
+	update["popup_media_type"] = req.PopupMediaType
+	update["player_overlay_media_url"] = req.PlayerOverlayMediaURL
+	update["player_overlay_media_type"] = req.PlayerOverlayMediaType
+	update["telegram_media_url"] = req.TelegramMediaURL
+	update["telegram_media_type"] = req.TelegramMediaType
 	if req.TelegramChannels != nil {
 		update["telegram_channels"] = req.TelegramChannels
 	}
@@ -230,7 +286,7 @@ func (h *AdHandler) AdminDeleteAd(c *gin.Context) {
 // -- Public endpoints --
 
 // GetAdsByPlacement GET /api/ads?placement=...
-// Returns the next ad in round-robin rotation for the placement (single element array).
+// Returns all active ads for the placement, ordered by priority DESC then created_at ASC.
 func (h *AdHandler) GetAdsByPlacement(c *gin.Context) {
 	placement := c.Query("placement")
 	if placement == "" {
@@ -238,16 +294,15 @@ func (h *AdHandler) GetAdsByPlacement(c *gin.Context) {
 		return
 	}
 
-	ad, err := h.adRepo.NextAdForPlacement(placement)
+	ads, err := h.adRepo.FindByPlacement(placement)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if ad == nil {
-		c.JSON(http.StatusOK, gin.H{"ads": []models.Ad{}})
-		return
+	if ads == nil {
+		ads = []models.Ad{}
 	}
-	c.JSON(http.StatusOK, gin.H{"ads": []models.Ad{*ad}})
+	c.JSON(http.StatusOK, gin.H{"ads": ads})
 }
 
 // RecordImpression POST /api/ads/:id/impression

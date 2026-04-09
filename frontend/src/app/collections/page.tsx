@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MovieCard from "@/components/MovieCard";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getCollections, Collection } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
 
@@ -37,6 +38,10 @@ export default async function CollectionsPage() {
             <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-white tracking-wide mb-2">
               KOLLEKTSIYALAR
             </h1>
+          </div>
+
+          <div className="mb-6">
+            <WebsiteAdSlot placement="collections_page_banner" variant="banner" />
           </div>
 
           {collections.length > 0 ? (

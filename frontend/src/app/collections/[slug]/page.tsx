@@ -6,6 +6,7 @@ import { ChevronLeft } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MovieCard from "@/components/MovieCard";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getCollectionBySlug, getCollections } from "@/lib/api";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.uz";
@@ -64,6 +65,10 @@ export default async function CollectionDetailPage({ params }: Props) {
             {collection.description && (
               <p className="text-gray-500 text-base">{collection.description}</p>
             )}
+          </div>
+
+          <div className="mb-6">
+            <WebsiteAdSlot placement="collection_detail_page_banner" variant="banner" />
           </div>
 
           {collection.movies && collection.movies.length > 0 ? (

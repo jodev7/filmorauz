@@ -439,3 +439,76 @@ func InitUpload() {
 	// Set storage directory modification time to prevent unused warnings
 	_ = time.Now()
 }
+
+// UploadTelegramPostMedia handles image uploads for Telegram posts
+// POST /api/superadmin/telegram-post/upload (superadmin only)
+func (h *UploadHandler) UploadTelegramPostMedia(c *gin.Context) {
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no file provided"})
+		return
+	}
+	defer file.Close()
+
+	contentType := header.Header.Get("Content-Type")
+	allowedTypes := map[string]bool{
+		"image/jpeg": true,
+		"image/jpg":  true,
+		"image/png":  true,
+		"image/webp": true,
+		"image/gif":  true,
+	}
+
+	if header.Size > 10*1024*1024 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file too large (max 10MB)"})
+		return
+	}
+
+	if !allowedTypes[contentType] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported file type"})
+		return
+	}
+
+	ext := filepath.Ext(header.Filename)
+	if ext == "" {
+		ext = ".jpg"
+	}
+
+	filename := fmt.Sprintf("%d_telegram_post%s", time.Now().UnixNano(), ext)
+
+	var savedURL string
+	if h.config.IsDev {
+		savedURL, err = h.saveTelegramPostLocal(file, filename)
+	} else {
+		savedURL, err = h.saveToCDN(file, filename, contentType)
+	}
+	if err != nil {
+		log.Printf("[UPLOAD] Telegram post media upload error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload file"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"url": savedURL})
+}
+
+// saveTelegramPostLocal saves telegram post images to local storage
+func (h *UploadHandler) saveTelegramPostLocal(file multipart.File, filename string) (string, error) {
+	storageDir := filepath.Join(h.config.UploadsDir, "telegram-post")
+
+	if err := os.MkdirAll(storageDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	filePath := filepath.Join(storageDir, filename)
+	dst, err := os.Create(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create file: %w", err)
+	}
+	defer dst.Close()
+
+	if _, err = io.Copy(dst, file); err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return fmt.Sprintf("http://localhost:%s/uploads/telegram-post/%s", h.config.Port, filename), nil
+}
