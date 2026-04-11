@@ -9,7 +9,6 @@ import ContinueWatchingSection from "@/components/home/ContinueWatchingSection";
 import FeaturedCollectionsSection from "@/components/home/FeaturedCollectionsSection";
 import HeroCarousel from "@/components/home/HeroCarousel";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
-import FixedBottomAd from "@/components/ads/FixedBottomAd";
 import { getMovies, getTrendingMovies, getFeaturedCollections, Movie } from "@/lib/api";
 import { getSeries, Series } from "@/lib/series-api";
 import { getTranslations } from "@/lib/i18n-server";
@@ -113,13 +112,13 @@ export default async function HomePage() {
         <HeroCarousel movies={latestMovies} />
 
         {/* ── Genre Chips ──────────────────────────────────────────── */}
-        <section className="max-w-7xl mx-auto px-4 mt-4 mb-2">
-          <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+        <section className="max-w-7xl mx-auto px-4 mt-6 mb-4">
+          <div className="flex gap-2.5 overflow-x-auto pb-2 scrollbar-hide">
             {GENRE_CHIPS.map((genre) => (
               <Link
                 key={genre.slug}
                 href={`/movies?genre=${genre.slug}`}
-                className="shrink-0 px-4 py-1.5 bg-brand-card border border-brand-border text-gray-300 text-sm rounded-full hover:border-brand-red hover:text-brand-red transition-colors"
+                className="shrink-0 px-4 py-2 bg-[#12121a] border border-[#1e1e2e] text-gray-400 text-sm rounded-full hover:border-orange-500 hover:text-orange-500 transition-colors"
               >
                 {genre.label}
               </Link>
@@ -137,15 +136,15 @@ export default async function HomePage() {
 
         {/* ── New Movies ─────────────────────────────────────── */}
         {recent.length > 0 && (
-          <section className="max-w-7xl mx-auto px-4 py-8">
-            <div className="flex items-center justify-between mb-5">
+          <section className="max-w-7xl mx-auto px-4 py-6">
+            <div className="flex items-center justify-between mb-4">
               <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Clapperboard size={20} className="text-brand-red" />
+                <Clapperboard size={20} className="text-orange-500" />
                 Yangi filmlar
               </h2>
               <Link
                 href="/movies"
-                className="flex items-center gap-1 text-xs text-brand-red hover:text-orange-400 transition-colors"
+                className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-400 transition-colors"
               >
                 Hammasi <ChevronRight size={14} />
               </Link>
@@ -156,10 +155,10 @@ export default async function HomePage() {
 
         {/* ── Trending ─────────────────────────────────────── */}
         {trending.length > 0 && (
-          <section className="max-w-7xl mx-auto px-4 py-8">
-            <div className="flex items-center justify-between mb-5">
+          <section className="max-w-7xl mx-auto px-4 py-6">
+            <div className="flex items-center justify-between mb-4">
               <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Flame size={20} className="text-brand-red" />
+                <Flame size={20} className="text-orange-500" />
                 Trending
               </h2>
             </div>
@@ -169,8 +168,8 @@ export default async function HomePage() {
 
         {/* ── Premium ─────────────────────────────────────── */}
         {movies.filter(m => m.is_premium).length > 0 && (
-          <section className="max-w-7xl mx-auto px-4 py-8">
-            <div className="flex items-center justify-between mb-5">
+          <section className="max-w-7xl mx-auto px-4 py-6">
+            <div className="flex items-center justify-between mb-4">
               <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
                 <Sparkles size={20} className="text-yellow-500" />
                 Premium
@@ -191,15 +190,15 @@ export default async function HomePage() {
 
         {/* ── New Series ──────────────────────────────────── */}
         {seriesData.length > 0 && (
-          <section className="max-w-7xl mx-auto px-4 py-8">
-            <div className="flex items-center justify-between mb-5">
+          <section className="max-w-7xl mx-auto px-4 py-6">
+            <div className="flex items-center justify-between mb-4">
               <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Film size={20} className="text-brand-red" />
+                <Film size={20} className="text-orange-500" />
                 Yangi seriallar
               </h2>
               <Link
                 href="/series"
-                className="flex items-center gap-1 text-xs text-brand-red hover:text-orange-400 transition-colors"
+                className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-400 transition-colors"
               >
                 Hammasi <ChevronRight size={14} />
               </Link>
@@ -215,15 +214,15 @@ export default async function HomePage() {
 
         {/* ── Featured row ──────────────────────────────────── */}
         {featured.length > 0 && (
-          <section className="max-w-7xl mx-auto px-4 py-8">
-            <div className="flex items-center justify-between mb-5">
+          <section className="max-w-7xl mx-auto px-4 py-6">
+            <div className="flex items-center justify-between mb-4">
               <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Clapperboard size={20} className="text-brand-red" />
+                <Clapperboard size={20} className="text-orange-500" />
                 {t("home.featuredMovies")}
               </h2>
               <Link
                 href="/movies"
-                className="flex items-center gap-1 text-xs text-brand-red hover:text-orange-400 transition-colors"
+                className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-400 transition-colors"
               >
                 {t("common.seeAll")} <ChevronRight size={14} />
               </Link>
@@ -245,7 +244,8 @@ export default async function HomePage() {
         )}
       </main>
       <Footer />
-      <FixedBottomAd placement="homepage_fixed_bottom" />
+      {/* Popup ad — renders as modal overlay when an active ad is available */}
+      <WebsiteAdSlot placement="homepage_popup" popup />
     </>
   );
 }

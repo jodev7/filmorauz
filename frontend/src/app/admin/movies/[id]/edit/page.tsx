@@ -73,13 +73,14 @@ export default function EditMoviePage() {
     poster_url: movie.poster_url,
     backdrop_url: movie.backdrop_url,
     year: movie.year,
-    genre: movie.genre,
+    genre: Array.isArray(movie.genre) ? movie.genre : [],
     country: movie.country,
     video_url: movie.video_url,
     embed_url: movie.embed_url,
     source_type: sourceType,
     duration: movie.duration,
     quality: movie.quality,
+    is_premium: movie.is_premium ?? false,
   };
 
   return (

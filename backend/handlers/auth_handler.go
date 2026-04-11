@@ -3,12 +3,25 @@ package handlers
 import (
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/services"
 	"github.com/gin-gonic/gin"
 )
+
+// sanitizeDisplayName returns the best non-empty, non-placeholder display name.
+// Priority: firstName → username → "User"
+func sanitizeDisplayName(firstName, username string) string {
+	for _, candidate := range []string{firstName, username} {
+		v := strings.TrimSpace(candidate)
+		if v != "" && v != "." && v != "-" {
+			return v
+		}
+	}
+	return "User"
+}
 
 type AuthHandler struct {
 	authService *services.AuthService
@@ -145,7 +158,7 @@ func (h *AuthHandler) TelegramAuthStatus(c *gin.Context) {
 					"id":            user.ID.Hex(),
 					"telegram_id":   user.TelegramID,
 					"username":      user.TelegramUser,
-					"first_name":    user.FirstName,
+					"first_name":    sanitizeDisplayName(user.FirstName, user.TelegramUser),
 					"last_name":     user.LastName,
 					"role":          user.Role,
 					"auth_provider": user.AuthProvider,
@@ -188,11 +201,12 @@ func (h *AuthHandler) CurrentUser(c *gin.Context) {
 		return
 	}
 
-	// Migration logic: if first_name is empty but display_name exists, use display_name
-	displayName := user.FirstName
-	if displayName == "" && user.DisplayName != "" {
-		displayName = user.DisplayName
+	// Prefer first_name; fall back to display_name (legacy), then username
+	rawName := user.FirstName
+	if rawName == "" {
+		rawName = user.DisplayName
 	}
+	displayName := sanitizeDisplayName(rawName, user.TelegramUser)
 
 	c.JSON(http.StatusOK, gin.H{
 		"authenticated": true,

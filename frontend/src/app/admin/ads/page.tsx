@@ -42,23 +42,81 @@ const SIMPLIFIED_PLACEMENTS = [
   { value: "telegram_bot", label: "Telegram Bot" },
 ];
 
+// Validate that a video file has ~15s duration (accepts 10–20s range)
+function validatePlayerVideoDuration(file: File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      URL.revokeObjectURL(url);
+      const dur = Math.round(video.duration);
+      if (dur < 10 || dur > 20) {
+        resolve(`Video player reklama uchun faqat 15 soniyalik video yuklash mumkin (joriy: ${dur}s)`);
+      } else {
+        resolve(null);
+      }
+    };
+    video.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+    video.src = url;
+  });
+}
+
+// Detect media category from the File's MIME type.
+function fileMediaType(file: File): "image" | "video" | null {
+  if (file.type.startsWith("image/")) return "image";
+  if (file.type.startsWith("video/")) return "video";
+  // Fallback: sniff from extension
+  const ext = file.name.split(".").pop()?.toLowerCase();
+  if (["jpg", "jpeg", "png", "webp", "gif"].includes(ext ?? "")) return "image";
+  if (["mp4", "webm", "mov"].includes(ext ?? "")) return "video";
+  return null;
+}
+
 function MediaUpload({
   value,
   uploading,
   onUpload,
   onClear,
-  acceptImage,
-  acceptVideo,
+  // Default: image-only (website slots). Pass acceptVideo or both to widen.
+  acceptImage = true,
+  acceptVideo = false,
+  validateFile,
 }: {
   value: string;
   uploading: boolean;
-  onUpload: (file: File, type: string) => Promise<void>;
+  onUpload: (file: File, type: "image" | "video") => Promise<void>;
   onClear: () => void;
   acceptImage?: boolean;
   acceptVideo?: boolean;
+  validateFile?: (file: File) => Promise<string | null>;
 }) {
-  const accept = acceptImage && acceptVideo ? "image/*,video/*" : acceptImage ? "image/jpeg,image/png,image/webp,image/gif" : "video/mp4,video/webm";
-  
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  // Build the <input accept="..."> attribute using canonical MIME types so browsers
+  // filter correctly regardless of OS.
+  const imageMIMEs = "image/jpeg,image/png,image/webp,image/gif";
+  const videoMIMEs = "video/mp4,video/webm,video/quicktime";
+  const accept =
+    acceptImage && acceptVideo
+      ? `${imageMIMEs},${videoMIMEs}`
+      : acceptImage
+      ? imageMIMEs
+      : videoMIMEs;
+
+  // Human-readable hint shown below the button
+  const hint =
+    acceptImage && acceptVideo
+      ? "JPG, PNG, WEBP, GIF · MP4, WEBM, MOV"
+      : acceptImage
+      ? "JPG, PNG, WEBP, GIF"
+      : "MP4, WEBM, MOV";
+
+  // Whether to show image preview vs text for an uploaded value
+  const isImageValue = value
+    ? /\.(jpe?g|png|webp|gif)(\?|$)/i.test(value)
+    : acceptImage && !acceptVideo;
+
   return (
     <div className="space-y-1">
       <label className="flex items-center gap-2 cursor-pointer w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-sm hover:border-brand-red transition">
@@ -78,14 +136,46 @@ function MediaUpload({
           onChange={async (e) => {
             const file = e.target.files?.[0];
             if (!file) return;
-            const type = accept.startsWith("image") ? "image" : "video";
-            await onUpload(file, type);
+            // Reset input so the same file can be re-selected after an error
+            e.target.value = "";
+            setLocalError(null);
+
+            const type = fileMediaType(file);
+            if (!type) {
+              setLocalError(`Qo'llab-quvvatlanmaydigan fayl turi. Ruxsat etilgan: ${hint}`);
+              return;
+            }
+            if (type === "image" && !acceptImage) {
+              setLocalError("Bu slot faqat video qabul qiladi.");
+              return;
+            }
+            if (type === "video" && !acceptVideo) {
+              setLocalError("Bu slot faqat rasmlarni qabul qiladi.");
+              return;
+            }
+            if (validateFile) {
+              const validationError = await validateFile(file);
+              if (validationError) {
+                setLocalError(validationError);
+                return;
+              }
+            }
+            try {
+              await onUpload(file, type);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : "Yuklash muvaffaqiyatsiz tugadi";
+              setLocalError(msg);
+            }
           }}
         />
       </label>
-      {value && (
+      <p className="text-[11px] text-gray-600">{hint}</p>
+      {localError && (
+        <p className="text-[11px] text-red-400">{localError}</p>
+      )}
+      {value && !localError && (
         <>
-          {accept.startsWith("image") ? (
+          {isImageValue ? (
             <img src={value} alt="preview" className="w-full h-20 object-cover rounded border border-brand-border" />
           ) : (
             <p className="text-xs text-green-400 truncate">{value.split("/").pop()}</p>
@@ -161,7 +251,7 @@ const emptyForm = (): AdInput => ({
   popup_media_url: "",
   popup_media_type: "image",
   player_overlay_media_url: "",
-  player_overlay_media_type: "image",
+  player_overlay_media_type: "video",
   telegram_media_url: "",
   telegram_media_type: "image",
   telegram_channels: [],
@@ -496,92 +586,113 @@ export default function AdminAdsPage() {
                       <MediaUpload
                         value={form.banner_media_url || ""}
                         uploading={uploadingBanner}
+                        acceptImage
                         onUpload={async (file, type) => {
                           if (!token) return;
                           setUploadingBanner(true);
-                          const url = (await uploadAdMedia(token, file, type as "image" | "video")) || "";
-                          setForm(f => ({ ...f, banner_media_url: url, banner_media_type: type as "image" | "video" }));
-                          setUploadingBanner(false);
+                          try {
+                            const url = (await uploadAdMedia(token, file, type)) || "";
+                            setForm(f => ({ ...f, banner_media_url: url, banner_media_type: type }));
+                          } finally {
+                            setUploadingBanner(false);
+                          }
                         }}
                         onClear={() => setForm(f => ({ ...f, banner_media_url: "" }))}
                       />
                     </div>
                   </Field>
-                  
+
                   <Field label="Inline (between content)">
                     <div className="space-y-1">
                       <p className="text-xs text-gray-500">Recommended: 1200x400 (3:1)</p>
                       <MediaUpload
                         value={form.inline_media_url || ""}
                         uploading={uploadingInline}
+                        acceptImage
                         onUpload={async (file, type) => {
                           if (!token) return;
                           setUploadingInline(true);
-                          const url = (await uploadAdMedia(token, file, type as "image" | "video")) || "";
-                          setForm(f => ({ ...f, inline_media_url: url, inline_media_type: type as "image" | "video" }));
-                          setUploadingInline(false);
+                          try {
+                            const url = (await uploadAdMedia(token, file, type)) || "";
+                            setForm(f => ({ ...f, inline_media_url: url, inline_media_type: type }));
+                          } finally {
+                            setUploadingInline(false);
+                          }
                         }}
                         onClear={() => setForm(f => ({ ...f, inline_media_url: "" }))}
                       />
                     </div>
                   </Field>
-                  
+
                   <Field label="Fixed Bottom">
                     <div className="space-y-1">
                       <p className="text-xs text-gray-500">Recommended: 1200x180</p>
                       <MediaUpload
                         value={form.fixed_bottom_media_url || ""}
                         uploading={uploadingFixedBottom}
+                        acceptImage
                         onUpload={async (file, type) => {
                           if (!token) return;
                           setUploadingFixedBottom(true);
-                          const url = (await uploadAdMedia(token, file, type as "image" | "video")) || "";
-                          setForm(f => ({ ...f, fixed_bottom_media_url: url, fixed_bottom_media_type: type as "image" | "video" }));
-                          setUploadingFixedBottom(false);
+                          try {
+                            const url = (await uploadAdMedia(token, file, type)) || "";
+                            setForm(f => ({ ...f, fixed_bottom_media_url: url, fixed_bottom_media_type: type }));
+                          } finally {
+                            setUploadingFixedBottom(false);
+                          }
                         }}
                         onClear={() => setForm(f => ({ ...f, fixed_bottom_media_url: "" }))}
                       />
                     </div>
                   </Field>
-                  
+
                   <Field label="Popup">
                     <div className="space-y-1">
                       <p className="text-xs text-gray-500">Recommended: 900x600</p>
                       <MediaUpload
                         value={form.popup_media_url || ""}
                         uploading={uploadingPopup}
+                        acceptImage
                         onUpload={async (file, type) => {
                           if (!token) return;
                           setUploadingPopup(true);
-                          const url = (await uploadAdMedia(token, file, type as "image" | "video")) || "";
-                          setForm(f => ({ ...f, popup_media_url: url, popup_media_type: type as "image" | "video" }));
-                          setUploadingPopup(false);
+                          try {
+                            const url = (await uploadAdMedia(token, file, type)) || "";
+                            setForm(f => ({ ...f, popup_media_url: url, popup_media_type: type }));
+                          } finally {
+                            setUploadingPopup(false);
+                          }
                         }}
                         onClear={() => setForm(f => ({ ...f, popup_media_url: "" }))}
                       />
                     </div>
                   </Field>
-                  
+
                   <Field label="Player Overlay">
                     <div className="space-y-1">
-                      <p className="text-xs text-gray-500">Recommended: 600x120</p>
+                      <p className="text-xs text-gray-500">Faqat 15 soniyalik video · MP4, WEBM, MOV</p>
                       <MediaUpload
                         value={form.player_overlay_media_url || ""}
                         uploading={uploadingPlayerOverlay}
+                        acceptVideo
+                        validateFile={validatePlayerVideoDuration}
                         onUpload={async (file, type) => {
                           if (!token) return;
                           setUploadingPlayerOverlay(true);
-                          const url = (await uploadAdMedia(token, file, type as "image" | "video")) || "";
-                          setForm(f => ({ ...f, player_overlay_media_url: url, player_overlay_media_type: type as "image" | "video" }));
-                          setUploadingPlayerOverlay(false);
+                          try {
+                            const url = (await uploadAdMedia(token, file, type)) || "";
+                            setForm(f => ({ ...f, player_overlay_media_url: url, player_overlay_media_type: "video" }));
+                          } finally {
+                            setUploadingPlayerOverlay(false);
+                          }
                         }}
-                        onClear={() => setForm(f => ({ ...f, player_overlay_media_url: "" }))}
+                        onClear={() => setForm(f => ({ ...f, player_overlay_media_url: "", player_overlay_media_type: "image" }))}
                       />
                     </div>
                   </Field>
                 </div>
               )}
-              
+
               {form.placements.includes("telegram_channel") || form.placements.includes("telegram_bot") ? (
                 <div className="space-y-4 p-4 bg-brand-dark/50 rounded-lg border border-brand-border">
                   <p className="text-sm font-medium text-white">Telegram Media</p>
@@ -594,9 +705,12 @@ export default function AdminAdsPage() {
                     onUpload={async (file, type) => {
                       if (!token) return;
                       setUploadingTelegram(true);
-                      const url = (await uploadAdMedia(token, file, type as "image" | "video")) || "";
-                      setForm(f => ({ ...f, telegram_media_url: url, telegram_media_type: type as "image" | "video" }));
-                      setUploadingTelegram(false);
+                      try {
+                        const url = (await uploadAdMedia(token, file, type)) || "";
+                        setForm(f => ({ ...f, telegram_media_url: url, telegram_media_type: type }));
+                      } finally {
+                        setUploadingTelegram(false);
+                      }
                     }}
                     onClear={() => setForm(f => ({ ...f, telegram_media_url: "", telegram_media_type: "image" }))}
                   />

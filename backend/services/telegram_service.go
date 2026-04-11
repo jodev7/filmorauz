@@ -398,23 +398,45 @@ func (s *TelegramService) buildAdminNotification(movie *TelegramMovieData) strin
 	return b.String()
 }
 
-// resolveMedia returns the appropriate RequestFileData for a media URL.
-// For localhost/127.0.0.1 URLs it maps the URL path to a local file and uses
-// multipart upload. For public URLs it uses URL-based delivery.
-func resolveMedia(mediaURL string) (tgbotapi.RequestFileData, string, error) {
+// resolveTelegramMediaSource returns the appropriate RequestFileData for a media URL.
+//
+// DEV (localhost / 127.0.0.1 host, or a bare /uploads/… path):
+//   - Maps the URL path to a local file on disk and sends via multipart upload.
+//   - Returns an error if the file does not exist.
+//
+// PROD (any other public URL):
+//   - Returns a FileURL so Telegram fetches the media directly.
+func resolveTelegramMediaSource(mediaURL string) (tgbotapi.RequestFileData, string, error) {
+	if mediaURL == "" {
+		return nil, "", fmt.Errorf("empty media URL")
+	}
+
 	u, err := url.Parse(mediaURL)
 	if err != nil {
-		return nil, "", fmt.Errorf("invalid media URL: %w", err)
+		return nil, "", fmt.Errorf("invalid media URL %q: %w", mediaURL, err)
 	}
+
+	// Treat localhost, 127.0.0.1, and bare /uploads/… paths as local files.
 	host := u.Hostname()
-	if host == "localhost" || host == "127.0.0.1" {
-		localPath := "." + u.Path
+	isLocal := host == "localhost" || host == "127.0.0.1" ||
+		(host == "" && strings.HasPrefix(u.Path, "/uploads/"))
+
+	if isLocal {
+		localPath := "." + u.Path // e.g. ./uploads/ads/images/file.jpg
 		if _, statErr := os.Stat(localPath); statErr != nil {
-			return nil, "", fmt.Errorf("local_media_file_not_found: %s", localPath)
+			log.Printf("[TELEGRAM AD] file not found in uploads: %s", localPath)
+			return nil, "", fmt.Errorf("file not found in uploads: %s", localPath)
 		}
+		log.Printf("[TELEGRAM AD] resolved local file: %s", localPath)
 		return tgbotapi.FilePath(localPath), "local_file", nil
 	}
+
 	return tgbotapi.FileURL(mediaURL), "public_url", nil
+}
+
+// resolveMedia is kept as an internal alias so existing call-sites compile unchanged.
+func resolveMedia(mediaURL string) (tgbotapi.RequestFileData, string, error) {
+	return resolveTelegramMediaSource(mediaURL)
 }
 
 // AdPostResult holds the result of posting a single ad to Telegram

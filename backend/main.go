@@ -251,9 +251,13 @@ func seedAdmin(repo *repositories.UserRepository, adminTelegramID int64) {
 	}
 
 	// Check if admin user already exists
-	_, err := repo.FindByTelegramID(adminTelegramID)
-	if err == nil {
+	existing, err := repo.FindByTelegramID(adminTelegramID)
+	if err == nil && existing != nil {
 		// Admin already exists
+		return
+	}
+	if err != nil {
+		log.Printf("Failed to check admin existence: %v", err)
 		return
 	}
 

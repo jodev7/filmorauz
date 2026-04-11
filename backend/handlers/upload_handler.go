@@ -292,6 +292,74 @@ func (h *UploadHandler) saveMovieAssetLocal(file multipart.File, filename string
 	return fmt.Sprintf("http://localhost:%s/uploads/movies/%s/%s", h.config.Port, subDir, filename), nil
 }
 
+// adMediaAllowedMIME maps canonical MIME types to their media category (image/video).
+// Extension aliases (like "image/jpg") and generic types are handled separately below.
+var adMediaAllowedMIME = map[string]string{
+	"image/jpeg":       "image",
+	"image/png":        "image",
+	"image/webp":       "image",
+	"image/gif":        "image",
+	"video/mp4":        "video",
+	"video/webm":       "video",
+	"video/quicktime":  "video", // .mov
+	"video/x-msvideo":  "video", // .avi
+}
+
+// extToMIME maps common extensions to their canonical MIME type for fallback sniffing.
+var extToMIME = map[string]string{
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".png":  "image/png",
+	".webp": "image/webp",
+	".gif":  "image/gif",
+	".mp4":  "video/mp4",
+	".webm": "video/webm",
+	".mov":  "video/quicktime",
+}
+
+// resolveAdMIME returns the canonical MIME type for an uploaded ad file.
+// Resolution order: part Content-Type header → file extension → http.DetectContentType (first 512 bytes).
+// Returns ("", "") if the type cannot be resolved.
+func resolveAdMIME(partCT string, filename string, file io.ReadSeeker) (mimeType string, category string) {
+	// 1. Trust the part header if it's not generic.
+	ct := strings.ToLower(strings.TrimSpace(partCT))
+	if ct != "" && ct != "application/octet-stream" {
+		// Strip parameters like "; charset=utf-8"
+		if idx := strings.Index(ct, ";"); idx != -1 {
+			ct = strings.TrimSpace(ct[:idx])
+		}
+		if cat, ok := adMediaAllowedMIME[ct]; ok {
+			return ct, cat
+		}
+		// Header present but unrecognised → reject early with the exact type
+		return ct, ""
+	}
+
+	// 2. Fall back to extension.
+	ext := strings.ToLower(filepath.Ext(filename))
+	if mime, ok := extToMIME[ext]; ok {
+		if cat, ok2 := adMediaAllowedMIME[mime]; ok2 {
+			return mime, cat
+		}
+	}
+
+	// 3. Sniff the first 512 bytes.
+	buf := make([]byte, 512)
+	n, _ := file.Read(buf)
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", ""
+	}
+	sniffed := http.DetectContentType(buf[:n])
+	sniffed = strings.ToLower(strings.TrimSpace(sniffed))
+	if idx := strings.Index(sniffed, ";"); idx != -1 {
+		sniffed = strings.TrimSpace(sniffed[:idx])
+	}
+	if cat, ok := adMediaAllowedMIME[sniffed]; ok {
+		return sniffed, cat
+	}
+	return sniffed, ""
+}
+
 // UploadAdMedia handles image/video uploads for ads
 // POST /api/superadmin/ads/upload  (superadmin only)
 func (h *UploadHandler) UploadAdMedia(c *gin.Context) {
@@ -302,56 +370,43 @@ func (h *UploadHandler) UploadAdMedia(c *gin.Context) {
 	}
 	defer file.Close()
 
-	// Detect media_type from MIME or extension — manual input is optional
+	// Resolve actual MIME type (handles empty/octet-stream part headers gracefully)
+	partCT := header.Header.Get("Content-Type")
+	contentType, detectedCategory := resolveAdMIME(partCT, header.Filename, file)
+	if detectedCategory == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("unsupported file type: %q — accepted: JPG, PNG, WEBP, GIF, MP4, WEBM, MOV", contentType),
+		})
+		return
+	}
+
+	// Prefer explicit media_type from form field; otherwise use detected category.
 	mediaType := c.PostForm("media_type")
 	if mediaType != "image" && mediaType != "video" {
-		ct := header.Header.Get("Content-Type")
-		ext := strings.ToLower(filepath.Ext(header.Filename))
-		switch {
-		case strings.HasPrefix(ct, "image/") ||
-			ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp" || ext == ".gif":
-			mediaType = "image"
-		case strings.HasPrefix(ct, "video/") ||
-			ext == ".mp4" || ext == ".webm" || ext == ".mov":
-			mediaType = "video"
-		default:
-			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported file type"})
-			return
-		}
+		mediaType = detectedCategory
 	}
 
-	var maxSize int64
-	var allowedTypes map[string]bool
+	// Validate that the file content matches the declared media_type.
+	if mediaType != detectedCategory {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("file content is %s but media_type=%q was declared", detectedCategory, mediaType),
+		})
+		return
+	}
 
+	// Enforce size limits per category.
+	var maxSize int64
 	if mediaType == "image" {
 		maxSize = 10 * 1024 * 1024 // 10 MB
-		allowedTypes = map[string]bool{
-			"image/jpeg": true,
-			"image/jpg":  true,
-			"image/png":  true,
-			"image/webp": true,
-			"image/gif":  true,
-		}
 	} else {
 		maxSize = 500 * 1024 * 1024 // 500 MB
-		allowedTypes = map[string]bool{
-			"video/mp4":  true,
-			"video/webm": true,
-		}
 	}
-
 	if header.Size > maxSize {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", maxSize/1024/1024)})
 		return
 	}
 
-	contentType := header.Header.Get("Content-Type")
-	if !allowedTypes[contentType] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported file type"})
-		return
-	}
-
-	ext := filepath.Ext(header.Filename)
+	ext := strings.ToLower(filepath.Ext(header.Filename))
 	if ext == "" {
 		if mediaType == "image" {
 			ext = ".jpg"

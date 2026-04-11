@@ -5,6 +5,7 @@ import { AuthProvider } from "@/lib/auth-context";
 import { I18nProvider } from "@/lib/i18n";
 import { AdSlotProvider } from "@/components/ads/AdSlotContext";
 import BanGuardWrapper from "@/components/BanGuardWrapper";
+import FixedBottomAd from "@/components/ads/FixedBottomAd";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.uz";
 
@@ -91,6 +92,7 @@ export default function RootLayout({
             <AdSlotProvider>
               <BanGuardWrapper>
                 {children}
+                <FixedBottomAd placement="website_fixed_bottom" />
               </BanGuardWrapper>
             </AdSlotProvider>
           </I18nProvider>

@@ -410,6 +410,7 @@ func (s *MovieService) UpdateMovie(id string, input *models.MovieInput) (*models
 	existing.SourceType = input.SourceType
 	existing.Duration = input.Duration
 	existing.Quality = input.Quality
+	existing.IsPremium = input.IsPremium
 	existing.UpdatedAt = time.Now()
 
 	// LOCALIZATION: Update Uzbek display fields

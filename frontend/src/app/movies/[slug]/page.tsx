@@ -17,7 +17,6 @@ import ShareButton from "@/components/ShareButton";
 import { isMoviePremium, PremiumBadge } from "@/components/PremiumComponents";
 import { getMovie, getRecommendations, getRatingSummary } from "@/lib/api";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
-import FixedBottomAd from "@/components/ads/FixedBottomAd";
 import { getTranslations } from "@/lib/i18n-server";
 import {
 	getLocalizedTitle,
@@ -318,7 +317,6 @@ export default async function MovieDetailPage({ params }: Props) {
         </section>
       </main>
       <Footer />
-      <FixedBottomAd placement="movie_page_fixed_bottom" />
     </>
   );
 }

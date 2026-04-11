@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/filmorauz/backend/models"
@@ -97,35 +98,39 @@ func (s *AuthService) CompleteAuthSession(req *models.AuthSessionRequest) (*mode
 	log.Printf("[AUTH SERVICE] Session is valid, creating/updating user for telegram_id=%d", req.TelegramID)
 
 	// Create or update user with Telegram data
-	// First try to find existing user
-	existingUser, err := s.userRepo.FindByTelegramID(req.TelegramID)
+	existingUser, dbErr := s.userRepo.FindByTelegramID(req.TelegramID)
+	if dbErr != nil {
+		log.Printf("[AUTH SERVICE] ERROR: DB error looking up user: %v", dbErr)
+		return nil, nil, fmt.Errorf("failed to look up user: %w", dbErr)
+	}
+
 	var isNew bool
 	var user *models.User
 
-	if err != nil {
-		// User doesn't exist, create new one
-		user, err = s.userRepo.Create(
+	if existingUser == nil {
+		// User doesn't exist — create new one, sanitizing the name first
+		firstName := sanitizeName(req.FirstName)
+		user, dbErr = s.userRepo.Create(
 			req.TelegramID,
-			req.FirstName,
+			firstName,
 			req.LastName,
 			req.Username,
 			req.PhotoURL,
 			"", // languageCode not in request
 		)
-		if err != nil {
-			log.Printf("[AUTH SERVICE] ERROR: Failed to create user: %v", err)
+		if dbErr != nil {
+			log.Printf("[AUTH SERVICE] ERROR: Failed to create user: %v", dbErr)
 			return nil, nil, errors.New("failed to create user")
 		}
 		isNew = true
 	} else {
-		// User exists, update their info (this would require adding an update method)
-		// For now, just use existing user
+		// User exists — refresh their Telegram info in case it changed
 		user = existingUser
 		isNew = false
-	}
-	if err != nil {
-		log.Printf("[AUTH SERVICE] ERROR: Failed to create/update user: %v", err)
-		return nil, nil, fmt.Errorf("failed to create/update user: %w", err)
+		if err := s.userRepo.UpdateTelegramInfo(req.TelegramID, req.Username, req.FirstName, req.LastName, req.PhotoURL); err != nil {
+			log.Printf("[AUTH SERVICE] WARN: Failed to update telegram info: %v", err)
+			// Non-fatal: continue with existing user data
+		}
 	}
 
 	log.Printf("[AUTH SERVICE] User created/updated: telegram_id=%d, user_id=%s, is_new=%v",
@@ -258,6 +263,16 @@ func (s *AuthService) ValidateToken(tokenStr string) (jwt.MapClaims, error) {
 func HashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	return string(bytes), err
+}
+
+// sanitizeName trims whitespace and rejects placeholder values like "."
+// Returns the cleaned name or empty string if invalid.
+func sanitizeName(name string) string {
+	v := strings.TrimSpace(name)
+	if v == "." || v == "-" {
+		return ""
+	}
+	return v
 }
 
 // generateSecureCode generates a random alphanumeric code

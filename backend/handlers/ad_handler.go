@@ -14,6 +14,15 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
+// telegramMediaArgs maps the ad's TelegramMediaURL/Type to (imageURL, videoURL)
+// arguments expected by SendAdToChannel / SendAdToBot.
+func telegramMediaArgs(mediaURL, mediaType string) (imageURL, videoURL string) {
+	if mediaType == "video" {
+		return "", mediaURL
+	}
+	return mediaURL, ""
+}
+
 type AdHandler struct {
 	adRepo          *repositories.AdRepository
 	telegram        *services.TelegramService
@@ -382,7 +391,8 @@ func (h *AdHandler) SendTelegramAd(c *gin.Context) {
 					target = "@" + target
 				}
 				log.Printf("[AD-TELEGRAM] sending channel ad to %s", target)
-				res := h.telegram.SendAdToChannel(target, ad.Title, ad.Description, ad.ImageURL, ad.VideoURL, ad.TargetURL, ad.CallToAction)
+				imgURL, vidURL := telegramMediaArgs(ad.TelegramMediaURL, ad.TelegramMediaType)
+				res := h.telegram.SendAdToChannel(target, ad.Title, ad.Description, imgURL, vidURL, ad.TargetURL, ad.CallToAction)
 				delivery := &models.AdDelivery{
 					AdID:      id,
 					Placement: "telegram_channel_post",
@@ -432,7 +442,8 @@ func (h *AdHandler) SendTelegramAd(c *gin.Context) {
 		} else {
 			for _, chatID := range chatIDs {
 				log.Printf("[AD-TELEGRAM] sending bot ad to chat_id=%d", chatID)
-				res := h.telegram.SendAdToBot(chatID, ad.Title, ad.Description, ad.ImageURL, ad.VideoURL, ad.TargetURL, ad.CallToAction)
+				imgURL, vidURL := telegramMediaArgs(ad.TelegramMediaURL, ad.TelegramMediaType)
+				res := h.telegram.SendAdToBot(chatID, ad.Title, ad.Description, imgURL, vidURL, ad.TargetURL, ad.CallToAction)
 				target := fmt.Sprintf("bot:%d", chatID)
 				_ = h.adRepo.LogDelivery(&models.AdDelivery{
 					AdID:      id,

@@ -224,6 +224,12 @@ func (r *UserRepository) FindChatIDs(limit int) ([]int64, error) {
 	return chatIDs, nil
 }
 
+// validName returns true if the name is non-empty and not a placeholder like "." or "-"
+func validName(s string) bool {
+	v := strings.TrimSpace(s)
+	return v != "" && v != "." && v != "-"
+}
+
 // UpsertTelegramUser saves or updates a user by telegram_id.
 // Called when a user sends /start to the bot. Persists chat_id for later bot messaging.
 func (r *UserRepository) UpsertTelegramUser(telegramID, chatID int64, username, firstName, lastName string) error {
@@ -231,16 +237,23 @@ func (r *UserRepository) UpsertTelegramUser(telegramID, chatID int64, username, 
 	defer cancel()
 
 	now := time.Now()
+	setFields := bson.M{
+		"telegram_chat_id": chatID,
+		"telegram_user":    username,
+		"updated_at":       now,
+	}
+	// Only overwrite names if they carry real data
+	if validName(firstName) {
+		setFields["first_name"] = strings.TrimSpace(firstName)
+	}
+	if validName(lastName) {
+		setFields["last_name"] = strings.TrimSpace(lastName)
+	}
+
 	result, err := r.col.UpdateOne(ctx,
 		bson.M{"telegram_id": telegramID},
 		bson.M{
-			"$set": bson.M{
-				"telegram_chat_id": chatID,
-				"telegram_user":    username,
-				"first_name":       firstName,
-				"last_name":        lastName,
-				"updated_at":       now,
-			},
+			"$set": setFields,
 			"$setOnInsert": bson.M{
 				"telegram_id":   telegramID,
 				"role":          "user",
@@ -260,6 +273,33 @@ func (r *UserRepository) UpsertTelegramUser(telegramID, chatID int64, username, 
 		log.Printf("[USER] updated bot user telegram_id=%d chat_id=%d", telegramID, chatID)
 	}
 	return nil
+}
+
+// UpdateTelegramInfo refreshes Telegram profile fields on login.
+// Only overwrites a field if the new value is valid (non-empty, not ".").
+func (r *UserRepository) UpdateTelegramInfo(telegramID int64, username, firstName, lastName, photoURL string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	setFields := bson.M{"updated_at": time.Now()}
+	if username != "" {
+		setFields["telegram_user"] = username
+	}
+	if validName(firstName) {
+		setFields["first_name"] = strings.TrimSpace(firstName)
+	}
+	if validName(lastName) {
+		setFields["last_name"] = strings.TrimSpace(lastName)
+	}
+	if photoURL != "" {
+		setFields["photo_url"] = photoURL
+	}
+
+	_, err := r.col.UpdateOne(ctx,
+		bson.M{"telegram_id": telegramID},
+		bson.M{"$set": setFields},
+	)
+	return err
 }
 
 func (r *UserRepository) UpdateLastLogin(userID primitive.ObjectID) error {

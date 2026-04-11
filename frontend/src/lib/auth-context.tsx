@@ -140,23 +140,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const status: TelegramAuthStatusResponse = await getTelegramAuthStatus(code);
 
-      if (status.status === "completed" && status.token && status.user) {
+      if (status.status === "completed" && status.token) {
         // Store token in cookie
         Cookies.set("auth_token", status.token, { expires: 7 });
         setTokenState(status.token);
-        setUser(status.user);
-        
-        // Check if user is banned
-        if (status.user.ban?.is_banned) {
-          setBanInfo({
-            is_banned: true,
-            reason: status.user.ban.reason,
-            banned_at: status.user.ban.banned_at,
-            banned_until: status.user.ban.banned_until,
-            banned_by_username: status.user.ban.banned_by_username,
-          });
+
+        // Fetch full profile so we get the sanitized first_name, photo, etc.
+        try {
+          const fullProfile = await getCurrentUser(status.token);
+          if (fullProfile.authenticated && fullProfile.user) {
+            setUser(fullProfile.user);
+            if (fullProfile.user.ban?.is_banned) {
+              setBanInfo({
+                is_banned: true,
+                reason: fullProfile.user.ban.reason,
+                banned_at: fullProfile.user.ban.banned_at,
+                banned_until: fullProfile.user.ban.banned_until,
+                banned_by_username: fullProfile.user.ban.banned_by_username,
+              });
+            }
+          }
+        } catch {
+          // Fallback: the useEffect on token will pick up the user
         }
-        
+
         return true;
       }
 

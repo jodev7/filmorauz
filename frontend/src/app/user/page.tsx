@@ -12,7 +12,6 @@ import { Heart, History, User as UserIcon, Crown, Calendar, Shield, Clock, Camer
 import { PremiumBadge, PremiumButton, PremiumAvatarRing, resolveIsPremium, resolvePremiumStatus } from "@/components/PremiumComponents";
 import { getFavorites, getWatchHistory, getCurrentUser, updateProfile, uploadProfileImage, updateProfileStyle, updatePrivacySettings, ProfileStyle } from "@/lib/api";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
-import FixedBottomAd from "@/components/ads/FixedBottomAd";
 import { CurrentUser } from "@/lib/api";
 
 // Subtle premium animations (luxury, not flashy)
@@ -223,15 +222,22 @@ export default function UserPage() {
     setLoading(false);
   }
 
+  // Returns true if a name candidate is valid (non-empty, not "." placeholder)
+  const isValidName = (s?: string | null): boolean => {
+    const v = (s ?? "").trim();
+    return v !== "" && v !== "." && v !== "-";
+  };
+
   // Get display name with proper priority
   const getDisplayName = (user: CurrentUser | null): string => {
     if (!user) return "Foydalanuvchi";
-    if (user.display_name) return user.display_name;
-    if (user.first_name) {
-      if (user.last_name) return `${user.first_name} ${user.last_name}`;
-      return user.first_name;
+    if (isValidName(user.display_name)) return user.display_name!.trim();
+    if (isValidName(user.first_name)) {
+      const first = user.first_name!.trim();
+      if (isValidName(user.last_name)) return `${first} ${user.last_name!.trim()}`;
+      return first;
     }
-    if (user.username) return `@${user.username}`;
+    if (isValidName(user.username)) return `@${user.username!.trim()}`;
     return "Foydalanuvchi";
   };
 
@@ -1118,7 +1124,6 @@ export default function UserPage() {
         </div>
       </main>
       <Footer />
-      <FixedBottomAd placement="profile_page_fixed_bottom" />
     </>
   );
 }

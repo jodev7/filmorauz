@@ -1,5 +1,37 @@
 "use client";
 
+import type { Ad } from "@/lib/api";
+
+/**
+ * Picks a weighted random ad using the `priority` field as weight (default 1).
+ * Avoids repeating `currentAdId` when alternatives exist — tries twice before
+ * falling back to any other ad.
+ */
+export function pickWeightedRandomAd(ads: Ad[], currentAdId?: string): Ad {
+  if (ads.length === 1) return ads[0];
+
+  const weights = ads.map((a) => Math.max(a.priority ?? 1, 1));
+  const total = weights.reduce((sum, w) => sum + w, 0);
+
+  const pick = (): Ad => {
+    let rand = Math.random() * total;
+    for (let i = 0; i < ads.length; i++) {
+      rand -= weights[i];
+      if (rand <= 0) return ads[i];
+    }
+    return ads[ads.length - 1];
+  };
+
+  // Try twice to avoid back-to-back repeat
+  const first = pick();
+  if (first.id !== currentAdId) return first;
+  const second = pick();
+  if (second.id !== currentAdId) return second;
+
+  // Last resort: any ad that isn't current, or first
+  return ads.find((a) => a.id !== currentAdId) ?? ads[0];
+}
+
 export function isAdsAllowedForRoute(pathname: string): boolean {
   if (!pathname) return true;
   

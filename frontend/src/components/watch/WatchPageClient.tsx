@@ -1,16 +1,138 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { ChevronLeft, Clock, Calendar, Heart, Eye, Crown } from "lucide-react";
 import VideoPlayer from "@/components/VideoPlayer";
-import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveWatchProgress, markWatchComplete, Movie } from "@/lib/api";
+import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, Ad, Movie } from "@/lib/api";
+import { pickWeightedRandomAd } from "@/lib/ads-utils";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
-import FixedBottomAd from "@/components/ads/FixedBottomAd";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n";
 import { isMoviePremium, isUserPremium, PremiumLockOverlay, PremiumButton, PremiumBadge } from "@/components/PremiumComponents";
 import { getLocalizedTitle, getLocalizedDescription, getLocalizedGenres, getLocalizedCountry } from "@/lib/localization";
+
+const PLAYER_AD_MANDATORY_SECS = 15;
+const PLAYER_AD_REPEAT_MS = 10 * 60 * 1000; // 10 minutes
+
+// Player ad — full-overlay interrupt every 10 minutes, 15s mandatory countdown
+function PlayerOverlayAd() {
+  const [currentAd, setCurrentAd] = useState<Ad | null>(null);
+  const [visible, setVisible] = useState(false);
+  const [countdown, setCountdown] = useState(PLAYER_AD_MANDATORY_SECS);
+  const [canClose, setCanClose] = useState(false);
+
+  const adsRef = useRef<Ad[]>([]);
+  const currentAdIdRef = useRef<string | undefined>(undefined);
+  const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const repeatTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const startCountdown = useCallback(() => {
+    setCountdown(PLAYER_AD_MANDATORY_SECS);
+    setCanClose(false);
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    countdownTimerRef.current = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(countdownTimerRef.current!);
+          countdownTimerRef.current = null;
+          setCanClose(true);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }, []);
+
+  const showAd = useCallback(() => {
+    const list = adsRef.current;
+    if (list.length === 0) return;
+    const picked = pickWeightedRandomAd(list, currentAdIdRef.current);
+    currentAdIdRef.current = picked.id;
+    setCurrentAd(picked);
+    setVisible(true);
+    recordAdImpression(picked.id).catch(() => {});
+    startCountdown();
+  }, [startCountdown]);
+
+  const dismiss = useCallback(() => {
+    setVisible(false);
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+    if (repeatTimerRef.current) clearTimeout(repeatTimerRef.current);
+    repeatTimerRef.current = setTimeout(showAd, PLAYER_AD_REPEAT_MS);
+  }, [showAd]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getAdsForWebsite("watch_player_overlay")
+      .then((data) => {
+        if (cancelled) return;
+        const valid = data.filter(
+          (a) => a.player_overlay_media_url || a.banner_media_url || a.image_url
+        );
+        adsRef.current = valid;
+        if (valid.length > 0) showAd();
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+      if (repeatTimerRef.current) clearTimeout(repeatTimerRef.current);
+    };
+  }, [showAd]);
+
+  if (!visible || !currentAd) return null;
+
+  const url = currentAd.player_overlay_media_url || currentAd.banner_media_url || currentAd.image_url || "";
+  const isVideo =
+    currentAd.player_overlay_media_type === "video" ||
+    currentAd.banner_media_type === "video" ||
+    url.endsWith(".mp4") ||
+    url.endsWith(".webm");
+
+  const handleClick = () => {
+    recordAdClick(currentAd.id).catch(() => {});
+    window.open(currentAd.target_url, "_blank", "noopener,noreferrer");
+  };
+
+  return (
+    <div className="absolute bottom-0 left-0 right-0 h-[90px] z-10 overflow-hidden">
+      <div className="relative w-full h-full cursor-pointer" onClick={handleClick}>
+        {isVideo ? (
+          <video
+            src={url}
+            className="absolute inset-0 w-full h-full object-cover"
+            autoPlay
+            muted
+            loop
+            playsInline
+          />
+        ) : (
+          <img src={url} alt="Ad" className="absolute inset-0 w-full h-full object-cover" />
+        )}
+        <div className="absolute top-1 right-1">
+          {canClose ? (
+            <button
+              onClick={(e) => { e.stopPropagation(); dismiss(); }}
+              className="w-5 h-5 flex items-center justify-center rounded-full bg-black/60 text-white text-xs hover:bg-black/90 transition"
+              aria-label="Close ad"
+            >
+              ×
+            </button>
+          ) : (
+            <span className="text-[10px] text-white bg-black/70 px-2 py-0.5 rounded whitespace-nowrap pointer-events-none">
+              Reklamani yopish uchun {countdown} soniya qoldi
+            </span>
+          )}
+        </div>
+        <span className="absolute top-1 left-1 text-[9px] text-gray-300 bg-black/50 px-1 rounded uppercase tracking-wide pointer-events-none">Ad</span>
+      </div>
+    </div>
+  );
+}
 
 // Fetch watch progress for resume
 async function getWatchProgressForResume(token: string, movieId: string): Promise<number> {
@@ -180,7 +302,7 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
   };
 
   return (
-    <>
+    <div className="pt-16">
       {/* Minimal top bar */}
       <div className="bg-brand-dark/95 backdrop-blur-sm border-b border-brand-border px-3 sm:px-4 py-2 sm:py-3 flex items-center gap-3 sm:gap-4">
         <Link
@@ -243,7 +365,6 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
             </div>
           </div>
         ) : (
-          // future preroll ad hook — insert player_preroll_placeholder slot here before VideoPlayer
           <div className="relative">
             <VideoPlayer
               videoUrl={movie.video_url}
@@ -252,6 +373,7 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
               title={localizedTitle}
               posterUrl={movie.backdrop_url || movie.poster_url}
             />
+            <PlayerOverlayAd />
           </div>
         )}
 
@@ -336,7 +458,6 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
           <RecommendationsRow movies={recommendations} />
         )}
       </div>
-      <FixedBottomAd placement="watch_page_fixed_bottom" />
-    </>
+    </div>
   );
 }

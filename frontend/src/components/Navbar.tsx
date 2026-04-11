@@ -105,13 +105,13 @@ export default function Navbar() {
   };
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-[70] bg-brand-dark/90 backdrop-blur-md border-b border-brand-border">
+    <header className="fixed top-0 left-0 right-0 z-[70] bg-[#0a0a0f]/95 backdrop-blur-md border-b border-[#1e1e2e]">
       <nav className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2 shrink-0">
-          <Film className="text-brand-red" size={22} />
+          <Film className="text-orange-500" size={22} />
           <span className="font-display text-xl sm:text-2xl tracking-wider text-white">
-            FILMORA<span className="text-brand-red">UZ</span>
+            FILMORA<span className="text-orange-500">UZ</span>
           </span>
           {resolveIsPremium(user) && (
             <span className="hidden sm:inline-flex items-center gap-1 text-xs bg-gradient-to-r from-yellow-500 to-amber-600 text-black px-2 py-0.5 rounded-full font-medium shadow-[0_0_10px_rgba(234,179,8,0.3)]">
@@ -122,37 +122,37 @@ export default function Navbar() {
         </Link>
 
         {/* Desktop nav links */}
-        <div className="hidden md:flex items-center gap-5 text-sm font-medium text-gray-400">
-          <Link href="/" className="hover:text-white transition-colors">
+        <div className="hidden md:flex items-center gap-1 text-sm font-medium text-zinc-400">
+          <Link href="/" className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors">
             {t("common.home")}
           </Link>
-          <Link href="/movies" className="hover:text-white transition-colors">
+          <Link href="/movies" className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors">
             {t("common.movies")}
           </Link>
-          <Link href="/series" className="hover:text-white transition-colors">
+          <Link href="/series" className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors">
             Seriallar
           </Link>
           <Link
             href="/movies?genre=Action"
-            className="hover:text-white transition-colors"
+            className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors"
           >
             {t("common.action")}
           </Link>
           <Link
             href="/movies?genre=Drama"
-            className="hover:text-white transition-colors"
+            className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors"
           >
             {t("common.drama")}
           </Link>
           <Link
             href="/movies?genre=Comedy"
-            className="hover:text-white transition-colors"
+            className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors"
           >
             {t("common.comedy")}
           </Link>
           <Link
             href="/premium"
-            className="flex items-center gap-1.5 text-yellow-500 hover:text-yellow-400 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-yellow-500 hover:text-yellow-400 hover:bg-yellow-500/10 transition-colors"
           >
             <Crown size={14} />
             Premium
@@ -171,7 +171,7 @@ export default function Navbar() {
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder={t("common.searchPlaceholder")}
-                  className="bg-brand-card border border-brand-border rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-brand-red w-44 sm:w-64 transition-all"
+                  className="bg-[#12121a] border border-[#1e1e2e] rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-orange-500 w-44 sm:w-64 transition-all"
                 />
                 <button
                   type="button"
@@ -180,7 +180,7 @@ export default function Navbar() {
                     setQuery("");
                     setResults([]);
                   }}
-                  className="ml-2 text-gray-400 hover:text-white"
+                  className="ml-2 text-zinc-400 hover:text-white"
                 >
                   <X size={18} />
                 </button>
@@ -188,7 +188,7 @@ export default function Navbar() {
             ) : (
               <button
                 onClick={() => setSearchOpen(true)}
-                className="text-gray-400 hover:text-white transition-colors p-1"
+                className="text-zinc-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5"
                 aria-label={t("common.search")}
               >
                 <Search size={20} />
@@ -197,9 +197,9 @@ export default function Navbar() {
 
             {/* Search dropdown */}
             {results.length > 0 && (
-              <div className="absolute top-full right-0 mt-2 w-72 bg-brand-card border border-brand-border rounded-xl overflow-hidden shadow-2xl">
+              <div className="absolute top-full right-0 mt-2 w-72 bg-[#12121a] border border-[#1e1e2e] rounded-xl overflow-hidden shadow-2xl">
                 {searching && (
-                  <div className="px-4 py-2 text-xs text-gray-500">
+                  <div className="px-4 py-2 text-xs text-zinc-500">
                     {t("common.loading")}
                   </div>
                 )}
@@ -207,7 +207,7 @@ export default function Navbar() {
                   <button
                     key={movie.id}
                     onClick={() => handleMovieClick(movie.slug)}
-                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-brand-border transition-colors text-left"
+                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#1e1e2e] transition-colors text-left"
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
@@ -222,13 +222,13 @@ export default function Navbar() {
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-white truncate">
                         {movie.code && (
-                          <span className="text-gray-500 font-mono text-xs mr-1">
+                          <span className="text-zinc-500 font-mono text-xs mr-1">
                             #{movie.code}
                           </span>
                         )}
                         {getLocalizedTitle(movie)}
                       </p>
-                      <p className="text-xs text-gray-500">
+                      <p className="text-xs text-zinc-500">
                         {movie.year} · {getLocalizedGenres(movie)?.join(", ")}
                       </p>
                     </div>
@@ -245,17 +245,17 @@ export default function Navbar() {
                 <NotificationBell />
                 <Link
                   href="/user"
-                  className="flex items-center justify-center w-10 h-10 rounded-full bg-brand-card border border-brand-border hover:border-brand-red/50 transition-colors relative"
+                  className="flex items-center justify-center w-10 h-10 rounded-full bg-[#12121a] border border-[#1e1e2e] hover:border-orange-500/50 transition-colors relative"
                   aria-label="Profile"
                 >
                   {(user?.profile_image_url || user?.photo_url) ? (
                     <img
                       src={user.profile_image_url || user.photo_url}
                       alt="Profile"
-                      className={`w-full h-full rounded-full object-cover ${resolveIsPremium(user) ? 'ring-2 ring-yellow-500 ring-offset-2 ring-offset-brand-dark' : ''}`}
+                      className={`w-full h-full rounded-full object-cover ${resolveIsPremium(user) ? 'ring-2 ring-yellow-500 ring-offset-2 ring-offset-[#0a0a0f]' : ''}`}
                     />
                   ) : (
-                    <User size={20} className={resolveIsPremium(user) ? 'text-yellow-400' : 'text-gray-400'} />
+                    <User size={20} className={resolveIsPremium(user) ? 'text-yellow-400' : 'text-zinc-400'} />
                   )}
                   {/* Premium crown indicator */}
                   {resolveIsPremium(user) && (
@@ -268,10 +268,10 @@ export default function Navbar() {
             ) : (
               <button
                 onClick={() => setLoginModalOpen(true)}
-                className="flex items-center justify-center w-10 h-10 rounded-full bg-brand-card border border-brand-border hover:border-brand-red/50 transition-colors"
+                className="flex items-center justify-center w-10 h-10 rounded-full bg-[#12121a] border border-[#1e1e2e] hover:border-orange-500/50 transition-colors"
                 aria-label="Login"
               >
-                <LogIn size={20} className="text-gray-400" />
+                <LogIn size={20} className="text-zinc-400" />
               </button>
             )
           )}
@@ -279,7 +279,7 @@ export default function Navbar() {
           {/* Mobile menu toggle */}
           <button
             onClick={() => setMenuOpen(!menuOpen)}
-            className="md:hidden text-gray-400 hover:text-white transition-colors p-1"
+            className="md:hidden text-zinc-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5"
             aria-label="Toggle menu"
           >
             {menuOpen ? <X size={22} /> : <Menu size={22} />}
@@ -289,7 +289,7 @@ export default function Navbar() {
 
       {/* Mobile menu */}
       {menuOpen && (
-        <div className="md:hidden border-t border-brand-border bg-brand-dark/95 backdrop-blur-md px-4 py-4 flex flex-col gap-1">
+        <div className="md:hidden border-t border-[#1e1e2e] bg-[#0a0a0f]/95 backdrop-blur-md px-4 py-4 flex flex-col gap-1">
           {/* Mobile search */}
           <form
             onSubmit={handleSearchSubmit}
@@ -298,19 +298,19 @@ export default function Navbar() {
             <div className="relative flex-1">
               <Search
                 size={15}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
               />
               <input
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={t("common.searchPlaceholder")}
-                className="w-full bg-brand-card border border-brand-border rounded-lg pl-9 pr-4 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-red transition-colors"
+                className="w-full bg-[#12121a] border border-[#1e1e2e] rounded-lg pl-9 pr-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-orange-500 transition-colors"
               />
             </div>
             <button
               type="submit"
-              className="bg-brand-red text-white px-3 py-2.5 rounded-lg text-sm font-medium"
+              className="bg-orange-500 text-white px-3 py-2.5 rounded-lg text-sm font-medium"
             >
               {t("common.search")}
             </button>
@@ -318,12 +318,12 @@ export default function Navbar() {
 
           {/* Mobile search results */}
           {results.length > 0 && (
-            <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden mb-3">
+            <div className="bg-[#12121a] border border-[#1e1e2e] rounded-xl overflow-hidden mb-3">
               {results.slice(0, 4).map((movie) => (
                 <button
                   key={movie.id}
                   onClick={() => handleMovieClick(movie.slug)}
-                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-brand-border transition-colors text-left border-b border-brand-border/50 last:border-0"
+                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#1e1e2e] transition-colors text-left border-b border-[#1e1e2e]/50 last:border-0"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
@@ -336,7 +336,7 @@ export default function Navbar() {
                   />
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-white truncate">{getLocalizedTitle(movie)}</p>
-                    <p className="text-xs text-gray-500">{movie.year}</p>
+                    <p className="text-xs text-zinc-500">{movie.year}</p>
                   </div>
                 </button>
               ))}
@@ -356,7 +356,7 @@ export default function Navbar() {
               key={item.href}
               href={item.href}
               onClick={() => setMenuOpen(false)}
-              className="flex items-center px-3 py-3 rounded-lg text-sm font-medium text-gray-400 hover:text-white hover:bg-brand-border transition-colors"
+              className="flex items-center px-3 py-3 rounded-lg text-sm font-medium text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
             >
               {item.label}
             </Link>
@@ -378,7 +378,7 @@ export default function Navbar() {
               <Link
                 href="/user"
                 onClick={() => setMenuOpen(false)}
-                className="flex items-center px-3 py-3 rounded-lg text-sm font-medium text-gray-400 hover:text-white hover:bg-brand-border transition-colors"
+                className="flex items-center px-3 py-3 rounded-lg text-sm font-medium text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
               >
                 <User size={16} className="mr-2" />
                 Profil
@@ -389,7 +389,7 @@ export default function Navbar() {
                   setMenuOpen(false);
                   setLoginModalOpen(true);
                 }}
-                className="flex items-center px-3 py-3 rounded-lg text-sm font-medium text-gray-400 hover:text-white hover:bg-brand-border transition-colors"
+                className="flex items-center px-3 py-3 rounded-lg text-sm font-medium text-zinc-400 hover:text-white hover:bg-white/5 transition-colors"
               >
                 <LogIn size={16} className="mr-2" />
                 Kirish
