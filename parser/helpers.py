@@ -275,6 +275,18 @@ def create_debug_summary(
     }
 
 
+def is_youtube_url(url: str) -> bool:
+    """Return True if url is a YouTube watch/shorts/youtu.be link."""
+    if not url:
+        return False
+    u = url.lower()
+    return (
+        "youtube.com/watch" in u
+        or "youtube.com/shorts/" in u
+        or "youtu.be/" in u
+    )
+
+
 def isValidStreamUrl(url: str) -> bool:
     """
     Validate if a URL is a valid media stream URL (not an HTML page).
@@ -304,14 +316,18 @@ def isValidStreamUrl(url: str) -> bool:
     """
     if not url:
         return False
-    
+
+    # YouTube URLs are handled by yt-dlp — always valid
+    if is_youtube_url(url):
+        return True
+
     url_lower = url.lower()
-    
+
     # === REJECT: HTML files at the end of URL ===
     # Be careful not to reject .mp4.html style CDN URLs
     if url_lower.endswith(".html") or url_lower.endswith(".htm"):
         return False
-    
+
     # === ACCEPT: Direct media extensions (HIGHEST PRIORITY) ===
     
     if ".m3u8" in url_lower:

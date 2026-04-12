@@ -94,6 +94,12 @@ func (h *PublishJobHandler) UploadNow(c *gin.Context) {
 	results := make([]jobResult, 0, len(req.Jobs))
 	overallStatus := "success"
 
+	userID, _ := c.Get("user_id")
+	createdBy := ""
+	if userID != nil {
+		createdBy, _ = userID.(string)
+	}
+
 	for _, j := range req.Jobs {
 		job := &models.PublishJob{
 			ClipID:      clipID,
@@ -103,11 +109,14 @@ func (h *PublishJobHandler) UploadNow(c *gin.Context) {
 			MovieCode:   clip.MovieCode,
 			Platform:    j.Platform,
 			AccountName: j.AccountName,
+			CreatedBy:   createdBy,
 		}
 		log.Printf("[PublishNow] clip=%s platform=%s account=%s", clipID.Hex(), j.Platform, j.AccountName)
 		uploadErr := services.ExecutePlatformUpload(h.parserURL, job)
 		if uploadErr != nil {
 			log.Printf("[PublishNow] failed platform=%s account=%s: %v", j.Platform, j.AccountName, uploadErr)
+			job.Status = models.PublishJobStatusFailed
+			job.Error = uploadErr.Error()
 			results = append(results, jobResult{
 				Platform:    j.Platform,
 				AccountName: j.AccountName,
@@ -115,29 +124,28 @@ func (h *PublishJobHandler) UploadNow(c *gin.Context) {
 				Error:       uploadErr.Error(),
 			})
 			overallStatus = "failed"
+			// Record failure for Instagram on the clip document
+			if j.Platform == models.PublishPlatformInstagram {
+				_ = h.clipRepo.RecordInstagramUpload(ctx, clipID, "failed")
+			}
 		} else {
 			log.Printf("[PublishNow] success platform=%s account=%s", j.Platform, j.AccountName)
+			job.Status = models.PublishJobStatusSuccess
 			results = append(results, jobResult{
 				Platform:    j.Platform,
 				AccountName: j.AccountName,
 				Status:      "success",
 			})
-			// Persist Instagram upload on clip document for dashboard status column
+			// Record Instagram upload on the clip document (legacy field used by dashboard)
 			if j.Platform == models.PublishPlatformInstagram {
 				if err := h.clipRepo.RecordInstagramUpload(ctx, clipID, "success"); err != nil {
 					log.Printf("[PublishNow] RecordInstagramUpload error clip=%s: %v", clipID.Hex(), err)
 				}
 			}
 		}
-	}
-
-	// If any Instagram job failed and none succeeded, record failure
-	if overallStatus == "failed" {
-		for _, r := range results {
-			if r.Platform == models.PublishPlatformInstagram && r.Status == "failed" {
-				_ = h.clipRepo.RecordInstagramUpload(ctx, clipID, "failed")
-				break
-			}
+		// Persist every upload attempt (all platforms) as a completed PublishJob record
+		if err := h.jobRepo.RecordCompleted(job); err != nil {
+			log.Printf("[PublishNow] RecordCompleted error platform=%s account=%s: %v", j.Platform, j.AccountName, err)
 		}
 	}
 

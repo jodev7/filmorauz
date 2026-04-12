@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 # Import validation function for URL validation
-from helpers import isValidStreamUrl
+from helpers import isValidStreamUrl, is_youtube_url
 
 logger = logging.getLogger(__name__)
 
@@ -1120,8 +1120,71 @@ class DownloaderService:
         
         if not result.success:
             raise DownloadError(f"DDownloader failed: {result.error}")
-        
+
         return result.local_path
+
+    def _download_youtube(
+        self,
+        url: str,
+        output_name: str,
+        backend_job_id: str | None = None,
+    ) -> dict:
+        """Download a YouTube video using yt-dlp and return smart_download-compatible dict."""
+        import subprocess, sys as _sys
+
+        os.makedirs(self.download_dir, exist_ok=True)
+
+        # Strip extension — yt-dlp adds its own
+        base_name = output_name.rsplit(".", 1)[0] if "." in output_name else output_name
+        output_template = os.path.join(self.download_dir, base_name + ".%(ext)s")
+
+        cmd = [
+            _sys.executable, "-m", "yt_dlp",
+            "--no-playlist",
+            "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            "--merge-output-format", "mp4",
+            "-o", output_template,
+            "--no-warnings",
+            url,
+        ]
+
+        logger.info(f"[YTDLP] Downloading: {url[:80]}")
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=3600,
+            )
+        except subprocess.TimeoutExpired:
+            raise DownloadError("yt-dlp timed out after 60 minutes")
+
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            raise DownloadError(f"yt-dlp failed: {err[:300]}")
+
+        # Find the downloaded file
+        local_path = None
+        for ext in ("mp4", "mkv", "webm", "m4v"):
+            candidate = os.path.join(self.download_dir, f"{base_name}.{ext}")
+            if os.path.exists(candidate):
+                local_path = candidate
+                break
+
+        if not local_path:
+            raise DownloadError("yt-dlp completed but output file not found")
+
+        file_size = os.path.getsize(local_path)
+        logger.info(f"[YTDLP] Download complete: {local_path} ({file_size} bytes)")
+
+        return {
+            "success": True,
+            "type": "mp4",
+            "file_path": local_path,
+            "file_name": os.path.basename(local_path),
+            "file_size": file_size,
+        }
 
     def smart_download(
         self,
@@ -1151,7 +1214,12 @@ class DownloaderService:
         """
         logger.info(f"[DOWNLOADER] smart_download called: url={url[:50]}..., output_name={output_name}")
         logger.info(f"[DOWNLOADER] job_id={job_id}, backend_job_id='{backend_job_id}', max_retries={max_retries}")
-        
+
+        # === YOUTUBE FAST-PATH ===
+        if is_youtube_url(url):
+            logger.info(f"[DOWNLOADER] YouTube URL detected — using yt-dlp")
+            return self._download_youtube(url, output_name, backend_job_id=backend_job_id)
+
         # === CRITICAL URL VALIDATION ===
         # Ensure URL is a valid stream URL before attempting download
         # This prevents passing HTML pages to N_m3u8DL which would cause errors

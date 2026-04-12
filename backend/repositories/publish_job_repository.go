@@ -47,6 +47,25 @@ func (r *PublishJobRepository) CreateMany(jobs []*models.PublishJob) error {
 	return err
 }
 
+// RecordCompleted inserts a single PublishJob that was already executed (status success or failed).
+// Used by UploadNow to persist immediate upload results for all platforms.
+func (r *PublishJobRepository) RecordCompleted(job *models.PublishJob) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	job.ID = primitive.NewObjectID()
+	job.CreatedAt = now
+	job.UpdatedAt = now
+	if job.ScheduledFor.IsZero() {
+		job.ScheduledFor = now
+	}
+	if job.ExecutedAt == nil {
+		job.ExecutedAt = &now
+	}
+	_, err := r.col.InsertOne(ctx, job)
+	return err
+}
+
 func (r *PublishJobRepository) FindByClipID(clipID primitive.ObjectID) ([]models.PublishJob, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

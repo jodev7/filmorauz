@@ -9,6 +9,9 @@ python-dotenv>=1.0.0
 # Instagram
 instagrapi>=2.0.0
 
+# YouTube download (manual import)
+yt-dlp>=2024.1.0
+
 # YouTube (OAuth2 + Data API)
 google-api-python-client>=2.100.0
 google-auth>=2.23.0
