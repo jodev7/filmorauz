@@ -450,50 +450,92 @@ class ParserHandler(BaseHTTPRequestHandler):
             # ── MANUAL SOURCE HANDLING ──────────────────────────────────
             if source == "manual":
                 video_url = query.get("video_url", [""])[0] or detail_url
-                title = query.get("title", ["Manual Import"])[0]
-                poster_url = query.get("poster_url", [""])[0]
-                year_str = query.get("year", ["0"])[0]
+                # Admin-entered values (forwarded by worker from job.Metadata)
+                admin_title    = query.get("title", [""])[0].strip()
+                admin_poster   = query.get("poster_url", [""])[0].strip()
+                admin_backdrop = query.get("backdrop_url", [""])[0].strip()
+                year_str       = query.get("year", ["0"])[0]
                 try:
-                    year = int(year_str) if year_str else 0
+                    admin_year = int(year_str) if year_str else 0
                 except ValueError:
-                    year = 0
-                
-                logger.info(f"[PARSER] Manual source: video_url={video_url}, title={title}")
-                
+                    admin_year = 0
+
+                logger.info(f"[PARSER] Manual source: video_url={video_url}, admin_title={admin_title!r}")
+
                 if not video_url:
                     self._send_error("Manual source requires 'video_url' or 'url' parameter")
                     return
-                
-                # Detect video type from URL
-                url_type = "mp4"  # default
-                video_url_lower = video_url.lower()
-                if ".m3u8" in video_url_lower or "m3u8" in video_url_lower:
+
+                from helpers import is_youtube_url as _is_yt
+                import re as _re, subprocess as _sp, sys as _sys
+
+                # ── YouTube: fetch metadata via yt-dlp --dump-json ──────
+                yt_title = ""
+                yt_year  = 0
+                yt_poster = ""
+                yt_description = ""
+
+                if _is_yt(video_url):
+                    try:
+                        meta_proc = _sp.run(
+                            [_sys.executable, "-m", "yt_dlp", "--dump-json",
+                             "--no-playlist", "--no-warnings", video_url],
+                            capture_output=True, text=True, timeout=30,
+                        )
+                        if meta_proc.returncode == 0 and meta_proc.stdout.strip():
+                            import json as _json
+                            yt_meta = _json.loads(meta_proc.stdout.strip())
+                            yt_title       = yt_meta.get("title", "")
+                            yt_description = yt_meta.get("description", "")
+                            # thumbnail: prefer the best-quality one
+                            thumbs = yt_meta.get("thumbnails") or []
+                            if thumbs:
+                                yt_poster = thumbs[-1].get("url", "") or yt_meta.get("thumbnail", "")
+                            else:
+                                yt_poster = yt_meta.get("thumbnail", "")
+                            upload_date = yt_meta.get("upload_date", "")  # YYYYMMDD
+                            if upload_date and len(upload_date) >= 4:
+                                try:
+                                    yt_year = int(upload_date[:4])
+                                except ValueError:
+                                    pass
+                            logger.info(f"[PARSER] YouTube metadata: title={yt_title!r}, year={yt_year}, thumb={yt_poster[:60]}")
+                    except Exception as _yt_err:
+                        logger.warning(f"[PARSER] yt-dlp metadata fetch failed (continuing): {_yt_err}")
+
+                # ── Merge: admin-entered values override YouTube metadata ─
+                title       = admin_title    or yt_title       or "Manual Import"
+                year        = admin_year     or yt_year        or 0
+                poster_url  = admin_poster   or yt_poster      or ""
+                backdrop_url = admin_backdrop or ""
+                description  = yt_description or ""
+
+                # Detect video type (not relevant for YouTube, defaults to mp4)
+                url_type = "mp4"
+                url_lower = video_url.lower()
+                if ".m3u8" in url_lower or "m3u8" in url_lower:
                     url_type = "m3u8"
-                elif ".mpd" in video_url_lower or "mpd" in video_url_lower:
+                elif ".mpd" in url_lower:
                     url_type = "mpd"
-                elif ".mp4" in video_url_lower:
-                    url_type = "mp4"
-                
-                logger.info(f"[PARSER] Manual source detected type: {url_type}")
-                
-                # For manual source, download the video
-                import re as _re
-                output_name = _re.sub(r'[^\w\s-]', '', title)
-                output_name = _re.sub(r'[-\s]+', '_', output_name)
-                output_name = f"{output_name}.mp4" if output_name else "manual_import.mp4"
-                
+
+                logger.info(f"[PARSER] Manual resolved: title={title!r}, year={year}, poster={poster_url[:60]}")
+
+                # ── Sanitize output filename ───────────────────────────
+                safe_title  = _re.sub(r'[^\w\s-]', '', title)
+                safe_title  = _re.sub(r'[-\s]+', '_', safe_title)
+                output_name = f"{safe_title}.mp4" if safe_title else "manual_import.mp4"
+
                 backend_job_id = job_id if job_id else ""
-                
+
                 try:
-                    # Report download start
                     if backend_job_id and BACKEND_URL:
                         self._report_progress_to_backend(backend_job_id, {
                             "stage": "download",
                             "status": "downloading",
                             "progress_percent": 0,
-                            "message": "Starting manual download...",
+                            "message": "Starting download...",
                         })
-                    
+
                     download_result = downloader_service.smart_download(
                         url=video_url,
                         output_name=output_name,
@@ -501,7 +543,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                         backend_job_id=backend_job_id,
                         referer=None,
                     )
-                    
+
                     if not download_result.get("success"):
                         error_msg = download_result.get("error", "Download failed")
                         logger.error(f"[PARSER] Manual download failed: {error_msg}")
@@ -515,13 +557,12 @@ class ParserHandler(BaseHTTPRequestHandler):
                             "local_path": "",
                         }, 500)
                         return
-                    
+
                     local_path = download_result.get("file_path", "")
-                    file_size = os.path.getsize(local_path) if local_path and os.path.exists(local_path) else 0
-                    
+                    file_size  = os.path.getsize(local_path) if local_path and os.path.exists(local_path) else 0
+
                     logger.info(f"[PARSER] Manual download successful: {local_path} ({file_size} bytes)")
-                    
-                    # Report download complete
+
                     if backend_job_id and BACKEND_URL:
                         self._report_progress_to_backend(backend_job_id, {
                             "stage": "process",
@@ -531,34 +572,37 @@ class ParserHandler(BaseHTTPRequestHandler):
                             "file_path": local_path,
                             "message": "Download completed",
                         })
-                    
+
                     self._send_json({
-                        "success": True,
-                        "source": "manual",
-                        "title": title,
-                        "year": year,
-                        "poster": poster_url,
-                        "poster_url": poster_url,
-                        "video_url": video_url,
-                        "video_url_type": url_type,
-                        "video_found": True,
-                        "download_needed": False,
+                        "success":           True,
+                        "source":            "manual",
+                        "title":             title,
+                        "description":       description,
+                        "year":              year,
+                        "poster":            poster_url,
+                        "poster_url":        poster_url,
+                        "backdrop":          backdrop_url,
+                        "backdrop_url":      backdrop_url,
+                        "video_url":         video_url,
+                        "video_url_type":    url_type,
+                        "video_found":       True,
+                        "download_needed":   False,
                         "download_completed": True,
-                        "local_path": local_path,
-                        "file_path": local_path,
-                        "file_size": file_size,
-                        "stream_type": url_type,
+                        "local_path":        local_path,
+                        "file_path":         local_path,
+                        "file_size":         file_size,
+                        "stream_type":       url_type,
                     })
                 except Exception as e:
                     logger.error(f"[PARSER] Manual source error: {e}", exc_info=True)
                     self._send_json({
-                        "success": False,
-                        "error": str(e),
-                        "source": "manual",
-                        "title": title,
-                        "video_url": video_url,
+                        "success":       False,
+                        "error":         str(e),
+                        "source":        "manual",
+                        "title":         title,
+                        "video_url":     video_url,
                         "video_url_type": url_type,
-                        "local_path": "",
+                        "local_path":    "",
                     }, 500)
                 return
             # ── END MANUAL SOURCE ───────────────────────────────────────

@@ -614,6 +614,22 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 	params.Set("id", job.SourceID)
 	params.Set("url", job.DetailURL)
 	params.Set("job_id", jobID)
+	// For manual jobs, forward admin-entered metadata so the parser can use it
+	// as override / fallback instead of returning generic placeholder values.
+	if job.Source == "manual" && job.Metadata != nil {
+		if job.Metadata.Title != "" {
+			params.Set("title", job.Metadata.Title)
+		}
+		if job.Metadata.Year > 0 {
+			params.Set("year", fmt.Sprintf("%d", job.Metadata.Year))
+		}
+		if job.Metadata.Poster != "" {
+			params.Set("poster_url", job.Metadata.Poster)
+		}
+		if job.Metadata.Backdrop != "" {
+			params.Set("backdrop_url", job.Metadata.Backdrop)
+		}
+	}
 	parserURL := parserEndpoint + "?" + params.Encode()
 
 	log.Printf("[WORKER] Calling parser /details with job_id=%s", jobID)
