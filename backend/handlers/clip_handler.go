@@ -171,12 +171,15 @@ func (h *ClipHandler) UploadToInstagram(c *gin.Context) {
 		return
 	}
 
-	caption := fmt.Sprintf("%s\n\nKinoni profildagi botdan toping!", clip.MovieTitle)
+	caption := fmt.Sprintf("%s\n\nKinoni profildagi bot orqali toping!\nKino Kodi: %s", clip.MovieTitle, clip.MovieCode)
 
 	type accountResult struct {
-		Account string `json:"account"`
-		Status  string `json:"status"`
-		Error   string `json:"error,omitempty"`
+		Account        string `json:"account"`
+		Status         string `json:"status"`
+		ErrorType      string `json:"error_type,omitempty"`
+		HumanMessage   string `json:"human_message,omitempty"`
+		ActionRequired string `json:"action_required,omitempty"`
+		Error          string `json:"error,omitempty"`
 	}
 	results := make([]accountResult, 0, len(req.AccountNames))
 	overallStatus := "success"
@@ -185,15 +188,36 @@ func (h *ClipHandler) UploadToInstagram(c *gin.Context) {
 		account := services.GetInstagramAccount(name)
 		if account == nil {
 			log.Printf("[Instagram] account not found: %s", name)
-			results = append(results, accountResult{Account: name, Status: "failed", Error: "account not configured"})
+			results = append(results, accountResult{
+				Account:      name,
+				Status:       "failed",
+				ErrorType:    "account_not_configured",
+				HumanMessage: "Akkaunt sozlanmagan (INSTAGRAM_ACCOUNTS_JSON)",
+				Error:        "account not configured",
+			})
 			overallStatus = "failed"
 			continue
 		}
 		log.Printf("[Instagram] uploading clip=%s to account=%s url=%s", clip.ID.Hex(), name, clip.URL)
 		uploadErr := services.UploadReelToInstagram(h.parserURL, clip.URL, caption, account)
 		if uploadErr != nil {
-			log.Printf("[Instagram] upload failed account=%s: %v", name, uploadErr)
-			results = append(results, accountResult{Account: name, Status: "failed", Error: uploadErr.Error()})
+			errorType := "publish_failed"
+			humanMsg := "Yuklash muvaffaqiyatsiz tugadi"
+			actionReq := ""
+			if igErr, ok := uploadErr.(*services.InstagramUploadError); ok {
+				errorType = igErr.ErrorType
+				humanMsg = igErr.HumanMessage
+				actionReq = igErr.ActionRequired
+			}
+			log.Printf("[Instagram] upload failed account=%s type=%s: %v", name, errorType, uploadErr)
+			results = append(results, accountResult{
+				Account:        name,
+				Status:         "failed",
+				ErrorType:      errorType,
+				HumanMessage:   humanMsg,
+				ActionRequired: actionReq,
+				Error:          uploadErr.Error(),
+			})
 			overallStatus = "failed"
 		} else {
 			log.Printf("[Instagram] upload success account=%s", name)

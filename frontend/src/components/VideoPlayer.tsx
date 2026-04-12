@@ -21,6 +21,8 @@ interface Props {
   sourceType?: VideoSourceType;
   title: string;
   posterUrl?: string;
+  onPlayIntent?: () => void;
+  forceStart?: boolean;
 }
 
 // Detect if URL is an embed (YouTube, Vimeo, etc.)
@@ -191,7 +193,7 @@ function formatTime(s: number): string {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
-function HLSPlayer({ src, poster }: { src: string; poster?: string }) {
+function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; poster?: string; autoPlay?: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -250,11 +252,13 @@ function HLSPlayer({ src, poster }: { src: string; poster?: string }) {
             }
           });
         setQualities(levels);
+        if (shouldAutoPlay) {
+          video.play().catch(() => {});
+        }
       });
 
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (data.fatal) {
-          console.error("[HLS] fatal error:", data.type, data.details);
           setError("Video yuklanmadi. Sahifani yangilang.");
           hls.destroy();
         }
@@ -272,12 +276,19 @@ function HLSPlayer({ src, poster }: { src: string; poster?: string }) {
     }
   }, [src]);
 
-  // Sync selected quality to hls.js
-  useEffect(() => {
-    if (hlsRef.current) {
-      hlsRef.current.currentLevel = selectedQuality;
+  const handleQualityChange = useCallback((index: number) => {
+    setSelectedQuality(index);
+    setShowQualityMenu(false);
+    const hls = hlsRef.current;
+    const video = videoRef.current;
+    if (!hls) return;
+    hls.currentLevel = index;
+    // Seek to current position to flush buffered old-quality data and reload at new level
+    if (video) {
+      const t = video.currentTime;
+      video.currentTime = t;
     }
-  }, [selectedQuality]);
+  }, []);
 
   // Sync speed
   useEffect(() => {
@@ -410,11 +421,19 @@ function HLSPlayer({ src, poster }: { src: string; poster?: string }) {
         <div className="relative px-3 pb-3 space-y-1.5" onClick={(e) => e.stopPropagation()}>
           {/* Progress bar */}
           <div className="relative h-1 group/progress">
+            {/* base track — full width always visible */}
+            <div className="absolute inset-0 bg-white/10 rounded-full" />
             {/* buffered */}
             <div
-              className="absolute top-0 left-0 h-full bg-white/20 rounded-full"
-              style={{ width: duration ? `${(buffered / duration) * 100}%` : "0%" }}
+              className="absolute top-0 left-0 h-full bg-white/25 rounded-full pointer-events-none"
+              style={{ width: duration ? `${Math.min((buffered / duration) * 100, 100)}%` : "0%" }}
             />
+            {/* played */}
+            <div
+              className="absolute top-0 left-0 h-full bg-brand-red rounded-full pointer-events-none"
+              style={{ width: duration ? `${Math.min((currentTime / duration) * 100, 100)}%` : "0%" }}
+            />
+            {/* invisible range input — on top for interaction */}
             <input
               type="range"
               min={0}
@@ -422,12 +441,7 @@ function HLSPlayer({ src, poster }: { src: string; poster?: string }) {
               step={0.1}
               value={currentTime}
               onChange={seek}
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-            />
-            {/* played */}
-            <div
-              className="absolute top-0 left-0 h-full bg-brand-red rounded-full pointer-events-none"
-              style={{ width: duration ? `${(currentTime / duration) * 100}%` : "0%" }}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
             />
           </div>
 
@@ -503,7 +517,7 @@ function HLSPlayer({ src, poster }: { src: string; poster?: string }) {
                     {qualities.map((q) => (
                       <button
                         key={q.index}
-                        onClick={() => { setSelectedQuality(q.index); setShowQualityMenu(false); }}
+                        onClick={() => handleQualityChange(q.index)}
                         className={`block w-full px-3 py-1.5 text-left hover:bg-white/10 transition-colors ${
                           q.index === selectedQuality ? "text-brand-red font-semibold" : "text-white"
                         }`}
@@ -527,15 +541,21 @@ function HLSPlayer({ src, poster }: { src: string; poster?: string }) {
   );
 }
 
-export default function VideoPlayer({ 
-  videoUrl, 
-  embedUrl, 
+export default function VideoPlayer({
+  videoUrl,
+  embedUrl,
   sourceType = "iframe_embed",
-  title, 
-  posterUrl 
+  title,
+  posterUrl,
+  onPlayIntent,
+  forceStart,
 }: Props) {
   const [started, setStarted] = useState(false);
   const [hasPlaybackError, setHasPlaybackError] = useState(false);
+
+  useEffect(() => {
+    if (forceStart && !started) setStarted(true);
+  }, [forceStart, started]);
 
   // Determine which URL to use based on source type
   const getEffectiveUrl = (): string | null => {
@@ -558,7 +578,11 @@ export default function VideoPlayer({
   const effectiveUrl = getEffectiveUrl();
 
   const handlePlay = () => {
-    setStarted(true);
+    if (onPlayIntent) {
+      onPlayIntent();
+    } else {
+      setStarted(true);
+    }
   };
 
   const handleRetry = () => {
@@ -630,7 +654,7 @@ export default function VideoPlayer({
       );
     
     case "direct_hls":
-      return <HLSPlayer src={effectiveUrl} poster={posterUrl} />;
+      return <HLSPlayer src={effectiveUrl} poster={posterUrl} autoPlay={forceStart} />;
     
     default:
       return <IframePlayer src={effectiveUrl} title={title} />;

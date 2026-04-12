@@ -1,6 +1,25 @@
+# HTTP / scraping
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
+
+# Environment
 python-dotenv>=1.0.0
-DDownloader>=0.1.0
+
+# Instagram
 instagrapi>=2.0.0
+
+# YouTube (OAuth2 + Data API)
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+
+# N_m3u8DL-RE binary wrapper
+ddownloader>=0.1.0
+
+# Playwright (uzmovi.py media extraction fallback)
+playwright>=1.40.0
+
+# AI clip analysis (optional — used in /clip/analyze endpoint)
+openai-whisper>=20231117
+opencv-python-headless>=4.8.0

@@ -82,37 +82,42 @@ const getAvatarInitial = (profile: PublicUserProfile | null): string => {
 
 export default async function UserProfilePage({ params }: PageProps) {
   const { id } = params;
-  
+
+  // Read auth token once — used for both viewer identification and profile fetch
+  const cookieStore = await cookies();
+  const authToken = cookieStore.get("auth_token")?.value;
+
   // Get current viewer's information for permission checks
   let viewerUser = null;
   let viewerIsAdmin = false;
   let viewerIsSuperAdmin = false;
   let viewerIsOwner = false;
-  
+
   try {
-    const cookieStore = await cookies();
-    const authToken = cookieStore.get("auth_token")?.value;
-    
     if (authToken) {
       const authResponse = await getCurrentUser(authToken);
       if (authResponse.authenticated && authResponse.user) {
         viewerUser = authResponse.user;
         viewerIsAdmin = viewerUser.role === "admin" || viewerUser.role === "superadmin";
         viewerIsSuperAdmin = viewerUser.role === "superadmin";
-        // Check if the viewer is the profile owner
         viewerIsOwner = viewerUser.id === id;
       }
     }
-  } catch (error) {
-    console.error("Failed to fetch current viewer:", error);
+  } catch {
+    // viewer identification is best-effort
   }
-  
-  // Try to fetch user profile
+
+  // Fetch user profile — pass token so the backend can enforce privacy correctly.
+  // If the profile is private and the requester is not the owner/admin, the API
+  // returns 403 and getPublicUser throws Error("Profile hidden").
   let profile: PublicUserProfile | null = null;
+  let profileHidden = false;
   try {
-    profile = await getPublicUser(id);
-  } catch (error) {
-    console.error("Failed to fetch profile:", error);
+    profile = await getPublicUser(id, authToken);
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message === "Profile hidden") {
+      profileHidden = true;
+    }
   }
 
   // Profile owner's properties (for badges and profile display)
@@ -129,8 +134,10 @@ export default async function UserProfilePage({ params }: PageProps) {
   const isPrivateProfile = profile?.is_private === true;
   const canViewFullProfile = viewerIsOwner || viewerIsAdmin;
 
-  // If profile is private and viewer is not owner/admin, show locked state UI
-  if (profile && isPrivateProfile && !canViewFullProfile) {
+  // Show hidden-profile UI when:
+  // - backend returned 403 (profileHidden = true), OR
+  // - profile loaded with is_private flag but viewer is not authorized (client-side fallback)
+  if (profileHidden || (profile && isPrivateProfile && !canViewFullProfile)) {
     return (
       <>
         <Navbar />

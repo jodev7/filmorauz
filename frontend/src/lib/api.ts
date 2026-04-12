@@ -1484,14 +1484,24 @@ export interface PublicUserProfile {
   stats?: UserStats;
 }
 
-// Get public user profile
-export async function getPublicUser(userId: string): Promise<PublicUserProfile> {
+// Get public user profile.
+// Pass `token` so the backend can identify the requester and allow owners/admins
+// to view private profiles. Without a token, private profiles return 403.
+export async function getPublicUser(userId: string, token?: string): Promise<PublicUserProfile> {
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
   const res = await fetch(`${API_URL}/users/${userId}`, {
     cache: "no-store",
+    headers,
   });
   if (!res.ok) {
     if (res.status === 404) {
       throw new Error("User not found");
+    }
+    if (res.status === 403) {
+      throw new Error("Profile hidden");
     }
     throw new Error("Failed to fetch user");
   }
@@ -2417,6 +2427,8 @@ export interface TelegramPostRequest {
   image_url?: string;
   send_to_channels: boolean;
   send_to_bot: boolean;
+  inline_button_text?: string;
+  inline_button_url?: string;
 }
 
 export interface TelegramPostResult {
@@ -2433,6 +2445,8 @@ export interface TelegramPost {
   image_url?: string;
   send_to_channels: boolean;
   send_to_bot_users: boolean;
+  inline_button_text?: string;
+  inline_button_url?: string;
   channels_sent_count: number;
   channels_failed_count: number;
   bot_sent_count: number;

@@ -12,6 +12,8 @@ type TelegramPost struct {
 	ImageURL            string             `bson:"image_url,omitempty" json:"image_url,omitempty"`
 	SendToChannels      bool               `bson:"send_to_channels" json:"send_to_channels"`
 	SendToBotUsers      bool               `bson:"send_to_bot_users" json:"send_to_bot_users"`
+	InlineButtonText    string             `bson:"inline_button_text,omitempty" json:"inline_button_text,omitempty"`
+	InlineButtonURL     string             `bson:"inline_button_url,omitempty" json:"inline_button_url,omitempty"`
 	ChannelsSentCount   int                `bson:"channels_sent_count" json:"channels_sent_count"`
 	ChannelsFailedCount int                `bson:"channels_failed_count" json:"channels_failed_count"`
 	BotSentCount        int                `bson:"bot_sent_count" json:"bot_sent_count"`

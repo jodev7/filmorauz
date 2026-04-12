@@ -15,17 +15,28 @@ import { getLocalizedTitle, getLocalizedDescription, getLocalizedGenres, getLoca
 const PLAYER_AD_MANDATORY_SECS = 15;
 const PLAYER_AD_REPEAT_MS = 10 * 60 * 1000; // 10 minutes
 
-// Player ad — full-overlay interrupt every 10 minutes, 15s mandatory countdown
-function PlayerOverlayAd() {
+// Player ad — full-overlay interrupt, 15s mandatory countdown
+// starts only after user clicks play (started=true), calls onFirstComplete when first dismissed
+function PlayerOverlayAd({
+  started,
+  onFirstComplete,
+}: {
+  started: boolean;
+  onFirstComplete: () => void;
+}) {
   const [currentAd, setCurrentAd] = useState<Ad | null>(null);
   const [visible, setVisible] = useState(false);
   const [countdown, setCountdown] = useState(PLAYER_AD_MANDATORY_SECS);
   const [canClose, setCanClose] = useState(false);
+  const [adsLoaded, setAdsLoaded] = useState(false);
 
   const adsRef = useRef<Ad[]>([]);
   const currentAdIdRef = useRef<string | undefined>(undefined);
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const repeatTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const firstCompleteRef = useRef(false);
+  const onFirstCompleteRef = useRef(onFirstComplete);
+  onFirstCompleteRef.current = onFirstComplete;
 
   const startCountdown = useCallback(() => {
     setCountdown(PLAYER_AD_MANDATORY_SECS);
@@ -61,10 +72,15 @@ function PlayerOverlayAd() {
       clearInterval(countdownTimerRef.current);
       countdownTimerRef.current = null;
     }
+    if (!firstCompleteRef.current) {
+      firstCompleteRef.current = true;
+      onFirstCompleteRef.current();
+    }
     if (repeatTimerRef.current) clearTimeout(repeatTimerRef.current);
     repeatTimerRef.current = setTimeout(showAd, PLAYER_AD_REPEAT_MS);
   }, [showAd]);
 
+  // Load ads on mount; set adsLoaded when ready so showAd can fire regardless of fetch vs play order
   useEffect(() => {
     let cancelled = false;
     getAdsForWebsite("watch_player_overlay")
@@ -74,7 +90,7 @@ function PlayerOverlayAd() {
           (a) => a.player_overlay_media_url || a.banner_media_url || a.image_url
         );
         adsRef.current = valid;
-        if (valid.length > 0) showAd();
+        if (valid.length > 0) setAdsLoaded(true);
       })
       .catch(() => {});
     return () => {
@@ -82,7 +98,16 @@ function PlayerOverlayAd() {
       if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
       if (repeatTimerRef.current) clearTimeout(repeatTimerRef.current);
     };
-  }, [showAd]);
+  }, []);
+
+  // Show first ad once both conditions are true: user started playback AND ads are fetched.
+  // Using adsLoaded as state (not just a ref) ensures this effect re-runs whichever condition
+  // becomes true second — fixing the race where user clicks play before fetch completes.
+  useEffect(() => {
+    if (started && adsLoaded && !firstCompleteRef.current) {
+      showAd();
+    }
+  }, [started, adsLoaded, showAd]);
 
   if (!visible || !currentAd) return null;
 
@@ -99,36 +124,36 @@ function PlayerOverlayAd() {
   };
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 h-[90px] z-10 overflow-hidden">
+    <div className="absolute inset-0 z-20 bg-black overflow-hidden">
       <div className="relative w-full h-full cursor-pointer" onClick={handleClick}>
         {isVideo ? (
           <video
             src={url}
-            className="absolute inset-0 w-full h-full object-cover"
+            className="absolute inset-0 w-full h-full object-contain"
             autoPlay
             muted
             loop
             playsInline
           />
         ) : (
-          <img src={url} alt="Ad" className="absolute inset-0 w-full h-full object-cover" />
+          <img src={url} alt="Ad" className="absolute inset-0 w-full h-full object-contain" />
         )}
-        <div className="absolute top-1 right-1">
+        <div className="absolute top-3 right-3">
           {canClose ? (
             <button
               onClick={(e) => { e.stopPropagation(); dismiss(); }}
-              className="w-5 h-5 flex items-center justify-center rounded-full bg-black/60 text-white text-xs hover:bg-black/90 transition"
+              className="flex items-center justify-center rounded-full bg-black/70 text-white text-sm px-3 py-1.5 hover:bg-black/90 transition font-medium"
               aria-label="Close ad"
             >
-              ×
+              ✕ Yopish
             </button>
           ) : (
-            <span className="text-[10px] text-white bg-black/70 px-2 py-0.5 rounded whitespace-nowrap pointer-events-none">
+            <span className="text-xs text-white bg-black/70 px-3 py-1.5 rounded-full whitespace-nowrap pointer-events-none font-medium">
               Reklamani yopish uchun {countdown} soniya qoldi
             </span>
           )}
         </div>
-        <span className="absolute top-1 left-1 text-[9px] text-gray-300 bg-black/50 px-1 rounded uppercase tracking-wide pointer-events-none">Ad</span>
+        <span className="absolute top-3 left-3 text-[10px] text-gray-300 bg-black/60 px-2 py-1 rounded uppercase tracking-wide pointer-events-none">Reklama</span>
       </div>
     </div>
   );
@@ -209,6 +234,19 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
   const [isLoadingRecommendations, setIsLoadingRecommendations] = useState(true);
   const [resumePosition, setResumePosition] = useState(0);
   const hasRecorded = useRef(false);
+
+  // Player ad flow: user clicks play → ad shows → ad dismissed → video starts
+  const [playIntended, setPlayIntended] = useState(false);
+  const [videoCanStart, setVideoCanStart] = useState(false);
+
+  const handlePlayIntent = useCallback(() => {
+    setPlayIntended(true);
+    if (isUserPremium(user)) {
+      // Premium users have no ad overlay — start video directly on first click
+      setVideoCanStart(true);
+    }
+  }, [user]);
+  const handleAdFirstComplete = useCallback(() => setVideoCanStart(true), []);
 
   // Get localized metadata (always Uzbek)
   const localizedTitle = getLocalizedTitle(movie);
@@ -372,8 +410,15 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
               sourceType={movie.source_type}
               title={localizedTitle}
               posterUrl={movie.backdrop_url || movie.poster_url}
+              onPlayIntent={handlePlayIntent}
+              forceStart={videoCanStart}
             />
-            <PlayerOverlayAd />
+            {!isUserPremium(user) && (
+              <PlayerOverlayAd
+                started={playIntended}
+                onFirstComplete={handleAdFirstComplete}
+              />
+            )}
           </div>
         )}
 

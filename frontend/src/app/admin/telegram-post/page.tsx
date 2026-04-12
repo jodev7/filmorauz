@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Loader2, Upload, CheckCircle, XCircle, Image, Users, Hash, Clock, User } from "lucide-react";
+import { Send, Loader2, Upload, CheckCircle, XCircle, Users, Hash, Clock, User, Link, ToggleLeft, ToggleRight } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { sendTelegramPost, uploadTelegramPostMedia, listTelegramPosts, TelegramPost } from "@/lib/api";
 
@@ -19,6 +19,10 @@ export default function TelegramPostPage() {
   const [imageUrl, setImageUrl] = useState("");
   const [sendToChannels, setSendToChannels] = useState(true);
   const [sendToBot, setSendToBot] = useState(false);
+  const [useInlineButton, setUseInlineButton] = useState(false);
+  const [buttonText, setButtonText] = useState("");
+  const [buttonUrl, setButtonUrl] = useState("");
+  const [validationError, setValidationError] = useState("");
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<TelegramPostResult | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -58,13 +62,29 @@ export default function TelegramPostPage() {
   };
 
   const handleSend = async () => {
+    setValidationError("");
+
     if (!text.trim()) {
-      alert("Text is required");
+      setValidationError("Matn kiritish shart.");
       return;
     }
     if (!sendToChannels && !sendToBot) {
-      alert("Select at least one target (Channels or Bot)");
+      setValidationError("Kamida bitta manzil tanlang (Kanal yoki Bot).");
       return;
+    }
+    if (useInlineButton) {
+      if (!buttonText.trim()) {
+        setValidationError("Tugma matni kiritilishi shart.");
+        return;
+      }
+      if (!buttonUrl.trim()) {
+        setValidationError("Tugma URL kiritilishi shart.");
+        return;
+      }
+      if (!buttonUrl.trim().startsWith("http://") && !buttonUrl.trim().startsWith("https://")) {
+        setValidationError("URL http:// yoki https:// bilan boshlanishi kerak.");
+        return;
+      }
     }
     if (!token) return;
 
@@ -72,25 +92,31 @@ export default function TelegramPostPage() {
     setResult(null);
 
     try {
+      const body: Record<string, unknown> = {
+        text: text.trim(),
+        image_url: imageUrl || undefined,
+        send_to_channels: sendToChannels,
+        send_to_bot: sendToBot,
+      };
+      if (useInlineButton) {
+        body.inline_button_text = buttonText.trim();
+        body.inline_button_url = buttonUrl.trim();
+      }
+
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/superadmin/telegram-post`, {
         method: "POST",
-        headers: {
-          "Authorization": `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          text: text.trim(),
-          image_url: imageUrl || undefined,
-          send_to_channels: sendToChannels,
-          send_to_bot: sendToBot,
-        }),
+        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       });
 
       const data = await res.json();
-      setResult(data);
-      if (res.ok) {
-        await loadHistory();
+      if (!res.ok) {
+        setValidationError(data.error || "Yuborish muvaffaqiyatsiz.");
+        return;
       }
-    } catch (err) {
+      setResult(data);
+      await loadHistory();
+    } catch {
       setResult({ channels_sent: 0, channels_failed: 0, bot_sent: 0, bot_failed: 0, error: "Request failed" });
     } finally {
       setSending(false);
@@ -172,6 +198,54 @@ export default function TelegramPostPage() {
           </label>
         </div>
 
+        {/* Inline button toggle */}
+        <div className="border border-brand-border rounded-lg overflow-hidden">
+          <button
+            type="button"
+            onClick={() => { setUseInlineButton(!useInlineButton); setValidationError(""); }}
+            className="w-full flex items-center justify-between px-4 py-3 hover:bg-brand-border/30 transition"
+          >
+            <span className="flex items-center gap-2 text-sm text-gray-300">
+              <Link size={15} className="text-blue-400" />
+              Inline button qo&apos;shish
+            </span>
+            {useInlineButton
+              ? <ToggleRight size={22} className="text-blue-400" />
+              : <ToggleLeft size={22} className="text-gray-500" />}
+          </button>
+
+          {useInlineButton && (
+            <div className="px-4 pb-4 pt-1 space-y-3 border-t border-brand-border bg-brand-dark/30">
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Tugma matni *</label>
+                <input
+                  type="text"
+                  value={buttonText}
+                  onChange={(e) => { setButtonText(e.target.value); setValidationError(""); }}
+                  placeholder="Ko'rish"
+                  className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Tugma URL *</label>
+                <input
+                  type="url"
+                  value={buttonUrl}
+                  onChange={(e) => { setButtonUrl(e.target.value); setValidationError(""); }}
+                  placeholder="https://example.com"
+                  className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {validationError && (
+          <p className="text-red-400 text-sm flex items-center gap-2">
+            <XCircle size={15} /> {validationError}
+          </p>
+        )}
+
         <button
           onClick={handleSend}
           disabled={sending || !text.trim() || (!sendToChannels && !sendToBot)}
@@ -235,6 +309,17 @@ export default function TelegramPostPage() {
                   )}
                   <div className="flex-1 min-w-0">
                     <p className="text-white text-sm line-clamp-2">{post.text}</p>
+                    {post.inline_button_text && (
+                      <a
+                        href={post.inline_button_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 mt-1.5 px-2.5 py-1 rounded border border-blue-500/40 bg-blue-500/10 text-blue-400 text-xs hover:bg-blue-500/20 transition max-w-xs truncate"
+                      >
+                        <Link size={11} />
+                        {post.inline_button_text}
+                      </a>
+                    )}
                     <div className="flex flex-wrap items-center gap-3 mt-2 text-xs text-gray-400">
                       {post.send_to_channels && (
                         <span className="flex items-center gap-1">

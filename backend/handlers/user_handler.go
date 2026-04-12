@@ -32,7 +32,7 @@ func NewUserHandler(
 }
 
 // GetPublicProfile godoc
-// GET /api/v1/users/:id
+// GET /api/users/:id
 func (h *UserHandler) GetPublicProfile(c *gin.Context) {
 	userIDStr := c.Param("id")
 	userID, err := primitive.ObjectIDFromHex(userIDStr)
@@ -50,6 +50,19 @@ func (h *UserHandler) GetPublicProfile(c *gin.Context) {
 	if profile == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
+	}
+
+	// Enforce profile privacy at the API level.
+	// OptionalAuth middleware populates user_id and role if a valid token is present.
+	if profile.IsPrivate {
+		requesterID, _ := c.Get("user_id")
+		requesterRole, _ := c.Get("role")
+		isOwner := requesterID != nil && requesterID.(string) == profile.ID
+		isAdmin := requesterRole != nil && (requesterRole.(string) == "admin" || requesterRole.(string) == "superadmin")
+		if !isOwner && !isAdmin {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Bu foydalanuvchi profili yashirilgan"})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": profile})

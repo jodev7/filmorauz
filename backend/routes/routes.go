@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler) {
+func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler) {
 	api := r.Group("/api")
 
 	// Health check
@@ -80,8 +80,8 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	// Public view counter (no auth required) - must be before :slug routes
 	api.POST("/movies/:id/view", userHandler.RecordView)
 
-	// Public user profile (no auth required)
-	api.GET("/users/:id", userHandler.GetPublicProfile)
+	// Public user profile (optional auth — needed to enforce privacy for owner/admin)
+	api.GET("/users/:id", middleware.OptionalAuth(authService), userHandler.GetPublicProfile)
 
 	// Public movie routes
 	api.GET("/movies", movieHandler.ListMovies)
@@ -217,7 +217,21 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 		admin.POST("/clips", clipHandler.SaveClips)
 		admin.DELETE("/clips/movie/:movieId", clipHandler.DeleteClipsByMovie)
 		admin.POST("/clips/:id/instagram", clipHandler.UploadToInstagram)
+		admin.POST("/clips/:id/instagram/schedule", igScheduleHandler.Create)
+		admin.GET("/clips/:id/instagram/schedules", igScheduleHandler.ListForClip)
 		admin.GET("/instagram/accounts", clipHandler.ListInstagramAccounts)
+		admin.GET("/instagram/schedules", igScheduleHandler.ListAll)
+		admin.PATCH("/instagram/schedules/:scheduleId", igScheduleHandler.UpdateTime)
+		admin.DELETE("/instagram/schedules/:scheduleId", igScheduleHandler.Cancel)
+
+		// Multi-platform publish jobs
+		admin.GET("/publish/accounts", publishJobHandler.ListAccounts)
+		admin.POST("/clips/:id/publish/now", publishJobHandler.UploadNow)
+		admin.POST("/clips/:id/publish/schedule", publishJobHandler.Schedule)
+		admin.GET("/clips/:id/publish/jobs", publishJobHandler.ListForClip)
+		admin.GET("/publish/jobs", publishJobHandler.ListAll)
+		admin.PATCH("/publish/jobs/:jobId", publishJobHandler.UpdateTime)
+		admin.DELETE("/publish/jobs/:jobId", publishJobHandler.Cancel)
 	}
 
 	// Public collection routes

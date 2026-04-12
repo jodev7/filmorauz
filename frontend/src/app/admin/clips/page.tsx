@@ -12,8 +12,56 @@ import {
   XCircle,
   MinusCircle,
   X,
+  Calendar,
+  CalendarClock,
+  Pencil,
+  Trash2,
+  Instagram,
+  Youtube,
+  Music2,
+  type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
+const TASHKENT_TZ = "Asia/Tashkent";
+
+// ─── Time helpers ─────────────────────────────────────────────────────────────
+
+function getNowTashkent(): string {
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: TASHKENT_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+    .format(new Date())
+    .replace(" ", "T");
+}
+
+function tashkentLocalToISO(localStr: string): string {
+  return new Date(localStr + ":00+05:00").toISOString();
+}
+
+function formatTashkent(isoStr?: string | null): string {
+  if (!isoStr) return "—";
+  return new Intl.DateTimeFormat("uz-UZ", {
+    timeZone: TASHKENT_TZ,
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(isoStr));
+}
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+type Platform = "instagram" | "youtube" | "tiktok";
 
 interface Clip {
   id: string;
@@ -28,14 +76,89 @@ interface Clip {
   sequence: number;
   storage_type: string;
   created_at: string;
-  // Instagram tracking
   uploaded_to_instagram: boolean;
   instagram_upload_count: number;
   last_instagram_upload_at?: string;
-  last_instagram_upload_status: string; // "success" | "failed" | ""
+  last_instagram_upload_status: string;
 }
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
+interface AllAccounts {
+  instagram: string[];
+  youtube: string[];
+  tiktok: string[];
+}
+
+interface PublishJob {
+  id: string;
+  clip_id: string;
+  clip_url: string;
+  movie_title: string;
+  movie_slug: string;
+  movie_code: string;
+  platform: Platform;
+  account_name: string;
+  scheduled_for: string;
+  status: "pending" | "processing" | "success" | "failed";
+  created_at: string;
+  executed_at?: string;
+  error?: string;
+}
+
+interface SelectedJob {
+  platform: Platform;
+  account_name: string;
+}
+
+type UploadMode = "now" | "scheduled";
+
+interface JobResult {
+  platform: Platform;
+  account_name: string;
+  status: "success" | "failed";
+  error?: string;
+}
+
+interface PublishModal {
+  clip: Clip;
+  selectedJobs: SelectedJob[];
+  mode: UploadMode;
+  scheduledFor: string;
+  results: JobResult[] | null;
+  scheduledCreated: boolean;
+}
+
+// ─── Platform config ──────────────────────────────────────────────────────────
+
+const PLATFORM_META: Record<
+  Platform,
+  { label: string; color: string; bgColor: string; borderColor: string; Icon: LucideIcon }
+> = {
+  instagram: {
+    label: "Instagram",
+    color: "text-pink-400",
+    bgColor: "bg-pink-500/10",
+    borderColor: "border-pink-500/30",
+    Icon: Instagram,
+  },
+  youtube: {
+    label: "YouTube",
+    color: "text-red-400",
+    bgColor: "bg-red-500/10",
+    borderColor: "border-red-500/30",
+    Icon: Youtube,
+  },
+  tiktok: {
+    label: "TikTok",
+    color: "text-sky-400",
+    bgColor: "bg-sky-500/10",
+    borderColor: "border-sky-500/30",
+    Icon: Music2,
+  },
+};
+
+const ALL_PLATFORMS: Platform[] = ["instagram", "youtube", "tiktok"];
+
+// ─── Sub-components ──────────────────────────────────────────────────────────
 
 function UploadStatusBadge({ clip }: { clip: Clip }) {
   if (clip.instagram_upload_count === 0 || !clip.last_instagram_upload_status) {
@@ -62,21 +185,53 @@ function UploadStatusBadge({ clip }: { clip: Clip }) {
   );
 }
 
+function JobStatusBadge({ status }: { status: PublishJob["status"] }) {
+  if (status === "pending")
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/30">
+        <Clock size={11} />
+        Kutilmoqda
+      </span>
+    );
+  if (status === "processing")
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-yellow-500/15 text-yellow-400 border border-yellow-500/30">
+        <Loader2 size={11} className="animate-spin" />
+        Bajarilmoqda
+      </span>
+    );
+  if (status === "success")
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-500/15 text-green-400 border border-green-500/30">
+        <CheckCircle size={11} />
+        Muvaffaqiyatli
+      </span>
+    );
+  return (
+    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400 border border-red-500/30">
+      <XCircle size={11} />
+      Xato
+    </span>
+  );
+}
+
+function PlatformBadge({ platform }: { platform: Platform }) {
+  const meta = PLATFORM_META[platform];
+  const { Icon } = meta;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded ${meta.bgColor} ${meta.color} ${meta.borderColor} border`}
+    >
+      <Icon size={9} />
+      {meta.label}
+    </span>
+  );
+}
+
 function formatDuration(seconds: number) {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-function formatDate(dateStr?: string) {
-  if (!dateStr) return null;
-  return new Date(dateStr).toLocaleDateString("uz-UZ", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 function groupByMovie(clips: Clip[]): Record<string, Clip[]> {
@@ -88,25 +243,18 @@ function groupByMovie(clips: Clip[]): Record<string, Clip[]> {
   return grouped;
 }
 
-interface AccountResult {
-  account: string;
-  status: "success" | "failed";
-  error?: string;
-}
-
-interface UploadModal {
-  clip: Clip;
-  selectedAccounts: string[];
-  results: AccountResult[] | null;
-}
+// ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function AdminClipsPage() {
   const { token } = useAuth();
   const [clips, setClips] = useState<Clip[]>([]);
   const [loading, setLoading] = useState(true);
-  const [igAccounts, setIgAccounts] = useState<string[]>([]);
+  const [allAccounts, setAllAccounts] = useState<AllAccounts>({ instagram: [], youtube: [], tiktok: [] });
+  const [publishJobs, setPublishJobs] = useState<PublishJob[]>([]);
   const [uploading, setUploading] = useState<Record<string, boolean>>({});
-  const [modal, setModal] = useState<UploadModal | null>(null);
+  const [modal, setModal] = useState<PublishModal | null>(null);
+  const [editingJob, setEditingJob] = useState<{ id: string; value: string } | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
 
   const fetchClips = useCallback(async () => {
     if (!token) return;
@@ -118,8 +266,8 @@ export default function AdminClipsPage() {
         const data = await res.json();
         setClips(data.data || []);
       }
-    } catch (err) {
-      console.error("Failed to fetch clips:", err);
+    } catch {
+      // silently ignore
     } finally {
       setLoading(false);
     }
@@ -128,62 +276,170 @@ export default function AdminClipsPage() {
   const fetchAccounts = useCallback(async () => {
     if (!token) return;
     try {
-      const res = await fetch(`${API}/admin/instagram/accounts`, {
+      const res = await fetch(`${API}/admin/publish/accounts`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
         const data = await res.json();
-        setIgAccounts(data.accounts || []);
+        setAllAccounts({
+          instagram: data.instagram || [],
+          youtube: data.youtube || [],
+          tiktok: data.tiktok || [],
+        });
       }
-    } catch (err) {
-      console.error("Failed to fetch Instagram accounts:", err);
+    } catch {
+      // silently ignore
+    }
+  }, [token]);
+
+  const fetchJobs = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${API}/admin/publish/jobs?limit=100`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPublishJobs(data.data || []);
+      }
+    } catch {
+      // silently ignore
     }
   }, [token]);
 
   useEffect(() => {
     fetchClips();
     fetchAccounts();
-  }, [fetchClips, fetchAccounts]);
+    fetchJobs();
+  }, [fetchClips, fetchAccounts, fetchJobs]);
 
-  const openUploadModal = (clip: Clip) => {
-    setModal({ clip, selectedAccounts: igAccounts.slice(0, 1), results: null });
-  };
-
-  const toggleAccount = (name: string) => {
-    if (!modal) return;
-    setModal((prev) => {
-      if (!prev) return prev;
-      const selected = prev.selectedAccounts.includes(name)
-        ? prev.selectedAccounts.filter((a) => a !== name)
-        : [...prev.selectedAccounts, name];
-      return { ...prev, selectedAccounts: selected };
+  const openModal = (clip: Clip) => {
+    // Pre-select first account for each platform that has accounts configured
+    const defaultJobs: SelectedJob[] = [];
+    if (allAccounts.instagram.length > 0)
+      defaultJobs.push({ platform: "instagram", account_name: allAccounts.instagram[0] });
+    setModal({
+      clip,
+      selectedJobs: defaultJobs,
+      mode: "now",
+      scheduledFor: getNowTashkent(),
+      results: null,
+      scheduledCreated: false,
     });
   };
 
-  const handleUpload = async () => {
-    if (!token || !modal || modal.selectedAccounts.length === 0) return;
-    const { clip, selectedAccounts } = modal;
+  const hasAnyAccount = allAccounts.instagram.length > 0 || allAccounts.youtube.length > 0 || allAccounts.tiktok.length > 0;
+
+  // Toggle a specific platform+account combo in selectedJobs
+  const toggleJob = (platform: Platform, accountName: string) => {
+    setModal((prev) => {
+      if (!prev) return prev;
+      const key = `${platform}:${accountName}`;
+      const exists = prev.selectedJobs.some((j) => `${j.platform}:${j.account_name}` === key);
+      const updated = exists
+        ? prev.selectedJobs.filter((j) => `${j.platform}:${j.account_name}` !== key)
+        : [...prev.selectedJobs, { platform, account_name: accountName }];
+      return { ...prev, selectedJobs: updated };
+    });
+  };
+
+  // Upload now
+  const handleUploadNow = async () => {
+    if (!token || !modal || modal.selectedJobs.length === 0) return;
+    const { clip, selectedJobs } = modal;
     setUploading((prev) => ({ ...prev, [clip.id]: true }));
     try {
-      const res = await fetch(`${API}/admin/clips/${clip.id}/instagram`, {
+      const res = await fetch(`${API}/admin/clips/${clip.id}/publish/now`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ account_names: selectedAccounts }),
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ jobs: selectedJobs }),
       });
       const data = await res.json();
-      setModal((prev) => prev ? { ...prev, results: data.results || [] } : prev);
+      setModal((prev) => (prev ? { ...prev, results: data.results || [] } : prev));
       await fetchClips();
-    } catch (err) {
-      console.error("Upload error:", err);
+    } catch {
+      // silently ignore
     } finally {
       setUploading((prev) => ({ ...prev, [clip.id]: false }));
     }
   };
 
+  // Schedule upload
+  const handleSchedule = async () => {
+    if (!token || !modal || modal.selectedJobs.length === 0) return;
+    const { clip, selectedJobs, scheduledFor } = modal;
+    setUploading((prev) => ({ ...prev, [clip.id]: true }));
+    try {
+      const res = await fetch(`${API}/admin/clips/${clip.id}/publish/schedule`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jobs: selectedJobs,
+          scheduled_for: tashkentLocalToISO(scheduledFor),
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.count > 0) {
+        setModal((prev) => (prev ? { ...prev, scheduledCreated: true } : prev));
+        await fetchJobs();
+      } else {
+        setModal((prev) =>
+          prev
+            ? {
+                ...prev,
+                results: [
+                  {
+                    platform: "instagram",
+                    account_name: "system",
+                    status: "failed",
+                    error: data.error || "Rejalash muvaffaqiyatsiz",
+                  },
+                ],
+              }
+            : prev
+        );
+      }
+    } catch {
+      // silently ignore
+    } finally {
+      setUploading((prev) => ({ ...prev, [clip.id]: false }));
+    }
+  };
+
+  const handleCancelJob = async (id: string) => {
+    if (!token) return;
+    setCancellingId(id);
+    try {
+      await fetch(`${API}/admin/publish/jobs/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      await fetchJobs();
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
+  const handleSaveEditTime = async (id: string, newLocalTime: string) => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${API}/admin/publish/jobs/${id}`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ scheduled_for: tashkentLocalToISO(newLocalTime) }),
+      });
+      if (res.ok) {
+        setEditingJob(null);
+        await fetchJobs();
+      }
+    } catch {
+      // silently ignore
+    }
+  };
+
   const groupedClips = groupByMovie(clips);
+  const pendingJobs = publishJobs.filter((j) => j.status === "pending" || j.status === "processing");
+  const doneJobs = publishJobs.filter((j) => j.status === "success" || j.status === "failed");
 
   return (
     <div className="p-4 sm:p-8">
@@ -194,6 +450,7 @@ export default function AdminClipsPage() {
         </div>
       </div>
 
+      {/* ── Clips table ─────────────────────────────────────────── */}
       {loading ? (
         <div className="flex items-center gap-2 text-gray-500 py-12 justify-center">
           <Loader2 size={18} className="animate-spin" />
@@ -214,7 +471,6 @@ export default function AdminClipsPage() {
               key={movieId}
               className="bg-brand-card border border-brand-border rounded-xl overflow-hidden"
             >
-              {/* Movie header */}
               <div className="px-4 sm:px-6 py-4 border-b border-brand-border bg-brand-dark/50">
                 <div className="flex items-center justify-between">
                   <div>
@@ -227,21 +483,18 @@ export default function AdminClipsPage() {
                     <div className="flex items-center gap-3 mt-1 text-sm text-gray-500">
                       <span className="font-mono">#{movieClips[0].movie_code}</span>
                       <span>{movieClips.length} ta klip</span>
-                      <span>{formatDate(movieClips[0].created_at)}</span>
                     </div>
                   </div>
                   <Link
                     href={`/movies/${movieClips[0].movie_slug}`}
                     target="_blank"
                     className="text-gray-500 hover:text-white transition-colors"
-                    title="Kinoni sahifasida ko'rish"
                   >
                     <ExternalLink size={18} />
                   </Link>
                 </div>
               </div>
 
-              {/* Clips table */}
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
@@ -249,7 +502,7 @@ export default function AdminClipsPage() {
                       <th className="text-left px-4 py-3">#</th>
                       <th className="text-left px-4 py-3">Fayl</th>
                       <th className="text-left px-4 py-3">Davom</th>
-                      <th className="text-left px-4 py-3">Saxnalash</th>
+                      <th className="text-left px-4 py-3">Saxlash</th>
                       <th className="text-left px-4 py-3">Instagram</th>
                       <th className="text-left px-4 py-3">Yuklashlar</th>
                       <th className="text-right px-4 py-3">Amallar</th>
@@ -258,103 +511,92 @@ export default function AdminClipsPage() {
                   <tbody>
                     {[...movieClips]
                       .sort((a, b) => a.sequence - b.sequence)
-                      .map((clip) => (
-                        <tr
-                          key={clip.id}
-                          className="border-b border-brand-border/50 last:border-0 hover:bg-brand-border/20 transition-colors"
-                        >
-                          {/* Sequence */}
-                          <td className="px-4 py-3 text-gray-500">{clip.sequence}</td>
-
-                          {/* Filename */}
-                          <td className="px-4 py-3">
-                            <span className="text-gray-300 font-mono text-xs">
-                              {clip.filename}
-                            </span>
-                          </td>
-
-                          {/* Duration */}
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-1.5 text-gray-400">
-                              <Clock size={14} />
-                              <span>{formatDuration(clip.duration)}</span>
-                            </div>
-                          </td>
-
-                          {/* Storage type */}
-                          <td className="px-4 py-3">
-                            <span
-                              className={`text-xs px-2 py-0.5 rounded ${
-                                clip.storage_type === "b2"
-                                  ? "bg-blue-500/20 text-blue-400"
-                                  : "bg-green-500/20 text-green-400"
-                              }`}
-                            >
-                              {clip.storage_type === "b2" ? "B2/CDN" : "Local"}
-                            </span>
-                          </td>
-
-                          {/* Instagram upload status */}
-                          <td className="px-4 py-3">
-                            <UploadStatusBadge clip={clip} />
-                          </td>
-
-                          {/* Upload count + last time */}
-                          <td className="px-4 py-3">
-                            {clip.instagram_upload_count > 0 ? (
-                              <div className="flex flex-col gap-0.5">
-                                <span className="text-xs text-gray-300 font-medium">
-                                  {clip.instagram_upload_count}× yuklangan
-                                </span>
-                                {clip.last_instagram_upload_at && (
-                                  <span className="text-xs text-gray-600">
-                                    {formatDate(clip.last_instagram_upload_at)}
+                      .map((clip) => {
+                        const clipJobs = publishJobs.filter((j) => j.clip_id === clip.id);
+                        const pendingClipJob = clipJobs.find((j) => j.status === "pending");
+                        return (
+                          <tr
+                            key={clip.id}
+                            className="border-b border-brand-border/50 last:border-0 hover:bg-brand-border/20 transition-colors"
+                          >
+                            <td className="px-4 py-3 text-gray-500">{clip.sequence}</td>
+                            <td className="px-4 py-3">
+                              <span className="text-gray-300 font-mono text-xs">{clip.filename}</span>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-1.5 text-gray-400">
+                                <Clock size={14} />
+                                <span>{formatDuration(clip.duration)}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <span
+                                className={`text-xs px-2 py-0.5 rounded ${
+                                  clip.storage_type === "b2"
+                                    ? "bg-blue-500/20 text-blue-400"
+                                    : "bg-green-500/20 text-green-400"
+                                }`}
+                              >
+                                {clip.storage_type === "b2" ? "B2/CDN" : "Local"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex flex-col gap-1">
+                                <UploadStatusBadge clip={clip} />
+                                {pendingClipJob && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] text-blue-400">
+                                    <CalendarClock size={10} />
+                                    {formatTashkent(pendingClipJob.scheduled_for)}
+                                    <PlatformBadge platform={pendingClipJob.platform} />
                                   </span>
                                 )}
                               </div>
-                            ) : (
-                              <span className="text-xs text-gray-600">—</span>
-                            )}
-                          </td>
-
-                          {/* Actions */}
-                          <td className="px-4 py-3">
-                            <div className="flex items-center justify-end gap-2">
-                              {/* View clip */}
-                              <a
-                                href={clip.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-gray-500 hover:text-gray-300 transition-colors"
-                                title="Klipni ochish"
-                              >
-                                <ExternalLink size={14} />
-                              </a>
-
-                              {/* Instagram upload */}
-                              <button
-                                onClick={() => openUploadModal(clip)}
-                                disabled={uploading[clip.id]}
-                                title="Instagramga yuklash"
-                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                                  clip.last_instagram_upload_status === "success"
-                                    ? "bg-green-500/15 text-green-400 border border-green-500/30 hover:bg-green-500/25"
-                                    : clip.last_instagram_upload_status === "failed"
-                                    ? "bg-red-500/15 text-red-400 border border-red-500/30 hover:bg-red-500/25"
-                                    : "bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10"
-                                } disabled:opacity-50`}
-                              >
-                                {uploading[clip.id] ? (
-                                  <Loader2 size={12} className="animate-spin" />
-                                ) : (
-                                  <Upload size={12} />
-                                )}
-                                {uploading[clip.id] ? "Yuklanmoqda..." : "Upload"}
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                            </td>
+                            <td className="px-4 py-3">
+                              {clip.instagram_upload_count > 0 ? (
+                                <div className="flex flex-col gap-0.5">
+                                  <span className="text-xs text-gray-300 font-medium">
+                                    {clip.instagram_upload_count}× yuklangan
+                                  </span>
+                                  {clip.last_instagram_upload_at && (
+                                    <span className="text-xs text-gray-600">
+                                      {formatTashkent(clip.last_instagram_upload_at)}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-xs text-gray-600">—</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center justify-end gap-2">
+                                <a
+                                  href={clip.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-gray-500 hover:text-gray-300 transition-colors"
+                                  title="Klipni ochish"
+                                >
+                                  <ExternalLink size={14} />
+                                </a>
+                                <button
+                                  onClick={() => openModal(clip)}
+                                  disabled={uploading[clip.id]}
+                                  title="Ijtimoiy tarmoqlarga yuklash"
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50"
+                                >
+                                  {uploading[clip.id] ? (
+                                    <Loader2 size={12} className="animate-spin" />
+                                  ) : (
+                                    <Upload size={12} />
+                                  )}
+                                  {uploading[clip.id] ? "..." : "Publish"}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
                   </tbody>
                 </table>
               </div>
@@ -363,14 +605,161 @@ export default function AdminClipsPage() {
         </div>
       )}
 
-      {/* Instagram account picker modal */}
+      {/* ── Scheduled publish jobs ───────────────────────────────── */}
+      {publishJobs.length > 0 && (
+        <div className="mt-10">
+          <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+            <CalendarClock size={20} className="text-blue-400" />
+            Rejalashtirilgan yuklamalar
+          </h2>
+
+          {/* Pending / processing */}
+          {pendingJobs.length > 0 && (
+            <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden mb-4">
+              <div className="px-4 py-3 border-b border-brand-border bg-brand-dark/50">
+                <span className="text-sm text-gray-400">Kutilayotgan</span>
+              </div>
+              <div className="divide-y divide-brand-border/50">
+                {pendingJobs.map((j) => (
+                  <div
+                    key={j.id}
+                    className="px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="text-white text-sm font-medium truncate">{j.movie_title}</p>
+                        <PlatformBadge platform={j.platform} />
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-gray-500">
+                        <span className="font-mono">{j.account_name}</span>
+                        <span>·</span>
+                        <span className="text-blue-400 font-medium">
+                          {formatTashkent(j.scheduled_for)}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <JobStatusBadge status={j.status} />
+                      {j.status === "pending" && (
+                        <>
+                          {editingJob?.id === j.id ? (
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="datetime-local"
+                                value={editingJob.value}
+                                onChange={(e) =>
+                                  setEditingJob({ id: j.id, value: e.target.value })
+                                }
+                                className="bg-brand-dark border border-brand-border rounded px-2 py-1 text-xs text-white"
+                              />
+                              <button
+                                onClick={() => handleSaveEditTime(j.id, editingJob.value)}
+                                className="text-green-400 hover:text-green-300 transition-colors px-1"
+                                title="Saqlash"
+                              >
+                                <CheckCircle size={15} />
+                              </button>
+                              <button
+                                onClick={() => setEditingJob(null)}
+                                className="text-gray-500 hover:text-gray-300 transition-colors px-1"
+                                title="Bekor"
+                              >
+                                <X size={15} />
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                const localVal = new Intl.DateTimeFormat("sv-SE", {
+                                  timeZone: TASHKENT_TZ,
+                                  year: "numeric",
+                                  month: "2-digit",
+                                  day: "2-digit",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })
+                                  .format(new Date(j.scheduled_for))
+                                  .replace(" ", "T");
+                                setEditingJob({ id: j.id, value: localVal });
+                              }}
+                              className="text-gray-500 hover:text-blue-400 transition-colors"
+                              title="Vaqtni tahrirlash"
+                            >
+                              <Pencil size={14} />
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleCancelJob(j.id)}
+                            disabled={cancellingId === j.id}
+                            className="text-gray-500 hover:text-red-400 transition-colors disabled:opacity-50"
+                            title="Bekor qilish"
+                          >
+                            {cancellingId === j.id ? (
+                              <Loader2 size={14} className="animate-spin" />
+                            ) : (
+                              <Trash2 size={14} />
+                            )}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Done (success / failed) */}
+          {doneJobs.length > 0 && (
+            <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-brand-border bg-brand-dark/50">
+                <span className="text-sm text-gray-400">Bajarilgan</span>
+              </div>
+              <div className="divide-y divide-brand-border/50">
+                {doneJobs.slice(0, 20).map((j) => (
+                  <div
+                    key={j.id}
+                    className="px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="text-white text-sm font-medium truncate">{j.movie_title}</p>
+                        <PlatformBadge platform={j.platform} />
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-gray-500">
+                        <span className="font-mono">{j.account_name}</span>
+                        <span>·</span>
+                        <span>{formatTashkent(j.scheduled_for)}</span>
+                        {j.executed_at && (
+                          <>
+                            <span>·</span>
+                            <span className="text-gray-600">
+                              bajarildi: {formatTashkent(j.executed_at)}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                      {j.error && (
+                        <p className="text-xs text-red-400 mt-1 truncate">{j.error}</p>
+                      )}
+                    </div>
+                    <JobStatusBadge status={j.status} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Publish Modal ──────────────────────────────────────────── */}
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-brand-card border border-brand-border rounded-xl w-full max-w-sm shadow-2xl">
+          <div className="bg-brand-card border border-brand-border rounded-xl w-full max-w-sm shadow-2xl max-h-[90vh] overflow-y-auto">
             {/* Header */}
-            <div className="flex items-center justify-between px-5 py-4 border-b border-brand-border">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-brand-border sticky top-0 bg-brand-card">
               <div>
-                <h2 className="text-white font-semibold text-sm">Instagramga yuklash</h2>
+                <h2 className="text-white font-semibold text-sm">Ijtimoiy tarmoqlarga yuklash</h2>
                 <p className="text-gray-500 text-xs mt-0.5 truncate max-w-[220px]">
                   {modal.clip.movie_title} — klip #{modal.clip.sequence}
                 </p>
@@ -383,66 +772,181 @@ export default function AdminClipsPage() {
               </button>
             </div>
 
-            {/* Results view */}
-            {modal.results ? (
-              <div className="px-5 py-4 space-y-2">
-                <p className="text-gray-400 text-xs mb-3">Yuklash natijalari:</p>
-                {modal.results.map((r) => (
-                  <div key={r.account} className="flex items-center justify-between">
-                    <span className="text-gray-300 text-sm font-mono">{r.account}</span>
-                    {r.status === "success" ? (
-                      <span className="inline-flex items-center gap-1 text-xs text-green-400">
-                        <CheckCircle size={13} /> Muvaffaqiyatli
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-xs text-red-400" title={r.error}>
-                        <XCircle size={13} /> Xato
-                      </span>
+            {/* Schedule created success */}
+            {modal.scheduledCreated ? (
+              <div className="px-5 py-6 text-center space-y-3">
+                <div className="w-12 h-12 rounded-full bg-blue-500/15 flex items-center justify-center mx-auto">
+                  <CalendarClock size={24} className="text-blue-400" />
+                </div>
+                <p className="text-white font-medium">Rejalashtirildi!</p>
+                <p className="text-gray-400 text-sm">
+                  Yuklash vaqti:{" "}
+                  <span className="text-blue-400 font-medium">
+                    {formatTashkent(tashkentLocalToISO(modal.scheduledFor))}
+                  </span>
+                </p>
+                <p className="text-gray-500 text-xs">
+                  {modal.selectedJobs.map((j) => `${PLATFORM_META[j.platform].label}/${j.account_name}`).join(", ")}
+                </p>
+                <button
+                  onClick={() => setModal(null)}
+                  className="w-full mt-2 py-2 rounded-lg bg-brand-border text-gray-300 text-sm hover:bg-white/10 transition-colors"
+                >
+                  Yopish
+                </button>
+              </div>
+            ) : modal.results ? (
+              /* Upload results */
+              <div className="px-5 py-4 space-y-3">
+                <p className="text-gray-400 text-xs mb-1">Yuklash natijalari:</p>
+                {modal.results.map((r, i) => (
+                  <div
+                    key={i}
+                    className={`rounded-lg border px-3 py-2.5 ${
+                      r.status === "success"
+                        ? "border-green-500/30 bg-green-500/5"
+                        : "border-red-500/30 bg-red-500/5"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        <PlatformBadge platform={r.platform} />
+                        <span className="text-gray-200 text-sm font-mono">{r.account_name}</span>
+                      </div>
+                      {r.status === "success" ? (
+                        <span className="inline-flex items-center gap-1 text-xs text-green-400 font-medium">
+                          <CheckCircle size={13} /> OK
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-xs text-red-400 font-medium">
+                          <XCircle size={13} /> Xato
+                        </span>
+                      )}
+                    </div>
+                    {r.status === "failed" && r.error && (
+                      <p className="text-xs text-red-300 mt-1 break-words">{r.error}</p>
                     )}
                   </div>
                 ))}
-                <div className="pt-3">
-                  <button
-                    onClick={() => setModal(null)}
-                    className="w-full py-2 rounded-lg bg-brand-border text-gray-300 text-sm hover:bg-white/10 transition-colors"
-                  >
-                    Yopish
-                  </button>
-                </div>
+                <button
+                  onClick={() => setModal(null)}
+                  className="w-full py-2 rounded-lg bg-brand-border text-gray-300 text-sm hover:bg-white/10 transition-colors"
+                >
+                  Yopish
+                </button>
               </div>
             ) : (
-              /* Account picker view */
-              <div className="px-5 py-4 space-y-3">
-                {igAccounts.length === 0 ? (
+              /* Picker */
+              <div className="px-5 py-4 space-y-4">
+                {!hasAnyAccount ? (
                   <p className="text-gray-500 text-sm text-center py-4">
-                    Instagram akkauntlar sozlanmagan.<br />
-                    <span className="text-xs text-gray-600">INSTAGRAM_ACCOUNTS_JSON env o&apos;rnatilmagan.</span>
+                    Hech qanday akkaunt sozlanmagan.
+                    <br />
+                    <span className="text-xs text-gray-600">
+                      INSTAGRAM_ACCOUNTS_JSON / YOUTUBE_ACCOUNTS_JSON / TIKTOK_ACCOUNTS_JSON env o&apos;rnatilmagan.
+                    </span>
                   </p>
                 ) : (
                   <>
-                    <p className="text-gray-400 text-xs">Akkaunt(lar)ni tanlang:</p>
-                    <div className="space-y-2">
-                      {igAccounts.map((name) => {
-                        const checked = modal.selectedAccounts.includes(name);
+                    {/* Platform + account selectors */}
+                    <div className="space-y-3">
+                      {ALL_PLATFORMS.map((platform) => {
+                        const accounts = allAccounts[platform];
+                        const meta = PLATFORM_META[platform];
+                        const { Icon } = meta;
+                        if (accounts.length === 0) return null;
                         return (
-                          <label
-                            key={name}
-                            className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-brand-border hover:border-gray-500 cursor-pointer transition-colors"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => toggleAccount(name)}
-                              className="accent-brand-red w-4 h-4 cursor-pointer"
-                            />
-                            <span className="text-gray-200 text-sm font-mono">{name}</span>
-                          </label>
+                          <div key={platform}>
+                            <div className={`flex items-center gap-2 mb-1.5 text-xs font-medium ${meta.color}`}>
+                              <Icon size={13} />
+                              {meta.label}
+                            </div>
+                            <div className="space-y-1.5">
+                              {accounts.map((name) => {
+                                const checked = modal.selectedJobs.some(
+                                  (j) => j.platform === platform && j.account_name === name
+                                );
+                                return (
+                                  <label
+                                    key={name}
+                                    className={`flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                                      checked
+                                        ? `${meta.bgColor} ${meta.borderColor}`
+                                        : "border-brand-border hover:border-gray-500"
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() => toggleJob(platform, name)}
+                                      className="w-4 h-4 cursor-pointer accent-current"
+                                    />
+                                    <span className="text-gray-200 text-sm font-mono">{name}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
                         );
                       })}
                     </div>
+
+                    {modal.selectedJobs.length > 0 && (
+                      <p className="text-xs text-gray-500">
+                        Tanlangan:{" "}
+                        {modal.selectedJobs
+                          .map((j) => `${PLATFORM_META[j.platform].label}/${j.account_name}`)
+                          .join(", ")}
+                      </p>
+                    )}
+
+                    {/* Mode toggle */}
+                    <div className="flex rounded-lg border border-brand-border overflow-hidden">
+                      <button
+                        onClick={() => setModal((p) => (p ? { ...p, mode: "now" } : p))}
+                        className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors ${
+                          modal.mode === "now"
+                            ? "bg-brand-red text-white"
+                            : "text-gray-400 hover:text-white hover:bg-white/5"
+                        }`}
+                      >
+                        <Upload size={13} />
+                        Hozir yuklash
+                      </button>
+                      <button
+                        onClick={() => setModal((p) => (p ? { ...p, mode: "scheduled" } : p))}
+                        className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors ${
+                          modal.mode === "scheduled"
+                            ? "bg-blue-600 text-white"
+                            : "text-gray-400 hover:text-white hover:bg-white/5"
+                        }`}
+                      >
+                        <Calendar size={13} />
+                        Vaqt belgilash
+                      </button>
+                    </div>
+
+                    {/* Datetime picker */}
+                    {modal.mode === "scheduled" && (
+                      <div>
+                        <label className="block text-gray-400 text-xs mb-1.5">
+                          Yuklash vaqti{" "}
+                          <span className="text-gray-600">(Toshkent vaqti, UTC+5)</span>
+                        </label>
+                        <input
+                          type="datetime-local"
+                          value={modal.scheduledFor}
+                          onChange={(e) =>
+                            setModal((p) => (p ? { ...p, scheduledFor: e.target.value } : p))
+                          }
+                          className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    )}
                   </>
                 )}
 
+                {/* Action buttons */}
                 <div className="flex gap-2 pt-1">
                   <button
                     onClick={() => setModal(null)}
@@ -450,27 +954,47 @@ export default function AdminClipsPage() {
                   >
                     Bekor
                   </button>
-                  <button
-                    onClick={handleUpload}
-                    disabled={
-                      modal.selectedAccounts.length === 0 ||
-                      uploading[modal.clip.id] ||
-                      igAccounts.length === 0
-                    }
-                    className="flex-1 py-2 rounded-lg bg-brand-red text-white text-sm font-medium hover:bg-brand-red/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
-                  >
-                    {uploading[modal.clip.id] ? (
-                      <>
-                        <Loader2 size={14} className="animate-spin" />
-                        Yuklanmoqda...
-                      </>
-                    ) : (
-                      <>
-                        <Upload size={14} />
-                        Yuklash
-                      </>
-                    )}
-                  </button>
+                  {modal.mode === "now" ? (
+                    <button
+                      onClick={handleUploadNow}
+                      disabled={
+                        modal.selectedJobs.length === 0 ||
+                        uploading[modal.clip.id] ||
+                        !hasAnyAccount
+                      }
+                      className="flex-1 py-2 rounded-lg bg-brand-red text-white text-sm font-medium hover:bg-brand-red/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
+                    >
+                      {uploading[modal.clip.id] ? (
+                        <>
+                          <Loader2 size={14} className="animate-spin" /> Yuklanmoqda...
+                        </>
+                      ) : (
+                        <>
+                          <Upload size={14} /> Yuklash
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleSchedule}
+                      disabled={
+                        modal.selectedJobs.length === 0 ||
+                        uploading[modal.clip.id] ||
+                        !hasAnyAccount
+                      }
+                      className="flex-1 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
+                    >
+                      {uploading[modal.clip.id] ? (
+                        <>
+                          <Loader2 size={14} className="animate-spin" /> Saqlanmoqda...
+                        </>
+                      ) : (
+                        <>
+                          <CalendarClock size={14} /> Rejalash
+                        </>
+                      )}
+                    </button>
+                  )}
                 </div>
               </div>
             )}

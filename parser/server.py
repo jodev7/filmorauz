@@ -1587,22 +1587,52 @@ class ParserHandler(BaseHTTPRequestHandler):
                     cl = Client()
                     cl.delay_range = [1, 3]
 
+                    # Auth error types that require re-login — password fallback won't help
+                    _AUTH_FAIL_TYPES = {"challenge_required", "checkpoint_required", "session_expired"}
+
+                    def _classify_ig_error(err_str):
+                        e = err_str.lower()
+                        if "challenge_required" in e or "feedback_required" in e:
+                            return "challenge_required"
+                        if "checkpoint_required" in e:
+                            return "checkpoint_required"
+                        if ("email" in e or "phone" in e) and ("send" in e or "verify" in e or "help" in e or "confirm" in e):
+                            return "checkpoint_required"
+                        if "account recovery" in e or "account has been compromised" in e:
+                            return "checkpoint_required"
+                        if "login_required" in e or "not_authenticated" in e or "not authenticated" in e or "login required" in e:
+                            return "session_expired"
+                        if "bad_password" in e or ("password" in e and ("incorrect" in e or "wrong" in e)):
+                            return "bad_credentials"
+                        if "please wait" in e or "too many" in e or "spam" in e:
+                            return "rate_limited"
+                        return "publish_failed"
+
                     if session_file.exists():
                         cl.load_settings(session_file)
                         logger.info(f"[Instagram] loaded session for account={account_name}")
-                        # Verify session is still valid without triggering challenge
+                        # Pre-check: verify session is valid before attempting upload
                         try:
                             cl.get_timeline_feed()
-                        except Exception as e:
-                            logger.warning(f"[Instagram] session expired for account={account_name}, falling back to password login: {e}")
-                            cl = Client()
-                            cl.delay_range = [1, 3]
-                            cl.login(username, password)
-                            cl.dump_settings(session_file)
-                            logger.info(f"[Instagram] re-authenticated and session updated for account={account_name}")
+                        except Exception as session_err:
+                            session_err_type = _classify_ig_error(str(session_err))
+                            if session_err_type in _AUTH_FAIL_TYPES:
+                                # Auth error — password fallback cannot fix this; fail immediately
+                                logger.error(f"[Instagram] session auth error ({session_err_type}) for account={account_name}, re-login required")
+                                raise
+                            # Non-auth failure (network, unknown) — try password fallback
+                            if password:
+                                logger.warning(f"[Instagram] session check failed ({session_err}), retrying with password")
+                                cl = Client()
+                                cl.delay_range = [1, 3]
+                                cl.login(username, password)
+                                cl.dump_settings(session_file)
+                                logger.info(f"[Instagram] re-authenticated for account={account_name}")
+                            else:
+                                raise
                     else:
                         if not password:
-                            raise Exception(f"No session file found for account={account_name} and no password provided. Run ig_login.py first.")
+                            raise Exception(f"no_session: No session file for account={account_name}. Run ig_login.py first.")
                         logger.warning(f"[Instagram] no session for account={account_name}, logging in with password (may trigger challenge)")
                         cl.login(username, password)
                         cl.dump_settings(session_file)
@@ -1616,16 +1646,240 @@ class ParserHandler(BaseHTTPRequestHandler):
                     logger.info(f"[Instagram] upload success media_id={media.pk} account={account_name}")
                     self._send_json({"status": "success", "media_id": str(media.pk)})
                 except Exception as e:
-                    if "challenge_required" in str(e).lower():
-                        logger.error(f"[Instagram] challenge_required for account={account_name} — run ig_login.py to create a session file first")
-                    else:
-                        logger.error(f"[Instagram] upload error for account={account_name}: {e}", exc_info=True)
-                    self._send_json({"status": "failed", "error": str(e)})
+                    error_str = str(e)
+                    error_type = _classify_ig_error(error_str)
+                    # Refine: no_session prefix set explicitly above
+                    if "no_session:" in error_str.lower():
+                        error_type = "no_session"
+                    _action_map = {
+                        "challenge_required":  "ig_login.py orqali sessiyani yangilang",
+                        "checkpoint_required": "ig_login.py orqali sessiyani yangilang",
+                        "session_expired":     "ig_login.py orqali qayta login qiling",
+                        "no_session":          "ig_login.py orqali birinchi marta login qiling",
+                        "bad_credentials":     "Login va parolni tekshiring",
+                        "rate_limited":        "Bir necha soatdan keyin urinib ko'ring",
+                        "publish_failed":      "Qayta urinib ko'ring",
+                    }
+                    action_required = _action_map.get(error_type, "Qayta urinib ko'ring")
+                    logger.error(f"[Instagram] error account={account_name} type={error_type}: {error_str}",
+                                 exc_info=(error_type == "publish_failed"))
+                    self._send_json({
+                        "status": "failed",
+                        "error": error_str,
+                        "error_type": error_type,
+                        "action_required": action_required,
+                    })
                 finally:
                     if tmp_path and os.path.exists(tmp_path):
                         os.unlink(tmp_path)
             except Exception as e:
                 logger.error(f"[Instagram] endpoint error: {e}", exc_info=True)
+                self._send_error(str(e), 500)
+            return
+
+        # /youtube/upload — upload a video clip as a YouTube Short
+        elif path == "/youtube/upload":
+            try:
+                body = self._read_json_body()
+                token_file = body.get("token_file", "")
+                video_url = body.get("video_url", "")
+                title = body.get("title", "")
+                description = body.get("description", "")
+                account_name = body.get("account_name", "") or token_file
+
+                if not token_file or not video_url:
+                    self._send_error("token_file and video_url are required", 400)
+                    return
+
+                logger.info(f"[YouTube] upload requested for account={account_name} url={video_url}")
+
+                try:
+                    from google.oauth2.credentials import Credentials
+                    from google.auth.transport.requests import Request
+                    from googleapiclient.discovery import build
+                    from googleapiclient.http import MediaFileUpload
+                except ImportError:
+                    self._send_error(
+                        "google-api-python-client not installed — run: pip install google-api-python-client google-auth",
+                        500,
+                    )
+                    return
+
+                import tempfile, json as _json
+                from pathlib import Path
+
+                token_path = Path(__file__).parent / token_file
+                if not token_path.exists():
+                    self._send_error(f"token_file not found: {token_file}", 400)
+                    return
+
+                creds_data = _json.loads(token_path.read_text())
+                creds = Credentials(
+                    token=creds_data.get("token"),
+                    refresh_token=creds_data.get("refresh_token"),
+                    token_uri=creds_data.get("token_uri", "https://oauth2.googleapis.com/token"),
+                    client_id=creds_data.get("client_id"),
+                    client_secret=creds_data.get("client_secret"),
+                )
+                if creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                    creds_data["token"] = creds.token
+                    token_path.write_text(_json.dumps(creds_data))
+                    logger.info(f"[YouTube] token refreshed for account={account_name}")
+
+                youtube = build("youtube", "v3", credentials=creds)
+
+                tmp_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+                        tmp_path = f.name
+                    logger.info(f"[YouTube] downloading video to {tmp_path}")
+                    urllib.request.urlretrieve(video_url, tmp_path)
+
+                    yt_body = {
+                        "snippet": {
+                            "title": (title or "Clip")[:100],
+                            "description": description or "",
+                            "tags": [],
+                            "categoryId": "22",  # People & Blogs
+                        },
+                        "status": {
+                            "privacyStatus": "public",
+                            "selfDeclaredMadeForKids": False,
+                        },
+                    }
+                    media = MediaFileUpload(tmp_path, mimetype="video/mp4", resumable=True)
+                    request = youtube.videos().insert(
+                        part="snippet,status",
+                        body=yt_body,
+                        media_body=media,
+                    )
+                    response = None
+                    while response is None:
+                        _, response = request.next_chunk()
+
+                    video_id = response.get("id", "")
+                    logger.info(f"[YouTube] upload success video_id={video_id} account={account_name}")
+                    self._send_json({"status": "success", "video_id": video_id})
+                except Exception as e:
+                    logger.error(f"[YouTube] upload error account={account_name}: {e}", exc_info=True)
+                    self._send_json({"status": "failed", "error": str(e)})
+                finally:
+                    if tmp_path and os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+            except Exception as e:
+                logger.error(f"[YouTube] endpoint error: {e}", exc_info=True)
+                self._send_error(str(e), 500)
+            return
+
+        # /tiktok/upload — upload a video clip to TikTok using Content Posting API v2
+        elif path == "/tiktok/upload":
+            try:
+                body = self._read_json_body()
+                token_file = body.get("token_file", "")
+                video_url = body.get("video_url", "")
+                caption = body.get("caption", "")
+                account_name = body.get("account_name", "")
+
+                if not token_file or not video_url:
+                    self._send_error("token_file and video_url are required", 400)
+                    return
+
+                logger.info(f"[TikTok] upload requested for account={account_name} url={video_url}")
+
+                try:
+                    import urllib.request as _urlreq2
+                    import json as _json2
+                    from pathlib import Path as _Path2
+
+                    token_path = _Path2(__file__).parent / token_file
+                    if not token_path.exists():
+                        self._send_json({"status": "failed", "error": f"token_file not found: {token_file}. Run tt_login.py first."})
+                        return
+
+                    token_data = _json2.loads(token_path.read_text())
+                    access_token = token_data.get("access_token", "")
+                    refresh_token = token_data.get("refresh_token", "")
+                    client_key = token_data.get("client_key", "")
+                    client_secret = token_data.get("client_secret", "")
+
+                    def _tt_refresh():
+                        """Refresh TikTok access token using refresh_token."""
+                        payload = {
+                            "client_key": client_key,
+                            "client_secret": client_secret,
+                            "grant_type": "refresh_token",
+                            "refresh_token": refresh_token,
+                        }
+                        data = urllib.parse.urlencode(payload).encode("utf-8")
+                        req = _urlreq2.Request(
+                            "https://open.tiktokapis.com/v2/oauth/token/",
+                            data=data,
+                            headers={"Content-Type": "application/x-www-form-urlencoded"},
+                            method="POST",
+                        )
+                        with _urlreq2.urlopen(req, timeout=15) as r:
+                            resp_data = _json2.loads(r.read().decode("utf-8"))
+                        return resp_data.get("data", {})
+
+                    def _tt_post(token):
+                        headers = {
+                            "Authorization": f"Bearer {token}",
+                            "Content-Type": "application/json; charset=UTF-8",
+                        }
+                        post_info = {
+                            "title": (caption or "")[:150],
+                            "privacy_level": "PUBLIC_TO_EVERYONE",
+                            "disable_duet": False,
+                            "disable_comment": False,
+                            "disable_stitch": False,
+                            "video_cover_timestamp_ms": 1000,
+                        }
+                        source_info = {"source": "PULL_FROM_URL", "video_url": video_url}
+                        payload = _json2.dumps({"post_info": post_info, "source_info": source_info}).encode("utf-8")
+                        req = _urlreq2.Request(
+                            "https://open.tiktokapis.com/v2/post/publish/video/init/",
+                            data=payload,
+                            headers=headers,
+                            method="POST",
+                        )
+                        with _urlreq2.urlopen(req, timeout=30) as r:
+                            return _json2.loads(r.read().decode("utf-8"))
+
+                    # Attempt upload; if token expired, refresh once and retry
+                    init_data = _tt_post(access_token)
+                    err_info = init_data.get("error", {})
+                    err_code = err_info.get("code", "ok")
+
+                    if err_code in ("access_token_invalid", "access_token_expired") and refresh_token and client_key:
+                        logger.warning(f"[TikTok] token expired for account={account_name}, refreshing...")
+                        new_tokens = _tt_refresh()
+                        if new_tokens.get("access_token"):
+                            access_token = new_tokens["access_token"]
+                            token_data["access_token"] = access_token
+                            if new_tokens.get("refresh_token"):
+                                token_data["refresh_token"] = new_tokens["refresh_token"]
+                            token_path.write_text(_json2.dumps(token_data, indent=2))
+                            logger.info(f"[TikTok] token refreshed for account={account_name}")
+                            init_data = _tt_post(access_token)
+                            err_info = init_data.get("error", {})
+                            err_code = err_info.get("code", "ok")
+
+                    if err_code != "ok":
+                        msg = err_info.get("message", "unknown error")
+                        logger.error(f"[TikTok] init error account={account_name}: code={err_code} msg={msg}")
+                        self._send_json({"status": "failed", "error": f"{err_code}: {msg}"})
+                        return
+
+                    publish_id = init_data.get("data", {}).get("publish_id", "")
+                    logger.info(f"[TikTok] upload initiated publish_id={publish_id} account={account_name}")
+                    self._send_json({"status": "success", "video_id": publish_id})
+
+                except Exception as e:
+                    logger.error(f"[TikTok] upload error account={account_name}: {e}", exc_info=True)
+                    self._send_json({"status": "failed", "error": str(e)})
+            except Exception as e:
+                logger.error(f"[TikTok] endpoint error: {e}", exc_info=True)
                 self._send_error(str(e), 500)
             return
 

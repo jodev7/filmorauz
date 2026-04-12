@@ -129,6 +129,108 @@ func (s *TelegramService) SendPostWithImageToBot(chatID int64, text, imageURL st
 	return AdPostResult{Target: target, Status: "success", MessageID: sentMsg.MessageID}
 }
 
+// SendTextPostWithButtonToChannel sends a text post with an inline URL button to a channel.
+func (s *TelegramService) SendTextPostWithButtonToChannel(channelTarget, text, buttonText, buttonURL string) AdPostResult {
+	if s.botToken == "" {
+		return AdPostResult{Target: channelTarget, Status: "failed", Error: "bot token not configured"}
+	}
+	api, err := tgbotapi.NewBotAPI(s.botToken)
+	if err != nil {
+		return AdPostResult{Target: channelTarget, Status: "failed", Error: err.Error()}
+	}
+	msg := tgbotapi.NewMessageToChannel(channelTarget, text)
+	msg.ParseMode = "HTML"
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonURL(buttonText, buttonURL)),
+	)
+	sentMsg, sendErr := api.Send(msg)
+	if sendErr != nil {
+		return AdPostResult{Target: channelTarget, Status: "failed", Error: sendErr.Error()}
+	}
+	return AdPostResult{Target: channelTarget, Status: "success", MessageID: sentMsg.MessageID}
+}
+
+// SendPostWithImageAndButtonToChannel sends a photo with caption and inline button to a channel.
+func (s *TelegramService) SendPostWithImageAndButtonToChannel(channelTarget, text, imageURL, buttonText, buttonURL string) AdPostResult {
+	if s.botToken == "" {
+		return AdPostResult{Target: channelTarget, Status: "failed", Error: "bot token not configured"}
+	}
+	api, err := tgbotapi.NewBotAPI(s.botToken)
+	if err != nil {
+		return AdPostResult{Target: channelTarget, Status: "failed", Error: err.Error()}
+	}
+	media, _, resolveErr := resolveMedia(imageURL)
+	if resolveErr != nil {
+		return AdPostResult{Target: channelTarget, Status: "failed", Error: resolveErr.Error()}
+	}
+	msg := tgbotapi.NewPhotoToChannel(channelTarget, media)
+	msg.Caption = text
+	msg.ParseMode = "HTML"
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonURL(buttonText, buttonURL)),
+	)
+	sentMsg, sendErr := api.Send(msg)
+	if sendErr != nil {
+		return AdPostResult{Target: channelTarget, Status: "failed", Error: sendErr.Error()}
+	}
+	return AdPostResult{Target: channelTarget, Status: "success", MessageID: sentMsg.MessageID}
+}
+
+// SendTextPostWithButtonToBot sends a text post with an inline URL button to a bot chat.
+func (s *TelegramService) SendTextPostWithButtonToBot(chatID int64, text, buttonText, buttonURL string) AdPostResult {
+	target := fmt.Sprintf("bot:%d", chatID)
+	if s.botToken == "" {
+		return AdPostResult{Target: target, Status: "failed", Error: "bot token not configured"}
+	}
+	if chatID == 0 {
+		return AdPostResult{Target: target, Status: "failed", Error: "chatID is 0"}
+	}
+	api, err := tgbotapi.NewBotAPI(s.botToken)
+	if err != nil {
+		return AdPostResult{Target: target, Status: "failed", Error: err.Error()}
+	}
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = "HTML"
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonURL(buttonText, buttonURL)),
+	)
+	sentMsg, sendErr := api.Send(msg)
+	if sendErr != nil {
+		return AdPostResult{Target: target, Status: "failed", Error: sendErr.Error()}
+	}
+	return AdPostResult{Target: target, Status: "success", MessageID: sentMsg.MessageID}
+}
+
+// SendPostWithImageAndButtonToBot sends a photo with caption and inline button to a bot chat.
+func (s *TelegramService) SendPostWithImageAndButtonToBot(chatID int64, text, imageURL, buttonText, buttonURL string) AdPostResult {
+	target := fmt.Sprintf("bot:%d", chatID)
+	if s.botToken == "" {
+		return AdPostResult{Target: target, Status: "failed", Error: "bot token not configured"}
+	}
+	if chatID == 0 {
+		return AdPostResult{Target: target, Status: "failed", Error: "chatID is 0"}
+	}
+	api, err := tgbotapi.NewBotAPI(s.botToken)
+	if err != nil {
+		return AdPostResult{Target: target, Status: "failed", Error: err.Error()}
+	}
+	media, _, resolveErr := resolveMedia(imageURL)
+	if resolveErr != nil {
+		return AdPostResult{Target: target, Status: "failed", Error: resolveErr.Error()}
+	}
+	msg := tgbotapi.NewPhoto(chatID, media)
+	msg.Caption = text
+	msg.ParseMode = "HTML"
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonURL(buttonText, buttonURL)),
+	)
+	sentMsg, sendErr := api.Send(msg)
+	if sendErr != nil {
+		return AdPostResult{Target: target, Status: "failed", Error: sendErr.Error()}
+	}
+	return AdPostResult{Target: target, Status: "success", MessageID: sentMsg.MessageID}
+}
+
 // ParseChannelsFromEnv parses TELEGRAM_CHANNELS env variable into channel list
 func ParseChannelsFromEnv(channelsEnv string) []string {
 	if channelsEnv == "" {

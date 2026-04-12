@@ -3,7 +3,8 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { X } from "lucide-react";
 import { Ad, getAdsForWebsite, recordAdImpression, recordAdClick } from "@/lib/api";
-import { pickWeightedRandomAd } from "@/lib/ads-utils";
+import { pickWeightedRandomAd, isUserPremium } from "@/lib/ads-utils";
+import { useAuth } from "@/lib/auth-context";
 
 interface WebsiteAdSlotProps {
   placement: string;
@@ -24,6 +25,7 @@ export default function WebsiteAdSlot({
   popup = false,
   variant = "inline",
 }: WebsiteAdSlotProps) {
+  const { user, isLoading: authLoading } = useAuth();
   const [ads, setAds] = useState<Ad[]>([]);
   const [dismissed, setDismissed] = useState(false);
   const [current, setCurrent] = useState(0);
@@ -79,6 +81,7 @@ export default function WebsiteAdSlot({
     recordAdImpression(ad.id).catch(() => {});
   }, [ads, current, isReady, placement]);
 
+  if (authLoading || isUserPremium(user)) return null;
   if (ads.length === 0 || dismissed) return null;
 
   const ad = ads[current % ads.length];

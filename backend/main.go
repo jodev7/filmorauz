@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/filmorauz/backend/config"
@@ -204,6 +206,20 @@ func main() {
 	clipRepo := repositories.NewClipRepository(db)
 	clipHandler := handlers.NewClipHandler(clipRepo, parserURL)
 
+	// Instagram schedule repository and handler
+	igScheduleRepo := repositories.NewInstagramScheduleRepository(db)
+	if err := igScheduleRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure instagram_schedules indexes: %v", err)
+	}
+	igScheduleHandler := handlers.NewInstagramScheduleHandler(igScheduleRepo, clipRepo)
+
+	// Multi-platform publish job repository and handler
+	publishJobRepo := repositories.NewPublishJobRepository(db)
+	if err := publishJobRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure publish_jobs indexes: %v", err)
+	}
+	publishJobHandler := handlers.NewPublishJobHandler(publishJobRepo, clipRepo, parserURL)
+
 	// Serve uploaded files in dev mode
 	if cfg.IsDev {
 		r.Static("/uploads", "./uploads")
@@ -216,10 +232,16 @@ func main() {
 	}
 
 	// Register routes
-	routes.Setup(r, authHandler, movieHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler)
+	routes.Setup(r, authHandler, movieHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler)
 
 	// Start premium cleanup background job (runs every 10 minutes)
 	go startPremiumCleanupJob(userRepo, notificationService)
+
+	// Start Instagram schedule executor (runs every 60 seconds)
+	go startInstagramScheduler(igScheduleRepo, clipRepo, parserURL)
+
+	// Start multi-platform publish job scheduler (runs every 60 seconds)
+	go startPublishJobScheduler(publishJobRepo, clipRepo, parserURL)
 
 	log.Printf("FilmoraUz API listening on :%s", cfg.Port)
 	if err := r.Run(":" + cfg.Port); err != nil {
@@ -298,6 +320,137 @@ func getParserURL() string {
 
 // Make sure models are used
 var _ = models.IngestionStatusPending
+
+// startInstagramScheduler runs a background goroutine that executes due scheduled uploads.
+// It polls every 60 seconds. Atomically claims one job at a time to prevent double-execution.
+func startInstagramScheduler(scheduleRepo *repositories.InstagramScheduleRepository, clipRepo *repositories.ClipRepository, parserURL string) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	// Run once immediately so uploads scheduled "now" don't wait 60s
+	runDueInstagramSchedules(scheduleRepo, clipRepo, parserURL)
+	for range ticker.C {
+		runDueInstagramSchedules(scheduleRepo, clipRepo, parserURL)
+	}
+}
+
+func runDueInstagramSchedules(scheduleRepo *repositories.InstagramScheduleRepository, clipRepo *repositories.ClipRepository, parserURL string) {
+	for {
+		schedule, err := scheduleRepo.ClaimDue()
+		if err != nil {
+			log.Printf("[IGScheduler] claim error: %v", err)
+			return
+		}
+		if schedule == nil {
+			return // nothing due right now
+		}
+		log.Printf("[IGScheduler] executing schedule=%s clip=%s accounts=%v",
+			schedule.ID.Hex(), schedule.ClipID.Hex(), schedule.AccountNames)
+		go executeInstagramSchedule(scheduleRepo, clipRepo, schedule, parserURL)
+	}
+}
+
+func executeInstagramSchedule(
+	scheduleRepo *repositories.InstagramScheduleRepository,
+	clipRepo *repositories.ClipRepository,
+	schedule *models.InstagramSchedule,
+	parserURL string,
+) {
+	caption := fmt.Sprintf("%s\n\nKinoni profildagi bot orqali toping!\nKino Kodi: %s", schedule.MovieTitle, schedule.MovieCode)
+	var uploadErrors []string
+
+	for _, accountName := range schedule.AccountNames {
+		account := services.GetInstagramAccount(accountName)
+		if account == nil {
+			uploadErrors = append(uploadErrors, fmt.Sprintf("%s: account not configured", accountName))
+			continue
+		}
+		if err := services.UploadReelToInstagram(parserURL, schedule.ClipURL, caption, account); err != nil {
+			uploadErrors = append(uploadErrors, fmt.Sprintf("%s: %v", accountName, err))
+		}
+	}
+
+	ctx := context.Background()
+	if len(uploadErrors) > 0 {
+		errMsg := strings.Join(uploadErrors, "; ")
+		if err := scheduleRepo.MarkFailed(schedule.ID, errMsg); err != nil {
+			log.Printf("[IGScheduler] MarkFailed error schedule=%s: %v", schedule.ID.Hex(), err)
+		}
+		// Persist upload failure on the clip document so the clips list reflects it
+		if err := clipRepo.RecordInstagramUpload(ctx, schedule.ClipID, "failed"); err != nil {
+			log.Printf("[IGScheduler] RecordInstagramUpload(failed) error clip=%s: %v", schedule.ClipID.Hex(), err)
+		}
+		log.Printf("[IGScheduler] schedule=%s failed: %s", schedule.ID.Hex(), errMsg)
+	} else {
+		if err := scheduleRepo.MarkSuccess(schedule.ID); err != nil {
+			log.Printf("[IGScheduler] MarkSuccess error schedule=%s: %v", schedule.ID.Hex(), err)
+		}
+		// Persist upload success on the clip document so the clips list reflects it after refresh
+		if err := clipRepo.RecordInstagramUpload(ctx, schedule.ClipID, "success"); err != nil {
+			log.Printf("[IGScheduler] RecordInstagramUpload(success) error clip=%s: %v", schedule.ClipID.Hex(), err)
+		}
+		log.Printf("[IGScheduler] schedule=%s success", schedule.ID.Hex())
+	}
+}
+
+// startPublishJobScheduler runs a background goroutine that executes due multi-platform publish jobs.
+// It polls every 60 seconds. Atomically claims one job at a time to prevent double-execution.
+func startPublishJobScheduler(jobRepo *repositories.PublishJobRepository, clipRepo *repositories.ClipRepository, parserURL string) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	runDuePublishJobs(jobRepo, clipRepo, parserURL)
+	for range ticker.C {
+		runDuePublishJobs(jobRepo, clipRepo, parserURL)
+	}
+}
+
+func runDuePublishJobs(jobRepo *repositories.PublishJobRepository, clipRepo *repositories.ClipRepository, parserURL string) {
+	for {
+		job, err := jobRepo.ClaimDue()
+		if err != nil {
+			log.Printf("[PublishScheduler] claim error: %v", err)
+			return
+		}
+		if job == nil {
+			return
+		}
+		log.Printf("[PublishScheduler] executing job=%s platform=%s account=%s clip=%s",
+			job.ID.Hex(), job.Platform, job.AccountName, job.ClipID.Hex())
+		go executePublishJob(jobRepo, clipRepo, job, parserURL)
+	}
+}
+
+func executePublishJob(
+	jobRepo *repositories.PublishJobRepository,
+	clipRepo *repositories.ClipRepository,
+	job *models.PublishJob,
+	parserURL string,
+) {
+	uploadErr := services.ExecutePlatformUpload(parserURL, job)
+
+	ctx := context.Background()
+	if uploadErr != nil {
+		errMsg := fmt.Sprintf("%v", uploadErr)
+		if err := jobRepo.MarkFailed(job.ID, errMsg); err != nil {
+			log.Printf("[PublishScheduler] MarkFailed error job=%s: %v", job.ID.Hex(), err)
+		}
+		if job.Platform == models.PublishPlatformInstagram {
+			if err := clipRepo.RecordInstagramUpload(ctx, job.ClipID, "failed"); err != nil {
+				log.Printf("[PublishScheduler] RecordInstagramUpload(failed) clip=%s: %v", job.ClipID.Hex(), err)
+			}
+		}
+		log.Printf("[PublishScheduler] job=%s failed: %s", job.ID.Hex(), errMsg)
+	} else {
+		if err := jobRepo.MarkSuccess(job.ID); err != nil {
+			log.Printf("[PublishScheduler] MarkSuccess error job=%s: %v", job.ID.Hex(), err)
+		}
+		if job.Platform == models.PublishPlatformInstagram {
+			if err := clipRepo.RecordInstagramUpload(ctx, job.ClipID, "success"); err != nil {
+				log.Printf("[PublishScheduler] RecordInstagramUpload(success) clip=%s: %v", job.ClipID.Hex(), err)
+			}
+		}
+		log.Printf("[PublishScheduler] job=%s success", job.ID.Hex())
+	}
+}
 
 // startPremiumCleanupJob runs a background goroutine that cleans up expired premium subscriptions.
 // It runs every 10 minutes.

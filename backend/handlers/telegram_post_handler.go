@@ -29,10 +29,12 @@ func NewTelegramPostHandler(telegramService *services.TelegramService, userRepo 
 }
 
 type TelegramPostRequest struct {
-	Text           string `json:"text" binding:"required"`
-	ImageURL       string `json:"image_url"`
-	SendToChannels bool   `json:"send_to_channels"`
-	SendToBot      bool   `json:"send_to_bot"`
+	Text             string `json:"text" binding:"required"`
+	ImageURL         string `json:"image_url"`
+	SendToChannels   bool   `json:"send_to_channels"`
+	SendToBot        bool   `json:"send_to_bot"`
+	InlineButtonText string `json:"inline_button_text"`
+	InlineButtonURL  string `json:"inline_button_url"`
 }
 
 type TelegramPostResponse struct {
@@ -62,6 +64,22 @@ func (h *TelegramPostHandler) SendPost(c *gin.Context) {
 		return
 	}
 
+	hasButton := strings.TrimSpace(req.InlineButtonText) != "" || strings.TrimSpace(req.InlineButtonURL) != ""
+	if hasButton {
+		if strings.TrimSpace(req.InlineButtonText) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "inline_button_text is required when using inline button"})
+			return
+		}
+		if strings.TrimSpace(req.InlineButtonURL) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "inline_button_url is required when using inline button"})
+			return
+		}
+		if !strings.HasPrefix(req.InlineButtonURL, "http://") && !strings.HasPrefix(req.InlineButtonURL, "https://") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "inline_button_url must start with http:// or https://"})
+			return
+		}
+	}
+
 	response := &TelegramPostResponse{
 		ChannelsSent:   0,
 		ChannelsFailed: 0,
@@ -79,6 +97,9 @@ func (h *TelegramPostHandler) SendPost(c *gin.Context) {
 	channelsEnv := os.Getenv("TELEGRAM_CHANNELS")
 	channelUsernames := parseChannelList(channelsEnv)
 
+	btnText := strings.TrimSpace(req.InlineButtonText)
+	btnURL := strings.TrimSpace(req.InlineButtonURL)
+
 	if req.SendToChannels && len(channelUsernames) > 0 {
 		for _, username := range channelUsernames {
 			target := username
@@ -87,9 +108,14 @@ func (h *TelegramPostHandler) SendPost(c *gin.Context) {
 			}
 
 			var result services.AdPostResult
-			if req.ImageURL != "" {
+			switch {
+			case req.ImageURL != "" && hasButton:
+				result = h.telegramService.SendPostWithImageAndButtonToChannel(target, req.Text, req.ImageURL, btnText, btnURL)
+			case req.ImageURL != "":
 				result = h.telegramService.SendPostWithImageToChannel(target, req.Text, req.ImageURL)
-			} else {
+			case hasButton:
+				result = h.telegramService.SendTextPostWithButtonToChannel(target, req.Text, btnText, btnURL)
+			default:
 				result = h.telegramService.SendTextPostToChannel(target, req.Text)
 			}
 
@@ -107,15 +133,18 @@ func (h *TelegramPostHandler) SendPost(c *gin.Context) {
 	if req.SendToBot {
 		chatIDs, err := h.userRepo.FindChatIDs(5000)
 		if err != nil {
-			log.Printf("[TELEGRAM POST] failed to load user chat_ids: %v", err)
 			response.Errors = append(response.Errors, "failed to load bot users")
 		} else {
-			log.Printf("[TELEGRAM POST] sending to %d bot users", len(chatIDs))
 			for _, chatID := range chatIDs {
 				var result services.AdPostResult
-				if req.ImageURL != "" {
+				switch {
+				case req.ImageURL != "" && hasButton:
+					result = h.telegramService.SendPostWithImageAndButtonToBot(chatID, req.Text, req.ImageURL, btnText, btnURL)
+				case req.ImageURL != "":
 					result = h.telegramService.SendPostWithImageToBot(chatID, req.Text, req.ImageURL)
-				} else {
+				case hasButton:
+					result = h.telegramService.SendTextPostWithButtonToBot(chatID, req.Text, btnText, btnURL)
+				default:
 					result = h.telegramService.SendTextPostToBot(chatID, req.Text)
 				}
 
@@ -130,10 +159,6 @@ func (h *TelegramPostHandler) SendPost(c *gin.Context) {
 			}
 		}
 	}
-
-	log.Printf("[TELEGRAM POST] completed: channels=%d/%d, bot=%d/%d",
-		response.ChannelsSent, response.ChannelsSent+response.ChannelsFailed,
-		response.BotSent, response.BotSent+response.BotFailed)
 
 	// Save post history
 	var sentByUserID primitive.ObjectID
@@ -160,6 +185,8 @@ func (h *TelegramPostHandler) SendPost(c *gin.Context) {
 		ImageURL:            req.ImageURL,
 		SendToChannels:      req.SendToChannels,
 		SendToBotUsers:      req.SendToBot,
+		InlineButtonText:    btnText,
+		InlineButtonURL:     btnURL,
 		ChannelsSentCount:   response.ChannelsSent,
 		ChannelsFailedCount: response.ChannelsFailed,
 		BotSentCount:        response.BotSent,

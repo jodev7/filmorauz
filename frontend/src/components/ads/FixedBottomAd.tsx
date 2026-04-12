@@ -3,7 +3,8 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import { Ad, getAdsForWebsite, recordAdImpression, recordAdClick } from "@/lib/api";
-import { pickWeightedRandomAd } from "@/lib/ads-utils";
+import { pickWeightedRandomAd, isUserPremium } from "@/lib/ads-utils";
+import { useAuth } from "@/lib/auth-context";
 
 interface FixedBottomAdProps {
   placement?: string;
@@ -17,6 +18,7 @@ export default function FixedBottomAd({
   bottomOffset = "0px",
 }: FixedBottomAdProps) {
   const pathname = usePathname();
+  const { user, isLoading: authLoading } = useAuth();
   const [ads, setAds] = useState<Ad[]>([]);
   const [current, setCurrent] = useState(0);
   const [dismissed, setDismissed] = useState(false);
@@ -78,6 +80,7 @@ export default function FixedBottomAd({
   }, [ads, current, isReady, placement]);
 
   if (pathname.startsWith("/admin")) return null;
+  if (authLoading || isUserPremium(user)) return null;
   if (!isReady || ads.length === 0 || dismissed) return null;
 
   const ad = ads[current % ads.length];
