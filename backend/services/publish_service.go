@@ -14,7 +14,7 @@ func BuildPublishCaption(movieTitle, movieCode string) string {
 // BuildYouTubeDescription returns the YouTube Shorts description.
 // Title is already set as the video title, so it is omitted here.
 func BuildYouTubeDescription(movieCode string) string {
-	return fmt.Sprintf("Kinoni profildagi bot orqali toping!\nKino Kodi: %s\nhttps://t.me/filmorauzbot", movieCode)
+	return fmt.Sprintf("Kinoni profildagi bot orqali toping!\nKino Kodi: %s", movieCode)
 }
 
 // ExecutePlatformUpload dispatches the upload to the correct platform service

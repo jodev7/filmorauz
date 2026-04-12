@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
+import { usePathname } from "next/navigation";
 import { X } from "lucide-react";
 import { Ad, getAdsForWebsite, recordAdImpression, recordAdClick } from "@/lib/api";
 import { pickWeightedRandomAd, isUserPremium } from "@/lib/ads-utils";
@@ -25,6 +26,7 @@ export default function WebsiteAdSlot({
   popup = false,
   variant = "inline",
 }: WebsiteAdSlotProps) {
+  const pathname = usePathname();
   const { user, isLoading: authLoading } = useAuth();
   const [ads, setAds] = useState<Ad[]>([]);
   const [dismissed, setDismissed] = useState(false);
@@ -81,6 +83,7 @@ export default function WebsiteAdSlot({
     recordAdImpression(ad.id).catch(() => {});
   }, [ads, current, isReady, placement]);
 
+  if (pathname.startsWith("/premium")) return null;
   if (authLoading || isUserPremium(user)) return null;
   if (ads.length === 0 || dismissed) return null;
 

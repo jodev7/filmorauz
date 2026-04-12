@@ -79,7 +79,7 @@ export default function FixedBottomAd({
     recordAdImpression(ad.id).catch(() => {});
   }, [ads, current, isReady, placement]);
 
-  if (pathname.startsWith("/admin")) return null;
+  if (pathname.startsWith("/admin") || pathname.startsWith("/premium")) return null;
   if (authLoading || isUserPremium(user)) return null;
   if (!isReady || ads.length === 0 || dismissed) return null;
 

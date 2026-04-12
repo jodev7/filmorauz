@@ -9,7 +9,14 @@ import time
 import urllib.request
 import urllib.error
 import threading
+import socketserver
 from http.server import HTTPServer, BaseHTTPRequestHandler
+
+
+class ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+    """Handle each request in a separate thread so long-running jobs
+    (imports, downloads) do not block social uploads."""
+    daemon_threads = True
 from urllib.parse import urlparse, parse_qs
 import sys
 
@@ -82,11 +89,14 @@ class ParserHandler(BaseHTTPRequestHandler):
     
     def _send_json(self, data, status=200):
         """Send JSON response"""
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
-    
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode())
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # client disconnected before response was sent
+
     def _send_error(self, message, status=400):
         """Send error response"""
         self._send_json({"error": message}, status)
@@ -342,11 +352,16 @@ class ParserHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         """Handle GET requests"""
+        try:
+            self._do_GET_inner()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # client disconnected mid-request
+
+    def _do_GET_inner(self):
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
-        
-        # Debug log the request
+
         logger.info(f"[SERVER] {self.command} {self.path}")
         
         # Routes
@@ -1179,10 +1194,16 @@ class ParserHandler(BaseHTTPRequestHandler):
         }
     
     def do_POST(self):
-        """Handle POST requests - for /download endpoint"""
+        """Handle POST requests"""
+        try:
+            self._do_POST_inner()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # client disconnected mid-request
+
+    def _do_POST_inner(self):
         parsed = urlparse(self.path)
         path = parsed.path
-        
+
         logger.info(f"[SERVER] {self.command} {self.path}")
         
         # /download - Download a video
@@ -2004,7 +2025,7 @@ def run_server(host="0.0.0.0", port=8081):
     server_address = (host, port)
     # Set the server address string for use in handlers
     ParserHandler.server_address_str = f"http://{host}:{port}"
-    httpd = HTTPServer(server_address, ParserHandler)
+    httpd = ThreadedHTTPServer(server_address, ParserHandler)
     logger.info(f"Parser API server running on http://{host}:{port}")
     logger.info(f"Available sources: {AVAILABLE_SOURCES}")
     logger.info(f"Parser base URL for workers: {ParserHandler.server_address_str}")

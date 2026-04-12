@@ -18,6 +18,10 @@ import {
   Instagram,
   Youtube,
   Music2,
+  ChevronDown,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
@@ -315,6 +319,19 @@ export default function AdminClipsPage() {
   const [modal, setModal] = useState<PublishModal | null>(null);
   const [editingJob, setEditingJob] = useState<{ id: string; value: string } | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [expandedMovies, setExpandedMovies] = useState<Set<string>>(new Set());
+
+  const toggleMovie = (movieId: string) =>
+    setExpandedMovies((prev) => {
+      const next = new Set(prev);
+      next.has(movieId) ? next.delete(movieId) : next.add(movieId);
+      return next;
+    });
+
+  const expandAll = () =>
+    setExpandedMovies(new Set(clips.map((c) => c.movie_id)));
+
+  const collapseAll = () => setExpandedMovies(new Set());
 
   const fetchClips = useCallback(async () => {
     if (!token) return;
@@ -506,8 +523,28 @@ export default function AdminClipsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-white">Kliplar</h1>
-          <p className="text-gray-500 text-sm mt-1">{clips.length} ta klip mavjud</p>
+          <p className="text-gray-500 text-sm mt-1">
+            {Object.keys(groupedClips).length} ta kino · {clips.length} ta klip
+          </p>
         </div>
+        {clips.length > 0 && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={expandAll}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-brand-border text-xs text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
+            >
+              <ChevronsUpDown size={13} />
+              Barchasini ochish
+            </button>
+            <button
+              onClick={collapseAll}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-brand-border text-xs text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
+            >
+              <ChevronsDownUp size={13} />
+              Barchasini yopish
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ── Clips table ─────────────────────────────────────────── */}
@@ -526,115 +563,181 @@ export default function AdminClipsPage() {
         </div>
       ) : (
         <div className="space-y-8">
-          {Object.entries(groupedClips).map(([movieId, movieClips]) => (
-            <div
-              key={movieId}
-              className="bg-brand-card border border-brand-border rounded-xl overflow-hidden"
-            >
-              <div className="px-4 sm:px-6 py-4 border-b border-brand-border bg-brand-dark/50">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Link
-                      href="/admin/movies"
-                      className="text-white font-medium hover:text-brand-red transition-colors"
-                    >
-                      {movieClips[0].movie_title}
-                    </Link>
-                    <div className="flex items-center gap-3 mt-1 text-sm text-gray-500">
-                      <span className="font-mono">#{movieClips[0].movie_code}</span>
-                      <span>{movieClips.length} ta klip</span>
-                    </div>
-                  </div>
-                  <Link
-                    href={`/movies/${movieClips[0].movie_slug}`}
-                    target="_blank"
-                    className="text-gray-500 hover:text-white transition-colors"
-                  >
-                    <ExternalLink size={18} />
-                  </Link>
-                </div>
-              </div>
+          {Object.entries(groupedClips).map(([movieId, movieClips]) => {
+            const isExpanded = expandedMovies.has(movieId);
+            const moviePublishJobs = publishJobs.filter((j) =>
+              movieClips.some((c) => c.id === j.clip_id)
+            );
+            // Per-platform upload summary for the movie header
+            const igUploaded = movieClips.filter((c) => c.instagram_upload_count > 0).length;
+            const ytUploaded = new Set(
+              moviePublishJobs
+                .filter((j) => j.platform === "youtube" && j.status === "success")
+                .map((j) => j.clip_id)
+            ).size;
+            const ttUploaded = new Set(
+              moviePublishJobs
+                .filter((j) => j.platform === "tiktok" && j.status === "success")
+                .map((j) => j.clip_id)
+            ).size;
+            const lastUpload = [
+              ...movieClips.map((c) => c.last_instagram_upload_at).filter(Boolean),
+              ...moviePublishJobs
+                .filter((j) => j.status === "success" && j.executed_at)
+                .map((j) => j.executed_at!),
+            ].sort().at(-1);
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-brand-border text-gray-500 text-xs uppercase tracking-wider">
-                      <th className="text-left px-4 py-3">#</th>
-                      <th className="text-left px-4 py-3">Fayl</th>
-                      <th className="text-left px-4 py-3">Davom</th>
-                      <th className="text-left px-4 py-3">Saxlash</th>
-                      <th className="text-left px-4 py-3">Platformlar</th>
-                      <th className="text-right px-4 py-3">Amallar</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[...movieClips]
-                      .sort((a, b) => a.sequence - b.sequence)
-                      .map((clip) => {
-                        const clipJobs = publishJobs.filter((j) => j.clip_id === clip.id);
-                        return (
-                          <tr
-                            key={clip.id}
-                            className="border-b border-brand-border/50 last:border-0 hover:bg-brand-border/20 transition-colors"
-                          >
-                            <td className="px-4 py-3 text-gray-500">{clip.sequence}</td>
-                            <td className="px-4 py-3">
-                              <span className="text-gray-300 font-mono text-xs">{clip.filename}</span>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex items-center gap-1.5 text-gray-400">
-                                <Clock size={14} />
-                                <span>{formatDuration(clip.duration)}</span>
-                              </div>
-                            </td>
-                            <td className="px-4 py-3">
-                              <span
-                                className={`text-xs px-2 py-0.5 rounded ${
-                                  clip.storage_type === "b2"
-                                    ? "bg-blue-500/20 text-blue-400"
-                                    : "bg-green-500/20 text-green-400"
-                                }`}
+            return (
+              <div
+                key={movieId}
+                className="bg-brand-card border border-brand-border rounded-xl overflow-hidden"
+              >
+                {/* ── Movie header (click to expand/collapse) ─────── */}
+                <button
+                  onClick={() => toggleMovie(movieId)}
+                  className="w-full px-4 sm:px-6 py-4 border-b border-brand-border bg-brand-dark/50 hover:bg-brand-dark/80 transition-colors text-left"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-gray-500 flex-shrink-0">
+                      {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <span className="text-white font-medium truncate">
+                          {movieClips[0].movie_title}
+                        </span>
+                        <span className="text-xs font-mono text-gray-500">
+                          #{movieClips[0].movie_code}
+                        </span>
+                        <span className="text-xs text-gray-600">
+                          {movieClips.length} ta klip
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                        {igUploaded > 0 && (
+                          <span className="inline-flex items-center gap-1 text-[11px] text-pink-400">
+                            <Instagram size={10} />
+                            {igUploaded}/{movieClips.length}
+                          </span>
+                        )}
+                        {ytUploaded > 0 && (
+                          <span className="inline-flex items-center gap-1 text-[11px] text-red-400">
+                            <Youtube size={10} />
+                            {ytUploaded}/{movieClips.length}
+                          </span>
+                        )}
+                        {ttUploaded > 0 && (
+                          <span className="inline-flex items-center gap-1 text-[11px] text-sky-400">
+                            <Music2 size={10} />
+                            {ttUploaded}/{movieClips.length}
+                          </span>
+                        )}
+                        {igUploaded === 0 && ytUploaded === 0 && ttUploaded === 0 && (
+                          <span className="text-[11px] text-gray-600">Yuklanmagan</span>
+                        )}
+                        {lastUpload && (
+                          <span className="text-[11px] text-gray-600">
+                            · {formatTashkent(lastUpload)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <a
+                      href={`/movies/${movieClips[0].movie_slug}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-gray-600 hover:text-white transition-colors flex-shrink-0"
+                    >
+                      <ExternalLink size={15} />
+                    </a>
+                  </div>
+                </button>
+
+                {/* ── Clip rows (collapsible) ──────────────────────── */}
+                {isExpanded && (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-brand-border text-gray-500 text-xs uppercase tracking-wider">
+                          <th className="text-left px-4 py-3">#</th>
+                          <th className="text-left px-4 py-3">Fayl</th>
+                          <th className="text-left px-4 py-3">Davom</th>
+                          <th className="text-left px-4 py-3">Saxlash</th>
+                          <th className="text-left px-4 py-3">Platformlar</th>
+                          <th className="text-right px-4 py-3">Amallar</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...movieClips]
+                          .sort((a, b) => a.sequence - b.sequence)
+                          .map((clip) => {
+                            const clipJobs = publishJobs.filter((j) => j.clip_id === clip.id);
+                            return (
+                              <tr
+                                key={clip.id}
+                                className="border-b border-brand-border/50 last:border-0 hover:bg-brand-border/20 transition-colors"
                               >
-                                {clip.storage_type === "b2" ? "B2/CDN" : "Local"}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3">
-                              <PlatformUploadStatuses clip={clip} clipJobs={clipJobs} />
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex items-center justify-end gap-2">
-                                <a
-                                  href={clip.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-gray-500 hover:text-gray-300 transition-colors"
-                                  title="Klipni ochish"
-                                >
-                                  <ExternalLink size={14} />
-                                </a>
-                                <button
-                                  onClick={() => openModal(clip)}
-                                  disabled={uploading[clip.id]}
-                                  title="Ijtimoiy tarmoqlarga yuklash"
-                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50"
-                                >
-                                  {uploading[clip.id] ? (
-                                    <Loader2 size={12} className="animate-spin" />
-                                  ) : (
-                                    <Upload size={12} />
-                                  )}
-                                  {uploading[clip.id] ? "..." : "Publish"}
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                  </tbody>
-                </table>
+                                <td className="px-4 py-3 text-gray-500">{clip.sequence}</td>
+                                <td className="px-4 py-3">
+                                  <span className="text-gray-300 font-mono text-xs">{clip.filename}</span>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center gap-1.5 text-gray-400">
+                                    <Clock size={14} />
+                                    <span>{formatDuration(clip.duration)}</span>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <span
+                                    className={`text-xs px-2 py-0.5 rounded ${
+                                      clip.storage_type === "b2"
+                                        ? "bg-blue-500/20 text-blue-400"
+                                        : "bg-green-500/20 text-green-400"
+                                    }`}
+                                  >
+                                    {clip.storage_type === "b2" ? "B2/CDN" : "Local"}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <PlatformUploadStatuses clip={clip} clipJobs={clipJobs} />
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center justify-end gap-2">
+                                    <a
+                                      href={clip.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-gray-500 hover:text-gray-300 transition-colors"
+                                      title="Klipni ochish"
+                                    >
+                                      <ExternalLink size={14} />
+                                    </a>
+                                    <button
+                                      onClick={() => openModal(clip)}
+                                      disabled={uploading[clip.id]}
+                                      title="Ijtimoiy tarmoqlarga yuklash"
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50"
+                                    >
+                                      {uploading[clip.id] ? (
+                                        <Loader2 size={12} className="animate-spin" />
+                                      ) : (
+                                        <Upload size={12} />
+                                      )}
+                                      {uploading[clip.id] ? "..." : "Publish"}
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
