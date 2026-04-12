@@ -1574,7 +1574,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                     self._send_error("instagrapi not installed — run: pip install instagrapi", 500)
                     return
 
-                import tempfile, os, urllib.request as _urlreq
+                import tempfile, urllib.request as _urlreq
                 from pathlib import Path
 
                 account_name = body.get("account_name", "") or username
@@ -1698,9 +1698,11 @@ class ParserHandler(BaseHTTPRequestHandler):
                     from google.auth.transport.requests import Request
                     from googleapiclient.discovery import build
                     from googleapiclient.http import MediaFileUpload
-                except ImportError:
+                except ImportError as _ie:
+                    import sys as _sys
                     self._send_error(
-                        "google-api-python-client not installed — run: pip install google-api-python-client google-auth",
+                        f"Missing YouTube dependency: {_ie}. "
+                        f"Run: {_sys.executable} -m pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2",
                         500,
                     )
                     return
@@ -1760,13 +1762,16 @@ class ParserHandler(BaseHTTPRequestHandler):
 
                     video_id = response.get("id", "")
                     logger.info(f"[YouTube] upload success video_id={video_id} account={account_name}")
-                    self._send_json({"status": "success", "video_id": video_id})
+                    self._send_json({"status": "success", "video_id": video_id, "account": account_name, "platform": "youtube"})
                 except Exception as e:
                     logger.error(f"[YouTube] upload error account={account_name}: {e}", exc_info=True)
                     self._send_json({"status": "failed", "error": str(e)})
                 finally:
-                    if tmp_path and os.path.exists(tmp_path):
-                        os.unlink(tmp_path)
+                    try:
+                        if tmp_path and os.path.exists(tmp_path):
+                            os.unlink(tmp_path)
+                    except Exception as _cleanup_err:
+                        logger.warning(f"[YouTube] temp file cleanup failed: {_cleanup_err}")
             except Exception as e:
                 logger.error(f"[YouTube] endpoint error: {e}", exc_info=True)
                 self._send_error(str(e), 500)

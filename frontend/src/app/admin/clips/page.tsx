@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import {
   Film,
@@ -10,7 +10,6 @@ import {
   Upload,
   CheckCircle,
   XCircle,
-  MinusCircle,
   X,
   Calendar,
   CalendarClock,
@@ -160,29 +159,90 @@ const ALL_PLATFORMS: Platform[] = ["instagram", "youtube", "tiktok"];
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
-function UploadStatusBadge({ clip }: { clip: Clip }) {
-  if (clip.instagram_upload_count === 0 || !clip.last_instagram_upload_status) {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-gray-800 text-gray-400 border border-gray-700">
-        <MinusCircle size={11} />
-        Not uploaded
-      </span>
+function PlatformUploadStatuses({
+  clip,
+  clipJobs,
+}: {
+  clip: Clip;
+  clipJobs: PublishJob[];
+}) {
+  const rows: React.ReactNode[] = [];
+
+  // Instagram: driven by clip fields
+  if (clip.instagram_upload_count > 0 || clip.last_instagram_upload_status) {
+    const meta = PLATFORM_META.instagram;
+    const { Icon } = meta;
+    const ok = clip.last_instagram_upload_status === "success";
+    const failed = clip.last_instagram_upload_status === "failed";
+    rows.push(
+      <div key="instagram" className="flex items-center gap-1.5">
+        <Icon size={11} className={meta.color} />
+        {ok ? (
+          <span className="inline-flex items-center gap-1 text-[11px] text-green-400">
+            <CheckCircle size={10} />
+            {clip.instagram_upload_count}× yuklandi
+            {clip.last_instagram_upload_at && (
+              <span className="text-gray-600 text-[10px]">
+                · {formatTashkent(clip.last_instagram_upload_at)}
+              </span>
+            )}
+          </span>
+        ) : failed ? (
+          <span className="inline-flex items-center gap-1 text-[11px] text-red-400">
+            <XCircle size={10} />
+            Xato
+          </span>
+        ) : (
+          <span className="text-[11px] text-gray-500">—</span>
+        )}
+      </div>
     );
   }
-  if (clip.last_instagram_upload_status === "success") {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-500/15 text-green-400 border border-green-500/30">
-        <CheckCircle size={11} />
-        Uploaded
-      </span>
+
+  // YouTube + TikTok: driven by publishJobs
+  for (const platform of ["youtube", "tiktok"] as const) {
+    const jobs = clipJobs.filter((j) => j.platform === platform);
+    if (jobs.length === 0) continue;
+    const meta = PLATFORM_META[platform];
+    const { Icon } = meta;
+    const successJobs = jobs.filter((j) => j.status === "success");
+    const pendingJobs = jobs.filter((j) => j.status === "pending" || j.status === "processing");
+    const failedJobs = jobs.filter((j) => j.status === "failed");
+    const lastSuccess = successJobs.sort((a, b) =>
+      (b.executed_at ?? b.created_at).localeCompare(a.executed_at ?? a.created_at)
+    )[0];
+    rows.push(
+      <div key={platform} className="flex items-center gap-1.5">
+        <Icon size={11} className={meta.color} />
+        {successJobs.length > 0 ? (
+          <span className="inline-flex items-center gap-1 text-[11px] text-green-400">
+            <CheckCircle size={10} />
+            {successJobs.length}× yuklandi
+            {lastSuccess?.executed_at && (
+              <span className="text-gray-600 text-[10px]">
+                · {formatTashkent(lastSuccess.executed_at)}
+              </span>
+            )}
+          </span>
+        ) : pendingJobs.length > 0 ? (
+          <span className="inline-flex items-center gap-1 text-[11px] text-blue-400">
+            <CalendarClock size={10} />
+            {formatTashkent(pendingJobs[0].scheduled_for)}
+          </span>
+        ) : failedJobs.length > 0 ? (
+          <span className="inline-flex items-center gap-1 text-[11px] text-red-400">
+            <XCircle size={10} />
+            Xato
+          </span>
+        ) : null}
+      </div>
     );
   }
-  return (
-    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400 border border-red-500/30">
-      <XCircle size={11} />
-      Failed
-    </span>
-  );
+
+  if (rows.length === 0) {
+    return <span className="text-xs text-gray-600">—</span>;
+  }
+  return <div className="flex flex-col gap-1">{rows}</div>;
 }
 
 function JobStatusBadge({ status }: { status: PublishJob["status"] }) {
@@ -503,8 +563,7 @@ export default function AdminClipsPage() {
                       <th className="text-left px-4 py-3">Fayl</th>
                       <th className="text-left px-4 py-3">Davom</th>
                       <th className="text-left px-4 py-3">Saxlash</th>
-                      <th className="text-left px-4 py-3">Instagram</th>
-                      <th className="text-left px-4 py-3">Yuklashlar</th>
+                      <th className="text-left px-4 py-3">Platformlar</th>
                       <th className="text-right px-4 py-3">Amallar</th>
                     </tr>
                   </thead>
@@ -513,7 +572,6 @@ export default function AdminClipsPage() {
                       .sort((a, b) => a.sequence - b.sequence)
                       .map((clip) => {
                         const clipJobs = publishJobs.filter((j) => j.clip_id === clip.id);
-                        const pendingClipJob = clipJobs.find((j) => j.status === "pending");
                         return (
                           <tr
                             key={clip.id}
@@ -541,32 +599,7 @@ export default function AdminClipsPage() {
                               </span>
                             </td>
                             <td className="px-4 py-3">
-                              <div className="flex flex-col gap-1">
-                                <UploadStatusBadge clip={clip} />
-                                {pendingClipJob && (
-                                  <span className="inline-flex items-center gap-1 text-[10px] text-blue-400">
-                                    <CalendarClock size={10} />
-                                    {formatTashkent(pendingClipJob.scheduled_for)}
-                                    <PlatformBadge platform={pendingClipJob.platform} />
-                                  </span>
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-4 py-3">
-                              {clip.instagram_upload_count > 0 ? (
-                                <div className="flex flex-col gap-0.5">
-                                  <span className="text-xs text-gray-300 font-medium">
-                                    {clip.instagram_upload_count}× yuklangan
-                                  </span>
-                                  {clip.last_instagram_upload_at && (
-                                    <span className="text-xs text-gray-600">
-                                      {formatTashkent(clip.last_instagram_upload_at)}
-                                    </span>
-                                  )}
-                                </div>
-                              ) : (
-                                <span className="text-xs text-gray-600">—</span>
-                              )}
+                              <PlatformUploadStatuses clip={clip} clipJobs={clipJobs} />
                             </td>
                             <td className="px-4 py-3">
                               <div className="flex items-center justify-end gap-2">
@@ -849,19 +882,63 @@ export default function AdminClipsPage() {
                 ) : (
                   <>
                     {/* Platform + account selectors */}
-                    <div className="space-y-3">
+                    <div className="space-y-4">
                       {ALL_PLATFORMS.map((platform) => {
                         const accounts = allAccounts[platform];
                         const meta = PLATFORM_META[platform];
                         const { Icon } = meta;
                         if (accounts.length === 0) return null;
+                        const allChecked = accounts.every((name) =>
+                          modal.selectedJobs.some((j) => j.platform === platform && j.account_name === name)
+                        );
+                        const someChecked = accounts.some((name) =>
+                          modal.selectedJobs.some((j) => j.platform === platform && j.account_name === name)
+                        );
+                        const toggleAll = () => {
+                          if (allChecked) {
+                            setModal((p) => p ? {
+                              ...p,
+                              selectedJobs: p.selectedJobs.filter((j) => j.platform !== platform),
+                            } : p);
+                          } else {
+                            setModal((p) => {
+                              if (!p) return p;
+                              const existing = p.selectedJobs.filter((j) => j.platform !== platform);
+                              return {
+                                ...p,
+                                selectedJobs: [
+                                  ...existing,
+                                  ...accounts.map((name) => ({ platform, account_name: name })),
+                                ],
+                              };
+                            });
+                          }
+                        };
                         return (
-                          <div key={platform}>
-                            <div className={`flex items-center gap-2 mb-1.5 text-xs font-medium ${meta.color}`}>
-                              <Icon size={13} />
-                              {meta.label}
-                            </div>
-                            <div className="space-y-1.5">
+                          <div key={platform} className="rounded-lg border border-brand-border overflow-hidden">
+                            {/* Platform header row */}
+                            <label
+                              className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors ${
+                                someChecked ? meta.bgColor : "bg-white/5"
+                              } hover:bg-white/10`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={allChecked}
+                                ref={(el) => { if (el) el.indeterminate = someChecked && !allChecked; }}
+                                onChange={toggleAll}
+                                className="w-4 h-4 cursor-pointer"
+                              />
+                              <Icon size={14} className={meta.color} />
+                              <span className={`text-sm font-semibold ${meta.color}`}>{meta.label}</span>
+                              <span className="ml-auto text-xs text-gray-500">
+                                {accounts.filter((name) =>
+                                  modal.selectedJobs.some((j) => j.platform === platform && j.account_name === name)
+                                ).length}/{accounts.length}
+                              </span>
+                            </label>
+                            {/* Account rows */}
+                            <div className="divide-y divide-brand-border">
                               {accounts.map((name) => {
                                 const checked = modal.selectedJobs.some(
                                   (j) => j.platform === platform && j.account_name === name
@@ -869,17 +946,15 @@ export default function AdminClipsPage() {
                                 return (
                                   <label
                                     key={name}
-                                    className={`flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
-                                      checked
-                                        ? `${meta.bgColor} ${meta.borderColor}`
-                                        : "border-brand-border hover:border-gray-500"
+                                    className={`flex items-center gap-3 pl-8 pr-3 py-2 cursor-pointer transition-colors ${
+                                      checked ? meta.bgColor : "hover:bg-white/5"
                                     }`}
                                   >
                                     <input
                                       type="checkbox"
                                       checked={checked}
                                       onChange={() => toggleJob(platform, name)}
-                                      className="w-4 h-4 cursor-pointer accent-current"
+                                      className="w-4 h-4 cursor-pointer"
                                     />
                                     <span className="text-gray-200 text-sm font-mono">{name}</span>
                                   </label>

@@ -6,9 +6,15 @@ import (
 	"github.com/filmorauz/backend/models"
 )
 
-// BuildPublishCaption returns the standard caption used across all platforms.
+// BuildPublishCaption returns the standard caption used for Instagram and TikTok.
 func BuildPublishCaption(movieTitle, movieCode string) string {
 	return fmt.Sprintf("%s\n\nKinoni profildagi bot orqali toping!\nKino Kodi: %s", movieTitle, movieCode)
+}
+
+// BuildYouTubeDescription returns the YouTube Shorts description.
+// Title is already set as the video title, so it is omitted here.
+func BuildYouTubeDescription(movieCode string) string {
+	return fmt.Sprintf("Kinoni profildagi bot orqali toping!\nKino Kodi: %s\nhttps://t.me/filmorauzbot", movieCode)
 }
 
 // ExecutePlatformUpload dispatches the upload to the correct platform service
@@ -27,7 +33,8 @@ func ExecutePlatformUpload(parserURL string, job *models.PublishJob) error {
 		if account == nil {
 			return fmt.Errorf("youtube account not configured: %s", job.AccountName)
 		}
-		return UploadShortToYouTube(parserURL, job.ClipURL, job.MovieTitle, caption, account)
+		ytDesc := BuildYouTubeDescription(job.MovieCode)
+		return UploadShortToYouTube(parserURL, job.ClipURL, job.MovieTitle, ytDesc, account)
 	case models.PublishPlatformTikTok:
 		account := GetTikTokAccount(job.AccountName)
 		if account == nil {
