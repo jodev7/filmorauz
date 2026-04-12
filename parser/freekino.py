@@ -714,7 +714,11 @@ class FreekinoParser:
                 continue
         
         logger.info(f"[FREEKINO] list_catalog: extracted {len(items)} items from page {page}")
-        
+
+        if type_filter:
+            items = [i for i in items if i.get("type") == type_filter]
+
+
         # Check for next page
         has_more = False
         pagination = soup.select_one(".navigation, .pagination, .pager, .page-nav, #bottom-nav")
@@ -806,11 +810,13 @@ class FreekinoParser:
                 desc = clean_text(el.get_text())[:200]
                 break
 
+        item_type = "serial" if "/serial/" in detail_url else "movie"
+
         return {
             "source_id": source_id,
             "title": title,
             "year": year,
-            "type": "movie",
+            "type": item_type,
             "poster": poster,
             "description": desc,
             "genres": [],
