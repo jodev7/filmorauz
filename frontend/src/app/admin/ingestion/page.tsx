@@ -4,9 +4,9 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { 
-  Search, Play, RefreshCw, CheckCircle, XCircle, 
+  Search, Play, RefreshCw, CheckCircle, XCircle,
   Clock, Download, Upload, Settings, AlertTriangle, Loader2,
-  ChevronLeft, ChevronRight, Film, Tv, Link, Plus
+  ChevronLeft, ChevronRight, Film, Tv, Link, Plus, Youtube
 } from "lucide-react";
 import {
   searchSource, createIngestionJob, getIngestionJobs,
@@ -465,13 +465,14 @@ function CatalogTab({
 }
 
 // Manual Import Tab Component
-function ManualTab({ 
+function ManualTab({
   token,
-  onImportSuccess 
-}: { 
+  onImportSuccess
+}: {
   token: string;
   onImportSuccess: () => void;
 }) {
+  const [sourceType, setSourceType] = useState<"direct" | "youtube">("direct");
   const [videoUrl, setVideoUrl] = useState("");
   const [title, setTitle] = useState("");
   const [year, setYear] = useState("");
@@ -484,10 +485,18 @@ function ManualTab({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!videoUrl.trim()) {
-      setError("Video URL is required");
+      setError("URL kiritish majburiy");
       return;
+    }
+
+    if (sourceType === "youtube") {
+      const ytPattern = /^https?:\/\/(www\.)?(youtube\.com\/(watch\?v=|shorts\/)|youtu\.be\/)/;
+      if (!ytPattern.test(videoUrl.trim())) {
+        setError("Yaroqli YouTube URL kiriting (youtube.com yoki youtu.be)");
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -503,20 +512,17 @@ function ManualTab({
         backdrop: backdrop.trim() || undefined,
         type: type,
       });
-      
-      setSuccess("Import job created successfully!");
-      // Reset form
+
+      setSuccess("Import vazifasi muvaffaqiyatli yaratildi!");
       setVideoUrl("");
       setTitle("");
       setYear("");
       setPoster("");
       setBackdrop("");
       setType("movie");
-      
-      // Notify parent
       onImportSuccess();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create import job");
+      setError(err instanceof Error ? err.message : "Import vazifasini yaratib bo'lmadi");
     } finally {
       setSubmitting(false);
     }
@@ -529,13 +535,13 @@ function ManualTab({
           <Link className="w-5 h-5 text-brand-red" />
           Manual Video Import
         </h3>
-        
+
         {error && (
           <div className="bg-red-500/10 border border-red-500/30 text-red-400 rounded-lg px-4 py-3 mb-4">
             {error}
           </div>
         )}
-        
+
         {success && (
           <div className="bg-green-500/10 border border-green-500/30 text-green-400 rounded-lg px-4 py-3 mb-4">
             {success}
@@ -543,19 +549,60 @@ function ManualTab({
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Video URL - Required */}
+          {/* Source type toggle */}
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">Manba turi</label>
+            <div className="flex rounded-lg border border-brand-border overflow-hidden">
+              <button
+                type="button"
+                onClick={() => { setSourceType("direct"); setVideoUrl(""); }}
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-medium transition-colors ${
+                  sourceType === "direct"
+                    ? "bg-brand-red text-white"
+                    : "text-gray-400 hover:text-white hover:bg-white/5"
+                }`}
+              >
+                <Link className="w-4 h-4" />
+                To&apos;g&apos;ridan URL
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSourceType("youtube"); setVideoUrl(""); }}
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-medium transition-colors ${
+                  sourceType === "youtube"
+                    ? "bg-red-600 text-white"
+                    : "text-gray-400 hover:text-white hover:bg-white/5"
+                }`}
+              >
+                <Youtube className="w-4 h-4" />
+                YouTube URL
+              </button>
+            </div>
+          </div>
+
+          {/* URL field */}
           <div>
             <label className="block text-sm text-gray-400 mb-1">
-              Video URL <span className="text-red-500">*</span>
+              {sourceType === "youtube" ? "YouTube URL" : "Video URL"}{" "}
+              <span className="text-red-500">*</span>
             </label>
             <input
               type="url"
               value={videoUrl}
               onChange={(e) => setVideoUrl(e.target.value)}
-              placeholder="https://example.com/video.mp4"
+              placeholder={
+                sourceType === "youtube"
+                  ? "https://www.youtube.com/watch?v=... yoki https://youtu.be/..."
+                  : "https://example.com/video.mp4"
+              }
               required
               className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
             />
+            {sourceType === "youtube" && (
+              <p className="text-xs text-gray-600 mt-1">
+                youtube.com/watch?v=, youtube.com/shorts/ va youtu.be/ manzillarini qo&apos;llab-quvvatlaydi
+              </p>
+            )}
           </div>
 
           {/* Type */}

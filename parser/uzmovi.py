@@ -2268,9 +2268,9 @@ class UzmoviParser(BaseParser):
                 title = clean_text(el.get_text())
                 href = el.get("href", "")
                 if href:
-                    detail_url = normalize_url(self.BASE_URL, href)
+                    detail_url = normalize_url(href, self.BASE_URL)
                 break
-        
+
         if not title:
             for a in card.find_all("a"):
                 text = clean_text(a.get_text())
@@ -2278,7 +2278,7 @@ class UzmoviParser(BaseParser):
                     title = text
                     href = a.get("href", "")
                     if href:
-                        detail_url = normalize_url(self.BASE_URL, href)
+                        detail_url = normalize_url(href, self.BASE_URL)
                     break
         
         if not title:
@@ -2291,7 +2291,7 @@ class UzmoviParser(BaseParser):
             if img:
                 poster = img.get("data-src") or img.get("data-lazy-src") or img.get("data-original") or img.get("src", "")
                 if poster:
-                    poster = normalize_url(self.BASE_URL, poster)
+                    poster = normalize_url(poster, self.BASE_URL)
                 break
         
         # Year
