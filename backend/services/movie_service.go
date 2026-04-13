@@ -91,6 +91,12 @@ func (s *MovieService) GetTrendingMovies(period string, limit int) ([]models.Tre
 			continue
 		}
 
+		// Skip unpublished movies — new pending content should not appear in trending.
+		// Legacy movies (no approval_status field) are treated as approved.
+		if !movie.IsPublished && movie.ApprovalStatus != "" {
+			continue
+		}
+
 		results = append(results, models.TrendingMovie{
 			Movie:         movie,
 			ViewsInPeriod: vc.ViewCount,
@@ -371,6 +377,10 @@ func (s *MovieService) CreateMovie(input *models.MovieInput) (*models.Movie, err
 		OriginalTitle:  input.OriginalTitle,
 		TMDBID:         input.TMDBID,
 		MetadataSource: input.MetadataSource,
+
+		// Approval workflow: new content starts hidden pending admin review
+		ApprovalStatus: "pending",
+		IsPublished:    false,
 	}
 
 	if err := s.repo.Create(movie); err != nil {
@@ -562,4 +572,14 @@ func calculateWebsiteURL(slug string, baseURL string) string {
 		baseURL = "https://filmorauz.uz"
 	}
 	return fmt.Sprintf("%s/movies/%s", baseURL, slug)
+}
+
+// ListAllMoviesAdmin returns all movies regardless of approval status for admin dashboard.
+func (s *MovieService) ListAllMoviesAdmin(page, limit int) ([]models.Movie, int64, error) {
+	return s.repo.ListAdmin(page, limit)
+}
+
+// SetMovieApprovalStatus approves or rejects a movie.
+func (s *MovieService) SetMovieApprovalStatus(id, status, byUserID string) error {
+	return s.repo.SetApprovalStatus(id, status, byUserID)
 }

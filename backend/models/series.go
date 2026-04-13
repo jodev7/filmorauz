@@ -24,6 +24,12 @@ type Series struct {
 	IsCompleted bool               `bson:"is_completed" json:"is_completed"` // Series completed flag
 	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt   time.Time          `bson:"updated_at" json:"updated_at"`
+
+	// Approval workflow — new series start as pending/unpublished
+	ApprovalStatus string     `bson:"approval_status,omitempty" json:"approval_status,omitempty"` // "pending" | "approved" | "rejected"
+	IsPublished    bool       `bson:"is_published" json:"is_published"`
+	ApprovedAt     *time.Time `bson:"approved_at,omitempty" json:"approved_at,omitempty"`
+	ApprovedBy     string     `bson:"approved_by,omitempty" json:"approved_by,omitempty"`
 }
 
 // Season represents a season in a series

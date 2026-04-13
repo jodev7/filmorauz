@@ -1043,6 +1043,80 @@ func (r *UserRepository) GetUserPremiumStatus(userID primitive.ObjectID) (isPrem
 	return user.IsPremium, user.IsPremiumActive(), nil
 }
 
+// TopUpWalletBalance adds amount to a user's wallet balance and returns the new balance.
+func (r *UserRepository) TopUpWalletBalance(userHex string, amount float64) (float64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	userID, err := primitive.ObjectIDFromHex(userHex)
+	if err != nil {
+		return 0, err
+	}
+
+	var updated models.User
+	err = r.col.FindOneAndUpdate(
+		ctx,
+		bson.M{"_id": userID},
+		bson.M{
+			"$inc": bson.M{"wallet_balance": amount},
+			"$set": bson.M{"updated_at": time.Now()},
+		},
+		options.FindOneAndUpdate().SetReturnDocument(options.After),
+	).Decode(&updated)
+	if err == mongo.ErrNoDocuments {
+		return 0, fmt.Errorf("user not found")
+	}
+	if err != nil {
+		return 0, err
+	}
+	return updated.WalletBalance, nil
+}
+
+// DeductWalletAndActivatePremium atomically checks that the user's wallet balance
+// is >= price, deducts price, and activates premium for durationDays.
+// Returns "insufficient_balance" error if balance is too low.
+func (r *UserRepository) DeductWalletAndActivatePremium(userHex string, price float64, durationDays int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	userID, err := primitive.ObjectIDFromHex(userHex)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	expiresAt := now.Add(time.Duration(durationDays) * 24 * time.Hour)
+
+	// Atomic: only match if wallet_balance >= price
+	result, err := r.col.UpdateOne(ctx,
+		bson.M{
+			"_id":            userID,
+			"wallet_balance": bson.M{"$gte": price},
+		},
+		bson.M{
+			"$inc": bson.M{"wallet_balance": -price},
+			"$set": bson.M{
+				"is_premium":         true,
+				"premium_started_at": now,
+				"premium_expires_at": expiresAt,
+				"updated_at":         now,
+			},
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		// Distinguish "no such user" from "insufficient balance"
+		user, findErr := r.FindByHex(userHex)
+		if findErr != nil || user == nil {
+			return fmt.Errorf("user not found")
+		}
+		return fmt.Errorf("insufficient_balance")
+	}
+	return nil
+}
+
 // Helper function to check if a string is in a slice
 func containsString(s string, list []string) bool {
 	for _, item := range list {

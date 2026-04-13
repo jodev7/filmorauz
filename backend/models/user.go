@@ -33,6 +33,9 @@ type User struct {
 	PremiumStartedAt *time.Time `bson:"premium_started_at,omitempty" json:"premium_started_at,omitempty"`
 	PremiumExpiresAt *time.Time `bson:"premium_expires_at,omitempty" json:"premium_expires_at,omitempty"`
 
+	// Wallet balance in UZS (so'm)
+	WalletBalance float64 `bson:"wallet_balance" json:"wallet_balance"`
+
 	// Profile customization (premium only)
 	ProfileStyle *ProfileStyle `bson:"profile_style,omitempty" json:"profile_style,omitempty"`
 

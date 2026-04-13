@@ -8,7 +8,9 @@ Architecture:
 - detect_url_type(url) -> str: Detects stream type from URL and Content-Type
 - smart_download(url, output_name) -> dict: Main download entry point
 - _download_with_ddownloader(url, output_path) -> str: Uses N_m3u8DL-RE for manifest streams
-- _download_with_aria2c(url, output_path) -> str: Uses aria2c for MP4 direct downloads
+- _download_with_aria2c(url, output_path) -> str: Uses aria2c for MP4 direct downloads (1st try)
+- _download_mp4_with_ffmpeg(url, output_path) -> str: Uses ffmpeg for signed CDN MP4s (2nd try)
+- _download_with_curl(url, output_path) -> str: curl last-resort MP4 fallback (3rd try)
 - validate_downloaded_file(path) -> bool: Validates downloaded file
 
 Supported types:
@@ -899,7 +901,393 @@ class DDownloaderIntegration:
         except Exception as e:
             logger.error(f"[ARIA2C] Download failed: {e}")
             raise DDdownloaderIntegrationError(f"MP4 download failed: {e}")
-    
+
+    def _download_with_curl(
+        self,
+        url: str,
+        output_path: str,
+        referer: Optional[str] = None,
+        job_id: Optional[str] = None,
+        backend_job_id: Optional[str] = None,
+        progress_callback=None,
+    ) -> str:
+        """
+        Download a direct MP4 URL using curl with browser-like headers.
+
+        curl -L --fail --connect-timeout 15 --speed-limit 51200 --speed-time 60
+             -A "<USER_AGENT>" [-e "<referer>"]
+             -o "<output_path>" "<url>"
+
+        Progress is approximated by polling the output file size every 3 s
+        in a background thread so the backend job does not appear stuck.
+
+        Raises DDdownloaderIntegrationError on failure or timeout.
+        """
+        DEBUG = os.environ.get("PARSER_DEBUG", "").lower() == "true"
+
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        # Remove stale partial file so size tracking starts from 0
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
+
+        cmd = [
+            "curl",
+            "-L",                        # follow redirects
+            "--fail",                    # non-zero exit on HTTP 4xx/5xx
+            "--connect-timeout", "15",   # fail fast if server unreachable
+            "--speed-limit", "51200",    # abort if throughput drops below 50 KB/s…
+            "--speed-time", "60",        # …for 60 consecutive seconds (stall detection)
+            "--retry", "2",
+            "--retry-delay", "3",
+            "-A", USER_AGENT,
+        ]
+        if referer:
+            cmd.extend(["-e", referer])
+        cmd.extend(["-o", output_path, url])
+
+        ref_str = (referer[:60] + "...") if referer and len(referer) > 60 else (referer or "<no referer>")
+        referer_flag = f"-e '{ref_str}'" if referer else "(no -e flag)"
+        logger.info(
+            f"[CURL] Starting: curl -L --fail --connect-timeout 15 "
+            f"--speed-limit 51200 --speed-time 60 "
+            f"-A '<UA>' {referer_flag} -o {os.path.basename(output_path)} <url>"
+        )
+
+        # How long (seconds) with zero byte growth before we consider the download stalled.
+        INACTIVITY_LIMIT = 120
+
+        process = None
+        _stop_monitor = threading.Event()
+        _killed_for_inactivity = threading.Event()
+
+        def _monitor_progress():
+            """
+            Poll output file size every 3 s.
+            - Reports progress via progress_callback.
+            - Kills the process if no new bytes arrive for INACTIVITY_LIMIT seconds.
+            """
+            total = 0
+            try:
+                head = requests.head(
+                    url, headers={"User-Agent": USER_AGENT}, timeout=10, allow_redirects=True
+                )
+                total = int(head.headers.get("Content-Length", 0))
+            except Exception:
+                pass
+
+            start = time.time()
+            last_pct = -1
+            prev_downloaded = 0
+            last_progress_time = time.time()
+
+            while not _stop_monitor.is_set():
+                time.sleep(3)
+                if _stop_monitor.is_set():
+                    break
+
+                try:
+                    downloaded = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+                except OSError:
+                    downloaded = 0
+
+                # Update inactivity clock whenever bytes grow
+                if downloaded > prev_downloaded:
+                    prev_downloaded = downloaded
+                    last_progress_time = time.time()
+                else:
+                    idle_secs = time.time() - last_progress_time
+                    if idle_secs > INACTIVITY_LIMIT:
+                        logger.warning(
+                            f"[CURL] No progress for {idle_secs:.0f}s "
+                            f"(downloaded={downloaded:,} bytes) — killing process"
+                        )
+                        _killed_for_inactivity.set()
+                        try:
+                            process.kill()
+                        except Exception:
+                            pass
+                        _stop_monitor.set()
+                        break
+
+                elapsed = time.time() - start
+                speed = downloaded / elapsed if elapsed > 0 else 0
+                pct = int(downloaded / total * 100) if total > 0 else 0
+                pct = min(pct, 99)
+                eta = int((total - downloaded) / speed) if speed > 0 and total > downloaded else 0
+
+                logger.info(
+                    f"[CURL] Progress: {pct}% — {downloaded:,}/{total:,} bytes "
+                    f"@ {speed/1024/1024:.1f} MB/s ETA {eta}s"
+                )
+                if progress_callback and pct > last_pct:
+                    last_pct = pct
+                    progress_callback(pct, downloaded, total, speed, eta)
+
+        monitor_thread = threading.Thread(target=_monitor_progress, daemon=True)
+
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+            monitor_thread.start()
+
+            # Python safety net only — real stall detection is in _monitor_progress above.
+            # curl's --speed-limit/--speed-time also catches slow-but-not-zero cases.
+            try:
+                _, stderr = process.communicate(timeout=7200)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                try:
+                    process.communicate(timeout=5)
+                except Exception:
+                    pass
+                raise DDdownloaderIntegrationError(
+                    "curl download safety-net timeout after 7200 s"
+                )
+            finally:
+                _stop_monitor.set()
+                monitor_thread.join(timeout=5)
+
+            if _killed_for_inactivity.is_set():
+                raise DDdownloaderIntegrationError(
+                    f"curl stalled: no bytes received for {INACTIVITY_LIMIT}s"
+                )
+
+            rc = process.returncode
+            if DEBUG or rc != 0:
+                logger.info(f"[CURL] Exit code: {rc}")
+                if stderr:
+                    logger.info(f"[CURL] stderr: {stderr[:400]}")
+
+            if rc != 0:
+                raise DDdownloaderIntegrationError(
+                    f"curl failed (exit {rc}): {(stderr or 'no stderr')[:200]}"
+                )
+
+            if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+                raise DDdownloaderIntegrationError(
+                    "curl exited 0 but output file is missing or empty"
+                )
+
+            file_size = os.path.getsize(output_path)
+            logger.info(f"[CURL] Download complete: {output_path} ({file_size:,} bytes)")
+            if progress_callback:
+                progress_callback(100, file_size, file_size, 0, 0)
+            return output_path
+
+        except FileNotFoundError:
+            raise DDdownloaderIntegrationError("curl not found on this system")
+        except DDdownloaderIntegrationError:
+            raise
+        except Exception as e:
+            raise DDdownloaderIntegrationError(f"curl download error: {e}")
+        finally:
+            _stop_monitor.set()
+
+    def _download_mp4_with_ffmpeg(
+        self,
+        url: str,
+        output_path: str,
+        referer: Optional[str] = None,
+        job_id: Optional[str] = None,
+        backend_job_id: Optional[str] = None,
+        progress_callback=None,
+    ) -> str:
+        """
+        Download a direct MP4 URL using ffmpeg (primary tool for signed CDN URLs).
+
+        ffmpeg -y -loglevel error -stats
+               -headers "User-Agent: <UA>\\r\\nReferer: <referer>\\r\\n"
+               -i "<url>" -c copy "<output>"
+
+        Progress is parsed from ffmpeg's -stats stderr output (size= field).
+        Raises DDdownloaderIntegrationError on failure.
+        """
+        logger.info(f"[FFMPEG-MP4] Starting direct MP4 download: url={url[:80]}...")
+
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        # Build combined -headers string (ffmpeg requires all custom headers in one -headers arg)
+        headers_str = f"User-Agent: {USER_AGENT}\r\n"
+        if referer:
+            headers_str += f"Referer: {referer}\r\n"
+
+        cmd = [
+            self._ffmpeg_path,
+            "-y",
+            "-loglevel", "error",
+            "-stats",
+            "-headers", headers_str,
+            "-i", url,
+            "-c", "copy",
+            output_path,
+        ]
+
+        logger.info(
+            f"[FFMPEG-MP4] Command: ffmpeg -y -loglevel error -stats "
+            f"-headers '...' -i <url> -c copy {os.path.basename(output_path)}"
+        )
+
+        # HEAD request for Content-Length so we can compute percentage
+        total_bytes = 0
+        try:
+            head = requests.head(
+                url,
+                headers={"User-Agent": USER_AGENT},
+                timeout=10,
+                allow_redirects=True,
+            )
+            total_bytes = int(head.headers.get("Content-Length", 0))
+        except Exception:
+            pass
+
+        # Kill ffmpeg if no new bytes arrive for this many seconds
+        INACTIVITY_LIMIT = 120
+
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+            stderr_lines: list = []
+            start_time = time.time()
+            _stop_watchdog = threading.Event()
+            _killed_for_inactivity = threading.Event()
+
+            # Shared mutable last-activity timestamp (updated by _read_stderr)
+            last_active = [time.time()]
+
+            def _read_stderr():
+                """Read ffmpeg stderr; parse -stats progress; update last_active."""
+                try:
+                    for raw in process.stderr:
+                        for line in raw.replace("\r", "\n").split("\n"):
+                            line = line.strip()
+                            if not line:
+                                continue
+                            stderr_lines.append(line)
+
+                            # Stats line: size= 102400kB time=00:01:23.00 ...
+                            m = re.search(r"size=\s*(\d+)kB", line)
+                            if m:
+                                downloaded = int(m.group(1)) * 1024
+                                last_active[0] = time.time()  # bytes are moving
+                                elapsed = time.time() - start_time
+                                speed = downloaded / elapsed if elapsed > 0 else 0
+                                pct = int(downloaded / total_bytes * 100) if total_bytes > 0 else 0
+                                pct = min(pct, 99)
+                                eta = (
+                                    int((total_bytes - downloaded) / speed)
+                                    if speed > 0 and total_bytes > downloaded
+                                    else 0
+                                )
+                                logger.info(
+                                    f"[FFMPEG-MP4] Progress: {pct}% — "
+                                    f"{downloaded:,}/{total_bytes:,} bytes "
+                                    f"@ {speed/1024/1024:.1f} MB/s ETA {eta}s"
+                                )
+                                if progress_callback:
+                                    progress_callback(pct, downloaded, total_bytes, speed, eta)
+                except Exception:
+                    pass
+
+            def _watchdog():
+                """
+                Kill ffmpeg if no stats output for INACTIVITY_LIMIT seconds.
+                Falls back to polling output file size in case ffmpeg stops
+                printing stats but is somehow still writing bytes.
+                """
+                prev_file_size = 0
+                while not _stop_watchdog.is_set():
+                    _stop_watchdog.wait(timeout=10)
+                    if _stop_watchdog.is_set():
+                        break
+
+                    # Also check file size growth as a secondary activity signal
+                    try:
+                        cur_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+                    except OSError:
+                        cur_size = 0
+                    if cur_size > prev_file_size:
+                        prev_file_size = cur_size
+                        last_active[0] = time.time()
+
+                    idle_secs = time.time() - last_active[0]
+                    if idle_secs > INACTIVITY_LIMIT:
+                        logger.warning(
+                            f"[FFMPEG-MP4] No progress for {idle_secs:.0f}s — killing ffmpeg"
+                        )
+                        _killed_for_inactivity.set()
+                        try:
+                            process.kill()
+                        except Exception:
+                            pass
+                        break
+
+            stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+            watchdog_thread = threading.Thread(target=_watchdog, daemon=True)
+            stderr_thread.start()
+            watchdog_thread.start()
+
+            try:
+                # Python safety net only — real stall detection is in _watchdog above.
+                process.wait(timeout=7200)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+                raise DDdownloaderIntegrationError(
+                    "ffmpeg MP4 download safety-net timeout after 7200 s"
+                )
+            finally:
+                _stop_watchdog.set()
+                stderr_thread.join(timeout=5)
+                watchdog_thread.join(timeout=5)
+
+            if _killed_for_inactivity.is_set():
+                raise DDdownloaderIntegrationError(
+                    f"ffmpeg stalled: no bytes written for {INACTIVITY_LIMIT}s"
+                )
+
+            rc = process.returncode
+            logger.info(f"[FFMPEG-MP4] Exit code: {rc}")
+            if rc != 0:
+                snippet = "\n".join(stderr_lines[-10:]) or "no stderr"
+                logger.error(f"[FFMPEG-MP4] stderr tail: {snippet[:400]}")
+                raise DDdownloaderIntegrationError(f"ffmpeg failed (exit {rc}): {snippet[:200]}")
+
+            if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+                raise DDdownloaderIntegrationError(
+                    "ffmpeg exited 0 but output file is missing or empty"
+                )
+
+            file_size = os.path.getsize(output_path)
+            logger.info(f"[FFMPEG-MP4] Complete: {output_path} ({file_size:,} bytes)")
+            if progress_callback:
+                progress_callback(100, file_size, file_size, 0, 0)
+            return output_path
+
+        except FileNotFoundError:
+            raise DDdownloaderIntegrationError(f"ffmpeg not found: {self._ffmpeg_path}")
+        except DDdownloaderIntegrationError:
+            raise
+        except Exception as e:
+            raise DDdownloaderIntegrationError(f"ffmpeg MP4 download error: {e}")
+
     def smart_download(
         self,
         url: str,
@@ -1047,12 +1435,67 @@ class DDownloaderIntegration:
                             progress_callback=progress_callback
                         )
                 elif stream_type == StreamType.MP4.value:
-                    # Use aria2c for direct MP4
-                    path = self._download_with_aria2c(
-                        url, output_path,
-                        job_id, backend_job_id, referer,
-                        progress_callback=progress_callback
-                    )
+                    # Fallback chain: aria2c → ffmpeg → curl
+                    # aria2c: fastest for generic MP4s.
+                    # ffmpeg: preferred for signed CDN URLs (e.g. video-cdn.org / freekino)
+                    #         because it sends proper browser-like headers and is not throttled.
+                    # curl: last resort (CDNs often throttle it to ~0.1 MB/s).
+                    mp4_error = None
+
+                    # 1. aria2c
+                    try:
+                        path = self._download_with_aria2c(
+                            url, output_path,
+                            job_id, backend_job_id, referer,
+                            progress_callback=progress_callback
+                        )
+                        mp4_error = None
+                    except DDdownloaderIntegrationError as aria_err:
+                        mp4_error = aria_err
+                        logger.warning(f"[DDOWNLOADER] aria2c failed ({aria_err}), trying ffmpeg")
+                        if backend_job_id:
+                            try:
+                                from downloader_service import report_progress_to_backend
+                                report_progress_to_backend(backend_job_id, {
+                                    "stage": "download", "status": "retrying",
+                                    "progress": 0, "message": "aria2c failed, trying ffmpeg...",
+                                })
+                            except Exception:
+                                pass
+
+                    # 2. ffmpeg (if aria2c failed) — handles signed CDN URLs well
+                    if mp4_error is not None:
+                        try:
+                            path = self._download_mp4_with_ffmpeg(
+                                url, output_path,
+                                referer=referer,
+                                job_id=job_id,
+                                backend_job_id=backend_job_id,
+                                progress_callback=progress_callback,
+                            )
+                            mp4_error = None
+                        except DDdownloaderIntegrationError as ffmpeg_err:
+                            mp4_error = ffmpeg_err
+                            logger.warning(f"[DDOWNLOADER] ffmpeg failed ({ffmpeg_err}), trying curl")
+                            if backend_job_id:
+                                try:
+                                    from downloader_service import report_progress_to_backend
+                                    report_progress_to_backend(backend_job_id, {
+                                        "stage": "download", "status": "retrying",
+                                        "progress": 0, "message": "ffmpeg failed, trying curl...",
+                                    })
+                                except Exception:
+                                    pass
+
+                    # 3. curl (last resort — may be throttled by CDN)
+                    if mp4_error is not None:
+                        path = self._download_with_curl(
+                            url, output_path,
+                            referer=referer,
+                            job_id=job_id,
+                            backend_job_id=backend_job_id,
+                            progress_callback=progress_callback,
+                        )
                 else:
                     raise DDdownloaderIntegrationError(f"Unsupported stream type: {stream_type}")
                 
@@ -1104,11 +1547,24 @@ class DDownloaderIntegration:
                 if attempt == max_retries:
                     break
         
-        # All retries exhausted
+        # All retries exhausted — report failure so the backend job leaves "Downloading" state
         download_duration = time.time() - start_time
         error_msg = f"Download failed after {max_retries} attempts. Last error: {last_error}"
         logger.error(f"[DDOWNLOADER] {error_msg}")
-        
+
+        if backend_job_id:
+            try:
+                from downloader_service import report_progress_to_backend
+                report_progress_to_backend(backend_job_id, {
+                    "stage": "download",
+                    "status": "failed",
+                    "progress": 0,
+                    "message": error_msg,
+                    "error": error_msg,
+                })
+            except Exception:
+                pass
+
         return DownloadResult(
             success=False,
             source=url,

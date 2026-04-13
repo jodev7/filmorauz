@@ -354,6 +354,34 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 		movie.MetadataSource = ms
 	}
 
+	// Handle approval workflow fields.
+	// Legacy documents (created before approval feature) have no is_published field —
+	// treat them as already published/approved so existing content stays visible.
+	if pub, ok := doc["is_published"]; ok {
+		if b, ok := pub.(bool); ok {
+			movie.IsPublished = b
+		}
+	} else {
+		movie.IsPublished = true // legacy document — treat as approved
+	}
+	if status, ok := doc["approval_status"].(string); ok {
+		movie.ApprovalStatus = status
+	} else {
+		movie.ApprovalStatus = "approved" // legacy document
+	}
+	if raw, ok := doc["approved_at"]; ok && raw != nil {
+		switch v := raw.(type) {
+		case primitive.DateTime:
+			t := v.Time()
+			movie.ApprovedAt = &t
+		case time.Time:
+			movie.ApprovedAt = &v
+		}
+	}
+	if by, ok := doc["approved_by"].(string); ok {
+		movie.ApprovedBy = by
+	}
+
 	return movie, nil
 }
 
@@ -365,7 +393,13 @@ func (r *MovieRepository) List(genre string, page, limit int) ([]models.Movie, i
 	log.Printf("[ListMovies] === DEBUG START ===")
 	log.Printf("[ListMovies] Request: genre=%q, page=%d, limit=%d", genre, page, limit)
 
-	filter := bson.M{}
+	// Only show published movies publicly; legacy docs without is_published are also shown
+	filter := bson.M{
+		"$or": []bson.M{
+			{"is_published": true},
+			{"is_published": bson.M{"$exists": false}},
+		},
+	}
 	if genre != "" {
 		filter["genre"] = bson.M{"$in": []string{genre}}
 	}
@@ -638,8 +672,12 @@ func (r *MovieRepository) FindByGenre(genres []string, limit int) ([]models.Movi
 		limit = 20
 	}
 
-	// Match any of the genres
+	// Match any of the genres; only published content
 	filter := bson.M{
+		"$or": []bson.M{
+			{"is_published": true},
+			{"is_published": bson.M{"$exists": false}},
+		},
 		"genre": bson.M{"$in": genres},
 	}
 
@@ -670,11 +708,21 @@ func (r *MovieRepository) Search(query string) ([]models.Movie, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Case-insensitive regex search on title
+	// Case-insensitive regex search on title; only published content
 	filter := bson.M{
-		"$or": []bson.M{
-			{"title": bson.M{"$regex": query, "$options": "i"}},
-			{"description": bson.M{"$regex": query, "$options": "i"}},
+		"$and": []bson.M{
+			{
+				"$or": []bson.M{
+					{"is_published": true},
+					{"is_published": bson.M{"$exists": false}},
+				},
+			},
+			{
+				"$or": []bson.M{
+					{"title": bson.M{"$regex": query, "$options": "i"}},
+					{"description": bson.M{"$regex": query, "$options": "i"}},
+				},
+			},
 		},
 	}
 
@@ -846,6 +894,84 @@ func (r *MovieRepository) FindMoviesWithoutCode() ([]models.Movie, error) {
 	}
 
 	return movies, nil
+}
+
+// ListAdmin returns ALL movies (regardless of approval status) for the admin dashboard.
+func (r *MovieRepository) ListAdmin(page, limit int) ([]models.Movie, int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 100
+	}
+
+	filter := bson.M{}
+
+	total, err := r.col.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count admin movies: %w", err)
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "created_at", Value: -1}}).
+		SetSkip(int64((page - 1) * limit)).
+		SetLimit(int64(limit))
+
+	cursor, err := r.col.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, 0, fmt.Errorf("find admin movies: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var rawDocs []bson.M
+	if err := cursor.All(ctx, &rawDocs); err != nil {
+		return nil, 0, fmt.Errorf("decode admin movies: %w", err)
+	}
+
+	movies := make([]models.Movie, 0, len(rawDocs))
+	for _, doc := range rawDocs {
+		movie, err := normalizeMovieFromBSON(doc)
+		if err != nil {
+			continue
+		}
+		movies = append(movies, *movie)
+	}
+
+	return movies, total, nil
+}
+
+// SetApprovalStatus sets the approval status and publishes/unpublishes a movie.
+func (r *MovieRepository) SetApprovalStatus(idHex, status, byUserID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	id, err := primitive.ObjectIDFromHex(idHex)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	result, err := r.col.UpdateOne(
+		ctx,
+		bson.M{"_id": id},
+		bson.M{"$set": bson.M{
+			"approval_status": status,
+			"is_published":    status == "approved",
+			"approved_at":     now,
+			"approved_by":     byUserID,
+			"updated_at":      now,
+		}},
+	)
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("movie not found")
+	}
+	return nil
 }
 
 // SetMovieCodeAndURL updates code, slug, and website_url for a movie

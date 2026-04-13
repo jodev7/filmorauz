@@ -49,23 +49,25 @@ type TelegramNotificationResult struct {
 
 // TelegramService handles Telegram notifications for new movies
 type TelegramService struct {
-	botToken        string
-	botUsername     string
-	channelUsername string
-	adminTelegramID int64
-	baseSiteURL     string
-	channels        []TelegramChannel
-	httpClient      *http.Client
+	botToken               string
+	botUsername            string
+	channelUsername        string
+	serialsChannelUsername string
+	adminTelegramID        int64
+	baseSiteURL            string
+	channels               []TelegramChannel
+	httpClient             *http.Client
 }
 
 // TelegramConfig holds configuration for Telegram service
 type TelegramConfig struct {
-	BotToken        string
-	BotUsername     string
-	ChannelUsername string
-	AdminTelegramID int64
-	BaseSiteURL     string
-	MovieChannels   []TelegramChannel // Genre-routed channels
+	BotToken               string
+	BotUsername            string
+	ChannelUsername        string
+	SerialsChannelUsername string
+	AdminTelegramID        int64
+	BaseSiteURL            string
+	MovieChannels          []TelegramChannel // Genre-routed channels
 }
 
 // NewTelegramService creates a new Telegram notification service
@@ -82,16 +84,22 @@ func NewTelegramService(config TelegramConfig) (*TelegramService, error) {
 	}
 
 	return &TelegramService{
-		botToken:        config.BotToken,
-		botUsername:     config.BotUsername,
-		channelUsername: config.ChannelUsername,
-		adminTelegramID: config.AdminTelegramID,
-		baseSiteURL:     config.BaseSiteURL,
-		channels:        channels,
+		botToken:               config.BotToken,
+		botUsername:            config.BotUsername,
+		channelUsername:        config.ChannelUsername,
+		serialsChannelUsername: config.SerialsChannelUsername,
+		adminTelegramID:        config.AdminTelegramID,
+		baseSiteURL:            config.BaseSiteURL,
+		channels:               channels,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}, nil
+}
+
+// GetBaseSiteURL returns the configured base site URL.
+func (s *TelegramService) GetBaseSiteURL() string {
+	return s.baseSiteURL
 }
 
 // SendMovieNotification sends a movie notification to all appropriate channels
@@ -621,6 +629,149 @@ func buildAdCaption(title, description, targetURL, cta string) string {
 // This is the main entry point for the backend API
 func (s *TelegramService) NotifyMovieCreated(movie *TelegramMovieData) *TelegramNotificationResult {
 	return s.SendMovieNotification(movie)
+}
+
+// PostContentApproval posts an approved movie or serial to Telegram.
+// isSerial=true → posts only to the serials channel.
+// isSerial=false → posts to main channel + any genre-matched channels.
+// Both include an inline "🎬 Tomosha qilish" button.
+func (s *TelegramService) PostContentApproval(data *TelegramMovieData, isSerial bool) {
+	if s.botToken == "" {
+		log.Printf("[TELEGRAM APPROVE] bot token not configured, skipping")
+		return
+	}
+
+	api, err := tgbotapi.NewBotAPI(s.botToken)
+	if err != nil {
+		log.Printf("[TELEGRAM APPROVE] failed to create bot API: %v", err)
+		return
+	}
+
+	caption := s.buildApprovalCaption(data, isSerial)
+	keyboard := buildAdKeyboard(data.MovieURL, "🎬 Tomosha qilish")
+
+	send := func(target string) {
+		if target == "" {
+			return
+		}
+		log.Printf("[TELEGRAM APPROVE] posting to %s", target)
+		if data.PosterURL != "" {
+			msg := tgbotapi.NewPhotoToChannel(target, tgbotapi.FileURL(data.PosterURL))
+			msg.Caption = caption
+			msg.ParseMode = "HTML"
+			if keyboard != nil {
+				msg.ReplyMarkup = keyboard
+			}
+			if _, sendErr := api.Send(msg); sendErr != nil {
+				// Fallback to text
+				log.Printf("[TELEGRAM APPROVE] photo send failed (%v), falling back to text", sendErr)
+				txt := tgbotapi.NewMessageToChannel(target, caption)
+				txt.ParseMode = "HTML"
+				if keyboard != nil {
+					txt.ReplyMarkup = keyboard
+				}
+				if _, sendErr2 := api.Send(txt); sendErr2 != nil {
+					log.Printf("[TELEGRAM APPROVE] text fallback also failed: %v", sendErr2)
+				}
+			}
+		} else {
+			txt := tgbotapi.NewMessageToChannel(target, caption)
+			txt.ParseMode = "HTML"
+			if keyboard != nil {
+				txt.ReplyMarkup = keyboard
+			}
+			if _, sendErr := api.Send(txt); sendErr != nil {
+				log.Printf("[TELEGRAM APPROVE] text send failed: %v", sendErr)
+			}
+		}
+	}
+
+	if isSerial {
+		if s.serialsChannelUsername != "" {
+			send("@" + s.serialsChannelUsername)
+		} else {
+			log.Printf("[TELEGRAM APPROVE] TELEGRAM_SERIALS_CHANNEL not configured, skipping serial post")
+		}
+		return
+	}
+
+	// Movie: post to main channel
+	if s.channelUsername != "" {
+		send("@" + s.channelUsername)
+	}
+
+	// Movie: also post to any genre-matched channels that have a numeric ID
+	for _, ch := range s.getTargetChannels(data.Genres) {
+		if ch.ID != 0 {
+			log.Printf("[TELEGRAM APPROVE] posting to genre channel %s", ch.Title)
+			if data.PosterURL != "" {
+				msg := tgbotapi.NewPhoto(ch.ID, tgbotapi.FileURL(data.PosterURL))
+				msg.Caption = caption
+				msg.ParseMode = "HTML"
+				if keyboard != nil {
+					msg.ReplyMarkup = keyboard
+				}
+				if _, sendErr := api.Send(msg); sendErr != nil {
+					log.Printf("[TELEGRAM APPROVE] genre channel %s failed: %v", ch.Title, sendErr)
+				}
+			} else {
+				msg := tgbotapi.NewMessage(ch.ID, caption)
+				msg.ParseMode = "HTML"
+				if keyboard != nil {
+					msg.ReplyMarkup = keyboard
+				}
+				if _, sendErr := api.Send(msg); sendErr != nil {
+					log.Printf("[TELEGRAM APPROVE] genre channel %s text failed: %v", ch.Title, sendErr)
+				}
+			}
+		}
+	}
+}
+
+// buildApprovalCaption builds the caption for an approved content post.
+func (s *TelegramService) buildApprovalCaption(data *TelegramMovieData, isSerial bool) string {
+	var b strings.Builder
+
+	emoji := "🎬"
+	if isSerial {
+		emoji = "📺"
+	}
+	b.WriteString(emoji + " <b>")
+	b.WriteString(html.EscapeString(data.Title))
+	b.WriteString("</b>\n")
+
+	if data.Year > 0 {
+		b.WriteString(fmt.Sprintf("📅 Yil: %d\n", data.Year))
+	}
+
+	genres := data.GenresUz
+	if len(genres) == 0 {
+		genres = data.Genres
+	}
+	if len(genres) > 0 {
+		b.WriteString(fmt.Sprintf("🎭 Janr: %s\n", strings.Join(genres, ", ")))
+	}
+
+	if data.Quality != "" {
+		b.WriteString(fmt.Sprintf("🎞 Sifat: %s\n", data.Quality))
+	}
+
+	if data.Description != "" {
+		desc := data.Description
+		if len([]rune(desc)) > 200 {
+			runes := []rune(desc)
+			desc = string(runes[:200]) + "..."
+		}
+		b.WriteString("\n")
+		b.WriteString(html.EscapeString(desc))
+	}
+
+	if s.channelUsername != "" {
+		b.WriteString("\n\n📢 @")
+		b.WriteString(s.channelUsername)
+	}
+
+	return b.String()
 }
 
 // CallMovieNotification calls the backend API to send Telegram notification

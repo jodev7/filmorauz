@@ -13,12 +13,18 @@ import (
 )
 
 type MovieHandler struct {
-	movieService *services.MovieService
-	userRepo     *repositories.UserRepository
+	movieService    *services.MovieService
+	userRepo        *repositories.UserRepository
+	telegramService *services.TelegramService
 }
 
 func NewMovieHandler(movieService *services.MovieService, userRepo *repositories.UserRepository) *MovieHandler {
 	return &MovieHandler{movieService: movieService, userRepo: userRepo}
+}
+
+// SetTelegramService wires the Telegram service after initialization.
+func (h *MovieHandler) SetTelegramService(svc *services.TelegramService) {
+	h.telegramService = svc
 }
 
 // --- Public Handlers ---
@@ -86,6 +92,14 @@ func (h *MovieHandler) GetMovieBySlug(c *gin.Context) {
 	}
 	log.Printf("[GetMovieBySlug] Found movie: id=%v, slug=%s, title=%s, source_type=%s", movie.ID, movie.Slug, movie.Title, movie.SourceType)
 
+	// Block access to unpublished movies on public routes.
+	// normalizeMovieFromBSON sets IsPublished=true for legacy documents, so this only
+	// hides new content that has explicitly been set to pending/rejected.
+	if !movie.IsPublished {
+		c.JSON(http.StatusNotFound, gin.H{"error": "movie not found"})
+		return
+	}
+
 	// Map source_type "ingestion" to valid public type for frontend compatibility
 	// Ingestion movies have video uploaded to CDN - detect type from URL extension
 	if movie.SourceType == "ingestion" {
@@ -128,6 +142,12 @@ func (h *MovieHandler) GetMovieByID(c *gin.Context) {
 
 	movie, err := h.movieService.GetMovieByID(id)
 	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "movie not found"})
+		return
+	}
+
+	// Block access to unpublished movies on public routes
+	if !movie.IsPublished {
 		c.JSON(http.StatusNotFound, gin.H{"error": "movie not found"})
 		return
 	}
@@ -387,4 +407,87 @@ func (h *MovieHandler) GetMovieWatchSource(c *gin.Context) {
 		"embed_url":   movie.EmbedURL,
 		"source_type": movie.SourceType,
 	})
+}
+
+// AdminListMovies GET /api/admin/movies
+// Returns ALL movies (pending, approved, rejected) for the admin dashboard.
+func (h *MovieHandler) AdminListMovies(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 500 {
+		limit = 200
+	}
+
+	movies, total, err := h.movieService.ListAllMoviesAdmin(page, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch movies"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data":  movies,
+		"total": total,
+		"page":  page,
+		"limit": limit,
+	})
+}
+
+// ApproveMovie PATCH /api/admin/movies/:id/approve
+func (h *MovieHandler) ApproveMovie(c *gin.Context) {
+	id := c.Param("id")
+	byUserID := c.GetString("user_id")
+
+	if err := h.movieService.SetMovieApprovalStatus(id, "approved", byUserID); err != nil {
+		if err.Error() == "movie not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "movie not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Async Telegram post — non-blocking
+	if h.telegramService != nil {
+		go func() {
+			movie, err := h.movieService.GetMovieByID(id)
+			if err != nil {
+				log.Printf("[TELEGRAM APPROVE] could not fetch movie %s: %v", id, err)
+				return
+			}
+			watchURL := h.telegramService.GetBaseSiteURL() + "/movies/" + movie.Slug
+			data := &services.TelegramMovieData{
+				Title:       movie.Title,
+				Year:        movie.Year,
+				Genres:      movie.Genre,
+				PosterURL:   movie.PosterURL,
+				Description: movie.Description,
+				Slug:        movie.Slug,
+				MovieURL:    watchURL,
+			}
+			data.Code = movie.Code
+			h.telegramService.PostContentApproval(data, false)
+		}()
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "approval_status": "approved"})
+}
+
+// RejectMovie PATCH /api/admin/movies/:id/reject
+func (h *MovieHandler) RejectMovie(c *gin.Context) {
+	id := c.Param("id")
+	byUserID := c.GetString("user_id")
+
+	if err := h.movieService.SetMovieApprovalStatus(id, "rejected", byUserID); err != nil {
+		if err.Error() == "movie not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "movie not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "approval_status": "rejected"})
 }

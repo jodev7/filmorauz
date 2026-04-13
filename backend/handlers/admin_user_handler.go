@@ -324,6 +324,7 @@ func (h *AdminUserHandler) ListUsers(c *gin.Context) {
 		IsPremium        bool    `json:"is_premium"`
 		IsPremiumActive  bool    `json:"is_premium_active"`
 		PremiumExpiresAt *string `json:"premium_expires_at,omitempty"`
+		WalletBalance    float64 `json:"wallet_balance"`
 		AuthProvider     string  `json:"auth_provider"`
 		CreatedAt        string  `json:"created_at"`
 		LastLoginAt      string  `json:"last_login_at"`
@@ -365,6 +366,7 @@ func (h *AdminUserHandler) ListUsers(c *gin.Context) {
 			IsPremium:        u.IsPremium,
 			IsPremiumActive:  u.IsPremiumActive(),
 			PremiumExpiresAt: premiumExpiresAt,
+			WalletBalance:    u.WalletBalance,
 			AuthProvider:     u.AuthProvider,
 			CreatedAt:        u.CreatedAt.Format(time.RFC3339),
 			LastLoginAt:      u.LastLoginAt.Format(time.RFC3339),
@@ -1037,4 +1039,32 @@ func (h *AdminUserHandler) UpdateUserPremium(c *gin.Context) {
 		"premium_started_at": startedAtStr,
 		"premium_expires_at": expiresAtStr,
 	})
+}
+
+// UpdateUserWallet godoc
+// PATCH /api/superadmin/users/:id/wallet
+// Adds amount to a user's wallet balance. Superadmin only.
+func (h *AdminUserHandler) UpdateUserWallet(c *gin.Context) {
+	userID := c.Param("id")
+
+	var req struct {
+		Amount float64 `json:"amount" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.Amount <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "amount must be greater than 0"})
+		return
+	}
+
+	newBalance, err := h.userRepo.TopUpWalletBalance(userID, req.Amount)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "wallet_balance": newBalance})
 }

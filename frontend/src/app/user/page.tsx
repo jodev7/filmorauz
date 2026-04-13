@@ -856,6 +856,30 @@ export default function UserPage() {
                 </div>
               )}
             </div>
+
+            {/* Wallet balance row */}
+            <div className="mt-4 flex items-center justify-between p-4 bg-brand-dark/60 rounded-xl border border-brand-border">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-yellow-500/10 flex items-center justify-center">
+                  <Star size={16} className="text-yellow-400" />
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400">Hisob balansi</p>
+                  <p className="text-white font-semibold">
+                    {(displayUser?.wallet_balance ?? 0).toLocaleString("en-US")}{" "}
+                    <span className="text-xs font-normal text-gray-400">so&apos;m</span>
+                  </p>
+                </div>
+              </div>
+              <a
+                href="https://t.me/filmorauznet?direct"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 px-3 py-2 bg-brand-red/10 border border-brand-red/30 text-brand-red hover:bg-brand-red hover:text-white rounded-lg text-xs font-semibold transition-all duration-200"
+              >
+                Hisobni to&apos;ldirish
+              </a>
+            </div>
           </div>
 
           {/* Premium Settings - Consolidated section for premium users */}

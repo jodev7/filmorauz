@@ -455,140 +455,321 @@ class FreekinoParser:
         }
     
     def get_detail(self, url: str) -> Dict[str, Any]:
-        """Get movie detail"""
+        """Get movie detail — returns video_urls list (for server) + quality_urls dict."""
         result = {
             "title": "", "video_url": "", "video_type": "",
             "poster": "", "description": "", "year": 2024,
-            "genres": [], "type": "movie"
+            "genres": [], "type": "movie",
+            # Passed to downloader as Referer header — CDN requires it
+            "video_page_url": url,
+            # server.py reads this list via _extract_best_video_url()
+            "video_urls": [],
+            # structured quality map: {360: url, 480: url, 720: url, 1080: url}
+            "quality_urls": {},
         }
-        
+
         try:
             response = self.session.get(url, timeout=30)
             soup = BeautifulSoup(response.text, "lxml")
-            
+
             # Title
             title_elem = soup.select_one("h1, .title, .film-title")
             if title_elem:
                 result["title"] = clean_text(title_elem.get_text())
-            
+
             # Poster
             og = soup.select_one("meta[property='og:image']")
             if og:
                 result["poster"] = normalize_url(self.BASE_URL, og.get("content", ""))
-            
+
             # Description
             desc = soup.select_one(".description, .desc, .synopsis, .text")
             if desc:
                 result["description"] = clean_text(desc.get_text())
-            
+
             # Year
             year_elem = soup.select_one(".year, [class*='year'], .date")
             if year_elem:
                 year = extract_year(year_elem.get_text())
                 if year:
                     result["year"] = year
-            
+
             # Genres
             genre_elems = soup.select(".genres a, .genre a, [class*='genre'] a")
             result["genres"] = [clean_text(g.get_text()) for g in genre_elems if g.get_text()]
-            
+
             # Type
             if "/serial/" in url:
                 result["type"] = "serial"
-            
-            # Video
-            video_url, video_type = self._extract_video(soup)
-            result["video_url"] = video_url
-            result["video_type"] = video_type
-            
+
+            # Video — extract all quality variants
+            all_entries, quality_urls = self._extract_video(soup)
+
+            if all_entries:
+                # Build video_urls list expected by server._extract_best_video_url()
+                result["video_urls"] = all_entries
+                result["quality_urls"] = quality_urls
+
+                # Best URL = highest quality entry (list is ordered best-first)
+                best = all_entries[0]
+                result["video_url"] = best["url"]
+                result["video_type"] = best["type"]
+
+                logger.info(
+                    f"[FREEKINO] {len(all_entries)} quality variant(s) found. "
+                    f"Best: {best.get('quality','?')} → {best['url'][:80]}"
+                )
+            else:
+                logger.warning(f"[FREEKINO] No video URL found for {url}")
+
         except Exception as e:
             logger.error(f"[FREEKINO] Detail error: {e}")
-        
+
         return result
     
+    # ------------------------------------------------------------------
+    # Quality resolution ordering — higher index = lower priority
+    # ------------------------------------------------------------------
+    _QUALITY_ORDER = [1080, 720, 480, 360, 240]
+
+    @staticmethod
+    def _label_to_int(label: str) -> int:
+        """Extract numeric resolution from a quality label like '720p' or '720'."""
+        m = re.search(r'(\d{3,4})', label)
+        return int(m.group(1)) if m else 0
+
     def _extract_video(self, soup):
-        """Extract video URL with enhanced validation"""
-        
-        # iframe - fetch iframe and extract from it, don't return iframe URL directly
-        iframe = soup.select_one('iframe[src*="player"]')
-        if iframe:
-            iframe_src = iframe.get("src", "")
-            if iframe_src and not iframe_src.startswith("blob"):
-                # Fetch iframe page and extract actual video
-                video_url, video_type = self._extract_video_from_iframe(iframe_src)
-                if video_url:
-                    return video_url, video_type
-                # If iframe fetch fails, don't return iframe URL (it's HTML)
-                if DEBUG:
-                    logger.info(f"[FREEKINO] No video found in iframe, not returning iframe URL")
-        
-        # video
-        video = soup.select_one("video[src]")
-        if video:
-            src = video.get("src", "")
-            if src and not src.startswith("blob"):
-                # Validate URL
-                error = validate_media_url_strict(src)
-                if not error:
-                    return src, classify_media_url(src)
-                if DEBUG:
-                    logger.info(f"[FREEKINO] Video URL rejected: {error}")
-        
-        # script regex
+        """
+        Extract all available video quality variants from the page.
+
+        Returns:
+            (all_entries, quality_urls)
+            - all_entries: list of {"url", "type", "quality"} dicts, best quality first.
+              This is what server._extract_best_video_url() reads via details["video_urls"].
+            - quality_urls: dict mapping int resolution to URL, e.g. {720: "https://...", 480: "..."}
+        """
+
+        # === PRIMARY: Playerjs({file:"[quality]url,[quality]url"}) ===
         for script in soup.find_all("script"):
             content = script.string or ""
-            matches = re.findall(r'(?:file|src|url)["\']?\s*[:=]\s*["\']([^"\']+(?:\.mp4|\.m3u8|\.mpd))', content, re.I)
+            if "Playerjs" not in content:
+                continue
+            entries, quality_urls = self._parse_playerjs_file(content)
+            if entries:
+                return entries, quality_urls
+
+        # === FALLBACK: <video> tag with <source> children ===
+        entries, quality_urls = self._extract_video_tags(soup)
+        if entries:
+            return entries, quality_urls
+
+        # === FALLBACK: any iframe — fetch and recurse ===
+        for iframe in soup.find_all("iframe"):
+            iframe_src = iframe.get("src", "")
+            if not iframe_src or iframe_src.startswith("blob"):
+                continue
+            entries, quality_urls = self._extract_from_iframe(iframe_src)
+            if entries:
+                return entries, quality_urls
+
+        # === FALLBACK: generic regex for absolute mp4/m3u8 URLs in scripts ===
+        entries, quality_urls = self._extract_script_fallback(soup)
+        if entries:
+            return entries, quality_urls
+
+        return [], {}
+
+    def _parse_playerjs_file(self, script_content: str):
+        """
+        Parse Playerjs({file:"[480p]url,[720p]url"}) — the primary freekino format.
+
+        JS escaping in the raw string:
+          \\/ → /   (forward-slash escape)
+          \\u0026 → &  (ampersand in query strings)
+
+        Returns (all_entries, quality_urls):
+          all_entries — list of {"url", "type", "quality"} ordered best-first
+          quality_urls — {720: url, 480: url, ...}
+        """
+        # Match the file:"..." value inside new Playerjs({...})
+        m = re.search(
+            r'new\s+Playerjs\s*\(\s*\{[^}]*?file\s*:\s*"((?:[^"\\]|\\.)*)"',
+            script_content, re.S
+        )
+        if not m:
+            m = re.search(r'\bfile\s*:\s*"((?:[^"\\]|\\.)*)"', script_content)
+        if not m:
+            return [], {}
+
+        raw = m.group(1)
+
+        # Unescape JS sequences
+        raw = raw.replace(r"\/", "/")          # literal backslash-slash
+        raw = raw.replace("\\/", "/")           # already-processed variant
+        raw = re.sub(r'\\u0026', '&', raw)      # unicode-escaped ampersand
+
+        # Parse quality-labelled entries: [label]https://...
+        labeled = re.findall(r'\[([^\]]+)\](https?://[^,\[]+)', raw)
+
+        if not labeled:
+            # No quality labels — single bare URL
+            url = raw.strip().rstrip(",")
+            if url.startswith("http"):
+                vtype = classify_media_url(url)
+                entry = {"url": url, "type": vtype, "quality": "auto"}
+                return [entry], {}
+            return [], {}
+
+        # Build per-quality map, dedup by resolution
+        quality_map: Dict[int, str] = {}
+        for label, url in labeled:
+            url = url.strip().rstrip(", ")
+            if not url.startswith("http"):
+                continue
+            error = validate_media_url_strict(url)
+            if error:
+                logger.debug(f"[FREEKINO] Rejected quality URL {url[:60]}: {error}")
+                continue
+            res = self._label_to_int(label)
+            # Keep first occurrence of each resolution (avoid overwrite)
+            if res not in quality_map:
+                quality_map[res] = url
+
+        if not quality_map:
+            # Validation rejected everything — use raw first entry as fallback
+            url = labeled[0][1].strip().rstrip(", ")
+            if url.startswith("http"):
+                vtype = classify_media_url(url)
+                return [{"url": url, "type": vtype, "quality": labeled[0][0]}], {}
+            return [], {}
+
+        # Sort by resolution descending
+        sorted_res = sorted(quality_map.keys(), reverse=True)
+        all_entries = []
+        for res in sorted_res:
+            url = quality_map[res]
+            vtype = classify_media_url(url)
+            quality_label = f"{res}p" if res else "auto"
+            all_entries.append({"url": url, "type": vtype, "quality": quality_label})
+
+        quality_urls = {res: quality_map[res] for res in sorted_res}
+        return all_entries, quality_urls
+
+    def _extract_video_tags(self, soup):
+        """Extract URLs from <video src> and <video><source src> tags."""
+        entries = []
+        quality_map: Dict[int, str] = {}
+
+        for video in soup.find_all("video"):
+            # Inline src on the <video> element
+            src = video.get("src", "")
+            if src and not src.startswith("blob"):
+                src = normalize_url(self.BASE_URL, src)
+                if not validate_media_url_strict(src):
+                    res = 0
+                    quality_map.setdefault(res, src)
+                    entries.append({
+                        "url": src,
+                        "type": classify_media_url(src),
+                        "quality": "auto",
+                    })
+
+            # <source> children (may carry label/size attributes)
+            for source in video.find_all("source"):
+                src = source.get("src", "")
+                if not src or src.startswith("blob"):
+                    continue
+                src = normalize_url(self.BASE_URL, src)
+                if validate_media_url_strict(src):
+                    continue
+                label = source.get("label", "") or source.get("size", "") or ""
+                res = self._label_to_int(label) if label else 0
+                quality_map.setdefault(res, src)
+                entries.append({
+                    "url": src,
+                    "type": classify_media_url(src),
+                    "quality": f"{res}p" if res else label or "auto",
+                })
+
+        # Re-sort by resolution descending
+        entries.sort(key=lambda e: self._label_to_int(e["quality"]), reverse=True)
+        quality_urls = {res: url for res, url in quality_map.items() if res}
+        return entries, quality_urls
+
+    def _extract_script_fallback(self, soup):
+        """Regex fallback: find absolute https:// mp4/m3u8/mpd URLs in script tags."""
+        seen: set = set()
+        entries = []
+
+        for script in soup.find_all("script"):
+            content = script.string or ""
+            matches = re.findall(
+                r'["\']((https?://)[^"\']+?\.(?:mp4|m3u8|mpd)(?:\?[^"\']*)?)["\']',
+                content, re.I
+            )
             for m in matches:
-                if m and not m.startswith("blob"):
-                    url = normalize_url(self.BASE_URL, m)
-                    # Validate URL
-                    error = validate_media_url_strict(url)
-                    if error:
-                        if DEBUG:
-                            logger.info(f"[FREEKINO] Script URL rejected: {url[:60]}... Reason: {error}")
-                        continue
-                    return url, classify_media_url(url)
-        
-        return "", ""
-    
-    def _extract_video_from_iframe(self, iframe_url: str) -> tuple:
-        """Fetch iframe page and extract video URL from it"""
+                url = m[0]
+                if url.startswith("blob") or url in seen:
+                    continue
+                if validate_media_url_strict(url):
+                    continue
+                seen.add(url)
+                res = self._label_to_int(url)  # try to infer from path (e.g. /720/)
+                entries.append({
+                    "url": url,
+                    "type": classify_media_url(url),
+                    "quality": f"{res}p" if res else "auto",
+                })
+
+        entries.sort(key=lambda e: self._label_to_int(e["quality"]), reverse=True)
+        quality_urls = {}
+        for e in entries:
+            res = self._label_to_int(e["quality"])
+            if res:
+                quality_urls.setdefault(res, e["url"])
+        return entries, quality_urls
+
+    def _extract_from_iframe(self, iframe_url: str):
+        """Fetch an iframe page and extract video URLs from it."""
         try:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             }
             response = requests.get(iframe_url, headers=headers, timeout=30, allow_redirects=True)
-            
-            if "text/html" in response.headers.get("Content-Type", ""):
-                # Parse iframe HTML
-                soup = BeautifulSoup(response.text, "lxml")
-                video = soup.select_one("video[src]")
-                if video:
-                    src = video.get("src", "")
-                    if src:
-                        error = validate_media_url_strict(src)
-                        if not error:
-                            return src, classify_media_url(src)
-                
-                # Try script extraction
-                for script in soup.find_all("script"):
-                    content = script.string or ""
-                    matches = re.findall(r'(?:file|src|url)["\']?\s*[:=]\s*["\']([^"\']+(?:\.mp4|\.m3u8|\.mpd))', content, re.I)
-                    for m in matches:
-                        if m and not m.startswith("blob"):
-                            url = normalize_url(response.url, m)
-                            error = validate_media_url_strict(url)
-                            if not error:
-                                return url, classify_media_url(url)
-            else:
+            content_type = response.headers.get("Content-Type", "")
+
+            if "text/html" not in content_type:
                 # Direct media response
-                return response.url, classify_media_url(response.url)
+                url = response.url
+                if not validate_media_url_strict(url):
+                    vtype = classify_media_url(url)
+                    return [{"url": url, "type": vtype, "quality": "auto"}], {}
+                return [], {}
+
+            iframe_soup = BeautifulSoup(response.text, "lxml")
+
+            # Try Playerjs first (same format as main page)
+            for script in iframe_soup.find_all("script"):
+                content = script.string or ""
+                if "Playerjs" in content:
+                    entries, quality_urls = self._parse_playerjs_file(content)
+                    if entries:
+                        return entries, quality_urls
+
+            # <video> tags
+            entries, quality_urls = self._extract_video_tags(iframe_soup)
+            if entries:
+                return entries, quality_urls
+
+            # Script regex fallback
+            return self._extract_script_fallback(iframe_soup)
+
         except Exception as e:
             if DEBUG:
-                logger.info(f"[FREEKINO] Iframe fetch error: {e}")
-        
-        return "", ""
+                logger.info(f"[FREEKINO] Iframe fetch error ({iframe_url[:60]}): {e}")
+        return [], {}
+    
 
 
     def list_categories(self):
@@ -635,30 +816,35 @@ class FreekinoParser:
         logger.info(f"[FREEKINO] list_categories: found {len(categories)} categories")
         return categories
 
+    # Default catalog page — all translated movies, has reliable pagination
+    CATALOG_BASE = "https://freekino.net/movie/genre/15-tarjima-kinolar"
+
     def list_catalog(self, page=1, limit=20, type_filter="", category_url=""):
         """
         List movies from freekino catalog with pagination.
+
+        Freekino uses Bootstrap pagination with ?page=N query strings:
+          page 1 → {base}
+          page N → {base}?page=N
 
         Args:
             page: Page number (1-based)
             limit: Max items per page
             type_filter: Optional filter
-            category_url: Optional category/genre URL to browse instead of homepage
+            category_url: Optional category/genre URL to browse instead of default
 
         Returns:
-            dict with items, page, limit, total, total_pages, has_more
+            dict with items, page, limit, total, total_pages, has_more, next_url
         """
-        # Build candidate URLs
-        if category_url:
-            base = category_url.rstrip("/")
-            candidate_urls = [f"{base}/page/{page}/"]
-            if page == 1:
-                candidate_urls.append(base + "/")
+        base = (category_url.rstrip("/") if category_url else self.CATALOG_BASE)
+
+        # Build the target URL for this page
+        if page <= 1:
+            candidate_urls = [base]
         else:
-            # Try standard DLE pagination URL first, fall back to root for page 1
-            candidate_urls = [f"{self.BASE_URL}/page/{page}/"]
-            if page == 1:
-                candidate_urls.append(self.BASE_URL + "/")
+            # Freekino uses ?page=N (query param, NOT /page/N/ path segment)
+            sep = "&" if "?" in base else "?"
+            candidate_urls = [f"{base}{sep}page={page}"]
 
         soup = None
         for url in candidate_urls:

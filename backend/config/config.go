@@ -36,6 +36,7 @@ type Config struct {
 	B2BucketName            string
 	B2CDNURL                string
 	TelegramChannels        []string // loaded from TELEGRAM_CHANNELS env (comma-separated)
+	TelegramSerialsChannel  string   // loaded from TELEGRAM_SERIALS_CHANNEL env
 }
 
 func Load() *Config {
@@ -70,6 +71,7 @@ func Load() *Config {
 		B2BucketName:            getEnv("B2_BUCKET_NAME", ""),
 		B2CDNURL:                getEnv("B2_CDN_URL", ""),
 		TelegramChannels:        parseTelegramChannels(getEnv("TELEGRAM_CHANNELS", "")),
+		TelegramSerialsChannel:  getEnv("TELEGRAM_SERIALS_CHANNEL", ""),
 	}
 
 	// Validate required fields

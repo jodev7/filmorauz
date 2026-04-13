@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 
@@ -438,4 +439,48 @@ func (h *UserHandler) RecordView(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "view recorded"})
+}
+
+// premiumPlans maps plan IDs to price (UZS) and duration in days
+var premiumPlans = map[string]struct {
+	Price        float64
+	DurationDays int
+}{
+	"1month":  {Price: 39000, DurationDays: 30},
+	"3month":  {Price: 105000, DurationDays: 90},
+	"6month":  {Price: 195000, DurationDays: 180},
+	"12month": {Price: 340000, DurationDays: 365},
+}
+
+// BuyPremium godoc
+// POST /api/user/premium/buy
+// Deducts wallet balance and activates premium for the authenticated user.
+func (h *UserHandler) BuyPremium(c *gin.Context) {
+	userIDStr, _ := c.Get("user_id")
+
+	var req struct {
+		PlanID string `json:"plan_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	plan, ok := premiumPlans[req.PlanID]
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid plan_id"})
+		return
+	}
+
+	err := h.userRepo.DeductWalletAndActivatePremium(userIDStr.(string), plan.Price, plan.DurationDays)
+	if err != nil {
+		if err.Error() == "insufficient_balance" {
+			c.JSON(http.StatusPaymentRequired, gin.H{"error": fmt.Sprintf("Hisobda mablag' yetarli emas. Zarur: %.0f so'm", plan.Price)})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Premium muvaffaqiyatli faollashtirildi"})
 }

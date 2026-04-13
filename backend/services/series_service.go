@@ -45,6 +45,10 @@ func (s *SeriesService) CreateSeries(input *models.SeriesInput) (*models.Series,
 		Country:     input.Country,
 		IsPremium:   input.IsPremium,
 		IsCompleted: input.IsCompleted,
+
+		// Approval workflow: new series start hidden pending admin review
+		ApprovalStatus: "pending",
+		IsPublished:    false,
 	}
 
 	// Check if slug already exists, append timestamp if needed
@@ -188,4 +192,14 @@ func (s *SeriesService) IncrementEpisodeViews(id primitive.ObjectID) error {
 // DeleteEpisode deletes an episode by ID
 func (s *SeriesService) DeleteEpisode(id primitive.ObjectID) error {
 	return s.seriesRepo.DeleteEpisode(id)
+}
+
+// ListAllSeriesAdmin returns all series regardless of approval status for admin dashboard.
+func (s *SeriesService) ListAllSeriesAdmin(limit, skip int) ([]models.Series, error) {
+	return s.seriesRepo.ListAdmin(limit, skip)
+}
+
+// SetSeriesApprovalStatus approves or rejects a series.
+func (s *SeriesService) SetSeriesApprovalStatus(id, status, byUserID string) error {
+	return s.seriesRepo.SetApprovalStatus(id, status, byUserID)
 }

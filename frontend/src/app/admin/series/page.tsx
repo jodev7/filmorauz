@@ -11,13 +11,45 @@ import {
   Film,
   Tv,
   Star,
+  CheckCircle,
+  XCircle,
+  Clock,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
   adminGetSeries,
   adminDeleteSeries,
+  approveSeries,
+  rejectSeries,
   AdminSeries,
 } from "@/lib/api";
+
+type StatusFilter = "all" | "pending" | "approved" | "rejected";
+
+function ApprovalBadge({ status }: { status?: string }) {
+  if (!status || status === "approved") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-500/15 text-green-400">
+        <CheckCircle size={10} />
+        Tasdiqlangan
+      </span>
+    );
+  }
+  if (status === "pending") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-yellow-500/15 text-yellow-400">
+        <Clock size={10} />
+        Kutmoqda
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">
+      <XCircle size={10} />
+      Rad etilgan
+    </span>
+  );
+}
 
 export default function AdminSeriesPage() {
   const { token } = useAuth();
@@ -25,14 +57,16 @@ export default function AdminSeriesPage() {
   const [filtered, setFiltered] = useState<AdminSeries[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [approving, setApproving] = useState<string | null>(null);
+  const [rejecting, setRejecting] = useState<string | null>(null);
 
   const fetchSeries = async () => {
     if (!token) return;
     try {
       const data = await adminGetSeries(token);
       setSeries(data || []);
-      setFiltered(data || []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -45,22 +79,29 @@ export default function AdminSeriesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  // Client-side filter
+  // Client-side filter: search + status tab
   useEffect(() => {
-    if (!search.trim()) {
-      setFiltered(series);
-    } else {
+    let result = series;
+
+    if (statusFilter !== "all") {
+      result = result.filter((s) => {
+        const st = s.approval_status || "approved";
+        return st === statusFilter;
+      });
+    }
+
+    if (search.trim()) {
       const q = search.toLowerCase();
-      setFiltered(
-        series.filter(
-          (s) =>
-            s.title.toLowerCase().includes(q) ||
-            s.slug.toLowerCase().includes(q) ||
-            s.genre?.some((g) => g.toLowerCase().includes(q))
-        )
+      result = result.filter(
+        (s) =>
+          s.title.toLowerCase().includes(q) ||
+          s.slug.toLowerCase().includes(q) ||
+          s.genre?.some((g) => g.toLowerCase().includes(q))
       );
     }
-  }, [search, series]);
+
+    setFiltered(result);
+  }, [search, series, statusFilter]);
 
   const handleDelete = async (s: AdminSeries) => {
     if (
@@ -81,6 +122,56 @@ export default function AdminSeriesPage() {
     }
   };
 
+  const handleApprove = async (s: AdminSeries) => {
+    setApproving(s.id);
+    try {
+      await approveSeries(token!, s.id);
+      setSeries((prev) =>
+        prev.map((item) =>
+          item.id === s.id
+            ? { ...item, approval_status: "approved", is_published: true }
+            : item
+        )
+      );
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Tasdiqlashda xato");
+    } finally {
+      setApproving(null);
+    }
+  };
+
+  const handleReject = async (s: AdminSeries) => {
+    setRejecting(s.id);
+    try {
+      await rejectSeries(token!, s.id);
+      setSeries((prev) =>
+        prev.map((item) =>
+          item.id === s.id
+            ? { ...item, approval_status: "rejected", is_published: false }
+            : item
+        )
+      );
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Rad etishda xato");
+    } finally {
+      setRejecting(null);
+    }
+  };
+
+  const counts = {
+    all: series.length,
+    pending: series.filter((s) => (s.approval_status || "approved") === "pending").length,
+    approved: series.filter((s) => (s.approval_status || "approved") === "approved").length,
+    rejected: series.filter((s) => (s.approval_status || "approved") === "rejected").length,
+  };
+
+  const tabs: { key: StatusFilter; label: string }[] = [
+    { key: "all", label: `Barchasi (${counts.all})` },
+    { key: "pending", label: `Kutmoqda (${counts.pending})` },
+    { key: "approved", label: `Tasdiqlangan (${counts.approved})` },
+    { key: "rejected", label: `Rad etilgan (${counts.rejected})` },
+  ];
+
   return (
     <div className="p-4 sm:p-8">
       {/* Header */}
@@ -88,7 +179,7 @@ export default function AdminSeriesPage() {
         <div>
           <h1 className="text-2xl font-bold text-white">Seriallar</h1>
           <p className="text-gray-400 text-sm mt-1">
-            {filtered.length} ta serial
+            {series.length} ta serial
           </p>
         </div>
         <Link
@@ -98,6 +189,23 @@ export default function AdminSeriesPage() {
           <PlusCircle className="w-5 h-5" />
           Yangi serial
         </Link>
+      </div>
+
+      {/* Status filter tabs */}
+      <div className="flex gap-1 mb-4 flex-wrap">
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setStatusFilter(tab.key)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              statusFilter === tab.key
+                ? "bg-brand-red text-white"
+                : "bg-brand-card text-gray-400 hover:text-white border border-brand-border"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       {/* Search */}
@@ -124,12 +232,14 @@ export default function AdminSeriesPage() {
         <div className="text-center py-12">
           <Film className="w-16 h-16 text-gray-600 mx-auto mb-4" />
           <p className="text-gray-400 text-lg">Seriallar topilmadi</p>
-          <Link
-            href="/admin/series/new"
-            className="inline-block mt-4 text-brand-red hover:underline"
-          >
-            Yangi serial qo'shing
-          </Link>
+          {statusFilter === "all" && !search && (
+            <Link
+              href="/admin/series/new"
+              className="inline-block mt-4 text-brand-red hover:underline"
+            >
+              Yangi serial qo&apos;shing
+            </Link>
+          )}
         </div>
       )}
 
@@ -144,19 +254,19 @@ export default function AdminSeriesPage() {
                     Poster
                   </th>
                   <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">
-                    Title
+                    Nomi
                   </th>
                   <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">
-                    Year
+                    Yil
+                  </th>
+                  <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3 hidden lg:table-cell">
+                    Janr
                   </th>
                   <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">
-                    Genre
-                  </th>
-                  <th className="text-left text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">
-                    Status
+                    Holat
                   </th>
                   <th className="text-right text-xs font-medium text-gray-400 uppercase tracking-wider px-4 py-3">
-                    Actions
+                    Amallar
                   </th>
                 </tr>
               </thead>
@@ -166,6 +276,7 @@ export default function AdminSeriesPage() {
                     <td className="px-4 py-3">
                       <div className="w-10 h-14 bg-gray-800 rounded overflow-hidden">
                         {s.poster_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
                           <img
                             src={s.poster_url}
                             alt={s.title}
@@ -182,12 +293,16 @@ export default function AdminSeriesPage() {
                       <div>
                         <p className="font-medium text-white">{s.title}</p>
                         <p className="text-sm text-gray-500">/{s.slug}</p>
+                        {s.is_premium && (
+                          <span className="inline-flex items-center gap-1 text-xs text-yellow-400 mt-0.5">
+                            <Star className="w-3 h-3" />
+                            Premium
+                          </span>
+                        )}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-gray-300">
-                      {s.year}
-                    </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 text-gray-300">{s.year}</td>
+                    <td className="px-4 py-3 hidden lg:table-cell">
                       <div className="flex flex-wrap gap-1">
                         {s.genre?.slice(0, 2).map((g, i) => (
                           <span
@@ -198,22 +313,50 @@ export default function AdminSeriesPage() {
                           </span>
                         ))}
                         {s.genre && s.genre.length > 2 && (
-                          <span className="text-gray-500 text-xs">+{s.genre.length - 2}</span>
+                          <span className="text-gray-500 text-xs">
+                            +{s.genre.length - 2}
+                          </span>
                         )}
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      {s.is_premium ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-1 bg-yellow-900/50 text-yellow-400 text-xs rounded">
-                          <Star className="w-3 h-3" />
-                          Premium
-                        </span>
-                      ) : (
-                        <span className="text-gray-500 text-xs">Free</span>
-                      )}
+                      <ApprovalBadge status={s.approval_status} />
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-2">
+                      <div className="flex items-center justify-end gap-1">
+                        {/* Approve */}
+                        {s.approval_status !== "approved" && (
+                          <button
+                            onClick={() => handleApprove(s)}
+                            disabled={approving === s.id}
+                            title="Tasdiqlash"
+                            className="p-2 text-green-500 hover:text-green-300 rounded-lg hover:bg-green-500/10 transition-colors disabled:opacity-50"
+                          >
+                            {approving === s.id ? (
+                              <Loader2 size={14} className="animate-spin" />
+                            ) : (
+                              <CheckCircle size={14} />
+                            )}
+                          </button>
+                        )}
+
+                        {/* Reject */}
+                        {s.approval_status !== "rejected" && (
+                          <button
+                            onClick={() => handleReject(s)}
+                            disabled={rejecting === s.id}
+                            title="Rad etish"
+                            className="p-2 text-red-500 hover:text-red-300 rounded-lg hover:bg-red-500/10 transition-colors disabled:opacity-50"
+                          >
+                            {rejecting === s.id ? (
+                              <Loader2 size={14} className="animate-spin" />
+                            ) : (
+                              <XCircle size={14} />
+                            )}
+                          </button>
+                        )}
+
+                        {/* Edit */}
                         <Link
                           href={`/admin/series/${s.id}/edit`}
                           className="p-2 text-gray-400 hover:text-white hover:bg-brand-dark rounded-lg transition-colors"
@@ -221,14 +364,20 @@ export default function AdminSeriesPage() {
                         >
                           <Pencil className="w-4 h-4" />
                         </Link>
-                        <Link
-                          href={`/series/${s.slug}`}
-                          target="_blank"
-                          className="p-2 text-gray-400 hover:text-white hover:bg-brand-dark rounded-lg transition-colors"
-                          title="Ko'rish"
-                        >
-                          <Tv className="w-4 h-4" />
-                        </Link>
+
+                        {/* View on site — only for approved */}
+                        {s.approval_status === "approved" && (
+                          <Link
+                            href={`/series/${s.slug}`}
+                            target="_blank"
+                            className="p-2 text-gray-400 hover:text-white hover:bg-brand-dark rounded-lg transition-colors"
+                            title="Ko'rish"
+                          >
+                            <Tv className="w-4 h-4" />
+                          </Link>
+                        )}
+
+                        {/* Delete */}
                         <button
                           onClick={() => handleDelete(s)}
                           disabled={deleting === s.id}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 
@@ -11,11 +12,17 @@ import (
 )
 
 type SeriesHandler struct {
-	seriesService *services.SeriesService
+	seriesService   *services.SeriesService
+	telegramService *services.TelegramService
 }
 
 func NewSeriesHandler(seriesService *services.SeriesService) *SeriesHandler {
 	return &SeriesHandler{seriesService: seriesService}
+}
+
+// SetTelegramService wires the Telegram service after initialization.
+func (h *SeriesHandler) SetTelegramService(svc *services.TelegramService) {
+	h.telegramService = svc
 }
 
 // GET /api/series - List all series
@@ -51,6 +58,14 @@ func (h *SeriesHandler) GetSeriesBySlug(c *gin.Context) {
 
 	series, err := h.seriesService.GetSeriesWithSeasons(slug)
 	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "series not found"})
+		return
+	}
+
+	// Block unpublished series on public routes.
+	// Legacy series (no approval_status) have ApprovalStatus="" and IsPublished=false (struct default),
+	// so we only block new content that has been explicitly set to pending/rejected.
+	if !series.Series.IsPublished && series.Series.ApprovalStatus != "" {
 		c.JSON(http.StatusNotFound, gin.H{"error": "series not found"})
 		return
 	}
@@ -315,3 +330,86 @@ func (h *SeriesHandler) DeleteEpisode(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "episode deleted"})
 }
+
+// AdminListSeries GET /api/admin/series
+// Returns ALL series (pending, approved, rejected) for the admin dashboard.
+func (h *SeriesHandler) AdminListSeries(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 500 {
+		limit = 200
+	}
+	skip := (page - 1) * limit
+
+	seriesList, err := h.seriesService.ListAllSeriesAdmin(limit, skip)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch series"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": seriesList, "page": page, "limit": limit})
+}
+
+// ApproveSeries PATCH /api/admin/series/:id/approve
+func (h *SeriesHandler) ApproveSeries(c *gin.Context) {
+	id := c.Param("id")
+	byUserID := c.GetString("user_id")
+
+	if err := h.seriesService.SetSeriesApprovalStatus(id, "approved", byUserID); err != nil {
+		status := http.StatusInternalServerError
+		if err.Error() == "series not found" {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Async Telegram post — non-blocking
+	if h.telegramService != nil {
+		go func() {
+			oid, err := primitive.ObjectIDFromHex(id)
+			if err != nil {
+				return
+			}
+			series, err := h.seriesService.GetSeriesByID(oid)
+			if err != nil {
+				log.Printf("[TELEGRAM APPROVE] could not fetch series %s: %v", id, err)
+				return
+			}
+			watchURL := h.telegramService.GetBaseSiteURL() + "/series/" + series.Slug
+			data := &services.TelegramMovieData{
+				Title:       series.Title,
+				Year:        series.Year,
+				Genres:      series.Genre,
+				PosterURL:   series.PosterURL,
+				Description: series.Description,
+				Slug:        series.Slug,
+				MovieURL:    watchURL,
+			}
+			h.telegramService.PostContentApproval(data, true)
+		}()
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "approval_status": "approved"})
+}
+
+// RejectSeries PATCH /api/admin/series/:id/reject
+func (h *SeriesHandler) RejectSeries(c *gin.Context) {
+	id := c.Param("id")
+	byUserID := c.GetString("user_id")
+
+	if err := h.seriesService.SetSeriesApprovalStatus(id, "rejected", byUserID); err != nil {
+		status := http.StatusInternalServerError
+		if err.Error() == "series not found" {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "approval_status": "rejected"})
+}
+

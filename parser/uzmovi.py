@@ -2165,17 +2165,23 @@ class UzmoviParser(BaseParser):
         Returns:
             dict with items, page, limit, total, total_pages, has_more
         """
-        # Build candidate URLs
+        # Build candidate URLs.
+        # Uzmovi homepage does NOT support /page/N/ (returns 404).
+        # Only category/xfsearch URLs have real paginated listings.
         if category_url:
             base = category_url.rstrip("/")
             candidate_urls = [f"{base}/page/{page}/"]
             if page == 1:
                 candidate_urls.append(base + "/")
         else:
-            # Try standard DLE pagination URL first, fall back to root for page 1
-            candidate_urls = [f"{self.BASE_URL}/page/{page}/"]
-            if page == 1:
-                candidate_urls.append(self.BASE_URL + "/")
+            if page > 1:
+                # Homepage has no /page/N/ support — return empty immediately.
+                logger.info(f"[UZMOVI] list_catalog: homepage has no pagination; page {page} returning empty")
+                return {
+                    "items": [], "page": page, "limit": limit,
+                    "total": 0, "total_pages": page, "has_more": False
+                }
+            candidate_urls = [self.BASE_URL + "/"]
 
         soup = None
         for url in candidate_urls:
@@ -2236,20 +2242,31 @@ class UzmoviParser(BaseParser):
         if type_filter:
             items = [i for i in items if i.get("type") == type_filter]
 
-        # Check for next page
+        # Check for next page using Uzmovi-specific selectors.
+        # Uzmovi uses .pages (not .pagination/.navigation) and "Keyingi" for "Next" in Uzbek.
         has_more = False
-        pagination = soup.select_one(".navigation, .pagination, .pager, .page-nav, #bottom-nav")
+        pagination = soup.select_one(".pages, .navigation, .pagination, .pager, .page-nav, #bottom-nav")
         if pagination:
             for link in pagination.select("a"):
                 href = link.get("href", "")
                 text = link.get_text(strip=True)
-                if "next" in text.lower() or "»" in text or "›" in text or f"/page/{page + 1}" in href:
+                if (
+                    "next" in text.lower()
+                    or "keyingi" in text.lower()
+                    or "»" in text
+                    or "›" in text
+                    or f"/page/{page + 1}" in href
+                    or f"/page/{page + 1}/" in href
+                ):
                     has_more = True
                     break
-        
-        if len(items) >= 10 and not has_more:
+
+        # Only apply has_more heuristic for category pages.
+        # The Uzmovi homepage has no /page/N/ pagination — returning that heuristic as True
+        # causes the Next button to appear and then load a 404 (empty page).
+        if category_url and len(items) >= 10 and not has_more:
             has_more = True
-        
+
         return {
             "items": items[:limit],
             "page": page,

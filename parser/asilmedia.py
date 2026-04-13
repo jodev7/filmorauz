@@ -62,14 +62,15 @@ class AsilmediaParser(BaseParser):
         "#searchresult",          # DLE search result ID
     ]
     
-    # DLE card/item selectors (priority order) 
+    # DLE card/item selectors (priority order)
     DLE_CARD_SELECTORS = [
-        ".shortstory-item",       # DLE shortstory (used on this site)
-        ".shortstory-item.moviebox",  # Movie cards on this site
-        "article.shortstory",     # DLE article shortstory
-        ".moviebox",              # Movie box on this site
-        "article",               # Generic article
-        ".film-item",            # Film items
+        ".shortstory-item",               # DLE shortstory (used on this site)
+        ".shortstory-item.moviebox",      # Movie cards on this site
+        "article.shortstory",             # DLE article shortstory
+        ".moviebox",                      # Movie box on this site
+        "article:not(.carousel-card)",    # Non-carousel articles (category listing pages)
+        "article",                        # Generic article (fallback)
+        ".film-item",                     # Film items
     ]
     
     # DLE title selectors (priority order)
@@ -964,14 +965,24 @@ class AsilmediaParser(BaseParser):
         Returns:
             dict with items, page, limit, total, total_pages, has_more
         """
-        # Use HTTP (not HTTPS) for asilmedia
+        # Asilmedia: category pages have proper paginated listings.
+        # The homepage (/page/N/) shows the same carousel blocks on every page —
+        # no real pagination. Only category URLs produce different items per page.
         if category_url:
             base = category_url.rstrip("/")
             url = f"{base}/page/{page}/" if page > 1 else base + "/"
         else:
-            url = f"{self.BASE_URL}/page/{page}/"
+            # Homepage does not paginate: page 1 = root, page 2+ = same content.
+            # Return empty immediately for page > 1 to avoid returning duplicate cards.
+            if page > 1:
+                logger.info(f"[ASILMEDIA] list_catalog: homepage has no real pagination; page {page} returning empty")
+                return {
+                    "items": [], "page": page, "limit": limit,
+                    "total": 0, "total_pages": page, "has_more": False
+                }
+            url = self.BASE_URL + "/"
         logger.info(f"[ASILMEDIA] list_catalog: fetching {url}")
-        
+
         try:
             response = self.session.get(url, timeout=30)
             response.raise_for_status()
@@ -981,9 +992,9 @@ class AsilmediaParser(BaseParser):
                 "items": [], "page": page, "limit": limit,
                 "total": 0, "total_pages": 0, "has_more": False
             }
-        
+
         soup = BeautifulSoup(response.text, "lxml")
-        
+
         # Find movie cards using DLE selectors
         cards = []
         for selector in self.DLE_CARD_SELECTORS:
@@ -991,42 +1002,55 @@ class AsilmediaParser(BaseParser):
             if cards:
                 logger.info(f"[ASILMEDIA] list_catalog: found {len(cards)} cards with '{selector}'")
                 break
-        
+
         if not cards:
             content = soup.select_one("#dle-content, .content, #content, main")
             if content:
                 cards = content.find_all(["article", "div"], class_=True, recursive=False)
                 logger.info(f"[ASILMEDIA] list_catalog: broader detection found {len(cards)} cards")
-        
+
         items = []
+        seen_urls = set()
         for card in cards:
             try:
                 item = self._extract_catalog_card(card)
                 if item and item.get("title"):
+                    url_key = item.get("detail_url", "") or item.get("source_id", "")
+                    if url_key and url_key in seen_urls:
+                        continue
+                    if url_key:
+                        seen_urls.add(url_key)
                     items.append(item)
             except Exception as e:
                 logger.debug(f"[ASILMEDIA] list_catalog: error extracting card: {e}")
                 continue
-        
+
         logger.info(f"[ASILMEDIA] list_catalog: extracted {len(items)} items from page {page}")
 
         if type_filter:
             items = [i for i in items if i.get("type") == type_filter]
 
-        # Check for next page
+        # Check for next page using known Asilmedia pagination selectors
         has_more = False
-        pagination = soup.select_one(".navigation, .pagination, .pager, .page-nav, #bottom-nav")
+        pagination = soup.select_one(".pagination, .pages, .navigation, .pager, .page-nav, #bottom-nav")
         if pagination:
             for link in pagination.select("a"):
                 href = link.get("href", "")
                 text = link.get_text(strip=True)
-                if "next" in text.lower() or "»" in text or "›" in text or f"/page/{page + 1}" in href:
+                if (
+                    "next" in text.lower()
+                    or "keyingi" in text.lower()
+                    or "»" in text
+                    or "›" in text
+                    or f"/page/{page + 1}/" in href
+                ):
                     has_more = True
                     break
-        
-        if len(items) >= 10 and not has_more:
+
+        # Only enable the has_more heuristic for category pages (homepage has no real pagination)
+        if category_url and len(items) >= 10 and not has_more:
             has_more = True
-        
+
         return {
             "items": items[:limit],
             "page": page,

@@ -5,9 +5,10 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n";
-import { 
-  Crown, 
-  Check, 
+import { buyPremium } from "@/lib/api";
+import {
+  Crown,
+  Check,
   Sparkles,
   Tv,
   Gauge,
@@ -15,8 +16,10 @@ import {
   ChevronDown,
   ChevronUp,
   Loader2,
-  Sparkle,
-  ArrowDown
+  ArrowDown,
+  Wallet,
+  ExternalLink,
+  AlertCircle,
 } from "lucide-react";
 
 interface FAQItem {
@@ -91,14 +94,17 @@ const premiumFeatures = [
 ];
 
 export default function PremiumPage() {
-  const { user } = useAuth();
+  const { user, token, refreshUser } = useAuth();
   const { t } = useI18n();
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
+  const [buyError, setBuyError] = useState<string | null>(null);
+  const [buySuccess, setBuySuccess] = useState<string | null>(null);
 
   // Check if user is premium
   const isPremium = user?.is_premium === true || user?.is_premium_active === true;
+  const walletBalance = user?.wallet_balance ?? 0;
 
   const features = [
     {
@@ -147,20 +153,25 @@ export default function PremiumPage() {
   };
 
   const handleGetPremium = async (planId: string) => {
+    if (!user || !token) return;
+
+    setBuyError(null);
+    setBuySuccess(null);
     setIsLoading(true);
     setSelectedPlan(planId);
-    
-    // Prepare message for Telegram bot with selected plan
-    const plan = pricingPlans.find(p => p.id === planId);
-    const message = plan ? `Premium ${plan.label} - ${plan.totalPrice.toLocaleString()} so'm` : 'Premium';
-    
-    // Redirect to Telegram bot with pre-filled message
-    window.open(`https://t.me/filmorauz_bot?text=${encodeURIComponent(message)}`, "_blank");
-    
-    setTimeout(() => {
+
+    try {
+      const result = await buyPremium(token, planId);
+      setBuySuccess(result.message || "Premium muvaffaqiyatli faollashtirildi");
+      // Refresh user data to reflect new premium status and wallet balance
+      await refreshUser();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Xatolik yuz berdi";
+      setBuyError(msg);
+    } finally {
       setIsLoading(false);
       setSelectedPlan(null);
-    }, 1000);
+    }
   };
 
   const formatPrice = (price: number) => {
@@ -270,9 +281,50 @@ export default function PremiumPage() {
             <h2 className="font-display text-3xl sm:text-4xl text-white text-center mb-4">
               Narx <span className="text-brand-red">rejalari</span>
             </h2>
-            <p className="text-gray-400 text-center mb-12 max-w-xl mx-auto">
+            <p className="text-gray-400 text-center mb-8 max-w-xl mx-auto">
               Qancha uzoq obuna olsangiz, shuncha ko'proq tejaysiz
             </p>
+
+            {/* Wallet balance card */}
+            {user && (
+              <div className="max-w-md mx-auto mb-10 p-5 bg-brand-card/60 border border-brand-border rounded-2xl flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-yellow-500/20 to-amber-500/20 flex items-center justify-center">
+                    <Wallet className="w-5 h-5 text-yellow-400" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-400">Hisob balansi</p>
+                    <p className="text-lg font-bold text-white">
+                      {walletBalance.toLocaleString("en-US")}{" "}
+                      <span className="text-sm font-normal text-gray-400">so'm</span>
+                    </p>
+                  </div>
+                </div>
+                <a
+                  href="https://t.me/filmorauznet?direct"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 px-4 py-2 bg-brand-red/20 border border-brand-red/50 text-brand-red hover:bg-brand-red hover:text-white rounded-xl text-sm font-semibold transition-all duration-200"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  Hisobni to'ldirish
+                </a>
+              </div>
+            )}
+
+            {/* Buy status messages */}
+            {buyError && (
+              <div className="max-w-md mx-auto mb-6 flex items-center gap-3 p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm">
+                <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                {buyError}
+              </div>
+            )}
+            {buySuccess && (
+              <div className="max-w-md mx-auto mb-6 flex items-center gap-3 p-4 bg-green-500/10 border border-green-500/30 rounded-xl text-green-400 text-sm">
+                <Check className="w-5 h-5 flex-shrink-0" />
+                {buySuccess}
+              </div>
+            )}
 
             {/* Pricing Cards Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
@@ -354,14 +406,28 @@ export default function PremiumPage() {
                         <Check size={16} />
                         Premium
                       </div>
+                    ) : !user ? (
+                      <div className="text-center text-xs text-gray-500 py-3">
+                        Sotib olish uchun tizimga kiring
+                      </div>
+                    ) : walletBalance < plan.totalPrice ? (
+                      <a
+                        href="https://t.me/filmorauznet?start=topup"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center justify-center gap-2 w-full py-3 bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20 rounded-xl text-sm font-semibold transition-all duration-200"
+                      >
+                        <Wallet size={14} />
+                        Hisobni to&apos;ldirish
+                      </a>
                     ) : (
                       <button
                         onClick={() => handleGetPremium(plan.id)}
-                        disabled={isLoading && selectedPlan === plan.id}
+                        disabled={isLoading}
                         className={`w-full py-3 rounded-xl font-semibold text-sm transition-all duration-300 ${
                           isHighlighted
-                            ? 'bg-gradient-to-r from-brand-red to-orange-600 hover:from-orange-600 hover:to-brand-red text-white shadow-[0_0_20px_rgba(249,115,22,0.3)] hover:shadow-[0_0_30px_rgba(249,115,22,0.5)]'
-                            : 'bg-brand-red/20 border border-brand-red/50 text-brand-red hover:bg-brand-red hover:text-white'
+                            ? "bg-gradient-to-r from-brand-red to-orange-600 hover:from-orange-600 hover:to-brand-red text-white shadow-[0_0_20px_rgba(249,115,22,0.3)] hover:shadow-[0_0_30px_rgba(249,115,22,0.5)]"
+                            : "bg-brand-red/20 border border-brand-red/50 text-brand-red hover:bg-brand-red hover:text-white"
                         } disabled:opacity-70 disabled:cursor-not-allowed`}
                       >
                         {isLoading && selectedPlan === plan.id ? (
@@ -380,7 +446,7 @@ export default function PremiumPage() {
             </div>
 
             <p className="text-center text-gray-500 text-sm mt-8">
-              Barcha to'lovlar Telegram orqali amalga oshiriladi
+              To&apos;lovlar hisobingizdan avtomatik amalga oshiriladi
             </p>
           </div>
         </section>

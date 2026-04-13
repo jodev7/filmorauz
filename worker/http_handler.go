@@ -193,36 +193,27 @@ func (h *ProcessHandler) buildFFmpegCommand(req ProcessRequest, outputFile strin
 		log.Printf("[WORKER] Will skip first %d seconds", req.CutSeconds)
 	}
 
-	// Add logo overlay if specified
-	if req.LogoPath != "" && req.LogoPath != "none" {
-		// Check if logo file exists
-		if _, err := os.Stat(req.LogoPath); err == nil {
-			// Position: default to bottom-right with padding
-			position := req.LogoPosition
-			if position == "" {
-				position = "W-w-10:10" // 10px from bottom-right
-			}
-
-			// Opacity: default to 80%
-			opacity := req.LogoOpacity
-			if opacity <= 0 {
-				opacity = 0.8
-			}
-
-			// FFmpeg overlay filter for logo
-			// Using overlay filter with alpha channel support
-			overlayFilter := fmt.Sprintf("'overlay=%s:format=auto'", position)
-
-			args = append(args,
-				"-i", req.LogoPath, // Second input: logo
-				"-filter_complex", overlayFilter,
-			)
-
-			log.Printf("[WORKER] Adding logo overlay: %s at position %s with opacity %.0f%%",
-				req.LogoPath, position, opacity*100)
-		} else {
-			log.Printf("[WORKER] Logo file not found, skipping overlay: %s", req.LogoPath)
-		}
+	// Always resolve and apply logo from docs/logo.png.
+	// Never rely on the caller passing logo_path — watermark must always be applied.
+	resolvedLogo := resolveLogoPath()
+	if resolvedLogo != "" {
+		// Use the same filter as createBaseVideo: scale to 18% of video width,
+		// overlay at bottom-right with 20px padding.
+		videoChain := "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+		filterComplex := fmt.Sprintf(
+			"[0:v]%s[vscaled];[1:v][vscaled]scale2ref=w=iw*0.18:h=-1[logo][vref];[vref][logo]overlay=W-w-20:H-h-20:shortest=1[out]",
+			videoChain,
+		)
+		args = append(args,
+			"-loop", "1",
+			"-i", resolvedLogo,
+			"-filter_complex", filterComplex,
+			"-map", "[out]",
+			"-map", "0:a?",
+		)
+		log.Printf("[WORKER] Applying logo overlay: %s", resolvedLogo)
+	} else {
+		log.Printf("[WORKER] WARNING: docs/logo.png not found — skipping watermark")
 	}
 
 	// Output file
@@ -241,42 +232,23 @@ func (h *ProcessHandler) sendError(w http.ResponseWriter, message string, status
 	})
 }
 
-// Getter for LogoPath (field is lowercase in struct)
-func (r *ProcessRequest) getLogoPath() string {
-	return r.LogoPath
-}
-
-// Fix: properly access logo path
-func (h *ProcessHandler) buildFFmpegCommandFixed(req ProcessRequest, outputFile string) *exec.Cmd {
-	args := []string{
-		"-y",
-		"-i", req.InputFile,
-		"-c:v", "libx264",
-		"-preset", "medium",
-		"-crf", "23",
-		"-c:a", "aac",
-		"-b:a", "128k",
-		"-movflags", "+faststart",
-	}
-
-	if req.CutSeconds > 0 {
-		args = append(args, "-ss", fmt.Sprintf("%d", req.CutSeconds))
-	}
-
-	// Access logo path properly - it's a field in the struct
-	logoPath := req.LogoPath
-	if logoPath != "" && logoPath != "none" {
-		if _, err := os.Stat(logoPath); err == nil {
-			position := req.LogoPosition
-			if position == "" {
-				position = "W-w-10:10"
-			}
-			overlayFilter := fmt.Sprintf("'overlay=%s:format=auto'", position)
-			args = append(args, "-i", logoPath, "-filter_complex", overlayFilter)
-			log.Printf("[WORKER] Adding logo: %s at %s", logoPath, position)
+// resolveLogoPath finds docs/logo.png relative to CWD first, then the
+// executable's directory — matching the same lookup order as createBaseVideo.
+func resolveLogoPath() string {
+	if cwd, err := os.Getwd(); err == nil {
+		if p := filepath.Join(cwd, "docs", "logo.png"); fileExistsHTTP(p) {
+			return p
 		}
 	}
+	if exe, err := os.Executable(); err == nil {
+		if p := filepath.Join(filepath.Dir(exe), "docs", "logo.png"); fileExistsHTTP(p) {
+			return p
+		}
+	}
+	return ""
+}
 
-	args = append(args, outputFile)
-	return exec.Command("ffmpeg", args...)
+func fileExistsHTTP(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

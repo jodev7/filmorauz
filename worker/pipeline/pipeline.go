@@ -1379,9 +1379,17 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 	}
 
 	// Use upsert to handle duplicates - this is safer than raw InsertOne
-	// Upsert will INSERT new movie OR UPDATE existing movie with same slug
+	// Upsert will INSERT new movie OR UPDATE existing movie with same slug.
+	// Approval fields use $setOnInsert so they are only written on NEW inserts;
+	// re-imports of an already-approved movie will not reset its approval status.
 	filter := bson.M{"slug": displaySlug}
-	update := bson.M{"$set": movieDoc}
+	update := bson.M{
+		"$set": movieDoc,
+		"$setOnInsert": bson.M{
+			"approval_status": "pending",
+			"is_published":    false,
+		},
+	}
 	upsert := true
 
 	result, err := p.movieCol.UpdateOne(ctx, filter, update, options.Update().SetUpsert(upsert))

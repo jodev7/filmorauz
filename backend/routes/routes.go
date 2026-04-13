@@ -67,6 +67,9 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 		user.POST("/favorites/:movieId", userHandler.AddFavorite)
 		user.DELETE("/favorites/:movieId", userHandler.RemoveFavorite)
 		user.GET("/favorites", userHandler.GetFavorites)
+
+		// Premium purchase via wallet
+		user.POST("/premium/buy", userHandler.BuyPremium)
 	}
 
 	// Watch progress (auth required)
@@ -166,9 +169,12 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 		admin.POST("/movies/upload", uploadHandler.UploadMovieAssets)
 
 		// Movie management
+		admin.GET("/movies", movieHandler.AdminListMovies)
 		admin.POST("/movies", movieHandler.CreateMovie)
 		admin.PUT("/movies/:id", movieHandler.UpdateMovie)
 		admin.DELETE("/movies/:id", movieHandler.DeleteMovie)
+		admin.PATCH("/movies/:id/approve", movieHandler.ApproveMovie)
+		admin.PATCH("/movies/:id/reject", movieHandler.RejectMovie)
 
 		// Ingestion job management
 		admin.POST("/ingestion/jobs", ingestionHandler.CreateIngestionJob)
@@ -311,9 +317,12 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	// Admin series management
 	adminSeries := admin.Group("/series")
 	{
+		adminSeries.GET("", seriesHandler.AdminListSeries)
 		adminSeries.POST("", seriesHandler.CreateSeries)
 		adminSeries.PUT("/:id", seriesHandler.UpdateSeries)
 		adminSeries.DELETE("/:id", seriesHandler.DeleteSeries)
+		adminSeries.PATCH("/:id/approve", seriesHandler.ApproveSeries)
+		adminSeries.PATCH("/:id/reject", seriesHandler.RejectSeries)
 		adminSeries.POST("/:id/seasons", seriesHandler.CreateSeason)
 	}
 
@@ -342,6 +351,9 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 		superadmin.POST("/ads/:id/send-telegram", adHandler.SendTelegramAd)
 		superadmin.GET("/ads/:id/delivery", adHandler.GetAdDelivery)
 	}
+
+	// Superadmin-only wallet management
+	superadmin.PATCH("/users/:id/wallet", adminUserHandler.UpdateUserWallet)
 
 	// Superadmin-only telegram post
 	superadmin.GET("/telegram-posts", telegramPostHandler.ListPosts)

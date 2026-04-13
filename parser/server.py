@@ -24,6 +24,29 @@ import sys
 from dotenv import load_dotenv
 load_dotenv()  # Loads parser/.env if it exists
 
+# Pre-import all optional heavy dependencies in the main thread NOW, before
+# ThreadedHTTPServer starts spawning request threads.  asyncio (and its
+# sub-modules asyncio.coroutines / asyncio.exceptions) is transitively pulled
+# in by instagrapi→httpx and by google-auth.  If two threads race to import it
+# for the first time, one sees a partially-initialised asyncio package and hits:
+#   "partially initialized module 'asyncio.coroutines' has no attribute 'iscoroutine'"
+#   "NameError: name 'exceptions' is not defined"
+# Importing everything here ensures sys.modules is fully populated before any
+# handler thread runs.  Subsequent `import X` calls in threads are safe dict
+# lookups — no initialisation race.
+import asyncio as _asyncio  # noqa: F401 — force full asyncio init in main thread
+try:
+    from instagrapi import Client as _InstagrapiClient  # noqa: F401
+except ImportError:
+    pass
+try:
+    from google.oauth2.credentials import Credentials as _GoogleCredentials  # noqa: F401
+    from google.auth.transport.requests import Request as _GoogleAuthRequest  # noqa: F401
+    from googleapiclient.discovery import build as _googleapiclient_build  # noqa: F401
+    from googleapiclient.http import MediaFileUpload as _GoogleMediaFileUpload  # noqa: F401
+except ImportError:
+    pass
+
 from binary_manager import require_binary
 from uzmovi import UzmoviParser
 from freekino import FreekinoParser
@@ -267,9 +290,11 @@ class ParserHandler(BaseHTTPRequestHandler):
         logger.info(f"[SERVER] ═══════════════════════════════════════════")
         return None, None
     
-    def _call_worker(self, input_file, title, cut_seconds=0, logo_path="", logo_position="W-w-10:10", logo_opacity=0.8):
+    def _call_worker(self, input_file, title, cut_seconds=0):
         """
         Call the worker to process a downloaded video.
+        The worker always applies the watermark from its own docs/logo.png —
+        logo_path must NOT be sent so the worker uses its resolved path.
         Returns the worker's response dict or raises an exception.
         """
         request_data = {
@@ -277,9 +302,6 @@ class ParserHandler(BaseHTTPRequestHandler):
             "title": title,
             "input_file": input_file,
             "cut_seconds": cut_seconds,
-            "logo_path": logo_path if logo_path else "none",
-            "logo_position": logo_position,
-            "logo_opacity": logo_opacity,
         }
         
         logger.info(f"[SERVER] Calling worker at {WORKER_URL}/process")
@@ -794,10 +816,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                             "message": "Downloading video...",
                         })
                     
-                    # Use referer if available
-                    referer_url = details.get('video_page_url', '')
-                    
-                    # Download the file
+                    # Download the file (referer_url computed at lines above from video_page_url / page_url)
                     download_result = downloader_service.smart_download(
                         url=video_url,
                         output_name=output_name,
@@ -1542,9 +1561,6 @@ class ParserHandler(BaseHTTPRequestHandler):
                                 input_file=result["file_path"],
                                 title=details_dict.get("title", output_name),
                                 cut_seconds=body.get("cut_seconds", 0),
-                                logo_path=body.get("logo_path", ""),
-                                logo_position=body.get("logo_position", "W-w-10:10"),
-                                logo_opacity=body.get("logo_opacity", 0.8),
                             )
                             
                             if worker_result.get("success"):
@@ -2052,7 +2068,7 @@ class ParserHandler(BaseHTTPRequestHandler):
         logger.info(f"{self.address_string()} - {format % args}")
 
 
-def run_server(host="0.0.0.0", port=8081):
+def run_server(host="0.0.0.0", port=8082):
     """Run the parser API server"""
     # IMPORTANT: Validate BACKEND_URL is set for progress reporting
     # Without this, admin UI won't receive download progress updates
@@ -2083,12 +2099,21 @@ def run_server(host="0.0.0.0", port=8081):
 
 if __name__ == "__main__":
     import argparse
-    
-    parser = argparse.ArgumentParser(description="Parser API Server")
-    parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
-    parser.add_argument("--port", type=int, default=8082, help="Port to bind to")
-    
-    args = parser.parse_args()
+
+    _env_host = os.environ.get("PARSER_HOST", "0.0.0.0")
+    _env_port = int(os.environ.get("PARSER_PORT", "8082"))
+
+    _arg_parser = argparse.ArgumentParser(description="Parser API Server")
+    _arg_parser.add_argument("--host", default=_env_host, help="Host to bind to")
+    _arg_parser.add_argument("--port", type=int, default=_env_port, help="Port to bind to")
+
+    args = _arg_parser.parse_args()
+
+    logger.info(f"[STARTUP] BACKEND_URL  = {os.environ.get('BACKEND_URL', '(not set)')}")
+    logger.info(f"[STARTUP] PARSER_HOST  = {os.environ.get('PARSER_HOST', '(not set)')}")
+    logger.info(f"[STARTUP] PARSER_PORT  = {os.environ.get('PARSER_PORT', '(not set)')}")
+    logger.info(f"[STARTUP] Binding to   = {args.host}:{args.port}")
+
     run_server(args.host, args.port)
 
 

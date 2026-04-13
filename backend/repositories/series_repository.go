@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/filmorauz/backend/models"
@@ -120,7 +121,15 @@ func (r *SeriesRepository) List(limit, skip int) ([]models.Series, error) {
 		SetLimit(int64(limit)).
 		SetSkip(int64(skip))
 
-	cursor, err := r.seriesCol.Find(ctx, bson.M{}, opts)
+	// Only show published series; legacy docs without is_published are also shown
+	publicFilter := bson.M{
+		"$or": []bson.M{
+			{"is_published": true},
+			{"is_published": bson.M{"$exists": false}},
+		},
+	}
+
+	cursor, err := r.seriesCol.Find(ctx, publicFilter, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -445,4 +454,65 @@ func (r *SeriesRepository) GetSeriesWithSeasons(seriesID primitive.ObjectID) (*m
 		Series:  *series,
 		Seasons: seasonsWithEpisodes,
 	}, nil
+}
+
+// ListAdmin returns ALL series (regardless of approval status) for the admin dashboard.
+func (r *SeriesRepository) ListAdmin(limit, skip int) ([]models.Series, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if limit <= 0 {
+		limit = 200
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "created_at", Value: -1}}).
+		SetLimit(int64(limit)).
+		SetSkip(int64(skip))
+
+	cursor, err := r.seriesCol.Find(ctx, bson.M{}, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var seriesList []models.Series
+	if err := cursor.All(ctx, &seriesList); err != nil {
+		return nil, err
+	}
+	if seriesList == nil {
+		seriesList = []models.Series{}
+	}
+	return seriesList, nil
+}
+
+// SetApprovalStatus sets the approval status and publishes/unpublishes a series.
+func (r *SeriesRepository) SetApprovalStatus(idHex, status, byUserID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	id, err := primitive.ObjectIDFromHex(idHex)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	result, err := r.seriesCol.UpdateOne(
+		ctx,
+		bson.M{"_id": id},
+		bson.M{"$set": bson.M{
+			"approval_status": status,
+			"is_published":    status == "approved",
+			"approved_at":     now,
+			"approved_by":     byUserID,
+			"updated_at":      now,
+		}},
+	)
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("series not found")
+	}
+	return nil
 }

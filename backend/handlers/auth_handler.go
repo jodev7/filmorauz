@@ -220,6 +220,7 @@ func (h *AuthHandler) CurrentUser(c *gin.Context) {
 			"role":              user.Role,
 			"is_premium":        user.IsPremium,
 			"is_premium_active": user.IsPremiumActive(),
+			"wallet_balance":    user.WalletBalance,
 			"premium_started_at": func() *string {
 				if user.PremiumStartedAt != nil {
 					t := user.PremiumStartedAt.Format(time.RFC3339)

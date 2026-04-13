@@ -171,6 +171,12 @@ func getRenditionNames(renditions []RenditionConfig) []string {
 	return names
 }
 
+// fileExists reports whether the named file exists and is readable.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // createBaseVideo creates an intermediate base video with logo overlay applied
 func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int)) error {
 	log.Printf("[HLS] Creating base video: cut=%ds, logo overlay, input=%s", cutSeconds, inputPath)
@@ -180,15 +186,27 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 	// Video chain: ensure even dimensions for H.264 (required by libx264).
 	videoChain := "scale=trunc(iw/2)*2:trunc(ih/2)*2"
 
-	// Resolve logo path relative to working directory.
-	cwd, _ := os.Getwd()
-	logoPath := filepath.Join(cwd, "docs", "logo.png")
-	logoExists := false
-	if _, statErr := os.Stat(logoPath); statErr == nil {
-		logoExists = true
+	// Resolve logo path: try CWD/docs/logo.png first (works for 'go run .'),
+	// then fall back to the directory containing the running executable (works
+	// for deployed binaries run from an arbitrary working directory).
+	logoPath := ""
+	if cwd, err := os.Getwd(); err == nil {
+		if candidate := filepath.Join(cwd, "docs", "logo.png"); fileExists(candidate) {
+			logoPath = candidate
+		}
+	}
+	if logoPath == "" {
+		if exe, err := os.Executable(); err == nil {
+			if candidate := filepath.Join(filepath.Dir(exe), "docs", "logo.png"); fileExists(candidate) {
+				logoPath = candidate
+			}
+		}
+	}
+	logoExists := logoPath != ""
+	if logoExists {
 		log.Printf("[HLS] Watermark logo found: %s", logoPath)
 	} else {
-		log.Printf("[HLS] WARNING: watermark logo not found at %s, skipping overlay", logoPath)
+		log.Printf("[HLS] WARNING: watermark logo not found in docs/logo.png (checked CWD and executable dir), skipping overlay")
 	}
 
 	// Build ffmpeg args: use filter_complex (two inputs) when logo exists,

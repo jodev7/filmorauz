@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Users, Search, ChevronLeft, ChevronRight, User, Shield, Crown, Ban, Unlock, X, ShieldCheck } from "lucide-react";
+import { Users, Search, ChevronLeft, ChevronRight, User, Shield, Crown, Ban, Unlock, X, ShieldCheck, Wallet } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { getAdminUsers, updateAdminUserRole, updateAdminUserPremium, banUser, unbanUser, AdminUser } from "@/lib/api";
+import { getAdminUsers, updateAdminUserRole, updateAdminUserPremium, updateUserWallet, banUser, unbanUser, AdminUser } from "@/lib/api";
 
 // Check if a user is SuperAdmin (case-insensitive)
 const isSuperAdmin = (role: string): boolean => {
@@ -31,6 +31,10 @@ export default function AdminUsersPage() {
   const [banReason, setBanReason] = useState("");
   const [customBanReason, setCustomBanReason] = useState("");
   const [banning, setBanning] = useState(false);
+  const [showWalletModal, setShowWalletModal] = useState(false);
+  const [walletTargetUser, setWalletTargetUser] = useState<AdminUser | null>(null);
+  const [walletAmount, setWalletAmount] = useState("");
+  const [updatingWallet, setUpdatingWallet] = useState(false);
 
   // Redirect if not admin
   useEffect(() => {
@@ -83,6 +87,26 @@ export default function AdminUsersPage() {
       console.error("Failed to update premium:", error);
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  const handleWalletUpdate = async () => {
+    if (!token || !walletTargetUser) return;
+    const amount = parseFloat(walletAmount);
+    if (isNaN(amount) || amount <= 0) return;
+    setUpdatingWallet(true);
+    try {
+      await updateUserWallet(token, walletTargetUser.id, amount);
+      setShowWalletModal(false);
+      setWalletTargetUser(null);
+      setWalletAmount("");
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const data = await getAdminUsers(token, { page, limit, search: search || undefined, role: role !== "all" ? role : undefined });
+      setUsers(data.data);
+    } catch (error) {
+      console.error("Failed to update wallet:", error);
+    } finally {
+      setUpdatingWallet(false);
     }
   };
 
@@ -374,6 +398,20 @@ export default function AdminUsersPage() {
                     </td>
                     <td className="px-3 sm:px-5 py-3 text-right">
                       <div className="flex items-center justify-end gap-2">
+                        {/* Wallet button - superadmin only, allowed for any user including other superadmins */}
+                        {user?.role === "superadmin" && (
+                          <button
+                            onClick={() => {
+                              setWalletTargetUser(u);
+                              setWalletAmount("");
+                              setShowWalletModal(true);
+                            }}
+                            className="p-1.5 rounded-lg bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 transition-colors"
+                            title={`Hamyon: ${(u.wallet_balance ?? 0).toLocaleString()} so'm`}
+                          >
+                            <Wallet size={14} />
+                          </button>
+                        )}
                         {isSuperAdmin(u.role) ? (
                           // SuperAdmin - show protected indicator, no actions
                           <span className="text-yellow-400 text-xs flex items-center gap-1" title="Himoyalangan hisob">
@@ -439,6 +477,57 @@ export default function AdminUsersPage() {
             >
               <ChevronRight size={18} />
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Wallet Modal */}
+      {showWalletModal && walletTargetUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={() => { setShowWalletModal(false); setWalletTargetUser(null); setWalletAmount(""); }}
+          />
+          <div className="relative bg-[#1a1a2e] border border-brand-border rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-9 h-9 rounded-lg bg-yellow-500/20 flex items-center justify-center">
+                <Wallet size={18} className="text-yellow-400" />
+              </div>
+              <div>
+                <h3 className="text-white font-semibold">Hamyon balansi</h3>
+                <p className="text-gray-400 text-xs">{walletTargetUser.display_name || walletTargetUser.username}</p>
+              </div>
+            </div>
+            <div className="mb-4">
+              <p className="text-gray-500 text-xs mb-2">
+                Joriy balans: <span className="text-yellow-400 font-medium">{(walletTargetUser.wallet_balance ?? 0).toLocaleString()} so&apos;m</span>
+              </p>
+              <label className="block text-gray-400 text-sm mb-1">Qo&apos;shish miqdori (so&apos;m)</label>
+              <input
+                type="number"
+                min="1"
+                step="1000"
+                value={walletAmount}
+                onChange={(e) => setWalletAmount(e.target.value)}
+                className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white focus:outline-none focus:border-yellow-500"
+                placeholder="0"
+              />
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setShowWalletModal(false); setWalletTargetUser(null); setWalletAmount(""); }}
+                className="flex-1 py-2 rounded-lg border border-brand-border text-gray-400 hover:bg-brand-border/30 transition-colors text-sm"
+              >
+                Bekor qilish
+              </button>
+              <button
+                onClick={handleWalletUpdate}
+                disabled={updatingWallet}
+                className="flex-1 py-2 rounded-lg bg-yellow-500 hover:bg-yellow-400 text-black font-semibold transition-colors text-sm disabled:opacity-60"
+              >
+                {updatingWallet ? "Saqlanmoqda..." : "Saqlash"}
+              </button>
+            </div>
           </div>
         </div>
       )}

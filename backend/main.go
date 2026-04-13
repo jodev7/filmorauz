@@ -180,11 +180,12 @@ func main() {
 
 	// Initialize Telegram service for movie notifications
 	telegramService, err := services.NewTelegramService(services.TelegramConfig{
-		BotToken:        botToken,
-		BotUsername:     cfg.TelegramBotUsername,
-		ChannelUsername: cfg.TelegramChannelUsername,
-		AdminTelegramID: cfg.AdminTelegramID,
-		BaseSiteURL:     cfg.BaseSiteURL,
+		BotToken:               botToken,
+		BotUsername:            cfg.TelegramBotUsername,
+		ChannelUsername:        cfg.TelegramChannelUsername,
+		SerialsChannelUsername: cfg.TelegramSerialsChannel,
+		AdminTelegramID:        cfg.AdminTelegramID,
+		BaseSiteURL:            cfg.BaseSiteURL,
 	})
 	if err != nil {
 		log.Printf("Warning: Failed to initialize Telegram service: %v", err)
@@ -197,10 +198,18 @@ func main() {
 	// Telegram post handler
 	telegramPostHandler := handlers.NewTelegramPostHandler(telegramService, userRepo, telegramPostRepo)
 
+	// Wire Telegram service into handlers that need it for approval auto-posts
+	if telegramService != nil {
+		movieHandler.SetTelegramService(telegramService)
+	}
+
 	// Series repository, service, and handler
 	// seriesRepo already initialized above for rating service
 	seriesService := services.NewSeriesService(seriesRepo)
 	seriesHandler := handlers.NewSeriesHandler(seriesService)
+	if telegramService != nil {
+		seriesHandler.SetTelegramService(telegramService)
+	}
 
 	// Clip repository and handler
 	clipRepo := repositories.NewClipRepository(db)

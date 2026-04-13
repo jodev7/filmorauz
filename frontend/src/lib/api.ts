@@ -32,6 +32,11 @@ export interface Movie {
   is_premium?: boolean;
   created_at: string;
   updated_at: string;
+  // Approval workflow
+  approval_status?: "pending" | "approved" | "rejected";
+  is_published?: boolean;
+  approved_at?: string | null;
+  approved_by?: string;
 }
 
 export interface MovieInput {
@@ -279,6 +284,7 @@ export interface CurrentUser {
   is_premium_active?: boolean;
   premium_started_at?: string | null;
   premium_expires_at?: string | null;
+  wallet_balance?: number;
   profile_style?: ProfileStyle;
   privacy?: PrivacySettings;
   ban?: BanInfo;
@@ -774,13 +780,35 @@ export async function adminDeleteMovie(
 }
 
 export async function adminGetMovies(token: string): Promise<Movie[]> {
-  const res = await fetch(`${API_URL}/movies?limit=100`, {
+  const res = await fetch(`${API_URL}/admin/movies?limit=500`, {
     headers: authHeaders(token),
     cache: "no-store",
   });
   if (!res.ok) throw new Error("Failed to fetch");
   const json = await res.json();
   return json.data;
+}
+
+export async function approveMovie(token: string, id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/movies/${id}/approve`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to approve movie");
+  }
+}
+
+export async function rejectMovie(token: string, id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/movies/${id}/reject`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to reject movie");
+  }
 }
 
 export type MovieAssetType = "poster" | "backdrop" | "video";
@@ -1145,6 +1173,7 @@ export interface AdminUser {
   is_premium: boolean;
   is_premium_active: boolean;
   premium_expires_at?: string | null;
+  wallet_balance?: number;
   auth_provider: string;
   created_at: string;
   last_login_at: string;
@@ -1297,6 +1326,41 @@ export async function updateAdminUserPremium(
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || err.message || "Failed to update premium status");
+  }
+  return res.json();
+}
+
+// Buy premium using wallet balance
+export async function buyPremium(
+  token: string,
+  planId: string
+): Promise<{ success: boolean; message: string }> {
+  const res = await fetch(`${API_URL}/user/premium/buy`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ plan_id: planId }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to purchase premium");
+  }
+  return res.json();
+}
+
+// Update user wallet balance (superadmin only)
+export async function updateUserWallet(
+  token: string,
+  userId: string,
+  amount: number
+): Promise<{ success: boolean; wallet_balance: number }> {
+  const res = await fetch(`${API_URL}/superadmin/users/${userId}/wallet`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify({ amount }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to update wallet balance");
   }
   return res.json();
 }
@@ -1653,6 +1717,11 @@ export interface AdminSeries {
   is_completed: boolean;
   created_at: string;
   updated_at: string;
+  // Approval workflow
+  approval_status?: "pending" | "approved" | "rejected";
+  is_published?: boolean;
+  approved_at?: string | null;
+  approved_by?: string;
 }
 
 export interface CreateSeriesData {
@@ -1671,9 +1740,9 @@ export interface CreateSeriesData {
   is_premium?: boolean;
 }
 
-// Admin: Get all series
+// Admin: Get all series (including pending/rejected — uses admin endpoint)
 export async function adminGetSeries(token: string): Promise<AdminSeries[]> {
-  const res = await fetch(`${API_URL}/series?limit=100`, {
+  const res = await fetch(`${API_URL}/admin/series?limit=500`, {
     headers: authHeaders(token),
   });
   if (!res.ok) {
@@ -1682,6 +1751,28 @@ export async function adminGetSeries(token: string): Promise<AdminSeries[]> {
   }
   const data = await res.json();
   return data.data || [];
+}
+
+export async function approveSeries(token: string, id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/series/${id}/approve`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to approve series");
+  }
+}
+
+export async function rejectSeries(token: string, id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/series/${id}/reject`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to reject series");
+  }
 }
 
 // Admin: Create series

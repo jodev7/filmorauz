@@ -50,6 +50,12 @@ type Movie struct {
 	OriginalTitle  string `bson:"original_title,omitempty" json:"original_title,omitempty"`
 	TMDBID         int    `bson:"tmdb_id,omitempty" json:"tmdb_id,omitempty"`
 	MetadataSource string `bson:"metadata_source,omitempty" json:"metadata_source,omitempty"`
+
+	// Approval workflow — new imports start as pending/unpublished
+	ApprovalStatus string     `bson:"approval_status,omitempty" json:"approval_status,omitempty"` // "pending" | "approved" | "rejected"
+	IsPublished    bool       `bson:"is_published" json:"is_published"`
+	ApprovedAt     *time.Time `bson:"approved_at,omitempty" json:"approved_at,omitempty"`
+	ApprovedBy     string     `bson:"approved_by,omitempty" json:"approved_by,omitempty"`
 }
 
 // MovieInput is used for create/update requests
