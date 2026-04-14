@@ -1130,7 +1130,7 @@ class DownloaderService:
         backend_job_id: str | None = None,
     ) -> dict:
         """Download a YouTube video using yt-dlp and return smart_download-compatible dict."""
-        import subprocess, sys as _sys
+        import subprocess, sys as _sys, os
 
         os.makedirs(self.download_dir, exist_ok=True)
 
@@ -1138,8 +1138,9 @@ class DownloaderService:
         base_name = output_name.rsplit(".", 1)[0] if "." in output_name else output_name
         output_template = os.path.join(self.download_dir, base_name + ".%(ext)s")
 
-        # YouTube cookies file
-        cookies_path = "/opt/filmorauz/parser/cookies.txt"
+        # YouTube cookies file from env
+        cookies_path = os.environ.get("YTDLP_COOKIE_FILE", "/opt/filmorauz/parser/cookies.txt")
+        user_agent = os.environ.get("YTDLP_USER_AGENT", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.210 Mobile Safari/537.36")
 
         cmd = [
             _sys.executable, "-m", "yt_dlp",
@@ -1148,7 +1149,8 @@ class DownloaderService:
             "--merge-output-format", "mp4",
             "-o", output_template,
             "--no-warnings",
-            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "--user-agent", user_agent,
+            "--extractor-args", "youtube:player_client=android",
         ]
 
         # Add cookies if file exists
@@ -1156,12 +1158,11 @@ class DownloaderService:
             cmd.extend(["--cookies", cookies_path])
             logger.info(f"[YTDLP] Using cookies file: {cookies_path}")
         else:
-            logger.warning(f"[YTDLP] Cookies file not found: {cookies_path} - YouTube may block this request")
+            logger.warning(f"[YTDLP] Cookies file not found: {cookies_path} - using fallback config (may be rate limited)")
 
         cmd.append(url)
 
         logger.info(f"[YTDLP] Downloading: {url[:80]}")
-        logger.info(f"[YTDLP] Retry count: 0/3")
 
         try:
             result = subprocess.run(

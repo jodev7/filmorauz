@@ -11,6 +11,7 @@ type IngestionStatus string
 
 const (
 	IngestionStatusPending    IngestionStatus = "pending"
+	IngestionStatusDownloaded IngestionStatus = "downloaded"
 	IngestionStatusProcessing IngestionStatus = "processing"
 	IngestionStatusCompleted  IngestionStatus = "completed"
 	IngestionStatusFailed     IngestionStatus = "failed"

@@ -447,25 +447,25 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 		},
 	}
 
-	// Set steps.download = true when stage is download or StepsDownload is true
-	log.Printf("[JOB REPO] Checking steps.download: Stage=%q, StepsDownload=%v", progress.Stage, progress.StepsDownload)
-	if progress.Stage == "download" || progress.StepsDownload {
-		log.Printf("[JOB REPO] Setting steps.download = true")
+	// CRITICAL: Set steps.download = true ONLY when download is 100% complete
+	// This prevents worker from starting before download finishes
+	downloadComplete := (progress.Stage == "download" && progress.Progress >= 100) || progress.StepsDownload
+	if downloadComplete {
+		log.Printf("[JOB REPO] Download complete (progress=%d%%, steps_download=%v) - marking steps.download=true", progress.Progress, progress.StepsDownload)
 		update["$set"].(bson.M)["steps.download"] = true
 
 		// On download complete: save local_path but do NOT force stage/status —
 		// worker sets those explicitly when it starts processing.
-		// Forcing stage="process" here caused the frontend to leave "download" stage
-		// before the progress bar could show 100%, producing a visible jump.
-		if progress.StepsDownload {
-			log.Printf("[JOB REPO] Download complete (steps_download=true); keeping stage=%q until worker advances it", progress.Stage)
+		if progress.StepsDownload || progress.Progress >= 100 {
+			log.Printf("[JOB REPO] Download finished - setting status to downloaded")
+			update["$set"].(bson.M)["status"] = "downloaded"
 			if progress.FilePath != "" {
 				update["$set"].(bson.M)["local_path"] = progress.FilePath
 				log.Printf("[JOB REPO] Updated local_path=%s (download completed)", progress.FilePath)
 			}
 		}
 	} else {
-		log.Printf("[JOB REPO] NOT setting steps.download (condition not met)")
+		log.Printf("[JOB REPO] NOT setting steps.download (progress=%d%%, not complete)", progress.Progress)
 	}
 
 	if progress.Message != "" {
