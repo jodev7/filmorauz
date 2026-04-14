@@ -150,6 +150,7 @@ export default function UserPage() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState("");
   const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [isSavingName, setIsSavingName] = useState(false);
   
   // Premium profile customization states
@@ -409,6 +410,19 @@ export default function UserPage() {
     const file = e.target.files?.[0];
     if (!file || !token) return;
 
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    const allowedExtensions = ['jpg', 'jpeg', 'png', 'webp'];
+    const fileExtension = file.name.split('.').pop()?.toLowerCase();
+
+    if (!fileExtension || !allowedExtensions.includes(fileExtension) || !allowedTypes.includes(file.type)) {
+      setUploadError('Faqat JPG, PNG va WebP rasmlar yuklanishi mumkin');
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      return;
+    }
+    setUploadError(null);
+
     setIsUploadingImage(true);
     try {
       const imageUrl = await uploadProfileImage(token, file);
@@ -418,6 +432,7 @@ export default function UserPage() {
       }
     } catch (error) {
       console.error("Failed to upload image:", error);
+      setUploadError("Rasmni yuklashda xatolik yuz berdi");
     }
     setIsUploadingImage(false);
     if (fileInputRef.current) {
@@ -539,10 +554,17 @@ export default function UserPage() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
+                accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
                 onChange={handleImageUpload}
                 className="hidden"
               />
+
+              {/* Upload error message */}
+              {uploadError && (
+                <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-red-600 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-20">
+                  {uploadError}
+                </div>
+              )}
 
               {/* Premium crown indicator on avatar - z-index above decorative layers */}
               {displayIsPremium && (

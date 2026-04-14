@@ -86,6 +86,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="uz" className={`${bebasNeue.variable} ${inter.variable}`}>
+      <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png" />
       <body className="bg-brand-dark text-white font-body antialiased">
         <AuthProvider>
           <I18nProvider>
