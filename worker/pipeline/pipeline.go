@@ -700,10 +700,10 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 		return nil, "", fmt.Errorf("download failed: %s", result.DownloadError)
 	}
 
-	// Check for video_url_not_found - non-retryable error
-	if result.Error == "video_url_not_found" {
-		log.Printf("[PIPELINE] ERROR: Parser could not find video URL - marking as non-retryable")
-		return nil, "", fmt.Errorf("video URL not found on source page - non-retryable error: no video available at this source")
+	// Check for video_url_not_found or site_blocked - non-retryable error
+	if result.Error == "video_url_not_found" || result.Error == "site_blocked" {
+		log.Printf("[PIPELINE] ERROR: Parser returned error=%q - marking as non-retryable", result.Error)
+		return nil, "", fmt.Errorf("parser error: %s - non-retryable", result.Error)
 	}
 
 	// Check for success=false with error

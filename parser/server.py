@@ -709,8 +709,20 @@ class ParserHandler(BaseHTTPRequestHandler):
                 video_url, url_type = self._extract_best_video_url(details, source)
                 
                 if not video_url:
+                    # Debug: log what was actually found to diagnose blocked vs not-found
+                    video_urls_list = details.get('video_urls', [])
+                    found_types = [v.get('type', 'unknown') for v in video_urls_list]
+                    player_url_found = details.get('player_url', '')
                     logger.error(f"[PARSER] video_url_not_found for source={source}, id={source_id}")
-                    logger.error(f"[PARSER] Checked {len(details.get('video_urls', []))} video URLs, none were valid")
+                    logger.error(f"[PARSER] Checked {len(video_urls_list)} video URLs, types found: {found_types}")
+                    logger.error(f"[PARSER] Player URL fallback: {player_url_found or 'none'}")
+                    # Detect likely blocked/anti-bot responses
+                    if player_url_found and ('://' in player_url_found and 
+                        any(bad in player_url_found.lower() for bad in ['blocked', 'captcha', 'cloudflare', '403', 'denied'])):
+                        error_type = "site_blocked"
+                        logger.error(f"[PARSER] DETECTED: Site likely blocked (player_url={player_url_found})")
+                    else:
+                        error_type = "video_url_not_found"
                     # Return explicit error - NEVER return empty video_url silently
                     page_url = detail_url if detail_url else source_id
                     
@@ -724,7 +736,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                         local_path=""
                     )
                     response_payload["success"] = False
-                    response_payload["error"] = "video_url_not_found"
+                    response_payload["error"] = error_type
                     response_payload["video_found"] = False
                     response_payload["download_needed"] = False
                     self._send_json(response_payload, 422)

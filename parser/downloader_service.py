@@ -1143,8 +1143,8 @@ class DownloaderService:
         base_name = output_name.rsplit(".", 1)[0] if "." in output_name else output_name
         output_template = os.path.join(self.download_dir, base_name + ".%(ext)s")
 
-        # YouTube cookies file from env
-        cookies_path = os.environ.get("YTDLP_COOKIES_FILE", "")
+        # YouTube cookies file from env (check both YTDLP_COOKIES_FILE and YTDLP_COOKIE_FILE for compatibility)
+        cookies_path = os.environ.get("YTDLP_COOKIES_FILE", "") or os.environ.get("YTDLP_COOKIE_FILE", "")
         user_agent = os.environ.get("YTDLP_USER_AGENT", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.210 Mobile Safari/537.36")
 
         cmd = [
