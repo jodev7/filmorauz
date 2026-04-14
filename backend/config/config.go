@@ -90,6 +90,19 @@ func Load() *Config {
 		log.Println("WARNING: ADMIN_TELEGRAM_ID not set, admin must be promoted via UI")
 	}
 
+	log.Printf("=== Backend Configuration ===")
+	log.Printf("Mode: %s", cfg.Mode)
+	log.Printf("Worker Upload URL: %s", cfg.WorkerUploadURL)
+	log.Printf("CDN URL: %s", cfg.CDNURL)
+
+	if cfg.IsProd {
+		if cfg.WorkerUploadURL == "" {
+			log.Printf("WARNING: Worker upload service not configured - profile image uploads will fail")
+		} else {
+			log.Printf("Upload service: configured (%s)", cfg.WorkerUploadURL)
+		}
+	}
+
 	log.Printf("Starting in %s mode", cfg.Mode)
 	return cfg
 }

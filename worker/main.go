@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -101,20 +102,42 @@ func main() {
 	// Initialize B2 storage for profile image uploads (prod mode only)
 	var b2Storage storage.Storage
 	storageMode := getStorageMode()
+	b2Bucket := getEnv("B2_BUCKET", "")
+	b2Endpoint := getEnv("B2_ENDPOINT", "")
+	b2KeyID := getEnv("B2_KEY_ID", "")
+	b2AppKey := getEnv("B2_APP_KEY", "")
+	cdnBaseURL := getEnv("CDN_BASE_URL", "")
+
+	log.Printf("[CONFIG] === Storage Configuration ===")
+	log.Printf("[CONFIG] Storage mode: %s (ENV=%s)", storageMode, getEnv("ENV", getEnv("MODE", "unset")))
+
 	if storageMode == "prod" {
+		log.Printf("[CONFIG] B2 bucket: %s", b2Bucket)
+		log.Printf("[CONFIG] B2 endpoint: %s", b2Endpoint)
+		log.Printf("[CONFIG] B2 key ID: %s", b2KeyID)
+		log.Printf("[CONFIG] B2 app key: %s", b2AppKey)
+		log.Printf("[CONFIG] CDN base URL: %s", cdnBaseURL)
+
+		// Validate required B2 config
+		if b2Bucket == "" || b2KeyID == "" || b2AppKey == "" {
+			log.Fatalf("[CONFIG] ERROR: B2_BUCKET, B2_KEY_ID, and B2_APP_KEY are required in production mode")
+		}
+
 		var err error
 		b2Storage, err = storage.NewStorage(storage.Config{
 			Mode:       "prod",
-			B2Bucket:   getEnv("B2_BUCKET", ""),
-			B2KeyID:    getEnv("B2_KEY_ID", ""),
-			B2AppKey:   getEnv("B2_APP_KEY", ""),
-			CDNBaseURL: getEnv("CDN_BASE_URL", ""),
+			B2Bucket:   b2Bucket,
+			B2Endpoint: b2Endpoint,
+			B2KeyID:    b2KeyID,
+			B2AppKey:   b2AppKey,
+			CDNBaseURL: cdnBaseURL,
 		})
 		if err != nil {
-			log.Printf("Warning: Failed to initialize B2 storage: %v", err)
-		} else {
-			log.Printf("[CONFIG] B2 storage initialized for profile image uploads")
+			log.Fatalf("[CONFIG] ERROR: Failed to initialize B2 storage: %v", err)
 		}
+		log.Printf("[CONFIG] B2 storage initialized successfully for profile image uploads")
+	} else {
+		log.Printf("[CONFIG] Development mode: using local storage (B2 config not required)")
 	}
 
 	// Initialize HTTP handler for direct video processing
@@ -239,16 +262,14 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-// getStorageMode returns the storage mode based on ENV variable
-// "development" -> "dev", "production" -> "prod"
-// Falls back to "dev" for any other value
+// getStorageMode returns the storage mode based on ENV or MODE variable
+// "production"/"prod" -> "prod", anything else -> "dev"
 func getStorageMode() string {
-	env := getEnv("ENV", "development")
-	switch env {
-	case "production":
+	// Check both ENV and MODE for flexibility
+	env := getEnv("ENV", getEnv("MODE", "development"))
+	switch strings.ToLower(env) {
+	case "production", "prod":
 		return "prod"
-	case "development":
-		fallthrough
 	default:
 		return "dev"
 	}

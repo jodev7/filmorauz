@@ -349,12 +349,12 @@ class ParserHandler(BaseHTTPRequestHandler):
             return
         
         try:
-            # Use public endpoint (no /admin prefix)
+            # Use direct backend URL (not public API through Cloudflare)
             url = f"{BACKEND_URL}/api/ingestion/jobs/{job_id}/progress"
             data = json.dumps(progress).encode("utf-8")
             
             logger.info(f"[SERVER] Reporting progress to backend: job_id={job_id}, progress={progress.get('progress_percent')}%, downloaded={progress.get('downloaded_bytes')} bytes")
-            logger.info(f"[SERVER] Full progress URL: {url}")
+            logger.info(f"[SERVER] Callback URL: {url}")
             
             req = urllib.request.Request(
                 url,
@@ -363,14 +363,19 @@ class ParserHandler(BaseHTTPRequestHandler):
                 method="POST"
             )
             
-            with urllib.request.urlopen(req, timeout=5) as response:
-                logger.info(f"[SERVER] Progress reported successfully: job_id={job_id}, progress={progress.get('progress_percent')}%")
+            with urllib.request.urlopen(req, timeout=10) as response:
+                logger.info(f"[SERVER] Progress reported: job_id={job_id}, status={response.status}")
         except urllib.error.HTTPError as e:
-            logger.warning(f"[SERVER] Backend progress update HTTP {e.code}: {e.reason}")
+            body = ""
+            try:
+                body = e.read().decode("utf-8", errors="replace")
+            except:
+                pass
+            logger.warning(f"[SERVER] Backend progress HTTP {e.code}: {e.reason}, body: {body[:200]}")
         except urllib.error.URLError as e:
-            logger.warning(f"[SERVER] Backend progress update failed: {e.reason}")
+            logger.warning(f"[SERVER] Backend progress failed: {e.reason}")
         except Exception as e:
-            logger.warning(f"[SERVER] Backend progress update error: {e}")
+            logger.warning(f"[SERVER] Backend progress error: {e}")
 
     def do_GET(self):
         """Handle GET requests"""

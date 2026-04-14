@@ -1319,10 +1319,10 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 		"original_description":  enrichedMetadata.Description,   // Keep original English description
 		"description":           displayDescription,             // Uzbek description for user-facing display
 		"year":                  enrichedMetadata.Year,
-		"genre":                 enrichedMetadata.Genres,                          // English genres for search/filter
-		"genres_uz":             enrichedMetadata.GenresUz,                        // Uzbek genres for display
-		"country":      strings.Join(enrichedMetadata.Countries, ", "), // English countries for storage (joined string)
-		"countries_uz": enrichedMetadata.CountriesUz,                 // Uzbek countries as array for frontend display
+		"genre":                 enrichedMetadata.Genres,                        // English genres for search/filter
+		"genres_uz":             enrichedMetadata.GenresUz,                      // Uzbek genres for display
+		"country":               strings.Join(enrichedMetadata.Countries, ", "), // English countries for storage (joined string)
+		"countries_uz":          enrichedMetadata.CountriesUz,                   // Uzbek countries as array for frontend display
 		"duration":              enrichedMetadata.Duration,
 		"quality":               enrichedMetadata.Quality,
 		"translation":           enrichedMetadata.Translation,
@@ -1764,7 +1764,7 @@ func (p *Pipeline) callTelegramAPI(payload map[string]interface{}) (*TelegramNot
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	log.Printf("[TELEGRAM] Backend response status: %d, body: %s", resp.StatusCode, string(body))
+	log.Printf("[TELEGRAM] Backend callback: url=%s, status=%d, body=%s", url, resp.StatusCode, string(body))
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("backend returned status %d: %s", resp.StatusCode, string(body))

@@ -1161,7 +1161,22 @@ class DownloaderService:
             raise DownloadError("yt-dlp timed out after 60 minutes")
 
         if result.returncode != 0:
-            err = (result.stderr or result.stdout or "").strip()
+            err = (result.stderr or result.stdout or "").strip().lower()
+            # Detect anti-bot / authentication required errors
+            if any(phrase in err for phrase in [
+                "sign in to confirm you're not a bot",
+                "this video is available to members only",
+                "video requires authentication",
+                "login required",
+                "yt-dlp: 403",
+                "http error 403",
+                "please sign in",
+                "is not available to view",
+            ]):
+                raise DownloadError(
+                    "YouTube import requires cookies/authentication. "
+                    "Use --cookies-from-browser flag or provide yt-dlp with authentication."
+                )
             raise DownloadError(f"yt-dlp failed: {err[:300]}")
 
         # Find the downloaded file
