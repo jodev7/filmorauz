@@ -70,6 +70,11 @@ func (h *ProcessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodPost && r.URL.Path == "/upload-telegram-post" {
+		h.handleUploadTelegramPost(w, r)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -290,6 +295,49 @@ func (h *ProcessHandler) handleUploadProfile(w http.ResponseWriter, r *http.Requ
 	log.Printf("[B2] Uploading profile image: bucket=filmorauznet, key=%s, size=%d", filename, len(data))
 
 	publicURL, err := h.b2Store.UploadData(filename, data, header.Header.Get("Content-Type"))
+	if err != nil {
+		log.Printf("[B2] Upload failed: %v", err)
+		h.sendError(w, fmt.Sprintf("B2 upload failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[B2] Upload success: %s", publicURL)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"url": publicURL,
+	})
+}
+
+func (h *ProcessHandler) handleUploadTelegramPost(w http.ResponseWriter, r *http.Request) {
+	if h.b2Store == nil {
+		h.sendError(w, "B2 storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	file, header, err := r.FormFile("image")
+	if err != nil {
+		h.sendError(w, fmt.Sprintf("no file provided: %v", err), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		h.sendError(w, fmt.Sprintf("failed to read file: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext == "" {
+		ext = ".jpg"
+	}
+	filename := fmt.Sprintf("%d_telegram_post%s", time.Now().UnixNano(), ext)
+	mediaKey := "images/telegram-post/" + filename
+
+	log.Printf("[B2] Uploading telegram post: bucket=filmorauznet, key=%s, size=%d", mediaKey, len(data))
+
+	publicURL, err := h.b2Store.UploadData(mediaKey, data, header.Header.Get("Content-Type"))
 	if err != nil {
 		log.Printf("[B2] Upload failed: %v", err)
 		h.sendError(w, fmt.Sprintf("B2 upload failed: %v", err), http.StatusInternalServerError)

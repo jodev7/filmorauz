@@ -191,12 +191,35 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		log.Printf("[STAGE] parser start — source=%s, source_id=%s, detail_url=%s", job.Source, job.SourceID, job.DetailURL)
 		log.Printf("[PIPELINE] No local_path found, calling parser to download video...")
 		log.Printf("[PIPELINE] NOTE: Parser is expected to download and return local_path")
+		log.Printf("[PIPELINE] Retry count: %d/3", job.RetryCount)
+
+		// Check if max retries reached
+		if job.RetryCount >= 3 {
+			errMsg := fmt.Sprintf("max retries (3) reached for parser downloads. Last error: %s", job.Error)
+			log.Printf("[PIPELINE] ERROR: %s", errMsg)
+			if err := p.failJobWithStatus(jobID, models.IngestionStatusFailed, errMsg); err != nil {
+				log.Printf("[PIPELINE] Failed to mark job as failed: %v", err)
+			}
+			return fmt.Errorf(errMsg)
+		}
 
 		// Call parser - it should download the file and return local_path
 		// If parser returns empty local_path, it means parser download failed
 		var parseErr error
 		metadata, localPath, parseErr = p.parseMovieDetails(job)
 		if parseErr != nil {
+			errMsg := fmt.Sprintf("parser error: %v", parseErr)
+			log.Printf("[PIPELINE] ERROR: %s", errMsg)
+
+			// Check retry count after parser failure
+			if job.RetryCount >= 2 {
+				failMsg := fmt.Sprintf("max retries (3) reached. Parser error: %v", parseErr)
+				if err := p.failJobWithStatus(jobID, models.IngestionStatusFailed, failMsg); err != nil {
+					log.Printf("[PIPELINE] Failed to mark job as failed: %v", err)
+				}
+				return fmt.Errorf(failMsg)
+			}
+
 			return fmt.Errorf("parsing failed: %w", parseErr)
 		}
 
@@ -667,13 +690,19 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 
 	// Check for parser-level errors
 	if result.Error != "" {
+		log.Printf("[PIPELINE] Parser returned error: %s", result.Error)
 		return nil, "", fmt.Errorf("parser error: %s", result.Error)
 	}
 
 	// Check for download-specific errors
 	if result.DownloadError != "" {
+		log.Printf("[PIPELINE] Parser returned download_error: %s", result.DownloadError)
 		return nil, "", fmt.Errorf("download failed: %s", result.DownloadError)
 	}
+
+	// NEW: Log parser response summary
+	log.Printf("[PIPELINE] Parser response: success=%v, local_path=%s, error=%s, download_error=%s",
+		result.Success, result.LocalPath, result.Error, result.DownloadError)
 
 	// CRITICAL: Validate parser returned success=true for download
 	// Parser contract requires: if success=true, then local_path must be non-empty

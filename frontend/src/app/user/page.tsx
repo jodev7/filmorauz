@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MovieCard from "@/components/MovieCard";
@@ -8,7 +9,7 @@ import MovieCarousel from "@/components/MovieCarousel";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n";
 import Link from "next/link";
-import { Heart, History, User as UserIcon, Crown, Calendar, Shield, Clock, Camera, Edit2, Check, X, Send, Hash, LayoutDashboard, BadgeCheck, Sparkles, RefreshCw, Zap, Palette, Eye, EyeOff, Lock, Star } from "lucide-react";
+import { Heart, History, User as UserIcon, Crown, Calendar, Shield, Clock, Camera, Edit2, Check, X, Send, Hash, LayoutDashboard, BadgeCheck, Sparkles, RefreshCw, Zap, Palette, Eye, EyeOff, Lock, Star, LogOut } from "lucide-react";
 import { PremiumBadge, PremiumButton, PremiumAvatarRing, resolveIsPremium, resolvePremiumStatus } from "@/components/PremiumComponents";
 import { getFavorites, getWatchHistory, getCurrentUser, updateProfile, uploadProfileImage, updateProfileStyle, updatePrivacySettings, ProfileStyle } from "@/lib/api";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
@@ -138,7 +139,8 @@ const premiumAnimations = `
 `;
 
 export default function UserPage() {
-  const { user, isAuthenticated, token, refreshUser } = useAuth();
+  const router = useRouter();
+  const { user, isAuthenticated, token, refreshUser, logout } = useAuth();
   const { t } = useI18n();
   const [favorites, setFavorites] = useState<any[]>([]);
   const [watchHistory, setWatchHistory] = useState<any[]>([]);
@@ -1059,6 +1061,20 @@ export default function UserPage() {
               )}
             </div>
           )}
+
+          {/* Logout button */}
+          <div className="mt-8 pt-6 border-t border-brand-border">
+            <button
+              onClick={async () => {
+                await logout();
+                router.push("/");
+              }}
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-red-600/20 border border-red-600/40 text-red-400 hover:bg-red-600/30 hover:border-red-500 transition-colors font-medium"
+            >
+              <LogOut size={18} />
+              {t("auth.logout") || "Chiqish"}
+            </button>
+          </div>
 
           {/* Loading state */}
           {loading && (

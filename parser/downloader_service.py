@@ -1138,6 +1138,9 @@ class DownloaderService:
         base_name = output_name.rsplit(".", 1)[0] if "." in output_name else output_name
         output_template = os.path.join(self.download_dir, base_name + ".%(ext)s")
 
+        # YouTube cookies file
+        cookies_path = "/opt/filmorauz/parser/cookies.txt"
+
         cmd = [
             _sys.executable, "-m", "yt_dlp",
             "--no-playlist",
@@ -1145,10 +1148,20 @@ class DownloaderService:
             "--merge-output-format", "mp4",
             "-o", output_template,
             "--no-warnings",
-            url,
+            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         ]
 
+        # Add cookies if file exists
+        if os.path.exists(cookies_path):
+            cmd.extend(["--cookies", cookies_path])
+            logger.info(f"[YTDLP] Using cookies file: {cookies_path}")
+        else:
+            logger.warning(f"[YTDLP] Cookies file not found: {cookies_path} - YouTube may block this request")
+
+        cmd.append(url)
+
         logger.info(f"[YTDLP] Downloading: {url[:80]}")
+        logger.info(f"[YTDLP] Retry count: 0/3")
 
         try:
             result = subprocess.run(
@@ -1161,9 +1174,10 @@ class DownloaderService:
             raise DownloadError("yt-dlp timed out after 60 minutes")
 
         if result.returncode != 0:
-            err = (result.stderr or result.stdout or "").strip().lower()
+            err = (result.stderr or result.stdout or "").strip()
+            err_lower = err.lower()
             # Detect anti-bot / authentication required errors
-            if any(phrase in err for phrase in [
+            if any(phrase in err_lower for phrase in [
                 "sign in to confirm you're not a bot",
                 "this video is available to members only",
                 "video requires authentication",
@@ -1172,12 +1186,13 @@ class DownloaderService:
                 "http error 403",
                 "please sign in",
                 "is not available to view",
+                "unable to extract",
+                "video unavailable",
             ]):
                 raise DownloadError(
-                    "YouTube import requires cookies/authentication. "
-                    "Use --cookies-from-browser flag or provide yt-dlp with authentication."
+                    "YouTube download failed: " + err[:200]
                 )
-            raise DownloadError(f"yt-dlp failed: {err[:300]}")
+            raise DownloadError("yt-dlp failed: " + err[:300])
 
         # Find the downloaded file
         local_path = None

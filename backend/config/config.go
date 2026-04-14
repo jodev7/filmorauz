@@ -160,3 +160,33 @@ func (c *Config) GetCDNFileURL(path string) string {
 	}
 	return c.CDNURL + "/file/filmorauznet/" + path
 }
+
+// MediaKeyKind defines the category of media for path building
+type MediaKeyKind string
+
+const (
+	MediaKeyProfile      MediaKeyKind = "profile"
+	MediaKeyTelegramPost MediaKeyKind = "telegram-post"
+	MediaKeyMovie        MediaKeyKind = "movie"
+	MediaKeyAd           MediaKeyKind = "ad"
+)
+
+// BuildMediaKey builds the B2 object key for a media file.
+// Rule: images/<category>/<filename>
+// Examples:
+//   - profile image: images/1234567890.jpg
+//   - telegram post: images/telegram-post/1234567890.jpg
+//   - movie poster: images/movie/posters/1234567890.jpg
+func BuildMediaKey(kind MediaKeyKind, filename string) string {
+	switch kind {
+	case MediaKeyTelegramPost:
+		return "images/telegram-post/" + filename
+	case MediaKeyMovie:
+		return "images/movie/" + filename
+	case MediaKeyAd:
+		return "images/ad/" + filename
+	default:
+		// profile and default
+		return "images/" + filename
+	}
+}

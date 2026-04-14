@@ -236,6 +236,16 @@ func (h *UploadHandler) saveToCDN(file multipart.File, filename string, subDir s
 	return baseURL, nil
 }
 
+// saveToCDNWithKey saves file to CDN using the exact B2 object key
+func (h *UploadHandler) saveToCDNWithKey(file multipart.File, mediaKey string) (string, error) {
+	cdnURL := h.config.GetCDNFileURL(mediaKey)
+	if cdnURL == "" {
+		return "", fmt.Errorf("CDN_URL not configured for production mode")
+	}
+	log.Printf("[UPLOAD] Using CDN URL (key=%s): %s", mediaKey, cdnURL)
+	return cdnURL, nil
+}
+
 // UploadMovieAssets handles file uploads for movie assets (poster, backdrop, video)
 func (h *UploadHandler) UploadMovieAssets(c *gin.Context) {
 	fileType := c.PostForm("type")
@@ -590,7 +600,58 @@ func (h *UploadHandler) UploadTelegramPostMedia(c *gin.Context) {
 	if h.config.IsDev {
 		savedURL, err = h.saveTelegramPostLocal(file, filename)
 	} else {
-		savedURL, err = h.saveToCDN(file, filename, "telegram-post")
+		// Call worker for B2 upload
+		workerURL := h.config.WorkerUploadURL
+		if workerURL == "" {
+			log.Printf("[UPLOAD] Error: WORKER_UPLOAD_URL not configured")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload service not configured"})
+			return
+		}
+
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
+			return
+		}
+
+		var b bytes.Buffer
+		wr := multipart.NewWriter(&b)
+		part, err := wr.CreateFormFile("image", filename)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload form"})
+			return
+		}
+		if _, err := io.Copy(part, file); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
+			return
+		}
+		wr.Close()
+
+		resp, err := http.Post(workerURL+"/upload-telegram-post", wr.FormDataContentType(), &b)
+		if err != nil {
+			log.Printf("[UPLOAD] Error uploading to worker: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			log.Printf("[UPLOAD] Worker returned status %d: %s", resp.StatusCode, body)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed"})
+			return
+		}
+
+		var result map[string]string
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid upload response"})
+			return
+		}
+
+		savedURL = result["url"]
+		if savedURL == "" {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed - no URL returned"})
+			return
+		}
 	}
 	if err != nil {
 		log.Printf("[UPLOAD] Telegram post media upload error: %v", err)
