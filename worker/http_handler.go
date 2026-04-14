@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/filmorauz/worker/storage"
 )
 
 // ProcessRequest represents a request to process a video
@@ -43,10 +45,11 @@ type ProcessResponse struct {
 type ProcessHandler struct {
 	outputDir string
 	tempDir   string
+	b2Store   storage.Storage
 }
 
 // NewProcessHandler creates a new process handler
-func NewProcessHandler(outputDir, tempDir string) *ProcessHandler {
+func NewProcessHandler(outputDir, tempDir string, b2Store storage.Storage) *ProcessHandler {
 	// Ensure directories exist
 	os.MkdirAll(outputDir, 0755)
 	os.MkdirAll(tempDir, 0755)
@@ -54,12 +57,18 @@ func NewProcessHandler(outputDir, tempDir string) *ProcessHandler {
 	return &ProcessHandler{
 		outputDir: outputDir,
 		tempDir:   tempDir,
+		b2Store:   b2Store,
 	}
 }
 
 // ServeHTTP handles HTTP requests
 func (h *ProcessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[WORKER] %s %s", r.Method, r.URL.Path)
+
+	if r.Method == http.MethodPost && r.URL.Path == "/upload-profile" {
+		h.handleUploadProfile(w, r)
+		return
+	}
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -251,4 +260,46 @@ func resolveLogoPath() string {
 func fileExistsHTTP(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func (h *ProcessHandler) handleUploadProfile(w http.ResponseWriter, r *http.Request) {
+	if h.b2Store == nil {
+		h.sendError(w, "B2 storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	file, header, err := r.FormFile("image")
+	if err != nil {
+		h.sendError(w, fmt.Sprintf("no file provided: %v", err), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		h.sendError(w, fmt.Sprintf("failed to read file: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext == "" {
+		ext = ".jpg"
+	}
+	filename := fmt.Sprintf("images/%d%s", time.Now().UnixNano(), ext)
+
+	log.Printf("[B2] Uploading profile image: bucket=filmorauznet, key=%s, size=%d", filename, len(data))
+
+	publicURL, err := h.b2Store.UploadData(filename, data, header.Header.Get("Content-Type"))
+	if err != nil {
+		log.Printf("[B2] Upload failed: %v", err)
+		h.sendError(w, fmt.Sprintf("B2 upload failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[B2] Upload success: %s", publicURL)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"url": publicURL,
+	})
 }

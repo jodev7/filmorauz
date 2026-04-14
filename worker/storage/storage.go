@@ -10,7 +10,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -296,12 +295,16 @@ func (s *B2Storage) getUploadURL() (uploadURL, token string, err error) {
 
 // uploadBytes sends data bytes to B2 at remotePath.
 func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (string, error) {
+	log.Printf("[B2] Upload attempt: bucket=%s, key=%s, size=%d, contentType=%s", s.bucket, remotePath, len(data), contentType)
+
 	if err := s.authorize(); err != nil {
-		return "", err
+		log.Printf("[B2] Authorization failed: %v", err)
+		return "", fmt.Errorf("b2 authorize: %w", err)
 	}
 	uploadURL, uploadToken, err := s.getUploadURL()
 	if err != nil {
-		return "", err
+		log.Printf("[B2] Get upload URL failed: %v", err)
+		return "", fmt.Errorf("b2 getUploadURL: %w", err)
 	}
 
 	// Compute SHA1 of file content
@@ -309,28 +312,36 @@ func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (st
 	h.Write(data)
 	sha1sum := hex.EncodeToString(h.Sum(nil))
 
-	encodedPath := url.PathEscape(remotePath)
+	// B2 uses X-Bz-File-Name for the object key - do NOT URL-encode it
+	// B2 handles folder creation via path prefix automatically
 	req, err := http.NewRequest("POST", uploadURL, bytes.NewReader(data))
 	if err != nil {
 		return "", fmt.Errorf("b2 upload: build request: %w", err)
 	}
 	req.Header.Set("Authorization", uploadToken)
-	req.Header.Set("X-Bz-File-Name", encodedPath)
+	req.Header.Set("X-Bz-File-Name", remotePath) // raw path - B2 creates folders via prefix
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(data)))
 	req.Header.Set("X-Bz-Content-Sha1", sha1sum)
 	req.ContentLength = int64(len(data))
 
+	log.Printf("[B2] Sending upload request: key=%s", remotePath)
+
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
+		log.Printf("[B2] Upload request failed: %v", err)
 		return "", fmt.Errorf("b2 upload: request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("b2 upload %s: status %d: %s", remotePath, resp.StatusCode, body)
+		errMsg := fmt.Sprintf("b2 upload %s: status %d: %s", remotePath, resp.StatusCode, body)
+		log.Printf("[B2] Upload failed: %s", errMsg)
+		return "", fmt.Errorf("%s", errMsg)
 	}
+
+	log.Printf("[B2] Upload success: key=%s", remotePath)
 
 	var fileURL string
 	if s.cdnURL != "" {
@@ -342,7 +353,7 @@ func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (st
 		s.mu.Unlock()
 		fileURL = dlURL + "/file/" + bucket + "/" + remotePath
 	}
-	log.Printf("[B2] Uploaded %s -> %s", remotePath, fileURL)
+	log.Printf("[B2] Returning URL: %s", fileURL)
 	return fileURL, nil
 }
 

@@ -98,8 +98,27 @@ func main() {
 		log.Fatalf("Failed to create output directory: %v", err)
 	}
 
+	// Initialize B2 storage for profile image uploads (prod mode only)
+	var b2Storage storage.Storage
+	storageMode := getStorageMode()
+	if storageMode == "prod" {
+		var err error
+		b2Storage, err = storage.NewStorage(storage.Config{
+			Mode:       "prod",
+			B2Bucket:   getEnv("B2_BUCKET", ""),
+			B2KeyID:    getEnv("B2_KEY_ID", ""),
+			B2AppKey:   getEnv("B2_APP_KEY", ""),
+			CDNBaseURL: getEnv("CDN_BASE_URL", ""),
+		})
+		if err != nil {
+			log.Printf("Warning: Failed to initialize B2 storage: %v", err)
+		} else {
+			log.Printf("[CONFIG] B2 storage initialized for profile image uploads")
+		}
+	}
+
 	// Initialize HTTP handler for direct video processing
-	processHandler := NewProcessHandler(outputDir, tempDir)
+	processHandler := NewProcessHandler(outputDir, tempDir, b2Storage)
 
 	// Start HTTP server for /process endpoint
 	httpPort := getEnv("WORKER_HTTP_PORT", "8083")

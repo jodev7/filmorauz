@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -117,11 +119,64 @@ func (h *UploadHandler) UploadProfileImage(c *gin.Context) {
 			return
 		}
 	} else {
-		// PROD mode - use CDN (Backblaze B2 or other)
-		savedURL, err = h.saveToCDN(file, filename, "images")
+		// PROD mode - use worker B2 upload
+		workerURL := h.config.WorkerUploadURL
+		if workerURL == "" {
+			log.Printf("[UPLOAD] Error: WORKER_UPLOAD_URL not configured")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload service not configured"})
+			return
+		}
+
+		// Seek to beginning of file
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			log.Printf("[UPLOAD] Error seeking file: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
+			return
+		}
+
+		// Create multipart form
+		var b bytes.Buffer
+		wr := multipart.NewWriter(&b)
+		part, err := wr.CreateFormFile("image", filename)
 		if err != nil {
-			log.Printf("[UPLOAD] Error saving to CDN: %v", err)
+			log.Printf("[UPLOAD] Error creating form: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload form"})
+			return
+		}
+		if _, err := io.Copy(part, file); err != nil {
+			log.Printf("[UPLOAD] Error copying to form: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
+			return
+		}
+		wr.Close()
+
+		// Upload to worker
+		resp, err := http.Post(workerURL+"/upload-profile", wr.FormDataContentType(), &b)
+		if err != nil {
+			log.Printf("[UPLOAD] Error uploading to worker: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			log.Printf("[UPLOAD] Worker returned status %d: %s", resp.StatusCode, body)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed"})
+			return
+		}
+
+		var result map[string]string
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			log.Printf("[UPLOAD] Error decoding response: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid upload response"})
+			return
+		}
+
+		savedURL = result["url"]
+		if savedURL == "" {
+			log.Printf("[UPLOAD] Worker returned empty URL")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed - no URL returned"})
 			return
 		}
 	}

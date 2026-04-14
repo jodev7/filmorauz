@@ -32,6 +32,10 @@ type Config struct {
 	AIEndpoint              string
 	UploadsDir              string
 	CDNURL                  string
+	B2Bucket                string
+	B2KeyID                 string
+	B2AppKey                string
+	WorkerUploadURL         string
 	TelegramChannels        []string // loaded from TELEGRAM_CHANNELS env (comma-separated)
 	TelegramSerialsChannel  string   // loaded from TELEGRAM_SERIALS_CHANNEL env
 }
@@ -64,6 +68,10 @@ func Load() *Config {
 		AIEndpoint:              getEnv("AI_ENDPOINT", ""),
 		UploadsDir:              getEnv("UPLOADS_DIR", "./uploads"),
 		CDNURL:                  getEnv("CDN_URL", ""),
+		B2Bucket:                getEnv("B2_BUCKET", ""),
+		B2KeyID:                 getEnv("B2_KEY_ID", ""),
+		B2AppKey:                getEnv("B2_APP_KEY", ""),
+		WorkerUploadURL:         getEnv("WORKER_UPLOAD_URL", ""),
 		TelegramChannels:        parseTelegramChannels(getEnv("TELEGRAM_CHANNELS", "")),
 		TelegramSerialsChannel:  getEnv("TELEGRAM_SERIALS_CHANNEL", ""),
 	}
