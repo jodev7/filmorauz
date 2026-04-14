@@ -1144,7 +1144,7 @@ class DownloaderService:
         output_template = os.path.join(self.download_dir, base_name + ".%(ext)s")
 
         # YouTube cookies file from env
-        cookies_path = os.environ.get("YTDLP_COOKIE_FILE", "/opt/filmorauz/parser/cookies.txt")
+        cookies_path = os.environ.get("YTDLP_COOKIES_FILE", "")
         user_agent = os.environ.get("YTDLP_USER_AGENT", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.210 Mobile Safari/537.36")
 
         cmd = [
@@ -1158,12 +1158,13 @@ class DownloaderService:
             "--extractor-args", "youtube:player_client=android",
         ]
 
-        # Add cookies if file exists
-        if os.path.exists(cookies_path):
-            cmd.extend(["--cookies", cookies_path])
-            logger.info(f"[YTDLP] Using cookies file: {cookies_path}")
-        else:
-            logger.warning(f"[YTDLP] Cookies file not found: {cookies_path} - using fallback config (may be rate limited)")
+        # Add cookies if env is set and file exists
+        if cookies_path:
+            if os.path.exists(cookies_path):
+                cmd.extend(["--cookies", cookies_path])
+                logger.info(f"[YTDLP] Using cookies file: {cookies_path}")
+            else:
+                logger.warning(f"[YTDLP] Cookies file not found: {cookies_path}")
 
         cmd.append(url)
 

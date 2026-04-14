@@ -358,6 +358,7 @@ class UzmoviParser(BaseParser):
             logger.info(f"[UZMOVI] ═══════════════════════════════════════════")
         
         player_url = ""
+        video_candidates_checked = 0
         
         # If no media found, try iframe fallback
         if not video_urls:
@@ -367,13 +368,15 @@ class UzmoviParser(BaseParser):
                 if iframe_src:
                     iframe_src = normalize_url(iframe_src, self.BASE_URL)
                     player_url = iframe_src
+                    video_candidates_checked += 1
                     if DEBUG:
                         logger.info(f"[UZMOVI] No media found, using iframe as fallback: {iframe_src}")
         
         if DEBUG:
-            logger.info(f"[UZMOVI] ═══════════════════════════════════════════")
             logger.info(f"[UZMOVI] === FINAL VIDEO EXTRACTION SUMMARY ===")
             logger.info(f"[UZMOVI] Detail page: {url}")
+            logger.info(f"[UZMOVI] Checked selectors: video_urls={len(video_urls)}, iframes={video_candidates_checked}")
+            logger.info(f"[UZMOVI] Player URL fallback: {player_url or 'none'}")
             logger.info(f"[UZMOVI] Found {len(video_urls)} playable video URL(s):")
             for i, v in enumerate(video_urls):
                 logger.info(f"[UZMOVI]   [{i}] type={v['type']}, url={v['url']}")
