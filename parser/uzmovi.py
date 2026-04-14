@@ -610,6 +610,11 @@ class UzmoviParser(BaseParser):
             source_id=source_id,
             type=movie_type
         )
+        
+        # Debug: log final extraction result
+        logger.info(f"[UZMOVI] FINAL: title={title}, video_urls_count={len(unique_video_urls)}, player_url={player_url or 'none'}")
+        if not unique_video_urls:
+            logger.warning(f"[UZMOVI] WARNING: No playable video URLs found for {url}")
     
     def _is_playable_video_url(self, url: str, allow_player: bool = False) -> bool:
         """
