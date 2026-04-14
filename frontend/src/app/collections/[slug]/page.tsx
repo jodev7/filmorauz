@@ -9,7 +9,7 @@ import MovieCard from "@/components/MovieCard";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getCollectionBySlug, getCollections } from "@/lib/api";
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.uz";
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 
 interface Props {
   params: { slug: string };

@@ -2072,7 +2072,7 @@ func createMovieSlug(title string) string {
 func calculateWebsiteURL(slug string) string {
 	baseURL := os.Getenv("BASE_SITE_URL")
 	if baseURL == "" {
-		baseURL = "https://filmorauz.uz"
+		baseURL = "https://filmorauz.net"
 	}
 	return fmt.Sprintf("%s/movies/%s", baseURL, slug)
 }

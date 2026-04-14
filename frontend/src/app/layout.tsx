@@ -7,7 +7,7 @@ import { AdSlotProvider } from "@/components/ads/AdSlotContext";
 import BanGuardWrapper from "@/components/BanGuardWrapper";
 import FixedBottomAd from "@/components/ads/FixedBottomAd";
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.uz";
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 
 const bebasNeue = Bebas_Neue({
   weight: "400",

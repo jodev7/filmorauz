@@ -188,7 +188,7 @@ streamingURL := p.config.StorageConfig.BaseURL + "/stream/" + folderName + "/mas
 remotePath := filepath.Join("videos", folderName, relPath)
 // Result: B2/videos/<slug>/master.m3u8
 streamingURL := p.storage.Upload(localPath, remotePath)
-// Example: https://cdn.filmorauz.uz/videos/movietitle/master.m3u8
+// Example: https://cdn.filmorauz.net/videos/movietitle/master.m3u8
 ```
 
 **Files are uploaded to B2/CDN with structure:**
@@ -216,7 +216,7 @@ movieDoc := bson.M{
 | Environment | video_url Value |
 |-------------|-----------------|
 | **Development** | `http://localhost:8080/stream/<slug>/master.m3u8` |
-| **Production** | `https://cdn.filmorauz.uz/videos/<slug>/master.m3u8` |
+| **Production** | `https://cdn.filmorauz.net/videos/<slug>/master.m3u8` |
 
 ### Frontend Player Integration
 

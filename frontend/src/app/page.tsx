@@ -27,7 +27,7 @@ const GENRE_CHIPS = [
 
 export const dynamic = "force-dynamic";
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.uz";
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 
 export async function generateMetadata(): Promise<Metadata> {
   return {

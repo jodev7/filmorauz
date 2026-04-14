@@ -165,26 +165,17 @@ func (h *UploadHandler) saveLocal(file multipart.File, filename string) (string,
 	}
 
 	// Return full URL with backend host and port
-	return fmt.Sprintf("http://localhost:%s/uploads/%s", h.config.Port, filename), nil
+	return h.config.GetBaseURL() + "/" + filename, nil
 }
 
 // saveToCDN saves file to CDN/storage (production)
 func (h *UploadHandler) saveToCDN(file multipart.File, filename string, contentType string) (string, error) {
-	// TODO: Implement actual CDN upload (Backblaze B2, S3, etc.)
-	// For now, this is a placeholder that returns an error
-	// In production, you would use the Backblaze B2 SDK or AWS S3 SDK
-
-	log.Printf("[UPLOAD] CDN upload not implemented, using placeholder URL")
-
-	// For production, you would upload to B2/S3 and return the public URL
-	// Example with Backblaze B2:
-	// b2, _ := b2.NewB2(...)
-	// uploaded, _ := b2.UploadFile(file, filename, contentType)
-	// return uploaded.URL, nil
-
-	// Placeholder - return a URL that would be returned by CDN
-	// In production, replace with actual CDN URL
-	return fmt.Sprintf("https://cdn.filmorauz.uz/images/%s", filename), nil
+	baseURL := h.config.GetBaseURL()
+	if baseURL == "" {
+		return "", fmt.Errorf("CDN_URL not configured for production mode")
+	}
+	log.Printf("[UPLOAD] Using CDN URL: %s", baseURL)
+	return baseURL + "/images/" + filename, nil
 }
 
 // UploadMovieAssets handles file uploads for movie assets (poster, backdrop, video)
@@ -289,20 +280,20 @@ func (h *UploadHandler) saveMovieAssetLocal(file multipart.File, filename string
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 
-	return fmt.Sprintf("http://localhost:%s/uploads/movies/%s/%s", h.config.Port, subDir, filename), nil
+	return h.config.GetBaseURL() + "/movies/" + subDir + "/" + filename, nil
 }
 
 // adMediaAllowedMIME maps canonical MIME types to their media category (image/video).
 // Extension aliases (like "image/jpg") and generic types are handled separately below.
 var adMediaAllowedMIME = map[string]string{
-	"image/jpeg":       "image",
-	"image/png":        "image",
-	"image/webp":       "image",
-	"image/gif":        "image",
-	"video/mp4":        "video",
-	"video/webm":       "video",
-	"video/quicktime":  "video", // .mov
-	"video/x-msvideo":  "video", // .avi
+	"image/jpeg":      "image",
+	"image/png":       "image",
+	"image/webp":      "image",
+	"image/gif":       "image",
+	"video/mp4":       "video",
+	"video/webm":      "video",
+	"video/quicktime": "video", // .mov
+	"video/x-msvideo": "video", // .avi
 }
 
 // extToMIME maps common extensions to their canonical MIME type for fallback sniffing.
@@ -452,7 +443,7 @@ func (h *UploadHandler) saveAdMediaLocal(file multipart.File, filename string, m
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 
-	return fmt.Sprintf("http://localhost:%s/uploads/ads/%s/%s", h.config.Port, subDir, filename), nil
+	return h.config.GetBaseURL() + "/ads/" + subDir + "/" + filename, nil
 }
 
 // isValidURL validates a basic URL
@@ -565,5 +556,5 @@ func (h *UploadHandler) saveTelegramPostLocal(file multipart.File, filename stri
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 
-	return fmt.Sprintf("http://localhost:%s/uploads/telegram-post/%s", h.config.Port, filename), nil
+	return h.config.GetBaseURL() + "/telegram-post/" + filename, nil
 }

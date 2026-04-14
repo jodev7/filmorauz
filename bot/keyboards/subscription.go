@@ -113,7 +113,7 @@ func BuildMovieFoundKeyboard(url string) tgbotapi.InlineKeyboardMarkup {
 
 // BuildDevModeMessage returns message when URL is not publicly available
 func BuildDevModeMessage(title string) string {
-	return "🎬 Kino topildi: " + title + "\n\n⚠️ Hozircha bu kino ishlab chiqarish muhitida emas.\n\n💡 Tez orada filmorauz.uz saytida jonli bo'ladi."
+	return "🎬 Kino topildi: " + title + "\n\n⚠️ Hozircha bu kino ishlab chiqarish muhitida emas.\n\n💡 Tez orada filmorauz.net saytida jonli bo'ladi."
 }
 
 // BuildMovieFoundMessageWithRawURL returns message with visible raw URL (for dev/local)

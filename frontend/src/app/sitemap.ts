@@ -1,7 +1,7 @@
 import { MetadataRoute } from "next";
 import { getMovies, getCollections } from "@/lib/api";
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.uz";
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const locales = ["uz", "ru", "en"] as const;

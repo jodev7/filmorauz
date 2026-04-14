@@ -7,7 +7,7 @@ import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getCollections, Collection } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.uz";
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 
 export async function generateMetadata(): Promise<Metadata> {
   return {

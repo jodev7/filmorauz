@@ -147,7 +147,7 @@ DB_NAME=filmorauz
 JWT_SECRET=dev-only-secret            # required in PROD, optional in DEV
 ADMIN_EMAIL=admin@filmorauz.uz
 ADMIN_PASSWORD=admin123               # required in PROD, optional in DEV
-ALLOWED_ORIGIN=https://filmorauz.uz  # PROD only — your domain for CORS
+ALLOWED_ORIGIN=https://filmorauz.net  # PROD only — your domain for CORS
 ```
 
 ### What MODE changes

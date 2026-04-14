@@ -135,7 +135,7 @@ func main() {
 	} else {
 		// In prod, parse comma-separated ALLOWED_ORIGIN from .env
 		if cfg.AllowedOrigin == "" {
-			log.Fatal("ALLOWED_ORIGIN is required in PROD mode (e.g. https://filmorauz.uz)")
+			log.Fatal("ALLOWED_ORIGIN is required in PROD mode (e.g. https://filmorauz.net)")
 		}
 		var origins []string
 		for _, origin := range strings.Split(cfg.AllowedOrigin, ",") {

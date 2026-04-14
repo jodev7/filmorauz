@@ -344,7 +344,7 @@ func (s *MovieService) CreateMovie(input *models.MovieInput) (*models.Movie, err
 	// Get website base URL from environment
 	websiteBaseURL := os.Getenv("BASE_SITE_URL")
 	if websiteBaseURL == "" {
-		websiteBaseURL = "https://filmorauz.uz"
+		websiteBaseURL = "https://filmorauz.net"
 	}
 
 	movie := &models.Movie{
@@ -469,7 +469,7 @@ func (s *MovieService) BackfillMovieCodes() {
 		// Get website base URL
 		websiteBaseURL := os.Getenv("BASE_SITE_URL")
 		if websiteBaseURL == "" {
-			websiteBaseURL = "https://filmorauz.uz"
+			websiteBaseURL = "https://filmorauz.net"
 		}
 
 		// Generate slug if missing
@@ -569,7 +569,7 @@ func generateSlug(title string, year int) string {
 // calculateWebsiteURL generates the website URL for a movie based on its slug
 func calculateWebsiteURL(slug string, baseURL string) string {
 	if baseURL == "" {
-		baseURL = "https://filmorauz.uz"
+		baseURL = "https://filmorauz.net"
 	}
 	return fmt.Sprintf("%s/movies/%s", baseURL, slug)
 }

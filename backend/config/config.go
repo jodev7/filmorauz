@@ -31,10 +31,7 @@ type Config struct {
 	WorkerUploadsDir        string
 	AIEndpoint              string
 	UploadsDir              string
-	B2AccountID             string
-	B2ApplicationKey        string
-	B2BucketName            string
-	B2CDNURL                string
+	CDNURL                  string
 	TelegramChannels        []string // loaded from TELEGRAM_CHANNELS env (comma-separated)
 	TelegramSerialsChannel  string   // loaded from TELEGRAM_SERIALS_CHANNEL env
 }
@@ -59,17 +56,14 @@ func Load() *Config {
 		DBName:                  getEnv("DB_NAME", "filmorauz"),
 		JWTSecret:               getEnv("JWT_SECRET", ""),
 		AdminTelegramID:         parseTelegramID(getEnv("ADMIN_TELEGRAM_ID", "0")),
-		BaseSiteURL:             getEnv("BASE_SITE_URL", "https://filmorauz.uz"),
+		BaseSiteURL:             getEnv("BASE_SITE_URL", "https://filmorauz.net"),
 		AllowedOrigin:           getEnv("ALLOWED_ORIGIN", ""),
 		TelegramBotUsername:     getEnv("TELEGRAM_BOT_USERNAME", "FilmoraUzBot"),
 		TelegramChannelUsername: getEnv("TG_CHANNEL_USERNAME", ""),
 		WorkerUploadsDir:        getEnv("WORKER_UPLOADS_DIR", "../worker/uploads"),
 		AIEndpoint:              getEnv("AI_ENDPOINT", ""),
 		UploadsDir:              getEnv("UPLOADS_DIR", "./uploads"),
-		B2AccountID:             getEnv("B2_ACCOUNT_ID", ""),
-		B2ApplicationKey:        getEnv("B2_APPLICATION_KEY", ""),
-		B2BucketName:            getEnv("B2_BUCKET_NAME", ""),
-		B2CDNURL:                getEnv("B2_CDN_URL", ""),
+		CDNURL:                  getEnv("CDN_URL", ""),
 		TelegramChannels:        parseTelegramChannels(getEnv("TELEGRAM_CHANNELS", "")),
 		TelegramSerialsChannel:  getEnv("TELEGRAM_SERIALS_CHANNEL", ""),
 	}
@@ -125,4 +119,14 @@ func parseTelegramChannels(s string) []string {
 		}
 	}
 	return channels
+}
+
+// GetBaseURL returns the base URL for media assets based on MODE.
+// In DEV: returns http://localhost:{PORT}/uploads
+// In PROD: returns CDN_URL from environment
+func (c *Config) GetBaseURL() string {
+	if c.IsDev {
+		return "http://localhost:" + c.Port + "/uploads"
+	}
+	return c.CDNURL
 }
