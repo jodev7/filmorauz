@@ -334,7 +334,7 @@ func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (st
 
 	var fileURL string
 	if s.cdnURL != "" {
-		fileURL = s.cdnURL + "/" + remotePath
+		fileURL = s.cdnURL + "/file/filmorauznet/" + remotePath
 	} else {
 		s.mu.Lock()
 		dlURL := s.downloadURL
@@ -422,9 +422,9 @@ func (s *B2Storage) Delete(remotePath string) error {
 	s.mu.Unlock()
 
 	payload, _ := json.Marshal(map[string]string{
-		"bucketId":  bucketID,
+		"bucketId":      bucketID,
 		"startFileName": remotePath,
-		"maxFileCount": "1",
+		"maxFileCount":  "1",
 	})
 	req, err := http.NewRequest("POST", apiURL+"/b2api/v2/b2_list_file_names", bytes.NewReader(payload))
 	if err != nil {
@@ -470,7 +470,7 @@ func (s *B2Storage) Delete(remotePath string) error {
 // GetURL returns the CDN (or B2 download) URL for a remote path.
 func (s *B2Storage) GetURL(remotePath string) string {
 	if s.cdnURL != "" {
-		return s.cdnURL + "/" + remotePath
+		return s.cdnURL + "/file/filmorauznet/" + remotePath
 	}
 	s.mu.Lock()
 	dlURL := s.downloadURL
@@ -495,9 +495,9 @@ func (s *B2Storage) GetFileSize(remotePath string) (int64, error) {
 	s.mu.Unlock()
 
 	payload, _ := json.Marshal(map[string]interface{}{
-		"bucketId":     bucketID,
+		"bucketId":      bucketID,
 		"startFileName": remotePath,
-		"maxFileCount": 1,
+		"maxFileCount":  1,
 	})
 	req, _ := http.NewRequest("POST", apiURL+"/b2api/v2/b2_list_file_names", bytes.NewReader(payload))
 	req.Header.Set("Authorization", authToken)
@@ -511,7 +511,7 @@ func (s *B2Storage) GetFileSize(remotePath string) (int64, error) {
 
 	var listResp struct {
 		Files []struct {
-			FileName    string `json:"fileName"`
+			FileName      string `json:"fileName"`
 			ContentLength int64  `json:"contentLength"`
 		} `json:"files"`
 	}

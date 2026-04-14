@@ -130,3 +130,12 @@ func (c *Config) GetBaseURL() string {
 	}
 	return c.CDNURL
 }
+
+// GetCDNFileURL returns the full CDN URL for a file path.
+// In PROD: returns CDN_URL + "/file/filmorauznet/" + path
+func (c *Config) GetCDNFileURL(path string) string {
+	if c.IsDev {
+		return "http://localhost:" + c.Port + "/uploads/" + path
+	}
+	return c.CDNURL + "/file/filmorauznet/" + path
+}

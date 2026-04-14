@@ -118,7 +118,7 @@ func (h *UploadHandler) UploadProfileImage(c *gin.Context) {
 		}
 	} else {
 		// PROD mode - use CDN (Backblaze B2 or other)
-		savedURL, err = h.saveToCDN(file, filename, contentType)
+		savedURL, err = h.saveToCDN(file, filename, "images")
 		if err != nil {
 			log.Printf("[UPLOAD] Error saving to CDN: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
@@ -165,17 +165,20 @@ func (h *UploadHandler) saveLocal(file multipart.File, filename string) (string,
 	}
 
 	// Return full URL with backend host and port
-	return h.config.GetBaseURL() + "/" + filename, nil
+	if h.config.IsDev {
+		return h.config.GetBaseURL() + "/" + filename, nil
+	}
+	return h.config.GetCDNFileURL("images/" + filename), nil
 }
 
 // saveToCDN saves file to CDN/storage (production)
-func (h *UploadHandler) saveToCDN(file multipart.File, filename string, contentType string) (string, error) {
-	baseURL := h.config.GetBaseURL()
+func (h *UploadHandler) saveToCDN(file multipart.File, filename string, subDir string) (string, error) {
+	baseURL := h.config.GetCDNFileURL(subDir + "/" + filename)
 	if baseURL == "" {
 		return "", fmt.Errorf("CDN_URL not configured for production mode")
 	}
 	log.Printf("[UPLOAD] Using CDN URL: %s", baseURL)
-	return baseURL + "/images/" + filename, nil
+	return baseURL, nil
 }
 
 // UploadMovieAssets handles file uploads for movie assets (poster, backdrop, video)
@@ -242,7 +245,7 @@ func (h *UploadHandler) UploadMovieAssets(c *gin.Context) {
 			return
 		}
 	} else {
-		savedURL, err = h.saveToCDN(file, filename, contentType)
+		savedURL, err = h.saveToCDN(file, filename, "movies/"+fileType+"s")
 		if err != nil {
 			log.Printf("[UPLOAD] Error saving movie asset to CDN: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
@@ -280,7 +283,10 @@ func (h *UploadHandler) saveMovieAssetLocal(file multipart.File, filename string
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 
-	return h.config.GetBaseURL() + "/movies/" + subDir + "/" + filename, nil
+	if h.config.IsDev {
+		return h.config.GetBaseURL() + "/movies/" + subDir + "/" + filename, nil
+	}
+	return h.config.GetCDNFileURL("movies/" + subDir + "/" + filename), nil
 }
 
 // adMediaAllowedMIME maps canonical MIME types to their media category (image/video).
@@ -412,7 +418,7 @@ func (h *UploadHandler) UploadAdMedia(c *gin.Context) {
 	if h.config.IsDev {
 		savedURL, err = h.saveAdMediaLocal(file, filename, mediaType)
 	} else {
-		savedURL, err = h.saveToCDN(file, filename, contentType)
+		savedURL, err = h.saveToCDN(file, filename, "ads/"+mediaType+"s")
 	}
 	if err != nil {
 		log.Printf("[UPLOAD] Ad media upload error: %v", err)
@@ -443,7 +449,10 @@ func (h *UploadHandler) saveAdMediaLocal(file multipart.File, filename string, m
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 
-	return h.config.GetBaseURL() + "/ads/" + subDir + "/" + filename, nil
+	if h.config.IsDev {
+		return h.config.GetBaseURL() + "/ads/" + subDir + "/" + filename, nil
+	}
+	return h.config.GetCDNFileURL("ads/" + subDir + "/" + filename), nil
 }
 
 // isValidURL validates a basic URL
@@ -526,7 +535,7 @@ func (h *UploadHandler) UploadTelegramPostMedia(c *gin.Context) {
 	if h.config.IsDev {
 		savedURL, err = h.saveTelegramPostLocal(file, filename)
 	} else {
-		savedURL, err = h.saveToCDN(file, filename, contentType)
+		savedURL, err = h.saveToCDN(file, filename, "telegram-post")
 	}
 	if err != nil {
 		log.Printf("[UPLOAD] Telegram post media upload error: %v", err)
