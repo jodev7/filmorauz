@@ -123,22 +123,32 @@ func main() {
 	// CORS config
 	corsConfig := cors.Config{
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Accept"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Accept", "X-Requested-With"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}
 
 	if cfg.IsDev {
-		// In dev, explicitly allow localhost:3000 (frontend)
-		// Note: Cannot use AllowAllOrigins with AllowCredentials
-		corsConfig.AllowOrigins = []string{"http://localhost:3000", "http://127.0.0.1:3000"}
+		// In dev, allow localhost dev origins
+		corsConfig.AllowOrigins = []string{"http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"}
 	} else {
-		// In prod, only allow your real domain — set ALLOWED_ORIGIN in .env
+		// In prod, parse comma-separated ALLOWED_ORIGIN from .env
 		if cfg.AllowedOrigin == "" {
 			log.Fatal("ALLOWED_ORIGIN is required in PROD mode (e.g. https://filmorauz.uz)")
 		}
-		corsConfig.AllowOrigins = []string{cfg.AllowedOrigin}
+		var origins []string
+		for _, origin := range strings.Split(cfg.AllowedOrigin, ",") {
+			origin = strings.TrimSpace(origin)
+			if origin != "" {
+				origins = append(origins, origin)
+			}
+		}
+		if len(origins) == 0 {
+			log.Fatal("ALLOWED_ORIGIN is empty after parsing")
+		}
+		corsConfig.AllowOrigins = origins
+		log.Printf("CORS allowing origins: %v", origins)
 	}
 
 	r.Use(cors.New(corsConfig))
