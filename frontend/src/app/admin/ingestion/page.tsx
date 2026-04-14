@@ -70,9 +70,12 @@ const STATUS_CONFIG: Record<IngestionStatus, { color: string; icon: React.Elemen
 
 // Stage to status mapping for badge display
 const STAGE_STATUS_MAP: Record<string, IngestionStatus> = {
+  parse: "parsing",
   parsing: "parsing",
+  download: "downloading",
   downloading: "downloading",
   processing: "processing",
+  upload: "uploading",
   uploading: "uploading",
   completed: "completed",
   failed: "failed",
