@@ -113,16 +113,17 @@ func (r *JobRepository) GetPendingJobs(ctx context.Context, limit int) ([]*model
 // ClaimNextJob atomically claims the next pending job
 // This uses FindOneAndUpdate to ensure only one worker can claim a job
 // Returns nil if no jobs are available
-// CRITICAL: Only claims jobs where steps.download=true (download complete)
-// This prevents worker from starting before download is 100% complete
+// NOTE: Claims jobs where steps.download is NOT true - worker will call parser to download
 func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob, error) {
 	filter := bson.M{
 		"status": models.IngestionStatusPending,
 		"retry_count": bson.M{
 			"$lt": 3, // Max 3 retries
 		},
-		// CRITICAL: Only claim jobs where download IS complete
-		"steps.download": true,
+		// Claim jobs where download is NOT complete - worker will call parser
+		"steps.download": bson.M{
+			"$ne": true,
+		},
 	}
 
 	update := bson.M{

@@ -197,51 +197,59 @@ func main() {
 						}
 					}()
 
-					// Atomically claim the next pending job
-					// This ensures only one worker processes each job
-					job, err := jobRepo.ClaimNextJob(workerCtx)
-					if err != nil {
-						log.Printf("Error claiming job: %v", err)
-						return
-					}
-
-					// If no download job available, try claiming a processing job
-					// This handles jobs where steps.download=true but steps.process=false
-					if job == nil {
-						job, err = jobRepo.ClaimNextProcessingJob(workerCtx)
+					// Poll for jobs - process all available jobs in this tick
+					for {
+						// Atomically claim the next pending job
+						// This ensures only one worker processes each job
+						log.Printf("[WORKER] Polling for pending jobs...")
+						job, err := jobRepo.ClaimNextJob(workerCtx)
 						if err != nil {
-							log.Printf("Error claiming processing job: %v", err)
-							return
+							log.Printf("[WORKER] Error claiming job: %v", err)
+							break
 						}
-						if job != nil {
-							log.Printf("[WORKER] Claimed processing job (steps.download=true): %s", job.ID.Hex())
+
+						// If no download job available, try claiming a processing job
+						// This handles jobs where steps.download=true but steps.process=false
+						if job == nil {
+							log.Printf("[WORKER] No download jobs, polling for processing jobs...")
+							job, err = jobRepo.ClaimNextProcessingJob(workerCtx)
+							if err != nil {
+								log.Printf("[WORKER] Error claiming processing job: %v", err)
+								break
+							}
+							if job != nil {
+								log.Printf("[WORKER] Claimed processing job (steps.download=true): %s", job.ID.Hex())
+							}
+						} else {
+							log.Printf("[WORKER] Claimed download job: %s (steps.download will be set after parser)", job.ID.Hex())
 						}
-					}
 
-					if job == nil {
-						// No jobs available
-						return
-					}
+						if job == nil {
+							// No jobs available, stop polling this tick
+							log.Printf("[WORKER] No pending jobs found")
+							break
+						}
 
-					title := job.Title
-					if title == "" && job.Metadata != nil {
-						title = job.Metadata.Title
-					}
-					if title == "" {
-						title = job.SourceID
-					}
+						title := job.Title
+						if title == "" && job.Metadata != nil {
+							title = job.Metadata.Title
+						}
+						if title == "" {
+							title = job.SourceID
+						}
 
-					// DEBUG: Log job details to diagnose metadata loading issue
-					log.Printf("[WORKER] Claimed job %s: %s from %s", job.ID.Hex(), title, job.Source)
-					log.Printf("[WORKER] job.local_path=%s", job.LocalPath)
-					log.Printf("[WORKER] metadata nil? %v", job.Metadata == nil)
-					if job.Metadata != nil {
-						log.Printf("[WORKER] metadata title=%s", job.Metadata.Title)
-					}
+						// DEBUG: Log job details to diagnose metadata loading issue
+						log.Printf("[WORKER] Claimed job %s: %s from %s", job.ID.Hex(), title, job.Source)
+						log.Printf("[WORKER] job.local_path=%s", job.LocalPath)
+						log.Printf("[WORKER] metadata nil? %v", job.Metadata == nil)
+						if job.Metadata != nil {
+							log.Printf("[WORKER] metadata title=%s", job.Metadata.Title)
+						}
 
-					// Process the job with panic recovery
-					// This ensures a single job failure doesn't crash the worker
-					safeProcessJob(pipe, workerCtx, job)
+						// Process the job with panic recovery
+						// This ensures a single job failure doesn't crash the worker
+						safeProcessJob(pipe, workerCtx, job)
+					} // end for loop
 				}()
 			}
 		}
