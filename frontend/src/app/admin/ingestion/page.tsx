@@ -768,7 +768,8 @@ function JobsTab({
           
           const activeStage = safeJob.stage || safeJob.status;
           const badgeStatus = STAGE_STATUS_MAP[activeStage] || safeJob.status;
-          const statusConfig = getStatusMeta(badgeStatus);
+          const displayStatus = safeJob.stage ? STAGE_STATUS_MAP[safeJob.stage] || safeJob.status : badgeStatus;
+          const statusConfig = getStatusMeta(displayStatus);
           const StatusIcon = statusConfig.icon;
           
           return (
@@ -793,7 +794,7 @@ function JobsTab({
                     </span>
                   </div>
                   <p className="text-sm text-gray-400">
-                    {safeJob.source} • {new Date(safeJob.created_at).toLocaleString()}
+                    {safeJob.message || safeJob.source} • {new Date(safeJob.created_at).toLocaleString()}
                   </p>
                 </div>
                 
@@ -955,18 +956,7 @@ export default function IngestionPage() {
     }
   }, [token]);
 
-  // Temporary polling: only when there are active jobs (not completed/failed)
-  useEffect(() => {
-    if (!token || activeTab !== "jobs" || syncPolling) return;
-
-    const hasActiveJobs = jobs.some(j => j.status !== "completed" && j.status !== "failed");
-    if (!hasActiveJobs) return;
-
-    const interval = setInterval(fetchJobs, 3000);
-    return () => clearInterval(interval);
-  }, [token, activeTab, syncPolling, jobs, fetchJobs]);
-
-  // Initial fetch on tab switch
+  // Initial fetch on tab switch only (no polling)
   useEffect(() => {
     if (!token || activeTab !== "jobs") return;
     fetchJobs();

@@ -447,8 +447,25 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 		},
 	}
 
+	// CRITICAL: Always update stage and status to current values from parser/worker
+	// This overwrites stale UI state with fresh progress
+	if progress.Stage != "" {
+		update["$set"].(bson.M)["stage"] = progress.Stage
+	}
+	if progress.Status != "" {
+		update["$set"].(bson.M)["status"] = progress.Status
+	} else if progress.Stage != "" {
+		// Derive status from stage if not explicitly provided
+		derived := DeriveStatusFromStage(progress.Stage)
+		if derived != "" {
+			update["$set"].(bson.M)["status"] = derived
+		}
+	}
+
+	// Set progress value
+	update["$set"].(bson.M)["progress"] = progress.Progress
+
 	// CRITICAL: Set steps.download = true ONLY when download is 100% complete
-	// This prevents worker from starting before download finishes
 	downloadComplete := (progress.Stage == "download" && progress.Progress >= 100) || progress.StepsDownload
 	if downloadComplete {
 		log.Printf("[JOB REPO] Download complete (progress=%d%%, steps_download=%v) - marking steps.download=true", progress.Progress, progress.StepsDownload)

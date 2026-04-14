@@ -333,8 +333,11 @@ class ParserHandler(BaseHTTPRequestHandler):
     def _report_progress_to_backend(self, job_id: str, progress: dict):
         """
         Report download progress to the backend job API.
-        This enables real-time progress updates in the admin dashboard.
+        Best-effort only - failures do not block the pipeline.
         """
+        import time
+        import urllib.error
+        
         logger.info(f"[SERVER] _report_progress_to_backend called with job_id='{job_id}'")
         logger.info(f"[SERVER] progress payload: {progress}")
         
@@ -342,40 +345,57 @@ class ParserHandler(BaseHTTPRequestHandler):
             logger.warning("[SERVER] No job_id or job_id='none', skipping progress report")
             return
         
-        # Always try to report progress if we have a job_id
-        # Skip only if BACKEND_URL is explicitly empty (not set)
         if BACKEND_URL == "":
             logger.warning(f"[SERVER] BACKEND_URL not set, skipping progress report")
             return
         
-        try:
-            # Use direct backend URL (not public API through Cloudflare)
-            url = f"{BACKEND_URL}/api/ingestion/jobs/{job_id}/progress"
-            data = json.dumps(progress).encode("utf-8")
-            
-            logger.info(f"[SERVER] Reporting progress to backend: job_id={job_id}, progress={progress.get('progress_percent')}%, downloaded={progress.get('downloaded_bytes')} bytes")
-            logger.info(f"[SERVER] Callback URL: {url}")
-            
-            req = urllib.request.Request(
-                url,
-                data=data,
-                headers={"Content-Type": "application/json"},
-                method="POST"
-            )
-            
-            with urllib.request.urlopen(req, timeout=10) as response:
-                logger.info(f"[SERVER] Progress reported: job_id={job_id}, status={response.status}")
-        except urllib.error.HTTPError as e:
-            body = ""
+        # Best-effort with retries
+        max_retries = 3
+        backoff = 0.5
+        
+        for attempt in range(max_retries):
             try:
-                body = e.read().decode("utf-8", errors="replace")
-            except:
-                pass
-            logger.warning(f"[SERVER] Backend progress HTTP {e.code}: {e.reason}, body: {body[:200]}")
-        except urllib.error.URLError as e:
-            logger.warning(f"[SERVER] Backend progress failed: {e.reason}")
-        except Exception as e:
-            logger.warning(f"[SERVER] Backend progress error: {e}")
+                url = f"{BACKEND_URL}/api/ingestion/jobs/{job_id}/progress"
+                data = json.dumps(progress).encode("utf-8")
+                
+                logger.info(f"[SERVER] Reporting progress: job_id={job_id}, progress={progress.get('progress_percent')}%, attempt {attempt+1}/{max_retries}")
+                
+                req = urllib.request.Request(
+                    url,
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST"
+                )
+                
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    logger.info(f"[SERVER] Progress reported: job_id={job_id}, status={response.status}")
+                    return
+            except urllib.error.HTTPError as e:
+                body = ""
+                try:
+                    body = e.read().decode("utf-8", errors="replace")
+                except:
+                    pass
+                if attempt < max_retries - 1:
+                    logger.warning(f"[SERVER] HTTP {e.code} attempt {attempt+1}, retrying: {e.reason}")
+                    time.sleep(backoff)
+                    backoff *= 2
+                else:
+                    logger.warning(f"[SERVER] HTTP {e.code} after {max_retries} attempts, continuing: {e.reason}")
+            except urllib.error.URLError as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"[SERVER] URL error attempt {attempt+1}, retrying: {e.reason}")
+                    time.sleep(backoff)
+                    backoff *= 2
+                else:
+                    logger.warning(f"[SERVER] URL error after {max_retries} attempts, continuing pipeline")
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"[SERVER] Error attempt {attempt+1}, retrying: {e}")
+                    time.sleep(backoff)
+                    backoff *= 2
+                else:
+                    logger.warning(f"[SERVER] Error after {max_retries} attempts, continuing pipeline: {e}")
 
     def do_GET(self):
         """Handle GET requests"""

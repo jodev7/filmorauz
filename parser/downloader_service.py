@@ -204,7 +204,9 @@ logger.info(f"[CONFIG] BACKEND_URL = '{BACKEND_URL}'")
 
 
 def report_progress_to_backend(job_id: str, progress_data: dict):
-    """Send progress update to backend API"""
+    """Send progress update to backend API - best-effort only, retries on failure"""
+    import time
+    
     logger.info(f"[PROGRESS] report_progress_to_backend called with job_id='{job_id}'")
     logger.info(f"[PROGRESS] BACKEND_URL='{BACKEND_URL}'")
     logger.info(f"[PROGRESS] progress_data: {progress_data}")
@@ -216,32 +218,35 @@ def report_progress_to_backend(job_id: str, progress_data: dict):
         logger.warning("[PROGRESS] ERROR: BACKEND_URL is empty! Set BACKEND_URL=http://127.0.0.1:8080")
         return
     
-    # Explicit log of the endpoint
     endpoint = f"{BACKEND_URL}/api/ingestion/jobs/{job_id}/progress"
     logger.info(f"[PROGRESS] POST {endpoint}")
     logger.info(f"[PROGRESS] PAYLOAD: {json.dumps(progress_data)}")
     
-    try:
-        data = json.dumps(progress_data).encode("utf-8")
-        
-        req = urllib.request.Request(
-            endpoint,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
-        
-        with urllib.request.urlopen(req, timeout=5) as response:
-            response_body = response.read().decode("utf-8")
-            logger.info(f"[PROGRESS] RESPONSE {response.status}: {response_body}")
-            logger.info(f"[PROGRESS] SUCCESS: job={job_id}, progress={progress_data.get('progress', progress_data.get('progress_percent', 0))}%")
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode("utf-8") if e.fp else ""
-        logger.warning(f"[PROGRESS] HTTP ERROR {e.code}: {e.reason} - Body: {error_body}")
-    except urllib.error.URLError as e:
-        logger.warning(f"[PROGRESS] URL ERROR: {e.reason}")
-    except Exception as e:
-        logger.warning(f"[PROGRESS] ERROR: {e}")
+    # Best-effort with retries
+    max_retries = 3
+    backoff = 0.5
+    
+    for attempt in range(max_retries):
+        try:
+            data = json.dumps(progress_data).encode("utf-8")
+            req = urllib.request.Request(
+                endpoint,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=15) as response:
+                response_body = response.read().decode("utf-8")
+                logger.info(f"[PROGRESS] RESPONSE {response.status}: {response_body}")
+                logger.info(f"[PROGRESS] SUCCESS: job={job_id}, progress={progress_data.get('progress', progress_data.get('progress_percent', 0))}%")
+                return
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"[PROGRESS] Attempt {attempt+1}/{max_retries} failed: {e}, retrying in {backoff}s...")
+                time.sleep(backoff)
+                backoff *= 2
+            else:
+                logger.warning(f"[PROGRESS] All {max_retries} attempts failed, continuing pipeline: {e}")
 
 
 def trigger_worker(job_id: str):
