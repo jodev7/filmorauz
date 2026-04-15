@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -318,7 +317,7 @@ func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (st
 	// Compute SHA1 of file content
 	h := sha1.New()
 	h.Write(data)
-	sha1sum := hex.EncodeToString(h.Sum(nil))
+	//sha1sum := hex.EncodeToString(h.Sum(nil))
 
 	// B2 uses X-Bz-File-Name for the object key - do NOT URL-encode it
 	// B2 handles folder creation via path prefix automatically
