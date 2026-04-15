@@ -42,7 +42,8 @@ const SOURCE_TYPE_OPTIONS: { value: VideoSourceType; label: string; description:
 interface UploadState {
   status: "idle" | "uploading" | "success" | "error";
   message?: string;
-  tempKey?: string; // For temp_movie uploads
+  tempKey?: string;
+  progress?: number;
 }
 
 interface DirectUploadState {
@@ -117,26 +118,28 @@ export default function MovieForm({
 
     setUploads(prev => ({
       ...prev,
-      [type]: { status: "uploading" }
+      [type]: { status: "uploading", progress: 0 }
     }));
 
     try {
-      // For direct_upload source type, upload as temp_movie for processing pipeline
       const uploadType = form.source_type === "direct_upload" ? "temp_movie" : type;
-      const result = await uploadMovieAsset(token, file, uploadType);
+      const result = await uploadMovieAsset(token, file, uploadType, (progress) => {
+        setUploads(prev => ({
+          ...prev,
+          [type]: { status: "uploading", progress }
+        }));
+      });
       
       setUploads(prev => ({
         ...prev,
-        [type]: { status: "success", message: result.url, tempKey: result.temp_key }
+        [type]: { status: "success", message: result.url, tempKey: result.temp_key, progress: 100 }
       }));
       if (type === "poster") {
         set("poster_url", result.url);
       } else if (type === "backdrop") {
         set("backdrop_url", result.url);
       } else {
-        // For video, store both url and temp_key for ingestion job
         set("video_url", result.url);
-        // Store temp_key separately for ingestion job
         setTempFileKey(result.temp_key || "");
       }
     } catch (err) {
@@ -465,9 +468,14 @@ export default function MovieForm({
           </label>
           <div className="upload-box">
             {uploads.video.status === "uploading" && (
-              <div className="upload-status">
+              <div className="upload-progress">
                 <Loader2 size={20} className="animate-spin" />
-                <span>Uploading video...</span>
+                <div className="progress-content">
+                  <span>Uploading video... {uploads.video.progress ?? 0}%</span>
+                  <div className="progress-bar">
+                    <div className="progress-fill" style={{ width: `${uploads.video.progress ?? 0}%` }} />
+                  </div>
+                </div>
               </div>
             )}
             {uploads.video.status === "success" && (
@@ -708,6 +716,32 @@ export default function MovieForm({
         }
         .upload-status.error {
           color: #ef4444;
+        }
+        .upload-progress {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          color: #9ca3af;
+          font-size: 0.875rem;
+        }
+        .progress-content {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+        }
+        .progress-bar {
+          width: 100%;
+          height: 6px;
+          background: #1e1e2e;
+          border-radius: 3px;
+          overflow: hidden;
+        }
+        .progress-fill {
+          height: 100%;
+          background: #e63946;
+          border-radius: 3px;
+          transition: width 0.2s ease;
         }
       `}</style>
     </form>

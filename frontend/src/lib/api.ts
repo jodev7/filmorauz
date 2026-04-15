@@ -825,8 +825,39 @@ export interface MovieAssetUploadResponse {
 export async function uploadMovieAsset(
   token: string,
   file: File,
-  type: MovieAssetType
+  type: MovieAssetType,
+  onProgress?: (progress: number) => void
 ): Promise<MovieAssetUploadResponse> {
+  if (onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${API_URL}/admin/movies/upload`);
+      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          onProgress(percent);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(JSON.parse(xhr.responseText));
+        } else {
+          reject(new Error("Upload failed"));
+        }
+      };
+
+      xhr.onerror = () => reject(new Error("Upload failed"));
+
+      const formData = new FormData();
+      formData.append("type", type);
+      formData.append("file", file);
+      xhr.send(formData);
+    });
+  }
+
   const formData = new FormData();
   formData.append("type", type);
   formData.append("file", file);
