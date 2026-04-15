@@ -388,7 +388,7 @@ func (h *ProcessHandler) handleUploadTempMovie(w http.ResponseWriter, r *http.Re
 		ext = ".mp4"
 	}
 	filename := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
-	tempKey := "temp/movies/" + filename
+	tempKey := "temp/raw/" + filename
 
 	log.Printf("[B2] Uploading temp movie: key=%s, size=%d", tempKey, len(data))
 
@@ -409,7 +409,7 @@ func (h *ProcessHandler) handleUploadTempMovie(w http.ResponseWriter, r *http.Re
 }
 
 // handleUploadMovieImage handles poster/backdrop image uploads for movies
-// Uploads to movies/posters or movies/backdrops path in B2
+// Uploads to temp/posters or temp/backdrops path in B2 (temp storage for ingestion)
 func (h *ProcessHandler) handleUploadMovieImage(w http.ResponseWriter, r *http.Request) {
 	if h.b2Store == nil {
 		h.sendError(w, "B2 storage not configured", http.StatusServiceUnavailable)
@@ -445,7 +445,7 @@ func (h *ProcessHandler) handleUploadMovieImage(w http.ResponseWriter, r *http.R
 		ext = ".jpg"
 	}
 	filename := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
-	mediaKey := fmt.Sprintf("movies/%s/%s", imageType, filename)
+	mediaKey := fmt.Sprintf("temp/%s/%s", imageType, filename)
 
 	log.Printf("[B2] Uploading movie %s: key=%s, size=%d", imageType, mediaKey, len(data))
 
