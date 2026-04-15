@@ -919,10 +919,16 @@ export async function directB2Upload(
   }
   const { upload_url, auth_token, file_key, cdn_url }: UploadURLResponse = await urlResp.json();
 
-  // Upload directly to B2
+  // Compute SHA1 for B2
+  const arrayBuffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest("SHA-1", arrayBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const sha1 = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+
+  // Upload directly to B2 using POST
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("PUT", upload_url);
+    xhr.open("POST", upload_url);
 
     xhr.upload.onprogress = (event) => {
       if (onProgress && event.lengthComputable) {
@@ -935,18 +941,22 @@ export async function directB2Upload(
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve({ url: cdn_url, file_key });
       } else {
-        reject(new Error(`Upload failed: ${xhr.status}`));
+        const responseText = xhr.responseText || "empty";
+        console.error("[B2] Upload failed:", xhr.status, responseText);
+        reject(new Error(`Upload failed: ${xhr.status} - ${responseText}`));
       }
     };
 
-    xhr.onerror = () => reject(new Error("Upload failed"));
+    xhr.onerror = () => {
+      console.error("[B2] Network error");
+      reject(new Error("Upload failed: network error"));
+    };
 
-    // Set headers for B2
-    if (auth_token) {
-      xhr.setRequestHeader("Authorization", auth_token);
-    }
+    // B2 requires exactly these headers (no "Bearer " prefix)
+    xhr.setRequestHeader("Authorization", auth_token);
     xhr.setRequestHeader("X-Bz-File-Name", file_key);
     xhr.setRequestHeader("Content-Type", file.type);
+    xhr.setRequestHeader("X-Bz-Content-Sha1", sha1);
 
     xhr.send(file);
   });
