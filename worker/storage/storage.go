@@ -330,7 +330,7 @@ func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (st
 	req.Header.Set("X-Bz-File-Name", remotePath) // raw path - B2 creates folders via prefix
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(data)))
-	req.Header.Set("X-Bz-Content-Sha1", sha1sum)
+	//req.Header.Set("X-Bz-Content-Sha1", sha1sum)
 	req.ContentLength = int64(len(data))
 
 	log.Printf("[B2] Sending upload request: key=%s", remotePath)

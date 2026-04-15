@@ -956,7 +956,7 @@ export async function directB2Upload(
     xhr.setRequestHeader("Authorization", auth_token);
     xhr.setRequestHeader("X-Bz-File-Name", file_key);
     xhr.setRequestHeader("Content-Type", file.type);
-    xhr.setRequestHeader("X-Bz-Content-Sha1", sha1);
+    //xhr.setRequestHeader("X-Bz-Content-Sha1", sha1);
 
     xhr.send(file);
   });
