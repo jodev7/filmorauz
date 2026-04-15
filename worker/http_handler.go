@@ -65,6 +65,12 @@ func NewProcessHandler(outputDir, tempDir string, b2Store storage.Storage) *Proc
 func (h *ProcessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[WORKER] %s %s", r.Method, r.URL.Path)
 
+	// Get presigned upload URL for direct B2 upload
+	if r.Method == http.MethodGet && r.URL.Path == "/get-upload-url" {
+		h.handleGetUploadURL(w, r)
+		return
+	}
+
 	if r.Method == http.MethodPost && r.URL.Path == "/upload-profile" {
 		h.handleUploadProfile(w, r)
 		return
@@ -461,5 +467,52 @@ func (h *ProcessHandler) handleUploadMovieImage(w http.ResponseWriter, r *http.R
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"url": publicURL,
+	})
+}
+
+// handleGetUploadURL returns a presigned upload URL for direct B2 upload
+// GET /get-upload-url?type=poster&filename=abc.jpg
+func (h *ProcessHandler) handleGetUploadURL(w http.ResponseWriter, r *http.Request) {
+	typeParam := r.URL.Query().Get("type")
+	filename := r.URL.Query().Get("filename")
+
+	if typeParam == "" || filename == "" {
+		h.sendError(w, "type and filename are required", http.StatusBadRequest)
+		return
+	}
+
+	// Determine path based on type
+	var tempPath string
+	switch typeParam {
+	case "poster":
+		tempPath = "temp/posters/" + filename
+	case "backdrop":
+		tempPath = "temp/backdrops/" + filename
+	case "video":
+		tempPath = "temp/raw/" + filename
+	default:
+		h.sendError(w, "invalid type: must be poster, backdrop, or video", http.StatusBadRequest)
+		return
+	}
+
+	// Get presigned upload URL
+	uploadURL, authToken, err := h.b2Store.GetPresignedUploadURL(tempPath, "")
+	if err != nil {
+		log.Printf("[B2] GetUploadURL failed: %v", err)
+		h.sendError(w, fmt.Sprintf("failed to get upload URL: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Get CDN URL for the file
+	cdnURL := h.b2Store.GetURL(tempPath)
+
+	log.Printf("[B2] Got upload URL for: %s, cdn: %s", tempPath, cdnURL)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"upload_url": uploadURL,
+		"auth_token": authToken,
+		"file_key":   tempPath,
+		"cdn_url":    cdnURL,
 	})
 }

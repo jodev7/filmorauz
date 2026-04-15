@@ -4,6 +4,13 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
 const WORKER_URL = process.env.NEXT_PUBLIC_WORKER_URL || "http://localhost:8083";
 
+interface UploadURLResponse {
+  upload_url: string;
+  auth_token: string;
+  file_key: string;
+  cdn_url: string;
+}
+
 export type VideoSourceType = 
   | "iframe_embed" 
   | "direct_mp4" 
@@ -888,6 +895,60 @@ export async function uploadMovieAsset(
     const formData = new FormData();
     formData.append(formField, file);
     xhr.send(formData);
+  });
+}
+
+// Direct B2 upload - gets presigned URL then uploads directly to B2
+export async function directB2Upload(
+  token: string,
+  file: File,
+  type: "poster" | "backdrop" | "video",
+  onProgress?: (progress: number) => void
+): Promise<{ url: string; file_key: string }> {
+  // Generate unique filename
+  const ext = file.name.split(".").pop() || "jpg";
+  const filename = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+
+  // Get presigned upload URL from worker
+  const urlResp = await fetch(
+    `${WORKER_URL}/get-upload-url?type=${type}&filename=${filename}`
+  );
+  if (!urlResp.ok) {
+    const err = await urlResp.json();
+    throw new Error(err.error || "Failed to get upload URL");
+  }
+  const { upload_url, auth_token, file_key, cdn_url }: UploadURLResponse = await urlResp.json();
+
+  // Upload directly to B2
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", upload_url);
+
+    xhr.upload.onprogress = (event) => {
+      if (onProgress && event.lengthComputable) {
+        const percent = Math.round((event.loaded / event.total) * 100);
+        onProgress(percent);
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve({ url: cdn_url, file_key });
+      } else {
+        reject(new Error(`Upload failed: ${xhr.status}`));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Upload failed"));
+
+    // Set headers for B2
+    if (auth_token) {
+      xhr.setRequestHeader("Authorization", auth_token);
+    }
+    xhr.setRequestHeader("X-Bz-File-Name", file_key);
+    xhr.setRequestHeader("Content-Type", file.type);
+
+    xhr.send(file);
   });
 }
 

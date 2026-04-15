@@ -25,6 +25,7 @@ type Storage interface {
 	Delete(remotePath string) error
 	GetURL(remotePath string) string
 	GetFileSize(remotePath string) (int64, error)
+	GetPresignedUploadURL(remotePath, contentType string) (string, string, error)
 }
 
 // Config holds storage configuration
@@ -163,6 +164,13 @@ func (s *LocalStorage) GetFileSize(remotePath string) (int64, error) {
 		return 0, err
 	}
 	return info.Size(), nil
+}
+
+// GetPresignedUploadURL returns URL and auth token for direct upload
+// For local storage, returns the upload endpoint URL
+func (s *LocalStorage) GetPresignedUploadURL(remotePath, contentType string) (string, string, error) {
+	uploadURL := LocalStorageUploadURL + "/uploads/" + remotePath
+	return uploadURL, "", nil
 }
 
 // B2Storage implements Backblaze B2 cloud storage using the native B2 API.
@@ -536,6 +544,18 @@ func (s *B2Storage) GetFileSize(remotePath string) (int64, error) {
 		}
 	}
 	return 0, fmt.Errorf("b2 GetFileSize: file not found: %s", remotePath)
+}
+
+// GetPresignedUploadURL returns URL and auth token for direct upload to B2
+func (s *B2Storage) GetPresignedUploadURL(remotePath, contentType string) (string, string, error) {
+	if err := s.authorize(); err != nil {
+		return "", "", fmt.Errorf("b2 authorize: %w", err)
+	}
+	uploadURL, uploadToken, err := s.getUploadURL()
+	if err != nil {
+		return "", "", fmt.Errorf("b2 getUploadURL: %w", err)
+	}
+	return uploadURL, uploadToken, nil
 }
 
 // detectContentType returns a MIME type based on file extension.

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Loader2, Plus, X, Info, Upload, CheckCircle, AlertCircle } from "lucide-react";
-import { MovieInput, VideoSourceType, uploadMovieAsset, createDirectUploadJob, DirectUploadInput, IngestionJob } from "@/lib/api";
+import { MovieInput, VideoSourceType, directB2Upload, createDirectUploadJob, DirectUploadInput, IngestionJob } from "@/lib/api";
 
 const QUALITIES = ["480p", "720p", "1080p", "1080p Ultra", "4K"];
 const GENRE_OPTIONS = [
@@ -122,8 +122,7 @@ export default function MovieForm({
     }));
 
     try {
-      const uploadType = form.source_type === "direct_upload" ? "temp_movie" : type;
-      const result = await uploadMovieAsset(token, file, uploadType, (progress) => {
+      const result = await directB2Upload(token, file, type, (progress: number) => {
         setUploads(prev => ({
           ...prev,
           [type]: { status: "uploading", progress }
@@ -132,7 +131,7 @@ export default function MovieForm({
       
       setUploads(prev => ({
         ...prev,
-        [type]: { status: "success", message: result.url, tempKey: result.temp_key, progress: 100 }
+        [type]: { status: "success", message: result.url, tempKey: result.file_key, progress: 100 }
       }));
       if (type === "poster") {
         set("poster_url", result.url);
@@ -140,7 +139,7 @@ export default function MovieForm({
         set("backdrop_url", result.url);
       } else {
         set("video_url", result.url);
-        setTempFileKey(result.temp_key || "");
+        setTempFileKey(result.file_key);
       }
     } catch (err) {
       setUploads(prev => ({
