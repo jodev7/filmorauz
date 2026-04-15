@@ -2,6 +2,7 @@
 // Central API client for all backend calls
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
+const WORKER_URL = process.env.NEXT_PUBLIC_WORKER_URL || "http://localhost:8083";
 
 export type VideoSourceType = 
   | "iframe_embed" 
@@ -828,54 +829,66 @@ export async function uploadMovieAsset(
   type: MovieAssetType,
   onProgress?: (progress: number) => void
 ): Promise<MovieAssetUploadResponse> {
-  if (onProgress) {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", `${API_URL}/admin/movies/upload`);
-      xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+  let uploadUrl: string;
+  let formField: string;
 
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable) {
-          const percent = Math.round((event.loaded / event.total) * 100);
-          onProgress(percent);
-        }
-      };
-
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(JSON.parse(xhr.responseText));
-        } else {
-          reject(new Error("Upload failed"));
-        }
-      };
-
-      xhr.onerror = () => reject(new Error("Upload failed"));
-
-      const formData = new FormData();
-      formData.append("type", type);
-      formData.append("file", file);
-      xhr.send(formData);
-    });
+  switch (type) {
+    case "poster":
+      uploadUrl = `${WORKER_URL}/upload-poster`;
+      formField = "image";
+      break;
+    case "backdrop":
+      uploadUrl = `${WORKER_URL}/upload-backdrop`;
+      formField = "image";
+      break;
+    case "temp_movie":
+    case "video":
+      uploadUrl = `${WORKER_URL}/upload-temp-movie`;
+      formField = "file";
+      break;
+    default:
+      uploadUrl = `${API_URL}/admin/movies/upload`;
+      formField = "file";
   }
 
-  const formData = new FormData();
-  formData.append("type", type);
-  formData.append("file", file);
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", uploadUrl);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
 
-  const res = await fetch(`${API_URL}/admin/movies/upload`, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${token}`,
-    },
-    body: formData,
+    xhr.upload.onprogress = (event) => {
+      if (onProgress && event.lengthComputable) {
+        const percent = Math.round((event.loaded / event.total) * 100);
+        onProgress(percent);
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const response = JSON.parse(xhr.responseText);
+        resolve({
+          message: "Uploaded successfully",
+          url: response.url,
+          type,
+          filename: file.name,
+          temp_key: response.temp_key,
+        });
+      } else {
+        let errorMsg = "Upload failed";
+        try {
+          const errResp = JSON.parse(xhr.responseText);
+          errorMsg = errResp.error || errResp.message || errorMsg;
+        } catch {}
+        reject(new Error(errorMsg));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Upload failed"));
+
+    const formData = new FormData();
+    formData.append(formField, file);
+    xhr.send(formData);
   });
-
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ error: "Upload failed" }));
-    throw new Error(error.error || "Failed to upload asset");
-  }
-
-  return res.json();
 }
 
 // ── Ingestion API ────────────────────────────────────────────────

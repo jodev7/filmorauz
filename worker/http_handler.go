@@ -80,6 +80,11 @@ func (h *ProcessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodPost && (r.URL.Path == "/upload-poster" || r.URL.Path == "/upload-backdrop") {
+		h.handleUploadMovieImage(w, r)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -400,5 +405,61 @@ func (h *ProcessHandler) handleUploadTempMovie(w http.ResponseWriter, r *http.Re
 	json.NewEncoder(w).Encode(map[string]string{
 		"url":      publicURL,
 		"temp_key": tempKey,
+	})
+}
+
+// handleUploadMovieImage handles poster/backdrop image uploads for movies
+// Uploads to movies/posters or movies/backdrops path in B2
+func (h *ProcessHandler) handleUploadMovieImage(w http.ResponseWriter, r *http.Request) {
+	if h.b2Store == nil {
+		h.sendError(w, "B2 storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	path := r.URL.Path
+	var imageType string
+	if path == "/upload-poster" {
+		imageType = "posters"
+	} else if path == "/upload-backdrop" {
+		imageType = "backdrops"
+	} else {
+		h.sendError(w, "Invalid upload path", http.StatusBadRequest)
+		return
+	}
+
+	file, header, err := r.FormFile("image")
+	if err != nil {
+		h.sendError(w, fmt.Sprintf("no file provided: %v", err), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		h.sendError(w, fmt.Sprintf("failed to read file: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext == "" {
+		ext = ".jpg"
+	}
+	filename := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
+	mediaKey := fmt.Sprintf("movies/%s/%s", imageType, filename)
+
+	log.Printf("[B2] Uploading movie %s: key=%s, size=%d", imageType, mediaKey, len(data))
+
+	publicURL, err := h.b2Store.UploadData(mediaKey, data, header.Header.Get("Content-Type"))
+	if err != nil {
+		log.Printf("[B2] Movie image upload failed: %v", err)
+		h.sendError(w, fmt.Sprintf("B2 upload failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[B2] Movie image upload success: %s", publicURL)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"url": publicURL,
 	})
 }
