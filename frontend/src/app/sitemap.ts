@@ -1,6 +1,8 @@
 import { MetadataRoute } from "next";
 import { getMovies, getCollections } from "@/lib/api";
 
+export const dynamic = "force-dynamic";
+
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
