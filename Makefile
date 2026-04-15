@@ -136,7 +136,7 @@ tidy-worker:
 	cd $(ROOT_DIR)worker && go mod tidy
 
 vps-pull-worker:
-	cd /opt/filmorauz/worker/ && git pull && cd /opt/filmorauz/worker/ && go mod download && go mod tidy && go build . && systemctl restart filmorauz-worker && systemctl restart filmorauz-parser && 
+	cd /opt/filmorauz/worker/ && git pull && go mod download && go mod tidy && go build . && systemctl restart filmorauz-worker && systemctl restart filmorauz-parser
 
 vps-pull-web:
 	cd /opt/filmorauz/backend && git pull && go mod download && go mod tidy && go build . && cd /opt/filmorauz/bot/ && go mod download && go mod tidy && go build . && systemctl restart filmorauz-backend && systemctl restart filmorauz-bot && cd /opt/filmorauz/frontend && npm run build && pm2 restart all

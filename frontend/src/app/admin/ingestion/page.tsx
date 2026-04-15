@@ -66,6 +66,7 @@ const STATUS_CONFIG: Record<IngestionStatus, { color: string; icon: React.Elemen
   failed: { color: "bg-red-500", icon: XCircle, label: "Failed" },
   download_failed: { color: "bg-red-600", icon: XCircle, label: "Download Failed" },
   parsing_complete: { color: "bg-teal-500", icon: CheckCircle, label: "Parsing Complete" },
+  creating_movie: { color: "bg-cyan-500", icon: Loader2, label: "Creating Movie" },
 };
 
 // Stage to status mapping for badge display
@@ -82,6 +83,7 @@ const STAGE_STATUS_MAP: Record<string, IngestionStatus> = {
   pending: "pending",
   download_failed: "download_failed",
   parsing_complete: "parsing_complete",
+  creating_movie: "creating_movie",
 };
 
 // Safe fallback config for unknown statuses

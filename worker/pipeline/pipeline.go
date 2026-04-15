@@ -136,6 +136,11 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	jobID := job.ID.Hex()
 	log.Printf("[PIPELINE] Starting processing for job %s", jobID)
 
+	// Handle direct_upload source - download from B2 temp path
+	if job.Source == "direct_upload" {
+		return p.processDirectUploadJob(ctx, job)
+	}
+
 	// CRITICAL: Create safe variables for metadata fields to prevent nil pointer access
 	// These will be used throughout the processing instead of direct job.Metadata.* access
 	title := "video"
@@ -1025,6 +1030,228 @@ func (p *Pipeline) validateWithFFprobe(filePath string) error {
 	return nil
 }
 
+// processDirectUploadJob processes a direct upload job - downloads from B2 temp, processes, uploads to final
+func (p *Pipeline) processDirectUploadJob(ctx context.Context, job *models.IngestionJob) error {
+	jobID := job.ID.Hex()
+	log.Printf("[DIRECT_UPLOAD] Starting processing for job %s", jobID)
+
+	metadata := job.Metadata
+	if metadata == nil {
+		return fmt.Errorf("job metadata is nil")
+	}
+
+	title := metadata.Title
+	if title == "" {
+		title = "untitled"
+	}
+	log.Printf("[DIRECT_UPLOAD] Processing: title=%s, temp_url=%s", title, job.TempFileURL)
+
+	// Update status to downloading
+	if err := p.updateStatus(jobID, models.IngestionStatusDownloading, 10); err != nil {
+		return fmt.Errorf("failed to update status: %w", err)
+	}
+
+	// Step 1: Download temp file from B2 to local temp storage
+	localTempPath, err := p.downloadDirectUploadTempFile(job)
+	if err != nil {
+		errMsg := fmt.Sprintf("failed to download temp file: %v", err)
+		log.Printf("[DIRECT_UPLOAD] ERROR: %s", errMsg)
+		if fErr := p.failJobWithStatus(jobID, models.IngestionStatusDownloadFailed, errMsg); fErr != nil {
+			log.Printf("[DIRECT_UPLOAD] Failed to mark job as failed: %v", fErr)
+		}
+		return fmt.Errorf(errMsg)
+	}
+	log.Printf("[DIRECT_UPLOAD] Downloaded temp file to: %s", localTempPath)
+
+	// Update status to processing
+	if err := p.updateStatus(jobID, models.IngestionStatusProcessing, 30); err != nil {
+		return fmt.Errorf("failed to update status: %w", err)
+	}
+
+	// Step 2: Process video (add logo, generate HLS)
+	canonicalFolderName := fmt.Sprintf("%d_%s", time.Now().UnixNano(), createMovieSlug(title))
+	hlsDir, masterPath, err := p.processVideo(job, localTempPath, canonicalFolderName)
+	if err != nil {
+		errMsg := fmt.Sprintf("video processing failed: %v", err)
+		log.Printf("[DIRECT_UPLOAD] ERROR: %s", errMsg)
+		if fErr := p.failJobWithStatus(jobID, models.IngestionStatusFailed, errMsg); fErr != nil {
+			log.Printf("[DIRECT_UPLOAD] Failed to mark job as failed: %v", fErr)
+		}
+		return fmt.Errorf(errMsg)
+	}
+	log.Printf("[DIRECT_UPLOAD] Processed video: hls_dir=%s, master=%s", hlsDir, masterPath)
+
+	// Cleanup temp input file after processing
+	if err := os.Remove(localTempPath); err != nil {
+		log.Printf("[DIRECT_UPLOAD] Warning: failed to cleanup temp input file: %v", err)
+	} else {
+		log.Printf("[DIRECT_UPLOAD] Cleaned up temp input file")
+	}
+
+	// Update status to uploading
+	if err := p.updateStatus(jobID, models.IngestionStatusUploading, 60); err != nil {
+		return fmt.Errorf("failed to update status: %w", err)
+	}
+
+	// Step 3: Upload HLS output to B2 final path
+	folderName := canonicalFolderName
+	streamingURL, err := p.uploadAdaptiveHLSFiles(job, hlsDir, folderName)
+	if err != nil {
+		errMsg := fmt.Sprintf("failed to upload processed files: %v", err)
+		log.Printf("[DIRECT_UPLOAD] ERROR: %s", errMsg)
+		if fErr := p.failJobWithStatus(jobID, models.IngestionStatusFailed, errMsg); fErr != nil {
+			log.Printf("[DIRECT_UPLOAD] Failed to mark job as failed: %v", fErr)
+		}
+		return fmt.Errorf(errMsg)
+	}
+	if streamingURL == "" {
+		return fmt.Errorf("no master playlist found")
+	}
+	log.Printf("[DIRECT_UPLOAD] Uploaded HLS to: %s", streamingURL)
+
+	// Update job with output paths
+	if err := p.jobRepo.UpdateOutputPath(ctx, jobID, streamingURL); err != nil {
+		log.Printf("[DIRECT_UPLOAD] Failed to update output path: %v", err)
+	}
+	// Also mark source file as deleted
+	if err := p.jobRepo.MarkSourceFileDeleted(ctx, jobID, "movies/"+folderName); err != nil {
+		log.Printf("[DIRECT_UPLOAD] Failed to mark source deleted: %v", err)
+	}
+
+	// Update status to creating movie
+	if err := p.updateStatus(jobID, models.IngestionStatusCreatingMovie, 80); err != nil {
+		return fmt.Errorf("failed to update status: %w", err)
+	}
+
+	// Step 4: Create movie in MongoDB
+	movieResult, err := p.createMovieInDatabase(job, metadata, streamingURL)
+	if err != nil {
+		errMsg := fmt.Sprintf("failed to create movie in DB: %v", err)
+		log.Printf("[DIRECT_UPLOAD] ERROR: %s", errMsg)
+		if fErr := p.failJobWithStatus(jobID, models.IngestionStatusFailed, errMsg); fErr != nil {
+			log.Printf("[DIRECT_UPLOAD] Failed to mark job as failed: %v", err)
+		}
+		return fmt.Errorf(errMsg)
+	}
+
+	// Step 5: Generate clips (optional - don't fail if clips fail)
+	if movieResult != nil {
+		movieCode := fmt.Sprintf("%d", time.Now().Unix()%10000) // Generate a code since we didn't get one from DB
+
+		// Create a simple MovieCreationResult for clip generation
+		clipMovieResult := &MovieCreationResult{
+			MovieID:      movieResult,
+			Code:         movieCode,
+			Slug:         createMovieSlug(title),
+			DisplayTitle: title,
+		}
+
+		log.Printf("[DIRECT_UPLOAD] Generating clips for movie: %s", title)
+		if clipErr := p.generateClips(ctx, canonicalFolderName, movieCode, clipMovieResult, masterPath, hlsDir); clipErr != nil {
+			log.Printf("[DIRECT_UPLOAD] WARNING: Clip generation failed: %v", clipErr)
+			log.Printf("[DIRECT_UPLOAD] Movie created successfully, but clips were not generated")
+		} else {
+			log.Printf("[DIRECT_UPLOAD] Clips generated successfully")
+		}
+	}
+
+	// Update status to completed
+	if err := p.updateStatus(jobID, models.IngestionStatusCompleted, 100); err != nil {
+		log.Printf("[DIRECT_UPLOAD] Failed to mark job completed: %v", err)
+	}
+
+	// Step 6: Cleanup B2 temp file
+	if err := p.cleanupTempFile(job); err != nil {
+		log.Printf("[DIRECT_UPLOAD] Warning: failed to cleanup temp file from B2: %v", err)
+	} else {
+		log.Printf("[DIRECT_UPLOAD] Cleaned up B2 temp file")
+	}
+
+	log.Printf("[DIRECT_UPLOAD] Job %s completed successfully", jobID)
+	return nil
+}
+
+// downloadDirectUploadTempFile downloads the temp file from B2 to local storage
+func (p *Pipeline) downloadDirectUploadTempFile(job *models.IngestionJob) (string, error) {
+	if job.TempFileURL == "" {
+		return "", fmt.Errorf("temp file URL is empty")
+	}
+
+	// Extract the B2 key from the URL
+	remotePath := extractB2KeyFromURL(job.TempFileURL)
+	if remotePath == "" {
+		// If extraction fails, try using the DetailURL as fallback
+		remotePath = extractB2KeyFromURL(job.DetailURL)
+	}
+	if remotePath == "" {
+		remotePath = job.TempFileURL
+	}
+
+	// Generate local temp filename
+	ext := ".mp4"
+	if idx := strings.LastIndex(remotePath, "."); idx != -1 {
+		ext = remotePath[idx:]
+	}
+	localFilename := fmt.Sprintf("%d_temp%s", time.Now().UnixNano(), ext)
+	localPath := filepath.Join(p.config.TempDir, localFilename)
+
+	log.Printf("[DIRECT_UPLOAD] Downloading from B2: remote=%s, local=%s", remotePath, localPath)
+
+	// Download from B2
+	if err := p.storage.Download(remotePath, localPath); err != nil {
+		return "", fmt.Errorf("failed to download from B2: %w", err)
+	}
+
+	// Verify file exists
+	if fileInfo, err := os.Stat(localPath); err != nil {
+		return "", fmt.Errorf("downloaded file not found: %w", err)
+	} else {
+		log.Printf("[DIRECT_UPLOAD] Downloaded file: size=%d", fileInfo.Size())
+	}
+	return localPath, nil
+}
+
+// cleanupTempFile removes the temp file from B2
+func (p *Pipeline) cleanupTempFile(job *models.IngestionJob) error {
+	// Prefer TempFileKey if available (set from frontend ingestion job creation)
+	tempKey := job.TempFileKey
+
+	// Fallback: extract from URL if key not provided
+	if tempKey == "" && job.TempFileURL != "" {
+		tempKey = extractB2KeyFromURL(job.TempFileURL)
+	}
+
+	// Last fallback: use DetailURL
+	if tempKey == "" && job.DetailURL != "" {
+		tempKey = extractB2KeyFromURL(job.DetailURL)
+	}
+
+	if tempKey == "" {
+		log.Printf("[DIRECT_UPLOAD] No temp file key to cleanup")
+		return nil
+	}
+
+	log.Printf("[DIRECT_UPLOAD] Deleting temp file: %s", tempKey)
+
+	if err := p.storage.Delete(tempKey); err != nil {
+		return fmt.Errorf("failed to delete temp file from B2: %w", err)
+	}
+
+	log.Printf("[DIRECT_UPLOAD] Deleted temp file: %s", tempKey)
+	return nil
+}
+
+// extractB2KeyFromURL extracts the B2 key from a CDN URL
+func extractB2KeyFromURL(cdnURL string) string {
+	// Expected format: https://cdn.example.com/file/filmorauznet/temp/movies/filename.mp4
+	// or: https://cdn.example.com/file/filmorauznet/movies/...
+	parts := strings.Split(cdnURL, "/file/filmorauznet/")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[1]
+}
+
 // processVideo processes the video with FFmpeg (watermark removal + adaptive HLS)
 // This function now generates multi-bitrate adaptive HLS with a master playlist
 func (p *Pipeline) processVideo(job *models.IngestionJob, inputPath string, canonicalFolderName string) (hlsDir, processedMasterPath string, err error) {
@@ -1278,13 +1505,72 @@ func (p *Pipeline) uploadProcessedFiles(job *models.IngestionJob, hlsDir string,
 }
 
 // createMovieInDatabase creates the movie entry in the main database
+// Uses the same logic as createMovieInDatabaseWithEnrichment for direct upload
 func (p *Pipeline) createMovieInDatabase(job *models.IngestionJob, metadata *models.ParsedMovieMetadata, streamingURL string) (interface{}, error) {
-	// This would call the backend API to create a movie
-	// For now, return a placeholder
-	p.log(job.ID.Hex(), "Movie created in database", "info")
+	jobID := job.ID.Hex()
 
-	// Return a dummy object ID
-	return "placeholder-movie-id", nil
+	if metadata == nil {
+		return nil, fmt.Errorf("metadata is nil")
+	}
+
+	// Check if movie collection is available
+	if p.movieCol == nil {
+		log.Printf("[DIRECT_UPLOAD] ERROR: Movie collection not available, cannot create movie")
+		return nil, fmt.Errorf("movie collection not initialized")
+	}
+
+	// Generate sequential code for the movie
+	code, err := p.getNextMovieCode(context.Background())
+	if err != nil {
+		log.Printf("[DIRECT_UPLOAD] ERROR: Failed to generate sequential code: %v", err)
+		return nil, fmt.Errorf("failed to generate movie code: %w", err)
+	}
+	log.Printf("[DIRECT_UPLOAD] Generated sequential movie code: %s", code)
+
+	// Build the movie document
+	displayTitle := cleanMovieTitle(metadata.Title)
+	if metadata.Title == "" {
+		displayTitle = "Untitled"
+	}
+
+	displaySlug := createMovieSlug(displayTitle)
+	displayDescription := metadata.Description
+	if displayDescription == "" {
+		displayDescription = "No description available"
+	}
+
+	movieDoc := bson.M{
+		"code":           code,
+		"slug":           displaySlug,
+		"title":          displayTitle,
+		"original_title": metadata.Title,
+		"description":    displayDescription,
+		"year":           metadata.Year,
+		"genre":          metadata.Genres,
+		"country":        metadata.Country,
+		"duration":       metadata.Duration,
+		"poster_url":     metadata.Poster,
+		"backdrop_url":   metadata.Backdrop,
+		"video_url":      streamingURL,
+		"source_type":    "direct_hls",
+		"quality":        job.Quality,
+		"is_premium":     job.IsPremium,
+		"status":         "published",
+		"created_at":     time.Now(),
+		"updated_at":     time.Now(),
+	}
+
+	// Insert the movie
+	result, err := p.movieCol.InsertOne(context.Background(), movieDoc)
+	if err != nil {
+		log.Printf("[DIRECT_UPLOAD] ERROR: Failed to insert movie: %v", err)
+		return nil, fmt.Errorf("failed to create movie: %w", err)
+	}
+
+	log.Printf("[DIRECT_UPLOAD] Movie created: id=%v, code=%s, title=%s", result.InsertedID, code, displayTitle)
+	p.log(jobID, fmt.Sprintf("Movie created: %s (code: %s)", displayTitle, code), "info")
+
+	return result.InsertedID, nil
 }
 
 // createMovieInDatabaseWithEnrichment creates movie with enriched metadata

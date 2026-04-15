@@ -178,6 +178,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 
 		// Ingestion job management
 		admin.POST("/ingestion/jobs", ingestionHandler.CreateIngestionJob)
+		admin.POST("/ingestion/direct-upload", ingestionHandler.CreateDirectUploadJob)
 		admin.GET("/ingestion/jobs", ingestionHandler.ListIngestionJobs)
 		admin.GET("/ingestion/jobs/:id", ingestionHandler.GetIngestionJob)
 		admin.POST("/ingestion/jobs/:id/retry", ingestionHandler.RetryIngestionJob)

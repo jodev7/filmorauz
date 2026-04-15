@@ -438,6 +438,91 @@ func (h *IngestionHandler) CreateIngestionJob(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"data": job, "message": "Ingestion job created"})
 }
 
+// CreateDirectUploadJob creates a new ingestion job for direct MP4 upload
+// POST /api/admin/ingestion/direct-upload
+type DirectUploadInput struct {
+	Title       string   `json:"title" binding:"required"`
+	TempFileURL string   `json:"temp_file_url" binding:"required"`
+	TempFileKey string   `json:"temp_file_key"` // B2 temp key for cleanup tracking
+	PosterURL   string   `json:"poster_url"`
+	BackdropURL string   `json:"backdrop_url"`
+	Year        int      `json:"year"`
+	Genres      []string `json:"genres"`
+	Country     string   `json:"country"`
+	Duration    int      `json:"duration"`
+	Quality     string   `json:"quality"`
+	IsPremium   bool     `json:"is_premium"`
+}
+
+func (h *IngestionHandler) CreateDirectUploadJob(c *gin.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[PANIC RECOVERY] CreateDirectUploadJob panicked: %v\n%s", r, debug.Stack())
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "Internal server error",
+				"details": fmt.Sprintf("recovered from panic: %v", r),
+			})
+		}
+	}()
+
+	var input DirectUploadInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		log.Printf("[INGESTION] DIRECT_UPLOAD: invalid request - %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	log.Printf("[INGESTION] DIRECT_UPLOAD: creating job - title=%s, temp_file_url=%s",
+		input.Title, input.TempFileURL)
+
+	// Validate temp_file_url
+	if input.TempFileURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "temp_file_url is required"})
+		return
+	}
+
+	// Build metadata from input
+	metadata := &models.ParsedMovieMetadata{
+		Title:        input.Title,
+		Poster:       input.PosterURL,
+		Backdrop:     input.BackdropURL,
+		Year:         input.Year,
+		Genres:       input.Genres,
+		Country:      input.Country,
+		Duration:     input.Duration,
+		VideoPageURL: input.TempFileURL,
+	}
+
+	// Create job with direct_upload source
+	job := &models.IngestionJob{
+		Title:       input.Title,
+		Source:      "direct_upload",
+		SourceID:    "",                // No source_id for direct upload
+		DetailURL:   input.TempFileURL, // Store temp URL in DetailURL
+		TempFileURL: input.TempFileURL,
+		TempFileKey: input.TempFileKey, // Store B2 temp key for cleanup tracking
+		Status:      models.IngestionStatusPending,
+		Progress:    0,
+		Steps:       models.JobSteps{},
+		Logs:        []models.IngestionLog{},
+		Metadata:    metadata,
+		Quality:     input.Quality,
+		IsPremium:   input.IsPremium,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := h.jobRepo.Create(ctx, job); err != nil {
+		log.Printf("[INGESTION] DIRECT_UPLOAD: failed to create job - %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create job"})
+		return
+	}
+
+	log.Printf("[INGESTION] DIRECT_UPLOAD: created job %s", job.ID.Hex())
+	c.JSON(http.StatusCreated, gin.H{"data": job, "message": "Direct upload ingestion job created"})
+}
+
 // GetIngestionJob gets a job by ID
 // GET /api/ingestion/jobs/:id
 func (h *IngestionHandler) GetIngestionJob(c *gin.Context) {
@@ -900,7 +985,7 @@ func (h *IngestionHandler) ListCatalog(c *gin.Context) {
 
 // CatalogCategory represents a single genre/category from a source site
 type CatalogCategory struct {
-	ID   string `json:"id"`   // same as slug, for frontend keying
+	ID   string `json:"id"` // same as slug, for frontend keying
 	Name string `json:"name"`
 	URL  string `json:"url"`
 	Slug string `json:"slug"`

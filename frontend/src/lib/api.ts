@@ -8,7 +8,8 @@ export type VideoSourceType =
   | "direct_mp4" 
   | "direct_hls" 
   | "external_restricted"
-  | "ingestion";
+  | "ingestion"
+  | "direct_upload";
 
 export interface Movie {
   id: string;
@@ -811,13 +812,14 @@ export async function rejectMovie(token: string, id: string): Promise<void> {
   }
 }
 
-export type MovieAssetType = "poster" | "backdrop" | "video";
+export type MovieAssetType = "poster" | "backdrop" | "video" | "temp_movie";
 
 export interface MovieAssetUploadResponse {
   message: string;
   url: string;
   type: MovieAssetType;
   filename: string;
+  temp_key?: string; // For temp_movie uploads
 }
 
 export async function uploadMovieAsset(
@@ -856,7 +858,8 @@ export type IngestionStatus =
   | "completed" 
   | "failed"
   | "download_failed"
-  | "parsing_complete";
+  | "parsing_complete"
+  | "creating_movie";
 
 export interface IngestionLog {
   timestamp: string;
@@ -910,6 +913,11 @@ export interface IngestionJob {
   speed_mbps?: number;
   eta_seconds?: number;
   message?: string;
+  // Direct upload fields
+  temp_file_url?: string;
+  temp_file_key?: string;
+  quality?: string;
+  is_premium?: boolean;
 }
 
 export interface SearchResult {
@@ -977,6 +985,39 @@ export async function createIngestionJob(
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || "Failed to create job");
+  }
+  const json = await res.json();
+  return json.data;
+}
+
+// Direct upload input type
+export interface DirectUploadInput {
+  title: string;
+  temp_file_url: string;
+  temp_file_key?: string; // B2 temp key for cleanup tracking
+  poster_url?: string;
+  backdrop_url?: string;
+  year?: number;
+  genres?: string[];
+  country?: string;
+  duration?: number;
+  quality?: string;
+  is_premium?: boolean;
+}
+
+// Create a direct upload ingestion job (for direct MP4 upload flow)
+export async function createDirectUploadJob(
+  token: string,
+  input: DirectUploadInput
+): Promise<IngestionJob> {
+  const res = await fetch(`${API_URL}/admin/ingestion/direct-upload`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to create direct upload job");
   }
   const json = await res.json();
   return json.data;

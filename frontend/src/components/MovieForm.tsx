@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Loader2, Plus, X, Info, Upload, CheckCircle, AlertCircle } from "lucide-react";
-import { MovieInput, VideoSourceType, uploadMovieAsset } from "@/lib/api";
+import { MovieInput, VideoSourceType, uploadMovieAsset, createDirectUploadJob, DirectUploadInput, IngestionJob } from "@/lib/api";
 
 const QUALITIES = ["480p", "720p", "1080p", "1080p Ultra", "4K"];
 const GENRE_OPTIONS = [
@@ -32,10 +32,22 @@ const SOURCE_TYPE_OPTIONS: { value: VideoSourceType; label: string; description:
     label: "External (Restricted)", 
     description: "For sources that block external playback. Shows restricted message." 
   },
+  { 
+    value: "direct_upload", 
+    label: "Direct Upload", 
+    description: "Upload MP4 file for processing (HLS encoding, clips generation)." 
+  },
 ];
 
 interface UploadState {
   status: "idle" | "uploading" | "success" | "error";
+  message?: string;
+  tempKey?: string; // For temp_movie uploads
+}
+
+interface DirectUploadState {
+  status: "idle" | "uploading" | "creating_job" | "job_created" | "error";
+  job?: IngestionJob;
   message?: string;
 }
 
@@ -87,6 +99,9 @@ export default function MovieForm({
     video: { status: "idle" },
   });
 
+  const [directUploadJob, setDirectUploadJob] = useState<DirectUploadState>({ status: "idle" });
+  const [tempFileKey, setTempFileKey] = useState<string>("");
+
   const set = (field: keyof MovieInput, value: unknown) => {
     setForm((prev) => ({ ...prev, [field]: value }));
   };
@@ -106,17 +121,23 @@ export default function MovieForm({
     }));
 
     try {
-      const result = await uploadMovieAsset(token, file, type);
+      // For direct_upload source type, upload as temp_movie for processing pipeline
+      const uploadType = form.source_type === "direct_upload" ? "temp_movie" : type;
+      const result = await uploadMovieAsset(token, file, uploadType);
+      
       setUploads(prev => ({
         ...prev,
-        [type]: { status: "success", message: result.url }
+        [type]: { status: "success", message: result.url, tempKey: result.temp_key }
       }));
       if (type === "poster") {
         set("poster_url", result.url);
       } else if (type === "backdrop") {
         set("backdrop_url", result.url);
       } else {
+        // For video, store both url and temp_key for ingestion job
         set("video_url", result.url);
+        // Store temp_key separately for ingestion job
+        setTempFileKey(result.temp_key || "");
       }
     } catch (err) {
       setUploads(prev => ({
@@ -162,6 +183,46 @@ export default function MovieForm({
       setError("Video URL is required for this source type");
       return;
     }
+    if (form.source_type === "direct_upload") {
+      // Handle direct upload flow
+      if (!token) {
+        setError("Authentication required");
+        return;
+      }
+      if (!form.title || !form.poster_url) {
+        setError("Title and poster are required for direct upload");
+        return;
+      }
+      if (uploads.video.status !== "success" || !form.video_url) {
+        setError("Please upload a video file first");
+        return;
+      }
+
+      setLoading(true);
+      try {
+        // Create direct upload ingestion job
+        const input: DirectUploadInput = {
+          title: form.title,
+          temp_file_url: form.video_url,
+          temp_file_key: tempFileKey, // Include temp file key for cleanup tracking
+          poster_url: form.poster_url,
+          backdrop_url: form.backdrop_url,
+          year: form.year,
+          genres: form.genre,
+          country: form.country,
+          duration: form.duration,
+          quality: form.quality,
+          is_premium: form.is_premium,
+        };
+        const job = await createDirectUploadJob(token, input);
+        setDirectUploadJob({ status: "job_created", job });
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Failed to create job");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
 
     setLoading(true);
     try {
@@ -174,9 +235,11 @@ export default function MovieForm({
   };
 
   // Check if we need video_url field based on source type
-  const requiresVideoURL = form.source_type !== "iframe_embed";
+  const requiresVideoURL = form.source_type !== "iframe_embed" && form.source_type !== "direct_upload";
   // Check if we need embed_url field based on source type  
   const requiresEmbedURL = form.source_type === "iframe_embed";
+  // Check if we show video upload area (includes direct_upload)
+  const showsVideoUpload = form.source_type === "direct_mp4" || form.source_type === "direct_hls" || form.source_type === "direct_upload";
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6 max-w-3xl">
@@ -394,11 +457,11 @@ export default function MovieForm({
         </div>
       )}
 
-      {/* Video URL (for direct types) */}
-      {requiresVideoURL && (
+      {/* Video Upload (for direct types including direct_upload) */}
+      {showsVideoUpload && (
         <div>
           <label className="block text-sm text-gray-400 mb-1.5">
-            Upload Video <span className="text-brand-red">*</span>
+            {form.source_type === "direct_upload" ? "Upload Video (for processing)" : "Upload Video"} <span className="text-brand-red">*</span>
           </label>
           <div className="upload-box">
             {uploads.video.status === "uploading" && (
@@ -572,12 +635,17 @@ export default function MovieForm({
       <div className="flex items-center gap-3 pt-2">
         <button
           type="submit"
-          disabled={loading}
+          disabled={loading || directUploadJob.status === "job_created"}
           className="flex items-center gap-2 bg-brand-red hover:bg-orange-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold px-8 py-3 rounded-xl transition-colors"
         >
           {loading && <Loader2 size={16} className="animate-spin" />}
           {loading ? "Saving..." : submitLabel}
         </button>
+        {directUploadJob.status === "job_created" && (
+          <span className="text-green-500 text-sm">
+            Ingestion job created! Check job status in Ingestion Jobs.
+          </span>
+        )}
       </div>
 
       {/* Field styles injected via style tag for simplicity */}

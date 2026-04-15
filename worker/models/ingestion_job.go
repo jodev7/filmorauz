@@ -74,6 +74,12 @@ type IngestionJob struct {
 	// Movie data for Telegram (cached after creation for idempotency)
 	MovieCode string `bson:"movie_code,omitempty" json:"movie_code,omitempty"`
 	MovieSlug string `bson:"movie_slug,omitempty" json:"movie_slug,omitempty"`
+
+	// Direct upload specific fields
+	TempFileURL string `bson:"temp_file_url,omitempty" json:"temp_file_url,omitempty"`
+	TempFileKey string `bson:"temp_file_key,omitempty" json:"temp_file_key,omitempty"`
+	Quality     string `bson:"quality,omitempty" json:"quality,omitempty"`
+	IsPremium   bool   `bson:"is_premium,omitempty" json:"is_premium,omitempty"`
 }
 
 // JobSteps tracks the completion status of each pipeline step

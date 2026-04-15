@@ -1146,6 +1146,7 @@ class DownloaderService:
         # YouTube cookies file from env (check both YTDLP_COOKIES_FILE and YTDLP_COOKIE_FILE for compatibility)
         cookies_path = os.environ.get("YTDLP_COOKIES_FILE", "") or os.environ.get("YTDLP_COOKIE_FILE", "")
         user_agent = os.environ.get("YTDLP_USER_AGENT", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.210 Mobile Safari/537.36")
+        proxy = os.environ.get("YTDLP_PROXY", "")
 
         cmd = [
             _sys.executable, "-m", "yt_dlp",
@@ -1166,6 +1167,11 @@ class DownloaderService:
             else:
                 logger.warning(f"[YTDLP] Cookies file not found: {cookies_path}")
 
+        # Add proxy if configured
+        if proxy:
+            cmd.extend(["--proxy", proxy])
+            logger.info(f"[YTDLP] Using proxy: {proxy}")
+
         cmd.append(url)
 
         logger.info(f"[YTDLP] Downloading: {url[:80]}")
@@ -1183,7 +1189,7 @@ class DownloaderService:
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "").strip()
             err_lower = err.lower()
-            # Detect anti-bot / authentication required errors
+            # Detect anti-bot / authentication required errors - these are blocked, don't retry
             if any(phrase in err_lower for phrase in [
                 "sign in to confirm you're not a bot",
                 "this video is available to members only",
@@ -1197,7 +1203,7 @@ class DownloaderService:
                 "video unavailable",
             ]):
                 raise DownloadError(
-                    "YouTube download failed: " + err[:200]
+                    "youtube_blocked: " + err[:200]
                 )
             raise DownloadError("yt-dlp failed: " + err[:300])
 

@@ -246,11 +246,17 @@ func (h *UploadHandler) saveToCDNWithKey(file multipart.File, mediaKey string) (
 	return cdnURL, nil
 }
 
-// UploadMovieAssets handles file uploads for movie assets (poster, backdrop, video)
+// UploadMovieAssets handles file uploads for movie assets (poster, backdrop, video, temp_movie)
 func (h *UploadHandler) UploadMovieAssets(c *gin.Context) {
 	fileType := c.PostForm("type")
-	if fileType != "poster" && fileType != "backdrop" && fileType != "video" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid type: must be 'poster', 'backdrop', or 'video'"})
+	if fileType != "poster" && fileType != "backdrop" && fileType != "video" && fileType != "temp_movie" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid type: must be 'poster', 'backdrop', 'video', or 'temp_movie'"})
+		return
+	}
+
+	// Handle temp_movie (raw MP4 for ingestion pipeline)
+	if fileType == "temp_movie" {
+		h.uploadTempMovie(c)
 		return
 	}
 
@@ -352,6 +358,147 @@ func (h *UploadHandler) saveMovieAssetLocal(file multipart.File, filename string
 		return h.config.GetBaseURL() + "/movies/" + subDir + "/" + filename, nil
 	}
 	return h.config.GetCDNFileURL("movies/" + subDir + "/" + filename), nil
+}
+
+// uploadTempMovie handles direct MP4 upload to B2 temp path for ingestion pipeline
+// This endpoint receives raw movie files and uploads to temp storage (not final movies path)
+func (h *UploadHandler) uploadTempMovie(c *gin.Context) {
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no file provided"})
+		return
+	}
+	defer file.Close()
+
+	// Validate it's a video file
+	allowedTypes := map[string]bool{
+		"video/mp4":       true,
+		"video/webm":      true,
+		"video/ogg":       true,
+		"video/quicktime": true,
+	}
+	contentType := header.Header.Get("Content-Type")
+	if !allowedTypes[contentType] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file type. allowed: mp4, webm, ogg, mov"})
+		return
+	}
+
+	// Max file size: 10GB for raw movie files
+	maxSize := int64(10 * 1024 * 1024 * 1024)
+	if header.Size > maxSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file too large (max 10GB)"})
+		return
+	}
+
+	// Generate temp filename with timestamp
+	ext := filepath.Ext(header.Filename)
+	if ext == "" {
+		ext = ".mp4"
+	}
+	timestamp := time.Now().UnixNano()
+	filename := fmt.Sprintf("%d%s", timestamp, ext)
+	tempKey := "temp/movies/" + filename
+
+	log.Printf("[TEMP_UPLOAD] Uploading temp movie: %s (size: %d)", tempKey, header.Size)
+
+	var savedURL string
+	if h.config.IsDev {
+		// DEV mode - save locally
+		savedURL, err = h.saveTempMovieLocal(file, filename)
+		if err != nil {
+			log.Printf("[TEMP_UPLOAD] Error saving temp movie locally: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save temp file"})
+			return
+		}
+	} else {
+		// PROD mode - upload to B2 temp path via worker
+		workerURL := h.config.WorkerUploadURL
+		if workerURL == "" {
+			log.Printf("[TEMP_UPLOAD] Error: WORKER_UPLOAD_URL not configured")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload service not configured"})
+			return
+		}
+
+		// Seek to beginning
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
+			return
+		}
+
+		// Create multipart form
+		var b bytes.Buffer
+		wr := multipart.NewWriter(&b)
+		part, err := wr.CreateFormFile("file", filename)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload form"})
+			return
+		}
+		if _, err := io.Copy(part, file); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
+			return
+		}
+		wr.Close()
+
+		// Upload to worker for temp storage
+		resp, err := http.Post(workerURL+"/upload-temp-movie", wr.FormDataContentType(), &b)
+		if err != nil {
+			log.Printf("[TEMP_UPLOAD] Error uploading to worker: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			log.Printf("[TEMP_UPLOAD] Worker returned status %d: %s", resp.StatusCode, body)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed"})
+			return
+		}
+
+		var result map[string]string
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			log.Printf("[TEMP_UPLOAD] Error decoding response: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid upload response"})
+			return
+		}
+
+		savedURL = result["url"]
+		if savedURL == "" {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed - no URL returned"})
+			return
+		}
+	}
+
+	log.Printf("[TEMP_UPLOAD] Uploaded temp movie: url=%s", savedURL)
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":  "Temp movie uploaded successfully",
+		"url":      savedURL,
+		"temp_key": tempKey,
+		"filename": filename,
+	})
+}
+
+// saveTempMovieLocal saves temp movie to local storage
+func (h *UploadHandler) saveTempMovieLocal(file multipart.File, filename string) (string, error) {
+	storageDir := filepath.Join(h.config.UploadsDir, "temp", "movies")
+	if err := os.MkdirAll(storageDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create storage directory: %w", err)
+	}
+
+	filePath := filepath.Join(storageDir, filename)
+	dst, err := os.Create(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create file: %w", err)
+	}
+	defer dst.Close()
+
+	_, err = io.Copy(dst, file)
+	if err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return h.config.GetBaseURL() + "/temp/movies/" + filename, nil
 }
 
 // adMediaAllowedMIME maps canonical MIME types to their media category (image/video).

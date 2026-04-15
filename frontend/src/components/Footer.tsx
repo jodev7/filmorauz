@@ -19,6 +19,7 @@ export default function Footer() {
             </Link>
             <p className="text-gray-500 text-sm max-w-xs">
               {t("footer.tagline")}
+              Disclaimer: Filmlarga bo'lgan huquq ularning mualliflariga tegishli. Barcha filmlar faqat ma'lumot olish uchun mo'ljallangan. Foydalanuvchilar joylashtirgan noqonuniy materiallar uchun ma'muriyat javobgar emas! Har qanday film mualliflik huquqi egasining iltimosiga binoan olib tashlanadi.
             </p>
           </div>
 

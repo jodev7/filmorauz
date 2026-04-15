@@ -75,6 +75,11 @@ func (h *ProcessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodPost && r.URL.Path == "/upload-temp-movie" {
+		h.handleUploadTempMovie(w, r)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -349,5 +354,51 @@ func (h *ProcessHandler) handleUploadTelegramPost(w http.ResponseWriter, r *http
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"url": publicURL,
+	})
+}
+
+// handleUploadTempMovie handles direct MP4 upload to B2 temp path
+// This stores raw movie files in temp/movies/ for the ingestion pipeline
+func (h *ProcessHandler) handleUploadTempMovie(w http.ResponseWriter, r *http.Request) {
+	if h.b2Store == nil {
+		h.sendError(w, "B2 storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		h.sendError(w, fmt.Sprintf("no file provided: %v", err), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		h.sendError(w, fmt.Sprintf("failed to read file: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext == "" {
+		ext = ".mp4"
+	}
+	filename := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
+	tempKey := "temp/movies/" + filename
+
+	log.Printf("[B2] Uploading temp movie: key=%s, size=%d", tempKey, len(data))
+
+	publicURL, err := h.b2Store.UploadData(tempKey, data, header.Header.Get("Content-Type"))
+	if err != nil {
+		log.Printf("[B2] Temp movie upload failed: %v", err)
+		h.sendError(w, fmt.Sprintf("B2 upload failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[B2] Temp movie upload success: %s", publicURL)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"url":      publicURL,
+		"temp_key": tempKey,
 	})
 }

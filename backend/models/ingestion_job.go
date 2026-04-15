@@ -72,6 +72,12 @@ type IngestionJob struct {
 	TotalBytes      int64   `bson:"total_bytes,omitempty" json:"total_bytes,omitempty"`
 	SpeedMBps       float64 `bson:"speed_mbps,omitempty" json:"speed_mbps,omitempty"`
 	EtaSeconds      int     `bson:"eta_seconds,omitempty" json:"eta_seconds,omitempty"`
+
+	// Direct upload specific fields
+	TempFileURL string `bson:"temp_file_url,omitempty" json:"temp_file_url,omitempty"` // Temp file URL (B2 path) for direct upload
+	TempFileKey string `bson:"temp_file_key,omitempty" json:"temp_file_key,omitempty"` // Temp file B2 key for cleanup
+	Quality     string `bson:"quality,omitempty" json:"quality,omitempty"`             // Video quality (480p, 720p, etc.)
+	IsPremium   bool   `bson:"is_premium,omitempty" json:"is_premium,omitempty"`       // Premium content flag
 }
 
 // JobSteps tracks the completion status of each pipeline step
