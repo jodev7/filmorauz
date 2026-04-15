@@ -23,11 +23,12 @@ import (
 type IngestionHandler struct {
 	jobRepo    *repositories.JobRepository
 	parserURL  string
+	workerURL  string
 	httpClient *http.Client
 }
 
 // NewIngestionHandler creates a new ingestion handler
-func NewIngestionHandler(jobRepo *repositories.JobRepository, parserURL string) *IngestionHandler {
+func NewIngestionHandler(jobRepo *repositories.JobRepository, parserURL string, workerURL string) *IngestionHandler {
 	// Create HTTP client with explicit timeout
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
@@ -39,11 +40,12 @@ func NewIngestionHandler(jobRepo *repositories.JobRepository, parserURL string) 
 		},
 	}
 
-	log.Printf("[INGESTION] Handler initialized with parserURL: %s", parserURL)
+	log.Printf("[INGESTION] Handler initialized with parserURL: %s, workerURL: %s", parserURL, workerURL)
 
 	return &IngestionHandler{
 		jobRepo:    jobRepo,
 		parserURL:  parserURL,
+		workerURL:  workerURL,
 		httpClient: httpClient,
 	}
 }
@@ -521,6 +523,58 @@ func (h *IngestionHandler) CreateDirectUploadJob(c *gin.Context) {
 
 	log.Printf("[INGESTION] DIRECT_UPLOAD: created job %s", job.ID.Hex())
 	c.JSON(http.StatusCreated, gin.H{"data": job, "message": "Direct upload ingestion job created"})
+}
+
+// GetUploadURL returns a presigned upload URL for direct B2 upload
+// GET /api/get-upload-url?type=poster|backdrop|video&filename=abc.jpg
+func (h *IngestionHandler) GetUploadURL(c *gin.Context) {
+	fileType := c.Query("type")
+	filename := c.Query("filename")
+
+	if fileType == "" || filename == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "type and filename are required"})
+		return
+	}
+
+	if fileType != "poster" && fileType != "backdrop" && fileType != "video" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid type: must be poster, backdrop, or video"})
+		return
+	}
+
+	// Call worker to get presigned URL
+	if h.workerURL == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "worker service not configured"})
+		return
+	}
+
+	workerResp, err := h.httpClient.Get(h.workerURL + "/get-upload-url?type=" + fileType + "&filename=" + filename)
+	if err != nil {
+		log.Printf("[UPLOAD_URL] Failed to call worker: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get upload URL"})
+		return
+	}
+	defer workerResp.Body.Close()
+
+	if workerResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(workerResp.Body)
+		log.Printf("[UPLOAD_URL] Worker returned: %d %s", workerResp.StatusCode, body)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "worker error"})
+		return
+	}
+
+	var result map[string]string
+	if err := json.NewDecoder(workerResp.Body).Decode(&result); err != nil {
+		log.Printf("[UPLOAD_URL] Failed to decode response: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid response"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"upload_url": result["upload_url"],
+		"auth_token": result["auth_token"],
+		"file_key":   result["file_key"],
+		"cdn_url":    result["cdn_url"],
+	})
 }
 
 // GetIngestionJob gets a job by ID

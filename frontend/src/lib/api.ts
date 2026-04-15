@@ -909,9 +909,9 @@ export async function directB2Upload(
   const ext = file.name.split(".").pop() || "jpg";
   const filename = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
 
-  // Get presigned upload URL from worker
+  // Get presigned upload URL from backend API
   const urlResp = await fetch(
-    `${WORKER_URL}/get-upload-url?type=${type}&filename=${filename}`
+    `${API_URL}/get-upload-url?type=${type}&filename=${filename}`
   );
   if (!urlResp.ok) {
     const err = await urlResp.json();

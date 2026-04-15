@@ -161,6 +161,9 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	// Returns job where steps.download=true and steps.process=false
 	api.GET("/ingestion/jobs/worker/claim", ingestionHandler.WorkerClaimJob)
 
+	// Get presigned upload URL for direct B2 upload
+	api.GET("/get-upload-url", ingestionHandler.GetUploadURL)
+
 	// Admin routes — protected by JWT and admin role check
 	admin := api.Group("/admin")
 	admin.Use(middleware.RequireAdmin(authService))
