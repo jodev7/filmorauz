@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/filmorauz/worker/models"
@@ -115,20 +116,25 @@ func (r *JobRepository) GetPendingJobs(ctx context.Context, limit int) ([]*model
 // Returns nil if no jobs are available
 // NOTE: Claims jobs where steps.download is NOT true - worker will call parser to download
 func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob, error) {
+	// FIXED: Use $exists:false OR steps.download != true to find unprocessed jobs
+	// This ensures newly created jobs (without steps field or steps.download=false) are picked up
 	filter := bson.M{
 		"status": models.IngestionStatusPending,
 		"retry_count": bson.M{
 			"$lt": 3, // Max 3 retries
 		},
-		// Claim jobs where download is NOT complete - worker will call parser
-		"steps.download": bson.M{
-			"$ne": true,
+		"$or": []bson.M{
+			// Jobs where steps.download doesn't exist (newly created jobs)
+			{"steps.download": bson.M{"$exists": false}},
+			// OR steps.download is explicitly false
+			{"steps.download": false},
 		},
 	}
 
 	update := bson.M{
 		"$set": bson.M{
 			"status":     models.IngestionStatusProcessing,
+			"stage":      "download",
 			"updated_at": time.Now(),
 		},
 	}
@@ -136,15 +142,22 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 	opts := options.FindOneAndUpdate().
 		SetSort(bson.D{{Key: "created_at", Value: 1}})
 
+	log.Printf("[REPO] ClaimNextJob: querying for pending download jobs...")
+	log.Printf("[REPO] ClaimNextJob filter: status=pending, retry_count<3, steps.download=$exists:false OR steps.download=false")
+
 	var job models.IngestionJob
 	err := r.collection.FindOneAndUpdate(ctx, filter, update, opts).Decode(&job)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
+			log.Printf("[REPO] ClaimNextJob: no pending download jobs found (0 documents)")
 			return nil, nil // No jobs available
 		}
+		log.Printf("[REPO] ClaimNextJob: ERROR - %v", err)
 		return nil, err
 	}
 
+	log.Printf("[REPO] ClaimNextJob: CLAIMED job %s (status: pending -> processing, title: %s, source: %s)",
+		job.ID.Hex(), job.Title, job.Source)
 	return &job, nil
 }
 
@@ -152,10 +165,16 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 // This is called when steps.download=true but steps.process=false
 func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.IngestionJob, error) {
 	filter := bson.M{
-		"status":         models.IngestionStatusPending,
-		"retry_count":    bson.M{"$lt": 3},
+		"status":      models.IngestionStatusPending,
+		"retry_count": bson.M{"$lt": 3},
+		// Jobs where download is complete but process is NOT complete
 		"steps.download": true,
-		"steps.process":  bson.M{"$ne": true},
+		"steps.process": bson.M{
+			"$or": []bson.M{
+				{"$exists": false},
+				{"$ne": true},
+			},
+		},
 	}
 
 	update := bson.M{
@@ -166,6 +185,9 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 		},
 	}
 
+	log.Printf("[REPO] ClaimNextProcessingJob: querying for pending processing jobs...")
+	log.Printf("[REPO] ClaimNextProcessingJob filter: status=pending, retry_count<3, steps.download=true, steps.process=$exists:false OR steps.process!=true")
+
 	opts := options.FindOneAndUpdate().
 		SetSort(bson.D{{Key: "created_at", Value: 1}})
 
@@ -173,12 +195,91 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 	err := r.collection.FindOneAndUpdate(ctx, filter, update, opts).Decode(&job)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
+			log.Printf("[REPO] ClaimNextProcessingJob: no pending processing jobs found (0 documents)")
 			return nil, nil
 		}
+		log.Printf("[REPO] ClaimNextProcessingJob: ERROR - %v", err)
 		return nil, err
 	}
 
+	log.Printf("[REPO] ClaimNextProcessingJob: CLAIMED job %s (status: pending -> processing, title: %s, source: %s)",
+		job.ID.Hex(), job.Title, job.Source)
 	return &job, nil
+}
+
+// CountPendingJobs returns the count of pending jobs for debugging
+// This helps diagnose why worker isn't picking up jobs
+func (r *JobRepository) CountPendingJobs(ctx context.Context) (int64, error) {
+	// Count all pending jobs (regardless of steps)
+	filter := bson.M{
+		"status": models.IngestionStatusPending,
+	}
+	total, err := r.collection.CountDocuments(ctx, filter)
+	if err != nil {
+		return 0, err
+	}
+
+	// Count jobs needing download
+	downloadFilter := bson.M{
+		"status": models.IngestionStatusPending,
+		"$or": []bson.M{
+			{"steps.download": bson.M{"$exists": false}},
+			{"steps.download": false},
+		},
+	}
+	downloadJobs, err := r.collection.CountDocuments(ctx, downloadFilter)
+	if err != nil {
+		return 0, err
+	}
+
+	// Count jobs needing processing (download done, process not done)
+	processFilter := bson.M{
+		"status":         models.IngestionStatusPending,
+		"steps.download": true,
+		"$or": []bson.M{
+			{"steps.process": bson.M{"$exists": false}},
+			{"steps.process": false},
+		},
+	}
+	processJobs, err := r.collection.CountDocuments(ctx, processFilter)
+	if err != nil {
+		return 0, err
+	}
+
+	log.Printf("[REPO] Pending jobs: total=%d, download_needed=%d, process_needed=%d",
+		total, downloadJobs, processJobs)
+	return total, nil
+}
+
+// ResetStaleJobs resets jobs stuck in "processing" state for over 1 hour
+// This handles cases where worker died mid-processing
+func (r *JobRepository) ResetStaleJobs(ctx context.Context) (int64, error) {
+	// Find jobs stuck in "processing" for over 1 hour
+	oneHourAgo := time.Now().Add(-1 * time.Hour)
+	filter := bson.M{
+		"status":     models.IngestionStatusProcessing,
+		"updated_at": bson.M{"$lt": oneHourAgo},
+	}
+
+	update := bson.M{
+		"$set": bson.M{
+			"status":     models.IngestionStatusPending,
+			"progress":   0,
+			"updated_at": time.Now(),
+		},
+	}
+
+	result, err := r.collection.UpdateMany(ctx, filter, update)
+	if err != nil {
+		log.Printf("[REPO] ResetStaleJobs: ERROR - %v", err)
+		return 0, err
+	}
+
+	if result.ModifiedCount > 0 {
+		log.Printf("[REPO] ResetStaleJobs: reset %d stale jobs (stuck in processing for >1 hour)",
+			result.ModifiedCount)
+	}
+	return result.ModifiedCount, nil
 }
 
 // UpdateStatus updates the status of a job

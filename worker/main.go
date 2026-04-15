@@ -182,12 +182,24 @@ func main() {
 
 		log.Println("Worker started - polling for jobs every 5 seconds")
 
+		// Debug: Log pending job counts at startup
+		if count, err := jobRepo.CountPendingJobs(workerCtx); err == nil {
+			log.Printf("[WORKER] Startup: found %d pending jobs", count)
+		} else {
+			log.Printf("[WORKER] Startup: could not count pending jobs: %v", err)
+		}
+
 		for {
 			select {
 			case <-workerCtx.Done():
 				log.Println("Worker stopped")
 				return
 			case <-ticker.C:
+				// Debug: log pending job counts every poll
+				if count, err := jobRepo.CountPendingJobs(workerCtx); err == nil && count > 0 {
+					log.Printf("[WORKER] Poll: %d pending jobs found", count)
+				}
+
 				// Wrap job processing in panic recovery to ensure worker stability
 				func() {
 					defer func() {
