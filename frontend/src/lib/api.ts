@@ -898,37 +898,17 @@ export async function uploadMovieAsset(
   });
 }
 
-// Direct B2 upload - gets presigned URL then uploads directly to B2
+// Proxy upload via backend (avoids CORS issue with direct B2 upload)
 export async function directB2Upload(
   token: string,
   file: File,
   type: "poster" | "backdrop" | "video",
   onProgress?: (progress: number) => void
 ): Promise<{ url: string; file_key: string }> {
-  // Generate unique filename
-  const ext = file.name.split(".").pop() || "jpg";
-  const filename = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-
-  // Get presigned upload URL from backend API
-  const urlResp = await fetch(
-    `${API_URL}/get-upload-url?type=${type}&filename=${filename}`
-  );
-  if (!urlResp.ok) {
-    const err = await urlResp.json();
-    throw new Error(err.error || "Failed to get upload URL");
-  }
-  const { upload_url, auth_token, file_key, cdn_url }: UploadURLResponse = await urlResp.json();
-
-  // Compute SHA1 for B2
-  const arrayBuffer = await file.arrayBuffer();
-  const hashBuffer = await crypto.subtle.digest("SHA-1", arrayBuffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const sha1 = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
-
-  // Upload directly to B2 using POST
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", upload_url);
+    xhr.open("POST", `${API_URL}/admin/upload-temp`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
 
     xhr.upload.onprogress = (event) => {
       if (onProgress && event.lengthComputable) {
@@ -939,26 +919,26 @@ export async function directB2Upload(
 
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        resolve({ url: cdn_url, file_key });
+        const response = JSON.parse(xhr.responseText);
+        resolve({ url: response.url, file_key: response.file_key });
       } else {
-        const responseText = xhr.responseText || "empty";
-        console.error("[B2] Upload failed:", xhr.status, responseText);
-        reject(new Error(`Upload failed: ${xhr.status} - ${responseText}`));
+        let errorMsg = "Upload failed";
+        try {
+          const errResp = JSON.parse(xhr.responseText);
+          errorMsg = errResp.error || errResp.message || errorMsg;
+        } catch {}
+        reject(new Error(errorMsg));
       }
     };
 
     xhr.onerror = () => {
-      console.error("[B2] Network error");
       reject(new Error("Upload failed: network error"));
     };
 
-    // B2 requires exactly these headers (no "Bearer " prefix)
-    xhr.setRequestHeader("Authorization", auth_token);
-    xhr.setRequestHeader("X-Bz-File-Name", file_key);
-    xhr.setRequestHeader("Content-Type", file.type);
-    //xhr.setRequestHeader("X-Bz-Content-Sha1", sha1);
-
-    xhr.send(file);
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("type", type);
+    xhr.send(formData);
   });
 }
 

@@ -830,3 +830,156 @@ func (h *UploadHandler) saveTelegramPostLocal(file multipart.File, filename stri
 
 	return h.config.GetBaseURL() + "/telegram-post/" + filename, nil
 }
+
+// UploadTemp handles proxy upload to B2 via worker (avoids CORS issue with direct browser upload)
+func (h *UploadHandler) UploadTemp(c *gin.Context) {
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no file provided"})
+		return
+	}
+	defer file.Close()
+
+	fileType := c.PostForm("type")
+	if fileType == "" {
+		fileType = "video"
+	}
+
+	var allowedTypes map[string]bool
+	var maxSize int64
+	var ext string
+
+	switch fileType {
+	case "poster", "backdrop":
+		maxSize = 10 * 1024 * 1024
+		allowedTypes = allowedImageTypes
+	case "video", "temp_movie":
+		maxSize = 5 * 1024 * 1024 * 1024
+		allowedTypes = map[string]bool{
+			"video/mp4":       true,
+			"video/webm":      true,
+			"video/ogg":       true,
+			"video/quicktime": true,
+		}
+	default:
+		maxSize = 10 * 1024 * 1024
+		allowedTypes = allowedImageTypes
+	}
+
+	if header.Size > maxSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", maxSize/1024/1024)})
+		return
+	}
+
+	contentType := header.Header.Get("Content-Type")
+	if !allowedTypes[contentType] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file type"})
+		return
+	}
+
+	ext = filepath.Ext(header.Filename)
+	if ext == "" {
+		if fileType == "video" || fileType == "temp_movie" {
+			ext = ".mp4"
+		} else {
+			ext = ".jpg"
+		}
+	}
+
+	filename := fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), fileType, ext)
+	subDir := fileType + "s"
+	if fileType == "temp_movie" {
+		subDir = "temp/movies"
+	}
+
+	var savedURL string
+	var fileKey string
+
+	if h.config.IsDev {
+		savedURL, err = h.saveMovieAssetLocal(file, filename, fileType)
+		if err != nil {
+			log.Printf("[UPLOAD_TEMP] Error saving locally: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save file"})
+			return
+		}
+		fileKey = subDir + "/" + filename
+	} else {
+		workerURL := h.config.WorkerUploadURL
+		if workerURL == "" {
+			log.Printf("[UPLOAD_TEMP] Error: WORKER_UPLOAD_URL not configured")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload service not configured"})
+			return
+		}
+
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
+			return
+		}
+
+		var b bytes.Buffer
+		wr := multipart.NewWriter(&b)
+		part, err := wr.CreateFormFile("file", filename)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload form"})
+			return
+		}
+		if _, err := io.Copy(part, file); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
+			return
+		}
+		wr.Close()
+
+		var endpoint string
+		if fileType == "temp_movie" {
+			endpoint = "/upload-temp-movie"
+		} else if fileType == "poster" {
+			endpoint = "/upload-poster"
+		} else if fileType == "backdrop" {
+			endpoint = "/upload-backdrop"
+		} else {
+			endpoint = "/upload-video"
+		}
+
+		resp, err := http.Post(workerURL+endpoint, wr.FormDataContentType(), &b)
+		if err != nil {
+			log.Printf("[UPLOAD_TEMP] Error uploading to worker: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			log.Printf("[UPLOAD_TEMP] Worker returned status %d: %s", resp.StatusCode, body)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed"})
+			return
+		}
+
+		var result map[string]string
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			log.Printf("[UPLOAD_TEMP] Error decoding response: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid upload response"})
+			return
+		}
+
+		savedURL = result["url"]
+		fileKey = result["temp_key"]
+		if fileKey == "" {
+			fileKey = result["file_key"]
+		}
+		if fileKey == "" {
+			fileKey = subDir + "/" + filename
+		}
+		if savedURL == "" {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed - no URL returned"})
+			return
+		}
+	}
+
+	log.Printf("[UPLOAD_TEMP] Uploaded: type=%s, key=%s, url=%s", fileType, fileKey, savedURL)
+
+	c.JSON(http.StatusOK, gin.H{
+		"url":      savedURL,
+		"file_key": fileKey,
+	})
+}
