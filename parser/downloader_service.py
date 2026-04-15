@@ -197,7 +197,42 @@ def _merge_parts(part_files: list, output_path: str) -> bool:
         return False
 
 # Backend URL for progress updates
-BACKEND_URL = os.environ.get("BACKEND_URL", "")
+# FIXED: Add URL scheme validation for SSL error prevention
+# If BACKEND_URL is set to https but backend doesn't support TLS, reject at startup
+raw_backend_url = os.environ.get("BACKEND_URL", "")
+BACKEND_URL = raw_backend_url
+
+# Validate BACKEND_URL scheme - reject https when TLS not available
+# SSL: WRONG_VERSION_NUMBER happens when connecting to non-TLS port with https
+if BACKEND_URL:
+    import re as _re
+    url_pattern = _re.compile(r'^(https?)://([^/:]+)(?::(\d+))?/?.*$')
+    match = url_pattern.match(BACKEND_URL)
+    if match:
+        scheme = match.group(1).lower()
+        host = match.group(2)
+        port = match.group(3) or ("443" if scheme == "https" else "80")
+        
+        # Check if trying to use HTTPS on a port that typically doesn't have TLS
+        # Common non-TLS ports: 8080, 3000, 8000, 5000
+        non_tls_ports = {"8080", "3000", "8000", "5000", "8082", "8083"}
+        port_str = str(port)
+        
+        if scheme == "https" and port_str in non_tls_ports:
+            # Auto-fix: change https to http for common non-TLS ports
+            if port_str == "8080":
+                BACKEND_URL = f"http://{host}:{port}"
+                logger.warning(f"[CONFIG] SSL FIX: Changed BACKEND_URL from https:// to http:// (port {port} typically doesn't support TLS)")
+            else:
+                logger.warning(f"[CONFIG] SSL WARNING: BACKEND_URL uses https:// but port {port} may not support TLS - consider using http://")
+        elif scheme == "https":
+            logger.info(f"[CONFIG] BACKEND_URL uses https:// (port {port} - assuming TLS is enabled)")
+        else:
+            logger.info(f"[CONFIG] BACKEND_URL uses http://")
+    else:
+        logger.warning(f"[CONFIG] Could not parse BACKEND_URL scheme from: {BACKEND_URL}")
+else:
+    logger.warning("[CONFIG] BACKEND_URL is empty - progress reporting disabled")
 
 # Log BACKEND_URL at startup
 logger.info(f"[CONFIG] BACKEND_URL = '{BACKEND_URL}'")
@@ -527,7 +562,13 @@ class DownloaderService:
         
         # Final progress update
         final_size = os.path.getsize(output_path)
-        logger.info(f"[DOWNLOAD] Parallel download completed: {output_path} ({final_size} bytes)")
+        
+        # CRITICAL: Log exact download completion point
+        logger.info("=" * 60)
+        logger.info("[DOWNLOAD COMPLETE] Parallel download finished successfully")
+        logger.info(f"[DOWNLOAD COMPLETE] File: {output_path}")
+        logger.info(f"[DOWNLOAD COMPLETE] Size: {final_size} bytes")
+        logger.info("=" * 60)
         
         if job_id:
             self.progress.update(job_id, {
@@ -701,7 +742,11 @@ class DownloaderService:
                             last_update_time = current_time
             
             # Download completed successfully
-            logger.info(f"[DOWNLOAD] Completed: {output_path}")
+            logger.info("=" * 60)
+            logger.info("[DOWNLOAD COMPLETE] Single-thread download finished successfully")
+            logger.info(f"[DOWNLOAD COMPLETE] File: {output_path}")
+            logger.info(f"[DOWNLOAD COMPLETE] Size: {downloaded_bytes} bytes")
+            logger.info("=" * 60)
             
             # Update local progress to completed
             if job_id:
@@ -947,7 +992,11 @@ class DownloaderService:
             if file_size == 0:
                 raise DownloadError(f"Downloaded file is empty: {output_path}")
             
-            logger.info(f"[DOWNLOAD] HLS download completed: {output_path} ({file_size} bytes)")
+            logger.info("=" * 60)
+            logger.info("[DOWNLOAD COMPLETE] HLS/FFmpeg download finished successfully")
+            logger.info(f"[DOWNLOAD COMPLETE] File: {output_path}")
+            logger.info(f"[DOWNLOAD COMPLETE] Size: {file_size} bytes")
+            logger.info("=" * 60)
             
             # Local progress - complete
             if job_id:

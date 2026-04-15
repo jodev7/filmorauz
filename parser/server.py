@@ -608,7 +608,11 @@ class ParserHandler(BaseHTTPRequestHandler):
                     local_path = download_result.get("file_path", "")
                     file_size  = os.path.getsize(local_path) if local_path and os.path.exists(local_path) else 0
 
-                    logger.info(f"[PARSER] Manual download successful: {local_path} ({file_size} bytes)")
+                    logger.info("=" * 60)
+                    logger.info("[PARSER DOWNLOAD COMPLETE] Manual source download finished")
+                    logger.info(f"[PARSER DOWNLOAD COMPLETE] File: {local_path}")
+                    logger.info(f"[PARSER DOWNLOAD COMPLETE] Size: {file_size} bytes")
+                    logger.info("=" * 60)
 
                     if backend_job_id and BACKEND_URL:
                         self._report_progress_to_backend(backend_job_id, {
@@ -945,6 +949,13 @@ class ParserHandler(BaseHTTPRequestHandler):
                 response_payload["file_name"] = output_name
                 response_payload["file_size"] = file_size
                 response_payload["stream_type"] = download_result.get("type", url_type)
+                
+                logger.info("=" * 60)
+                logger.info("[PARSER DOWNLOAD COMPLETE] File ready for pipeline processing")
+                logger.info(f"[PARSER DOWNLOAD COMPLETE] local_path: {local_path}")
+                logger.info(f"[PARSER DOWNLOAD COMPLETE] file_size: {file_size} bytes")
+                logger.info(f"[PARSER DOWNLOAD COMPLETE] video_url_type: {url_type}")
+                logger.info("=" * 60)
                 
                 logger.info(f"[PARSER] Returning structured payload with local_path: {local_path}")
                 logger.info(f"[PARSER]   video_url_type: {response_payload.get('video_url_type')}")
