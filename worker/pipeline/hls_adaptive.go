@@ -29,18 +29,21 @@ type RenditionConfig struct {
 	Name         string // Display name (e.g., "360p", "480p")
 	Width        int    // Video width
 	Height       int    // Video height
-	VideoBitrate string // Video bitrate (e.g., "800k")
-	AudioBitrate string // Audio bitrate (e.g., "96k")
+	VideoBitrate string // Target video bitrate (e.g., "4500k")
+	MaxBitrate   string // Max bitrate (1.2x target)
+	BufSize      string // Buffer size (2x target)
+	AudioBitrate string // Audio bitrate (e.g., "128k")
 	Bandwidth    int    // Total bandwidth in bits/sec for master playlist
+	CRF          int    // Constant Rate Factor (18-23, lower = higher quality)
 }
 
-// DefaultRenditions returns the default adaptive HLS renditions
+// DefaultRenditions returns the default adaptive HLS renditions (legacy - use getApplicableRenditions for production)
 func DefaultRenditions() []RenditionConfig {
 	return []RenditionConfig{
-		{Name: "360p", Width: 640, Height: 360, VideoBitrate: "800k", AudioBitrate: "96k", Bandwidth: 896000},
-		{Name: "480p", Width: 854, Height: 480, VideoBitrate: "1400k", AudioBitrate: "128k", Bandwidth: 1528000},
-		{Name: "720p", Width: 1280, Height: 720, VideoBitrate: "2800k", AudioBitrate: "128k", Bandwidth: 2928000},
-		{Name: "1080p", Width: 1920, Height: 1080, VideoBitrate: "5000k", AudioBitrate: "128k", Bandwidth: 5128000},
+		{Name: "360p", Width: 640, Height: 360, VideoBitrate: "800k", AudioBitrate: "96k", Bandwidth: 896000, CRF: 23},
+		{Name: "480p", Width: 854, Height: 480, VideoBitrate: "1200k", AudioBitrate: "128k", Bandwidth: 1328000, CRF: 22},
+		{Name: "720p", Width: 1280, Height: 720, VideoBitrate: "2800k", AudioBitrate: "128k", Bandwidth: 2928000, CRF: 21},
+		{Name: "1080p", Width: 1920, Height: 1080, VideoBitrate: "5000k", AudioBitrate: "128k", Bandwidth: 5128000, CRF: 20},
 	}
 }
 
@@ -50,7 +53,7 @@ func DefaultRenditions() []RenditionConfig {
 // 2. Then generates multiple quality renditions from the base
 // 3. Creates a master.m3u8 playlist referencing all variants
 // No watermark removal - use source video directly
-func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int), maxConcurrentRenditions int, segmentUploadWorkers int, segmentUploadRetries int) (masterPlaylistPath, processedMasterPath string, err error) {
+func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int), maxConcurrentRenditions int, segmentUploadWorkers int, segmentUploadRetries int) (masterPlaylistPath, processedMasterPath string, generatedQualities []string, err error) {
 	log.Printf("[HLS] Starting adaptive HLS generation for job %s", jobID)
 	log.Printf("[CHECKPOINT] hls_raw_input_path: %s", inputPath)
 	log.Printf("[HLS] Output directory: %s", outputDir)
@@ -73,7 +76,7 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	//   - 1080p/
 
 	if err = os.MkdirAll(outputDir, 0755); err != nil {
-		return "", "", fmt.Errorf("failed to create output directory: %w", err)
+		return "", "", nil, fmt.Errorf("failed to create output directory: %w", err)
 	}
 
 	// Get input resolution to determine which renditions to generate
@@ -83,11 +86,11 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 		inputWidth = 1920
 		inputHeight = 1080
 	}
-	log.Printf("[HLS] Input resolution: %dx%d", inputWidth, inputHeight)
+	log.Printf("[HLS] Input resolution detected: %dx%d", inputWidth, inputHeight)
 
 	// Determine which renditions to generate based on input resolution
 	renditions := p.getApplicableRenditions(inputWidth, inputHeight)
-	log.Printf("[HLS] Generating %d renditions: %v", len(renditions), getRenditionNames(renditions))
+	log.Printf("[HLS] Source resolution %dx%d - generating %d renditions: %v", inputWidth, inputHeight, len(renditions), getRenditionNames(renditions))
 
 	// Step 1: Cut + logo overlay → processed_master.mp4
 	// This is the single processed master used for both HLS and clip generation.
@@ -96,7 +99,7 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	log.Printf("[CHECKPOINT] processed_master_path: %s", processedMasterPath)
 	log.Printf("[STAGE] logo_overlay start — raw_input: %s → master: %s", inputPath, processedMasterPath)
 	if err = p.createBaseVideo(inputPath, processedMasterPath, cutSeconds, jobStatusCallback); err != nil {
-		return "", "", fmt.Errorf("failed to create processed master: %w", err)
+		return "", "", nil, fmt.Errorf("failed to create processed master: %w", err)
 	}
 	log.Printf("[STAGE] logo_overlay end — processed_master: %s", processedMasterPath)
 	log.Printf("[CHECKPOINT] hls_input_path: %s", processedMasterPath)
@@ -124,7 +127,7 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	for i, r := range renditions {
 		renditionDir := filepath.Join(outputDir, r.Name)
 		if err = os.MkdirAll(renditionDir, 0755); err != nil {
-			return "", "", fmt.Errorf("failed to create rendition directory: %w", err)
+			return "", "", nil, fmt.Errorf("failed to create rendition directory: %w", err)
 		}
 		baseProgress := 55 + (i * 30 / len(renditions))
 		jobs[i] = renditionJob{
@@ -166,7 +169,7 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	for _, err := range errors {
 		if err != nil {
 			streamingUploader.stopAndWait()
-			return "", "", fmt.Errorf("rendition generation failed: %w", err)
+			return "", "", nil, fmt.Errorf("rendition generation failed: %w", err)
 		}
 	}
 
@@ -174,7 +177,7 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	log.Printf("[STAGE] streaming_upload wait")
 
 	if err = streamingUploader.stopAndWait(); err != nil {
-		return "", "", fmt.Errorf("segment upload failed: %w", err)
+		return "", "", nil, fmt.Errorf("segment upload failed: %w", err)
 	}
 
 	log.Printf("[STAGE] streaming_upload done")
@@ -190,7 +193,7 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	log.Printf("[STAGE] master_playlist start")
 	masterPlaylistPath = filepath.Join(outputDir, "master.m3u8")
 	if err = p.createMasterPlaylist(masterPlaylistPath, renditions); err != nil {
-		return "", "", fmt.Errorf("failed to create master playlist: %w", err)
+		return "", "", nil, fmt.Errorf("failed to create master playlist: %w", err)
 	}
 	log.Printf("[STAGE] master_playlist end")
 
@@ -202,7 +205,7 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	// Verify output
 	files, dirErr := os.ReadDir(outputDir)
 	if dirErr != nil {
-		return "", "", fmt.Errorf("failed to read output directory: %w", dirErr)
+		return "", "", nil, fmt.Errorf("failed to read output directory: %w", dirErr)
 	}
 	log.Printf("[HLS] Adaptive HLS generation complete. Output files:")
 	for _, f := range files {
@@ -212,25 +215,83 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	log.Printf("[HLS] Master playlist: %s", masterPlaylistPath)
 	log.Printf("[CHECKPOINT] hls_master_playlist: %s", masterPlaylistPath)
 	log.Printf("[STAGE] hls_processing end — master: %s, processed_master: %s", masterPlaylistPath, processedMasterPath)
-	return masterPlaylistPath, processedMasterPath, nil
+
+	// Build list of generated qualities
+	generatedQualities = make([]string, len(renditions))
+	for i, r := range renditions {
+		generatedQualities[i] = r.Name
+	}
+	log.Printf("[HLS] Generated qualities: %v", generatedQualities)
+
+	return masterPlaylistPath, processedMasterPath, generatedQualities, nil
 }
 
 // getApplicableRenditions returns the renditions that should be generated based on input resolution
+// Uses height-based smart selection - never upscale
+// Height >= 1080: generate [1080p, 720p, 480p]
+// Height >= 720:  generate [720p, 480p]
+// Height < 720:   generate [480p only]
+// Each rendition includes optimized bitrate settings for streaming
 func (p *Pipeline) getApplicableRenditions(inputWidth, inputHeight int) []RenditionConfig {
-	allRenditions := DefaultRenditions()
 	applicable := make([]RenditionConfig, 0)
 
-	for _, r := range allRenditions {
-		// Generate rendition if input is at least 80% of rendition resolution
-		// This ensures reasonable quality when upscaling
-		if inputWidth >= int(float64(r.Width)*0.8) && inputHeight >= int(float64(r.Height)*0.8) {
-			applicable = append(applicable, r)
-		}
+	// Smart height-based selection - never upscale
+	// Bitrate strategy: target → maxrate=1.2x, bufsize=2x
+	if inputHeight >= 1080 {
+		// Source is 1080p or higher - generate all three
+		// 1080p: target 5000k, max 6000k, buf 10000k, CRF 20
+		applicable = append(applicable, RenditionConfig{
+			Name: "1080p", Width: 1920, Height: 1080,
+			VideoBitrate: "5000k", MaxBitrate: "6000k", BufSize: "10000k",
+			AudioBitrate: "128k", Bandwidth: 5300000, CRF: 20,
+		})
+		// 720p: target 2800k, max 3360k, buf 5600k, CRF 21
+		applicable = append(applicable, RenditionConfig{
+			Name: "720p", Width: 1280, Height: 720,
+			VideoBitrate: "2800k", MaxBitrate: "3360k", BufSize: "5600k",
+			AudioBitrate: "128k", Bandwidth: 3020000, CRF: 21,
+		})
+		// 480p: target 1200k, max 1440k, buf 2400k, CRF 22
+		applicable = append(applicable, RenditionConfig{
+			Name: "480p", Width: 854, Height: 480,
+			VideoBitrate: "1200k", MaxBitrate: "1440k", BufSize: "2400k",
+			AudioBitrate: "128k", Bandwidth: 1320000, CRF: 22,
+		})
+		log.Printf("[HLS] Source height >= 1080px: generating [1080p(5000k), 720p(2800k), 480p(1200k)]")
+	} else if inputHeight >= 720 {
+		// Source is 720p - generate 720p and 480p
+		// 720p: target 3000k, max 3600k, buf 6000k, CRF 20
+		applicable = append(applicable, RenditionConfig{
+			Name: "720p", Width: 1280, Height: 720,
+			VideoBitrate: "3000k", MaxBitrate: "3600k", BufSize: "6000k",
+			AudioBitrate: "128k", Bandwidth: 3200000, CRF: 20,
+		})
+		// 480p: target 1200k, max 1440k, buf 2400k, CRF 22
+		applicable = append(applicable, RenditionConfig{
+			Name: "480p", Width: 854, Height: 480,
+			VideoBitrate: "1200k", MaxBitrate: "1440k", BufSize: "2400k",
+			AudioBitrate: "128k", Bandwidth: 1320000, CRF: 22,
+		})
+		log.Printf("[HLS] Source height >= 720px and < 1080px: generating [720p(3000k), 480p(1200k)]")
+	} else {
+		// Source is below 720p - only generate 480p (no upscaling)
+		// 480p: target 1500k, max 1800k, buf 3000k, CRF 20 (higher quality for low-res source)
+		applicable = append(applicable, RenditionConfig{
+			Name: "480p", Width: 854, Height: 480,
+			VideoBitrate: "1500k", MaxBitrate: "1800k", BufSize: "3000k",
+			AudioBitrate: "128k", Bandwidth: 1620000, CRF: 20,
+		})
+		log.Printf("[HLS] Source height < 720px: generating [480p(1500k) only] - no upscaling")
 	}
 
-	// Always include at least 360p if available
+	// Defensive: if somehow nothing was added, add 480p as fallback
 	if len(applicable) == 0 {
-		applicable = append(applicable, allRenditions[0]) // 360p
+		applicable = append(applicable, RenditionConfig{
+			Name: "480p", Width: 854, Height: 480,
+			VideoBitrate: "1200k", MaxBitrate: "1440k", BufSize: "2400k",
+			AudioBitrate: "128k", Bandwidth: 1320000, CRF: 22,
+		})
+		log.Printf("[HLS] Fallback: generating [480p(1200k)]")
 	}
 
 	return applicable
@@ -418,6 +479,8 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 
 // generateHLSRendition generates a single HLS rendition from the base video
 func (p *Pipeline) generateHLSRendition(jobID, baseVideoPath, outputDir string, rendition RenditionConfig, baseProgress int, jobStatusCallback func(status models.IngestionStatus, progress int)) error {
+	log.Printf("[ENCODER] === START %s encoding === (target: %dx%d, bitrate: %s)", rendition.Name, rendition.Width, rendition.Height, rendition.VideoBitrate)
+
 	log.Printf("[CHECKPOINT] hls_input_path: %s", baseVideoPath)
 	log.Printf("[HLS] Generating %s rendition: %dx%d, video=%s, audio=%s",
 		rendition.Name, rendition.Width, rendition.Height, rendition.VideoBitrate, rendition.AudioBitrate)
@@ -431,14 +494,41 @@ func (p *Pipeline) generateHLSRendition(jobID, baseVideoPath, outputDir string, 
 	hlsPlaylist := filepath.Join(outputDir, "index.m3u8")
 	segmentPattern := filepath.Join(outputDir, "segment_%03d.ts")
 
-	// Key settings for adaptive streaming:
-	// - GOP of 2 seconds (keyframe interval)
-	// - -sc_threshold 0: disable scene cut detection (forces keyframes at GOP boundary)
-	// - -g: GOP size in frames (assuming 24fps, 2 seconds = 48 frames)
-	// - -keyint_min: minimum keyframe interval
-	// - -hls_time 6: 6-second segments
-	// - -hls_list_size 0: include all segments
-	// - -hls_playlist_type vod: VOD playlist
+	// Build maxrate and bufsize from rendition config or use defaults
+	maxRate := rendition.MaxBitrate
+	bufSize := rendition.BufSize
+	if maxRate == "" {
+		maxRate = fmt.Sprintf("%.0fk", parseBitrate(rendition.VideoBitrate)*1.2)
+	}
+	if bufSize == "" {
+		bufSize = fmt.Sprintf("%.0fk", parseBitrate(rendition.VideoBitrate)*2)
+	}
+
+	// Keyframe settings for smooth HLS streaming:
+	// - GOP (Group of Pictures) = 2 seconds for optimal seeking
+	// - -sc_threshold 0: disable random scene detection (forces keyframes at GOP)
+	// - -force_key_frames: force IDR at segment boundaries for clean switching
+	// - -hls_time 4: 4-second segments (aligns with 2s GOP = 2 keyframes per segment)
+
+	// Determine FPS from base video (default 24fps)
+	fps := 24.0
+	if fpsInfo, err := p.getVideoFPS(baseVideoPath); err == nil {
+		fps = fpsInfo
+	}
+	gopSize := int(fps * 2) // 2 seconds * fps = GOP in frames
+	segmentDuration := 4    // 4-second segments align with 2s GOP (2 keyframes per segment)
+
+	// Force keyframes every segment duration (4 seconds)
+	// This ensures IDR frames at segment boundaries for clean switching
+	forceKeyframes := fmt.Sprintf("expr:gte(t,n_forced*%.0f)", float64(segmentDuration))
+
+	crf := rendition.CRF
+	if crf == 0 {
+		crf = 22 // default CRF
+	}
+
+	log.Printf("[KEYFRAME] %s: GOP=%d frames (%.1ffps × 2s), segment=%ds, force_keyframes=%s",
+		rendition.Name, gopSize, fps, segmentDuration, forceKeyframes)
 
 	ffmpegArgs := []string{
 		"-y",                // Overwrite output
@@ -447,18 +537,21 @@ func (p *Pipeline) generateHLSRendition(jobID, baseVideoPath, outputDir string, 
 			rendition.Width, rendition.Height, rendition.Width, rendition.Height), // Scale and pad to exact resolution
 		"-c:v", "libx264", // H.264 video codec
 		"-preset", "veryfast", // Fast encoding preset
-		"-b:v", rendition.VideoBitrate, // Video bitrate
-		"-maxrate", fmt.Sprintf("%.0fk", parseBitrate(rendition.VideoBitrate)*1.5), // Max rate 1.5x bitrate
-		"-bufsize", fmt.Sprintf("%.0fk", parseBitrate(rendition.VideoBitrate)*2), // Buffer size 2x bitrate
-		"-profile:v", "main", // Main profile for good compatibility
-		"-level", "3.1", // Level 3.1 for wide device compatibility
-		"-sc_threshold", "0", // Disable scene cut detection - forces keyframes at GOP boundary
-		"-g", "48", // GOP size: 2 seconds * 24fps = 48 frames
-		"-keyint_min", "48", // Minimum keyframe interval
+		"-crf", fmt.Sprintf("%d", crf), // CRF for quality (lower = better quality)
+		"-b:v", rendition.VideoBitrate, // Target bitrate (used with CRF for rate control)
+		"-maxrate", maxRate, // Max bitrate (1.2x target)
+		"-bufsize", bufSize, // Buffer size (2x target)
+		"-profile:v", "high", // High profile for better quality
+		"-level", "4.1", // Level 4.1 for HD content
+		"-sc_threshold", "0", // Disable scene cut detection - forces keyframes at GOP
+		"-g", fmt.Sprintf("%d", gopSize), // GOP size: 2 seconds × fps
+		"-keyint_min", fmt.Sprintf("%d", gopSize), // Minimum keyframe interval = GOP
+		"-force_key_frames", forceKeyframes, // Force IDR at segment boundaries
 		"-c:a", "aac", // AAC audio codec
-		"-b:a", rendition.AudioBitrate, // Audio bitrate
+		"-b:a", rendition.AudioBitrate, // Audio bitrate (128k stereo)
+		"-ac", "2", // Stereo audio
 		"-f", "hls", // HLS output format
-		"-hls_time", "6", // 6-second segment duration
+		"-hls_time", fmt.Sprintf("%d", segmentDuration), // Segment duration
 		"-hls_list_size", "0", // Include all segments in playlist
 		"-hls_playlist_type", "vod", // VOD playlist type
 		"-hls_segment_filename", segmentPattern, // Segment filename pattern
@@ -466,6 +559,8 @@ func (p *Pipeline) generateHLSRendition(jobID, baseVideoPath, outputDir string, 
 		"-progress", "pipe:1", // Output progress to stdout
 	}
 
+	log.Printf("[BITRATE] %s: target=%s, max=%s, buf=%s, crf=%d, audio=%s",
+		rendition.Name, rendition.VideoBitrate, maxRate, bufSize, crf, rendition.AudioBitrate)
 	log.Printf("[HLS] %s FFmpeg: ffmpeg %s", rendition.Name, strings.Join(ffmpegArgs, " "))
 
 	// Run ffmpeg with progress tracking
@@ -538,12 +633,23 @@ func (p *Pipeline) generateHLSRendition(jobID, baseVideoPath, outputDir string, 
 		jobStatusCallback(models.IngestionStatusProcessing, finalProgress)
 	}
 
-	// Verify output
+	// Verify output and log file sizes
 	files, err := os.ReadDir(outputDir)
 	if err != nil || len(files) == 0 {
 		return fmt.Errorf("no output files generated for %s", rendition.Name)
 	}
 
+	// Calculate total size of all segments
+	totalSize := int64(0)
+	for _, f := range files {
+		if info, err := f.Info(); err == nil {
+			totalSize += info.Size()
+		}
+	}
+	totalSizeMB := float64(totalSize) / (1024 * 1024)
+
+	log.Printf("[BITRATE] %s encoding complete: %d files, total size: %.2f MB", rendition.Name, len(files), totalSizeMB)
+	log.Printf("[ENCODER] === END %s encoding === (%d files, %.2f MB)", rendition.Name, len(files), totalSizeMB)
 	log.Printf("[HLS] %s rendition complete: %d files in %s", rendition.Name, len(files), outputDir)
 	return nil
 }

@@ -78,6 +78,13 @@ type IngestionJob struct {
 	TempFileKey string `bson:"temp_file_key,omitempty" json:"temp_file_key,omitempty"` // Temp file B2 key for cleanup
 	Quality     string `bson:"quality,omitempty" json:"quality,omitempty"`             // Video quality (480p, 720p, etc.)
 	IsPremium   bool   `bson:"is_premium,omitempty" json:"is_premium,omitempty"`       // Premium content flag
+
+	// Quality info from source (Asilmedia etc.)
+	SourceQuality      string   `bson:"source_quality,omitempty" json:"source_quality,omitempty"`
+	AvailableQualities []string `bson:"available_qualities,omitempty" json:"available_qualities,omitempty"`
+	SourceResolution   string   `bson:"source_resolution,omitempty" json:"source_resolution,omitempty"`
+	GeneratedQualities []string `bson:"generated_qualities,omitempty" json:"generated_qualities,omitempty"`
+	MasterPlaylistURL  string   `bson:"master_playlist_url,omitempty" json:"master_playlist_url,omitempty"`
 }
 
 // JobSteps tracks the completion status of each pipeline step

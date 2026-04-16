@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -401,12 +402,88 @@ func (h *MovieHandler) GetMovieWatchSource(c *gin.Context) {
 		return
 	}
 
-	// User has access - return video source
-	c.JSON(http.StatusOK, gin.H{
+	// User has access - return video source with prefetch support
+	// Include HLS streaming data for optimized playback
+	response := gin.H{
 		"video_url":   movie.VideoURL,
 		"embed_url":   movie.EmbedURL,
 		"source_type": movie.SourceType,
-	})
+	}
+
+	// Add HLS streaming data if available
+	if movie.SourceType == "direct_hls" && movie.MasterPlaylistURL != "" {
+		response["hls"] = gin.H{
+			"master_playlist_url": movie.MasterPlaylistURL,
+			"generated_qualities": movie.GeneratedQualities,
+			"default_quality":     getDefaultQuality(movie.DefaultQuality, movie.GeneratedQualities),
+			"source_resolution":   movie.SourceResolution,
+		}
+
+		// Preload URLs for fast playback (first 2 segments of default quality)
+		// These can be prefetched by the frontend
+		defaultQ := getDefaultQuality(movie.DefaultQuality, movie.GeneratedQualities)
+		if defaultQ != "" && movie.MasterPlaylistURL != "" {
+			preloadURLs := generatePreloadURLs(movie.MasterPlaylistURL, defaultQ, 2)
+			response["preload"] = gin.H{
+				"master_playlist": movie.MasterPlaylistURL,
+				"segments":        preloadURLs,
+				"default_quality": defaultQ,
+			}
+			log.Printf("[PREFETCH] Generated preload URLs for movie %s: default=%s", movie.ID.Hex(), defaultQ)
+		}
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// getDefaultQuality returns the default quality for playback
+func getDefaultQuality(custom string, qualities []string) string {
+	if custom != "" {
+		return custom
+	}
+	// Default to 480p for fast initial playback
+	if len(qualities) > 0 {
+		for _, q := range qualities {
+			if q == "480p" {
+				return "480p"
+			}
+		}
+		// If no 480p, return first available (lowest quality)
+		return qualities[len(qualities)-1]
+	}
+	return "480p"
+}
+
+// generatePreloadURLs generates URLs for first N segments of given quality
+func generatePreloadURLs(masterURL, quality string, segmentCount int) []string {
+	// Extract base path from master playlist URL
+	// e.g., https://cdn.example.com/videos/movie-slug/master.m3u8
+	// -> https://cdn.example.com/videos/movie-slug/480p/
+
+	// Find last slash position before master.m3u8
+	lastSlash := lastIndex(masterURL, "/")
+	if lastSlash == -1 {
+		return nil
+	}
+
+	basePath := masterURL[:lastSlash+1] + quality + "/"
+
+	urls := make([]string, segmentCount)
+	for i := 0; i < segmentCount; i++ {
+		urls[i] = basePath + fmt.Sprintf("segment_%03d.ts", i+1)
+	}
+
+	return urls
+}
+
+// lastIndex is a simple string last index helper
+func lastIndex(s, substr string) int {
+	for i := len(s) - len(substr); i >= 0; i-- {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
 }
 
 // AdminListMovies GET /api/admin/movies

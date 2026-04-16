@@ -712,6 +712,29 @@ class ParserHandler(BaseHTTPRequestHandler):
                 # Extract the best video URL from the parsed details
                 video_url, url_type = self._extract_best_video_url(details, source)
                 
+                # Get quality info from parser details
+                source_quality = ""
+                available_qualities = []
+                video_urls_list = details.get('video_urls', [])
+                
+                # Extract quality from selected video URL
+                if video_url:
+                    for v in video_urls_list:
+                        if v.get('url') == video_url:
+                            source_quality = v.get('quality', '')
+                            break
+                
+                # Get all available qualities from video_urls
+                for v in video_urls_list:
+                    q = v.get('quality', '')
+                    if q and q != 'unknown' and q not in available_qualities:
+                        available_qualities.append(q)
+                
+                if source_quality:
+                    logger.info(f"[PARSER] Source quality: {source_quality}")
+                if available_qualities:
+                    logger.info(f"[PARSER] Available qualities: {available_qualities}")
+                
                 if not video_url:
                     # Debug: log what was actually found to diagnose blocked vs not-found
                     video_urls_list = details.get('video_urls', [])
@@ -930,14 +953,16 @@ class ParserHandler(BaseHTTPRequestHandler):
                 # Create structured worker payload with normalized metadata
                 # Parser has downloaded the file and returns local_path
                 response_payload = create_worker_payload(
-                    source=source,
-                    source_url=source_base_url,
-                    page_url=page_url,
-                    video_url=video_url,
-                    video_url_type=url_type,
-                    metadata=normalized_metadata,
-                    local_path=local_path  # Parser downloaded the file
-                )
+                        source=source,
+                        source_url=source_base_url,
+                        page_url=page_url,
+                        video_url=video_url,
+                        video_url_type=url_type,
+                        metadata=normalized_metadata,
+                        local_path=local_path,
+                        source_quality=source_quality,
+                        available_qualities=available_qualities
+                    )
                 
                 # Add additional fields for worker
                 response_payload["success"] = True

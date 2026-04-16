@@ -863,6 +863,46 @@ func (p *Pipeline) getVideoDurationMs(inputPath string) (int64, error) {
 	return durationMs, nil
 }
 
+// getVideoFPS returns the video frame rate using ffprobe
+func (p *Pipeline) getVideoFPS(inputPath string) (float64, error) {
+	cmd := exec.Command("ffprobe",
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=r_frame_rate",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		inputPath,
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return 24.0, fmt.Errorf("ffprobe failed to get fps: %w", err)
+	}
+
+	result := strings.TrimSpace(string(output))
+	// Parse frame rate as fraction (e.g., "30000/1001" = 29.97)
+	if strings.Contains("/", result) {
+		parts := strings.Split(result, "/")
+		if len(parts) == 2 {
+			num, err1 := strconv.ParseFloat(parts[0], 64)
+			den, err2 := strconv.ParseFloat(parts[1], 64)
+			if err1 == nil && err2 == nil && den > 0 {
+				fps := num / den
+				log.Printf("[WORKER] ffprobe fps=%.2f (from %s)", fps, result)
+				return fps, nil
+			}
+		}
+	}
+
+	// Try direct float parse
+	fps, err := strconv.ParseFloat(result, 64)
+	if err != nil {
+		return 24.0, fmt.Errorf("failed to parse fps: %w", err)
+	}
+
+	log.Printf("[WORKER] ffprobe fps=%.2f", fps)
+	return fps, nil
+}
+
 // runFFmpegWithProgress runs FFmpeg with progress tracking
 // Returns duration in milliseconds and any error
 func (p *Pipeline) runFFmpegWithProgress(
@@ -1337,12 +1377,14 @@ func (p *Pipeline) processVideo(job *models.IngestionJob, inputPath string, cano
 	// The processed master (cut + logo) is NOT deleted inside processAdaptiveHLS;
 	// it stays alive so clip generation can use it, then the whole readyvideo dir is cleaned up.
 	var masterPlaylistPath string
-	masterPlaylistPath, processedMasterPath, err = p.processAdaptiveHLS(jobID, inputPath, outputDir, defaultCutSeconds, progressCallback, p.config.MaxRenditionConcurrent, p.config.SegmentUploadWorkers, p.config.SegmentUploadRetries)
+	var generatedQualities []string
+	masterPlaylistPath, processedMasterPath, generatedQualities, err = p.processAdaptiveHLS(jobID, inputPath, outputDir, defaultCutSeconds, progressCallback, p.config.MaxRenditionConcurrent, p.config.SegmentUploadWorkers, p.config.SegmentUploadRetries)
 	if err != nil {
 		return "", "", fmt.Errorf("adaptive HLS processing failed: %w", err)
 	}
 	log.Printf("[CHECKPOINT] processed_master_path: %s", processedMasterPath)
 	log.Printf("[CHECKPOINT] hls_master_playlist: %s", masterPlaylistPath)
+	log.Printf("[PIPELINE] Source resolution from ffprobe, generated qualities: %v", generatedQualities)
 
 	files, readErr := os.ReadDir(outputDir)
 	if readErr != nil {
@@ -1355,6 +1397,15 @@ func (p *Pipeline) processVideo(job *models.IngestionJob, inputPath string, cano
 	log.Printf("[PIPELINE] processVideo completed: %d files/dirs in %s", len(files), outputDir)
 	log.Printf("[STAGE] hls_processing end — master: %s", masterPlaylistPath)
 	p.log(jobID, fmt.Sprintf("%s+processed", folderName), "info")
+
+	// Update quality info in database
+	sourceResolution := ""
+	if inputWidth, inputHeight, err := p.getInputResolution(inputPath); err == nil {
+		sourceResolution = fmt.Sprintf("%dx%d", inputWidth, inputHeight)
+	}
+	if err := p.jobRepo.UpdateQualityInfo(context.Background(), jobID, job.SourceQuality, sourceResolution, generatedQualities, masterPlaylistPath); err != nil {
+		log.Printf("[PIPELINE] WARNING: failed to update quality info: %v", err)
+	}
 
 	return outputDir, processedMasterPath, nil
 }

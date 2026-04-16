@@ -538,3 +538,24 @@ func (r *JobRepository) List(ctx context.Context, filter bson.M, limit, skip int
 func (r *JobRepository) Count(ctx context.Context, filter bson.M) (int64, error) {
 	return r.collection.CountDocuments(ctx, filter)
 }
+
+// UpdateQualityInfo updates source quality and generated renditions info
+func (r *JobRepository) UpdateQualityInfo(ctx context.Context, id, sourceQuality, sourceResolution string, generatedQualities []string, masterPlaylistURL string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid id")
+	}
+
+	update := bson.M{
+		"$set": bson.M{
+			"source_quality":      sourceQuality,
+			"source_resolution":   sourceResolution,
+			"generated_qualities": generatedQualities,
+			"master_playlist_url": masterPlaylistURL,
+			"updated_at":          time.Now(),
+		},
+	}
+
+	_, err = r.collection.UpdateByID(ctx, objID, update)
+	return err
+}

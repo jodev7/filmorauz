@@ -541,7 +541,9 @@ def create_worker_payload(
     video_url: Optional[str],
     video_url_type: str,
     metadata: Dict[str, Any],
-    local_path: str = ""
+    local_path: str = "",
+    source_quality: str = "",
+    available_qualities: List[str] = None
 ) -> Dict[str, Any]:
     """
     Create the final payload for the worker.
@@ -558,6 +560,8 @@ def create_worker_payload(
         video_url_type: Type of video URL (mp4, m3u8, missing)
         metadata: Normalized metadata dict
         local_path: Local file path if downloaded
+        source_quality: Selected source quality (e.g., "1080p")
+        available_qualities: List of available qualities from source
     
     Returns:
         Structured payload for worker (flattened + nested for compatibility)
@@ -575,6 +579,9 @@ def create_worker_payload(
     quality = metadata.get('quality', '')
     translation = metadata.get('translation', '')
     original_title = metadata.get('original_title', '')
+    
+    if available_qualities is None:
+        available_qualities = []
     
     # Build the payload - flatten top-level fields for worker backward compatibility
     # Worker expects: Title, Description, Poster, Year, Genres, Country, Duration, VideoPageURL
@@ -595,6 +602,10 @@ def create_worker_payload(
         "quality": quality,
         "translation": translation,
         "original_title": original_title,
+        
+        # Source quality info (for Asilmedia and other sources with multiple qualities)
+        "source_quality": source_quality,
+        "available_qualities": available_qualities,
         
         # Source tracking
         "source": source,
@@ -617,6 +628,8 @@ def create_worker_payload(
             "duration_minutes": duration,
             "quality": quality,
             "translation": translation,
+            "source_quality": source_quality,
+            "available_qualities": available_qualities,
         }
     }
     
@@ -624,6 +637,6 @@ def create_worker_payload(
     if local_path:
         payload["local_path"] = local_path
     
-    logger.info(f"[NORMALIZER] Created worker payload: source={source}, title={title}")
+    logger.info(f"[NORMALIZER] Created worker payload: source={source}, title={title}, source_quality={source_quality}")
     
     return payload

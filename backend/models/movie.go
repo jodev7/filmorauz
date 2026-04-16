@@ -40,6 +40,12 @@ type Movie struct {
 	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt   time.Time          `bson:"updated_at" json:"updated_at"`
 
+	// HLS Streaming Support
+	MasterPlaylistURL  string   `bson:"master_playlist_url,omitempty" json:"master_playlist_url,omitempty"` // CDN URL to master.m3u8
+	GeneratedQualities []string `bson:"generated_qualities,omitempty" json:"generated_qualities,omitempty"` // Available qualities ["480p", "720p", "1080p"]
+	DefaultQuality     string   `bson:"default_quality,omitempty" json:"default_quality,omitempty"`         // Quality to start with (e.g., "480p")
+	SourceResolution   string   `bson:"source_resolution,omitempty" json:"source_resolution,omitempty"`     // Original source resolution (e.g., "1920x1080")
+
 	// LOCALIZATION: Uzbek display fields (preferred for /uz pages)
 	TitleUz       string   `bson:"title_uz,omitempty" json:"title_uz,omitempty"`
 	DescriptionUz string   `bson:"description_uz,omitempty" json:"description_uz,omitempty"`
@@ -73,6 +79,12 @@ type MovieInput struct {
 	Duration    int             `json:"duration"`
 	Quality     string          `json:"quality"`
 	IsPremium   bool            `json:"is_premium"`
+
+	// HLS Streaming Support
+	MasterPlaylistURL  string   `json:"master_playlist_url"`
+	GeneratedQualities []string `json:"generated_qualities"`
+	DefaultQuality     string   `json:"default_quality"`
+	SourceResolution   string   `json:"source_resolution"`
 
 	// LOCALIZATION: Uzbek display fields
 	TitleUz        string   `json:"title_uz"`

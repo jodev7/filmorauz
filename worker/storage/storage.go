@@ -16,6 +16,44 @@ import (
 	"time"
 )
 
+// CacheTTLConfig defines cache TTL values for different file types
+type CacheTTLConfig struct {
+	M3U8TTL  time.Duration // playlist TTL (low for updates)
+	TSTTL    time.Duration // segment TTL (long for caching)
+	ImageTTL time.Duration // image TTL (very long)
+	OtherTTL time.Duration // default TTL
+}
+
+// DefaultCacheTTL returns default cache configuration
+func DefaultCacheTTL() CacheTTLConfig {
+	return CacheTTLConfig{
+		M3U8TTL:  10 * time.Second,
+		TSTTL:    24 * time.Hour,
+		ImageTTL: 7 * 24 * time.Hour,
+		OtherTTL: 1 * time.Hour,
+	}
+}
+
+// getCacheHeaders returns appropriate Cache-Control header based on file extension
+func getCacheHeaders(filename string, config CacheTTLConfig) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+
+	switch ext {
+	case ".m3u8", ".M3U8":
+		// Playlists: short TTL to allow quick updates
+		return fmt.Sprintf("public, max-age=%.0f", config.M3U8TTL.Seconds())
+	case ".ts", ".TS":
+		// Segments: long TTL, immutable (won't change)
+		return fmt.Sprintf("public, max-age=%.0f, immutable", config.TSTTL.Seconds())
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
+		// Images: very long TTL
+		return fmt.Sprintf("public, max-age=%.0f", config.ImageTTL.Seconds())
+	default:
+		// Default: moderate TTL
+		return fmt.Sprintf("public, max-age=%.0f", config.OtherTTL.Seconds())
+	}
+}
+
 // Storage interface defines methods for file storage
 type Storage interface {
 	Upload(localPath, remotePath string) (string, error)
@@ -227,6 +265,9 @@ type B2Storage struct {
 	appKey string
 	cdnURL string
 
+	// Cache configuration for CDN headers
+	cacheTTL CacheTTLConfig
+
 	mu          sync.Mutex
 	httpClient  *http.Client
 	authToken   string
@@ -284,6 +325,7 @@ func NewB2Storage(config Config) (*B2Storage, error) {
 		keyID:      config.B2KeyID,
 		appKey:     config.B2AppKey,
 		cdnURL:     config.CDNBaseURL,
+		cacheTTL:   DefaultCacheTTL(),
 		httpClient: &http.Client{Timeout: 5 * time.Minute},
 	}, nil
 }
@@ -366,7 +408,11 @@ func (s *B2Storage) getUploadURL() (uploadURL, token string, err error) {
 
 // uploadBytes sends data bytes to B2 at remotePath.
 func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (string, error) {
+	// Get cache headers based on file type
+	cacheControl := getCacheHeaders(remotePath, s.cacheTTL)
+
 	log.Printf("[B2] Upload attempt: bucket=%s, key=%s, size=%d, contentType=%s", s.bucket, remotePath, len(data), contentType)
+	log.Printf("[CDN] Cache-Control for %s: %s", filepath.Ext(remotePath), cacheControl)
 
 	if err := s.authorize(); err != nil {
 		log.Printf("[B2] Authorization failed: %v", err)
@@ -385,6 +431,7 @@ func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (st
 
 	// B2 uses X-Bz-File-Name for the object key - do NOT URL-encode it
 	// B2 handles folder creation via path prefix automatically
+	// Cache-Control is set via X-Bz-Info-* headers
 	req, err := http.NewRequest("POST", uploadURL, bytes.NewReader(data))
 	if err != nil {
 		return "", fmt.Errorf("b2 upload: build request: %w", err)
@@ -393,6 +440,7 @@ func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (st
 	req.Header.Set("X-Bz-File-Name", remotePath) // raw path - B2 creates folders via prefix
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	req.Header.Set("X-Bz-Info-cache_control", cacheControl) // Set CDN cache headers
 	//req.Header.Set("X-Bz-Content-Sha1", sha1sum)
 	req.ContentLength = int64(len(data))
 
@@ -416,13 +464,16 @@ func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (st
 
 	var fileURL string
 	if s.cdnURL != "" {
+		// Use CDN URL for faster delivery
 		fileURL = s.cdnURL + "/file/filmorauznet/" + remotePath
+		log.Printf("[CDN] Using CDN URL: %s", fileURL)
 	} else {
 		s.mu.Lock()
 		dlURL := s.downloadURL
 		bucket := s.bucket
 		s.mu.Unlock()
 		fileURL = dlURL + "/file/" + bucket + "/" + remotePath
+		log.Printf("[CDN] Using direct B2 URL (no CDN configured): %s", fileURL)
 	}
 	log.Printf("[B2] Returning URL: %s", fileURL)
 	return fileURL, nil
@@ -504,6 +555,9 @@ type uploadURL struct {
 }
 
 func (s *B2Storage) uploadWithUrl(data []byte, uploadUrl, token, remotePath, contentType string) (string, error) {
+	// Get cache headers based on file type
+	cacheControl := getCacheHeaders(remotePath, s.cacheTTL)
+
 	req, err := http.NewRequest("POST", uploadUrl, bytes.NewReader(data))
 	if err != nil {
 		return "", fmt.Errorf("b2 upload: new request: %w", err)
@@ -513,6 +567,9 @@ func (s *B2Storage) uploadWithUrl(data []byte, uploadUrl, token, remotePath, con
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("X-Bz-File-Name", remotePath)
 	req.Header.Set("X-Bz-Info-Content-Type", contentType)
+	req.Header.Set("X-Bz-Info-cache_control", cacheControl) // CDN cache headers
+
+	log.Printf("[CDN] Parallel upload cache-control for %s: %s", filepath.Ext(remotePath), cacheControl)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -525,7 +582,15 @@ func (s *B2Storage) uploadWithUrl(data []byte, uploadUrl, token, remotePath, con
 		return "", fmt.Errorf("b2 upload: status %d: %s", resp.StatusCode, body)
 	}
 
-	return remotePath, nil
+	// Return full CDN URL
+	var fileURL string
+	if s.cdnURL != "" {
+		fileURL = s.cdnURL + "/file/filmorauznet/" + remotePath
+	} else {
+		fileURL = remotePath
+	}
+
+	return fileURL, nil
 }
 
 func (s *B2Storage) ParallelUpload(jobs []struct {
