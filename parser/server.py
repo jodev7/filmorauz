@@ -11,14 +11,24 @@ import urllib.error
 import threading
 import socketserver
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+import sys
+
+
+# Safe string truncation - never raises IndexError
+def safe_truncate(s: str, max_len: int) -> str:
+    """Truncate string to max_len without raising IndexError"""
+    if not s:
+        return ""
+    if len(s) <= max_len:
+        return s
+    return s[:max_len]
 
 
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
     """Handle each request in a separate thread so long-running jobs
     (imports, downloads) do not block social uploads."""
     daemon_threads = True
-from urllib.parse import urlparse, parse_qs
-import sys
 
 # Load environment variables from .env file FIRST
 from dotenv import load_dotenv
@@ -769,8 +779,8 @@ class ParserHandler(BaseHTTPRequestHandler):
                     self._send_json(response_payload, 422)
                     return
                 
-                logger.info(f"[PARSER] Final video URL: {video_url[:80]}... (type: {url_type})")
-                logger.info(f"[PARSER] selected source url — type={url_type}, quality={source_quality or 'auto'}, url={video_url[:120]}...")
+                logger.info(f"[PARSER] Final video URL: {safe_truncate(video_url, 80)}... (type: {url_type})")
+                logger.info(f"[PARSER] selected source url — type={url_type}, quality={source_quality or 'auto'}, url={safe_truncate(video_url, 120)}...")
                 
                 # NEW FLOW: /details returns metadata + source URL only, NO download
                 # Worker will call /download separately with the source URL
@@ -817,8 +827,8 @@ class ParserHandler(BaseHTTPRequestHandler):
             quality = query.get("quality", [""])[0]
             referer = query.get("referer", [""])[0]
             
-            logger.info(f"[PARSER] /download request — source={source}, video_url={video_url[:60]}..., job_id={job_id}")
-            logger.info(f"[PARSER] DDownloader start — url={video_url[:80]}...")
+            logger.info(f"[PARSER] /download request — source={source}, video_url={safe_truncate(video_url, 60)}..., job_id={job_id}")
+            logger.info(f"[PARSER] DDownloader start — url={safe_truncate(video_url, 80)}...")
             
             if not video_url:
                 self._send_error("Missing 'video_url' parameter")

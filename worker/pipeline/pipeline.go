@@ -26,6 +26,17 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// Safe string truncation - never panics
+func safeTruncate(s string, maxLen int) string {
+	if s == "" {
+		return ""
+	}
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen]
+}
+
 // Config holds pipeline configuration
 type Config struct {
 	ParserURL              string
@@ -317,7 +328,10 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		canonicalTitle = job.Metadata.Title
 	}
 	canonicalSlug := createMovieSlug(canonicalTitle)
-	shortJobId := job.ID.Hex()[:8]
+	shortJobId := job.ID.Hex()
+	if len(shortJobId) > 8 {
+		shortJobId = shortJobId[:8]
+	}
 	canonicalFolderName := fmt.Sprintf("%s_%s", canonicalSlug, shortJobId)
 	log.Printf("[PIPELINE] Canonical movie folder (computed once): %s", canonicalFolderName)
 	log.Printf("[PIPELINE] Canonical title source: %s", canonicalTitle)
@@ -743,7 +757,7 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 	// NEW FLOW: If download_needed=true, worker must call /download to get local_path
 	if result.DownloadNeeded && result.VideoURL != "" {
 		log.Printf("[PIPELINE] Parser returned download_needed=true, calling /download endpoint...")
-		log.Printf("[PIPELINE] Calling parser /download for job %s with video_url=%s", jobID, result.VideoURL[:80])
+		log.Printf("[PIPELINE] Calling parser /download for job %s with video_url=%s", jobID, safeTruncate(result.VideoURL, 80))
 
 		localPath, err := p.callParserDownload(jobID, result.VideoURL)
 		if err != nil {
@@ -811,7 +825,7 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 // This is called when /details returns download_needed=true with a video_url
 func (p *Pipeline) callParserDownload(jobID, videoURL string) (string, error) {
 	jobIDCopy := jobID // Capture for logging below
-	log.Printf("[PIPELINE] callParserDownload: job_id=%s, url=%s", jobIDCopy, videoURL[:80])
+	log.Printf("[PIPELINE] callParserDownload: job_id=%s, url=%s", jobIDCopy, safeTruncate(videoURL, 80))
 
 	// Build download endpoint URL
 	parserEndpoint := fmt.Sprintf("%s/download", p.config.ParserURL)

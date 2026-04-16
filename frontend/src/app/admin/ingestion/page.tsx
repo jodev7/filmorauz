@@ -941,7 +941,6 @@ export default function IngestionPage() {
   const [jobs, setJobs] = useState<IngestionJob[]>([]);
   const [loadingJobs, setLoadingJobs] = useState(false);
   const [retryingStage, setRetryingStage] = useState<{jobId: string; stage: string} | null>(null);
-  const [syncPolling, setSyncPolling] = useState(false);
 
   const fetchJobs = useCallback(async () => {
     if (!token) return;
@@ -958,10 +957,20 @@ export default function IngestionPage() {
     }
   }, [token]);
 
-  // Initial fetch on tab switch only (no polling)
+  // Auto-refresh jobs every 1 second when Jobs tab is active
   useEffect(() => {
-    if (!token || activeTab !== "jobs") return;
+    if (activeTab !== "jobs" || !token) return;
+    
+    // Initial fetch
     fetchJobs();
+    
+    // Polling interval
+    const interval = setInterval(() => {
+      fetchJobs();
+    }, 1000);
+    
+    // Cleanup on unmount or tab change
+    return () => clearInterval(interval);
   }, [token, activeTab, fetchJobs]);
 
   const handleRetry = async (jobId: string, stage: "download" | "process" | "upload" = "download") => {
@@ -1041,16 +1050,6 @@ export default function IngestionPage() {
               </span>
             )}
           </button>
-          {activeTab === "jobs" && (
-            <button
-              onClick={() => { setSyncPolling(true); fetchJobs().finally(() => setSyncPolling(false)); }}
-              disabled={loadingJobs}
-              className="px-3 py-2 rounded-lg bg-brand-card text-gray-400 hover:text-white border border-brand-border transition-colors flex items-center gap-2 disabled:opacity-50"
-            >
-              <RotateCcw className={`w-4 h-4 ${loadingJobs ? 'animate-spin' : ''}`} />
-              Sync
-            </button>
-          )}
         </div>
 
         {/* Source Content */}
