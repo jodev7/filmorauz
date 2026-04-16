@@ -77,7 +77,7 @@ func NewPipeline(config Config, jobRepo *repositories.JobRepository) (*Pipeline,
 		jobRepo: jobRepo,
 		storage: store,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Minute, // Very long timeout for parser downloads (can take 10-20+ minutes)
+			Timeout: 60 * time.Minute, // Increased to 60 minutes for large file downloads
 		},
 		enricher: enricher,
 		movieCol: movieCol,
@@ -178,10 +178,17 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 				log.Printf("[PIPELINE] WARNING: metadata is nil or empty, will re-parse")
 				localPath = ""
 			} else {
-				// Mark download as complete if not already set
+				// If steps.download is not set, transition atomically to processing
+				// This clears any previous error and sets proper stage
 				if !job.Steps.Download {
-					if err := p.jobRepo.UpdateStep(ctx, jobID, "download"); err != nil {
-						log.Printf("[PIPELINE] Failed to mark download step: %v", err)
+					log.Printf("[PIPELINE] Job has existing local_path but steps.download=false - transitioning to processing")
+					log.Printf("[PARSER] job moved to processing — job_id=%s (existing local_path)", jobID)
+					if err := p.jobRepo.TransitionToProcessing(ctx, jobID, localPath); err != nil {
+						log.Printf("[PIPELINE] WARNING: Failed to transition to processing: %v", err)
+						// Fallback
+						if stepErr := p.jobRepo.UpdateStep(ctx, jobID, "download"); stepErr != nil {
+							log.Printf("[PIPELINE] Failed to mark download step: %v", stepErr)
+						}
 					}
 				}
 				log.Printf("[PIPELINE] Using existing metadata: %s (%d)", metadata.Title, metadata.Year)
@@ -231,18 +238,24 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 			return fmt.Errorf("parsing failed: %w", parseErr)
 		}
 
-		// DEFENSIVE: If parser provided local_path, update the job immediately
+		// DEFENSIVE: If parser provided local_path, transition job atomically to processing
+		// This clears error, sets steps.download=true, stage=processing, status=processing, progress=50
 		if localPath != "" {
 			log.Printf("[PIPELINE] Parser downloaded file to: %s", localPath)
 			log.Printf("[STAGE] parser end — success, local_path=%s", localPath)
-			// Update job with local_path so worker can find the file
-			if err := p.jobRepo.UpdateLocalPath(ctx, jobID, localPath); err != nil {
-				log.Printf("[PIPELINE] Failed to update local_path: %v", err)
-				// Continue - this is not fatal, we can still proceed
-			}
-			// Also mark download as complete
-			if err := p.jobRepo.UpdateStep(ctx, jobID, "download"); err != nil {
-				log.Printf("[PIPELINE] Failed to mark download step: %v", err)
+			log.Printf("[PARSER] job moved to processing — job_id=%s, local_path=%s", jobID, localPath)
+
+			// Use atomic transition to processing stage
+			// This ensures: steps.download=true, error="", stage="processing", status=processing, progress=50
+			if err := p.jobRepo.TransitionToProcessing(ctx, jobID, localPath); err != nil {
+				log.Printf("[PIPELINE] WARNING: Failed to atomically transition to processing: %v", err)
+				// Fallback: update individually (non-atomic)
+				if upErr := p.jobRepo.UpdateLocalPath(ctx, jobID, localPath); upErr != nil {
+					log.Printf("[PIPELINE] Failed to update local_path: %v", upErr)
+				}
+				if stepErr := p.jobRepo.UpdateStep(ctx, jobID, "download"); stepErr != nil {
+					log.Printf("[PIPELINE] Failed to mark download step: %v", stepErr)
+				}
 			}
 		} else {
 			// Parser returned empty local_path - this is a CONTRACT VIOLATION
@@ -636,7 +649,7 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 	}
 
 	jobID := job.ID.Hex()
-	log.Printf("[STAGE] parser start — source=%s, source_id=%s, url=%s", job.Source, job.SourceID, job.DetailURL)
+	log.Printf("[PARSER] parser request started — job_id=%s, source=%s, source_id=%s, url=%s", jobID, job.Source, job.SourceID, job.DetailURL)
 	log.Printf("[PIPELINE] parseMovieDetails: job=%s, source=%s, sourceID=%s", jobID, job.Source, job.SourceID)
 
 	parserEndpoint := fmt.Sprintf("%s/details", p.config.ParserURL)
@@ -663,7 +676,7 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 	}
 	parserURL := parserEndpoint + "?" + params.Encode()
 
-	log.Printf("[WORKER] Calling parser /details with job_id=%s", jobID)
+	log.Printf("[PARSER] calling parser /details — job_id=%s, url=%s", jobID, parserURL)
 
 	resp, err := p.httpClient.Get(parserURL)
 	if err != nil {
@@ -721,6 +734,8 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 	}
 
 	// NEW: Log parser response summary
+	log.Printf("[PARSER] parser request finished — job_id=%s, status=%d, success=%v, local_path=%s, error=%s, download_error=%s",
+		jobID, resp.StatusCode, result.Success, result.LocalPath, result.Error, result.DownloadError)
 	log.Printf("[PIPELINE] Parser response: success=%v, local_path=%s, error=%s, download_error=%s",
 		result.Success, result.LocalPath, result.Error, result.DownloadError)
 
@@ -763,7 +778,7 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 			return nil, "", fmt.Errorf("parser returned local_path but file is empty: %s", localPath)
 		}
 
-		log.Printf("[PIPELINE] Parser provided local_path: %s (size: %d bytes)", localPath, fileInfo.Size())
+		log.Printf("[PARSER] local_path received — job_id=%s, path=%s, size=%d bytes", jobID, localPath, fileInfo.Size())
 	}
 
 	log.Printf("[PIPELINE] parseMovieDetails completed: title=%s, year=%d, video_urls=%d, local_path=%s",

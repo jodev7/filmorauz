@@ -614,6 +614,40 @@ func (r *JobRepository) UpdateStep(ctx context.Context, id string, step string) 
 	return err
 }
 
+// TransitionToProcessing atomically transitions job from download to processing stage
+// This is called when parser successfully downloads the file and returns local_path
+// Clears error field, sets status=processing, stage=processing, steps.download=true
+// Also handles case where job might already have status=processing from being claimed
+func (r *JobRepository) TransitionToProcessing(ctx context.Context, id, localPath string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid id")
+	}
+
+	// Use $set to ensure stage is explicitly set to "processing"
+	// This handles edge case where job was claimed but stuck at stage=download
+	update := bson.M{
+		"$set": bson.M{
+			"status":         models.IngestionStatusProcessing,
+			"stage":          "processing",
+			"progress":       50,
+			"local_path":     localPath,
+			"steps.download": true,
+			"error":          "",
+			"updated_at":     time.Now(),
+		},
+	}
+
+	_, err = r.collection.UpdateByID(ctx, objID, update)
+	if err != nil {
+		log.Printf("[REPO] TransitionToProcessing: failed for job %s: %v", id, err)
+		return err
+	}
+
+	log.Printf("[REPO] TransitionToProcessing: job %s transitioned to processing (local_path=%s)", id, localPath)
+	return nil
+}
+
 // RetryFromDownload resets job to retry from download stage
 // Clears all progress, local_path, and steps
 func (r *JobRepository) RetryFromDownload(ctx context.Context, id string) error {
