@@ -210,57 +210,64 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		}
 	}
 
-	// If no valid local_path, call parser to download
-	// CRITICAL: Parser contract now requires parser to download the file
-	// If local_path is empty, parser has failed to download - fail immediately
+	// Download phase - either get existing file or start async download
+	// NEW: Async download flow with proper polling
 	if localPath == "" {
-		log.Printf("[STAGE] parser start — source=%s, source_id=%s, detail_url=%s", job.Source, job.SourceID, job.DetailURL)
-		log.Printf("[PIPELINE] No local_path found, calling parser to download video...")
-		log.Printf("[PIPELINE] NOTE: Parser is expected to download and return local_path")
-		log.Printf("[PIPELINE] Retry count: %d/3", job.RetryCount)
+		log.Printf("[WORKER] download start — source=%s, source_id=%s", job.Source, job.SourceID)
 
-		// Check if max retries reached
-		if job.RetryCount >= 3 {
-			errMsg := fmt.Sprintf("max retries (3) reached for parser downloads. Last error: %s", job.Error)
-			log.Printf("[PIPELINE] ERROR: %s", errMsg)
-			if err := p.failJobWithStatus(jobID, models.IngestionStatusFailed, errMsg); err != nil {
-				log.Printf("[PIPELINE] Failed to mark job as failed: %v", err)
-			}
-			return fmt.Errorf(errMsg)
-		}
-
-		// Call parser - it should download the file and return local_path
-		// If parser returns empty local_path, it means parser download failed
-		var parseErr error
-		metadata, localPath, parseErr = p.parseMovieDetails(job)
+		// CRITICAL: Need metadata and video_url from parser
+		// parseMovieDetails returns metadata and local_path (if parser already downloaded)
+		// In new parser flow, download_needed=true, so localPath should be empty
+		meta, _, parseErr := p.parseMovieDetails(job)
 		if parseErr != nil {
-			errMsg := fmt.Sprintf("parser error: %v", parseErr)
-			log.Printf("[PIPELINE] ERROR: %s", errMsg)
+			return fmt.Errorf("parser error: %w", parseErr)
+		}
+		metadata = meta
 
-			// Check retry count after parser failure
-			if job.RetryCount >= 2 {
-				failMsg := fmt.Sprintf("max retries (3) reached. Parser error: %v", parseErr)
-				if err := p.failJobWithStatus(jobID, models.IngestionStatusFailed, failMsg); err != nil {
-					log.Printf("[PIPELINE] Failed to mark job as failed: %v", err)
-				}
-				return fmt.Errorf(failMsg)
-			}
-
-			return fmt.Errorf("parsing failed: %w", parseErr)
+		// The parser selected best video URL is in meta.VideoURL
+		videoURL := meta.VideoURL
+		if videoURL == "" {
+			return fmt.Errorf("parser did not return video_url for download")
 		}
 
-		// DEFENSIVE: If parser provided local_path, transition job atomically to processing
-		// This clears error, sets steps.download=true, stage=processing, status=processing, progress=50
-		if localPath != "" {
-			log.Printf("[PIPELINE] Parser downloaded file to: %s", localPath)
-			log.Printf("[STAGE] parser end — success, local_path=%s", localPath)
-			log.Printf("[PARSER] job moved to processing — job_id=%s, local_path=%s", jobID, localPath)
+		// Persist video_url to job for worker restart safety (pollDownloadProgress uses job.VideoURL)
+		if err := p.jobRepo.UpdateVideoURL(ctx, jobID, videoURL); err != nil {
+			log.Printf("[PIPELINE] WARNING: Failed to persist video_url: %v", err)
+		}
+		// Update in-memory job as well
+		job.VideoURL = videoURL
 
-			// Use atomic transition to processing stage
-			// This ensures: steps.download=true, error="", stage="processing", status=processing, progress=50
+		// Check if download was already started (worker restart case)
+		if job.Steps.DownloadStarted {
+			log.Printf("[WORKER] download already started — job_id=%s, resuming polling", jobID)
+			// Resume polling /progress instead of calling /download again
+			localPath, err = p.pollDownloadProgress(ctx, job, videoURL)
+			if err != nil {
+				return fmt.Errorf("download polling failed: %w", err)
+			}
+		} else {
+			// First time calling /download for this job
+			log.Printf("[WORKER] calling /download — job_id=%s, url=%s", jobID, safeTruncate(videoURL, 60))
+
+			// Mark download as started BEFORE calling (prevents duplicate calls on retry)
+			if err := p.jobRepo.MarkDownloadStarted(ctx, jobID); err != nil {
+				log.Printf("[PIPELINE] WARNING: Failed to mark download_started: %v", err)
+			}
+
+			// Call parser /download (non-blocking, returns immediately)
+			localPath, err = p.startDownloadAndPoll(ctx, job)
+			if err != nil {
+				return fmt.Errorf("download failed: %w", err)
+			}
+		}
+
+		// Transition to processing after successful download
+		if localPath != "" {
+			log.Printf("[WORKER] download completed — job_id=%s, local_path=%s", jobID, localPath)
+			log.Printf("[WORKER] moving to processing — job_id=%s", jobID)
+
 			if err := p.jobRepo.TransitionToProcessing(ctx, jobID, localPath); err != nil {
-				log.Printf("[PIPELINE] WARNING: Failed to atomically transition to processing: %v", err)
-				// Fallback: update individually (non-atomic)
+				log.Printf("[PIPELINE] WARNING: Failed to transition to processing: %v", err)
 				if upErr := p.jobRepo.UpdateLocalPath(ctx, jobID, localPath); upErr != nil {
 					log.Printf("[PIPELINE] Failed to update local_path: %v", upErr)
 				}
@@ -269,18 +276,12 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 				}
 			}
 		} else {
-			// Parser returned empty local_path - this is a CONTRACT VIOLATION
-			// Parser MUST download the file and return local_path
-			// Do NOT retry - parser download has failed
-			log.Printf("[PIPELINE] ERROR: Parser returned empty local_path - download failed!")
-			log.Printf("[PIPELINE] Parser contract violation: parser must download file before returning")
-
-			// Mark job as download_failed for clearer admin visibility
-			if err := p.failJobWithStatus(jobID, models.IngestionStatusDownloadFailed, fmt.Sprintf("parser failed to download file - returned empty local_path. Parser must download the video and return a valid local_path before worker can proceed.")); err != nil {
+			// localPath empty - this is a failure (not a retry scenario)
+			log.Printf("[PIPELINE] ERROR: download returned empty local_path")
+			if err := p.failJobWithStatus(jobID, models.IngestionStatusDownloadFailed, "parser failed to return local_path"); err != nil {
 				log.Printf("[PIPELINE] Failed to mark job as download_failed: %v", err)
 			}
-
-			return fmt.Errorf("parser failed to download file - returned empty local_path. Parser must download the video and return a valid local_path before worker can proceed.")
+			return fmt.Errorf("parser failed to return local_path")
 		}
 	}
 
@@ -755,18 +756,13 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 		result.Success, result.LocalPath, result.Error, result.DownloadError)
 
 	// NEW FLOW: If download_needed=true, worker must call /download to get local_path
+	// NOTE: Download is now handled in main pipeline flow via startDownloadAndPoll
+	// This code path is kept for backward compatibility but should not be reached
+	// in the new async architecture
 	if result.DownloadNeeded && result.VideoURL != "" {
-		log.Printf("[PIPELINE] Parser returned download_needed=true, calling /download endpoint...")
-		log.Printf("[PIPELINE] Calling parser /download for job %s with video_url=%s", jobID, safeTruncate(result.VideoURL, 80))
-
-		localPath, err := p.callParserDownload(jobID, result.VideoURL)
-		if err != nil {
-			return nil, "", fmt.Errorf("parser /download failed: %w", err)
-		}
-
-		// Update result with local_path from download
-		result.LocalPath = localPath
-		log.Printf("[PIPELINE] Parser /download completed: local_path=%s", localPath)
+		log.Printf("[PIPELINE] WARNING: download_needed=true but download should be handled in main pipeline")
+		log.Printf("[PIPELINE] This code path should not be reached in new architecture")
+		// Don't call download here - main pipeline will handle it
 	}
 
 	// CRITICAL: Validate parser returned success=true for download
@@ -817,29 +813,32 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 
 	p.log(jobID, fmt.Sprintf("Parsed: %s (%d)", result.Title, result.Year), "info")
 
-	// NEW: Return local_path so caller can update the job
+	// Copy selected video URL into metadata for later use
+	result.ParsedMovieMetadata.VideoURL = result.VideoURL
+
+	// Return metadata and local_path (may be empty if parser will download separately)
 	return &result.ParsedMovieMetadata, localPath, nil
 }
 
-// callParserDownload calls the parser /download endpoint to download the video
-// This is called when /details returns download_needed=true with a video_url
+// callParserDownload calls the parser /download endpoint to start download
+// Then polls /progress until download completes
 func (p *Pipeline) callParserDownload(jobID, videoURL string) (string, error) {
-	jobIDCopy := jobID // Capture for logging below
-	log.Printf("[PIPELINE] callParserDownload: job_id=%s, url=%s", jobIDCopy, safeTruncate(videoURL, 80))
+	jobIDCopy := jobID
+	log.Printf("[WORKER] download start — job_id=%s, url=%s", jobIDCopy, safeTruncate(videoURL, 80))
 
 	// Build download endpoint URL
 	parserEndpoint := fmt.Sprintf("%s/download", p.config.ParserURL)
 	params := url.Values{}
 	params.Set("video_url", videoURL)
 	params.Set("job_id", jobIDCopy)
-	// Generate output name from job_id
 	safeName := regexp.MustCompile(`[^\w\s-]`).ReplaceAllString(jobIDCopy, "")
 	safeName = regexp.MustCompile(`[-\s]+`).ReplaceAllString(safeName, "_")
 	params.Set("output_name", safeName+".mp4")
 
 	downloadURL := parserEndpoint + "?" + params.Encode()
-	log.Printf("[PARSER] calling parser /download — job_id=%s, url=%s", jobIDCopy, downloadURL)
+	log.Printf("[WORKER] calling parser /download — job_id=%s", jobIDCopy)
 
+	// Call /download to start background download
 	resp, err := p.httpClient.Get(downloadURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to call parser /download: %w", err)
@@ -851,53 +850,241 @@ func (p *Pipeline) callParserDownload(jobID, videoURL string) (string, error) {
 		return "", fmt.Errorf("parser /download returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var result struct {
-		Success           bool   `json:"success"`
-		LocalPath         string `json:"local_path"`
-		FilePath          string `json:"file_path"`
-		FileSize          int64  `json:"file_size"`
-		SourceQuality     string `json:"source_quality"`
-		StreamType        string `json:"stream_type"`
-		DownloadCompleted bool   `json:"download_completed"`
-		Error             string `json:"error"`
-		DownloadError     string `json:"download_error"`
+	var downloadResp struct {
+		Success         bool   `json:"success"`
+		AlreadyRunning  bool   `json:"already_running"`
+		Status          string `json:"status"`
+		ProgressPercent int    `json:"progress_percent"`
+		Message         string `json:"message"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&downloadResp); err != nil {
 		return "", fmt.Errorf("failed to decode /download response: %w", err)
 	}
 
-	if !result.Success {
-		errMsg := result.Error
-		if result.DownloadError != "" {
-			errMsg = result.DownloadError
+	if !downloadResp.Success {
+		return "", fmt.Errorf("parser /download failed: %s", downloadResp.Message)
+	}
+
+	// If already running, just poll progress (don't restart)
+	if downloadResp.AlreadyRunning {
+		log.Printf("[WORKER] existing active download detected — job_id=%s, continuing polling", jobIDCopy)
+	}
+
+	log.Printf("[WORKER] download started — job_id=%s, status=%s", jobIDCopy, downloadResp.Status)
+
+	// Poll /progress until download completes
+	maxPollCount := 7200 // Max 2 hours (7200 * 1 second)
+	pollInterval := 1 * time.Second
+
+	for pollCount := 0; pollCount < maxPollCount; pollCount++ {
+		time.Sleep(pollInterval)
+
+		// Call /progress endpoint
+		progressURL := fmt.Sprintf("%s/progress?job_id=%s", p.config.ParserURL, jobIDCopy)
+		progressResp, err := p.httpClient.Get(progressURL)
+		if err != nil {
+			log.Printf("[WORKER] /progress error — job_id=%s, error=%v, retrying...", jobIDCopy, err)
+			continue
 		}
-		return "", fmt.Errorf("parser /download failed: %s", errMsg)
+
+		var progress struct {
+			Success         bool    `json:"success"`
+			Status          string  `json:"status"`
+			ProgressPercent int     `json:"progress_percent"`
+			DownloadedBytes int64   `json:"downloaded_bytes"`
+			TotalBytes      int64   `json:"total_bytes"`
+			SpeedMBps       float64 `json:"speed_mbps"`
+			EtaSeconds      int     `json:"eta_seconds"`
+			LocalPath       string  `json:"local_path"`
+			FileSize        int64   `json:"file_size"`
+			Error           string  `json:"error"`
+			Done            bool    `json:"done"`
+		}
+
+		if err := json.NewDecoder(progressResp.Body).Decode(&progress); err != nil {
+			progressResp.Body.Close()
+			log.Printf("[WORKER] /progress decode error — job_id=%s, error=%v, retrying...", jobIDCopy, err)
+			continue
+		}
+		progressResp.Body.Close()
+
+		log.Printf("[WORKER] polling — job_id=%s, status=%s, percent=%d%%",
+			jobIDCopy, progress.Status, progress.ProgressPercent)
+
+		// Check if download completed
+		if progress.Status == "completed" {
+			localPath := progress.LocalPath
+			if localPath == "" {
+				return "", fmt.Errorf("parser /progress returned completed but empty local_path")
+			}
+
+			// Validate the file exists
+			if _, err := os.Stat(localPath); err != nil {
+				return "", fmt.Errorf("parser /progress returned local_path but file does not exist: %s", localPath)
+			}
+
+			fileSize := int64(0)
+			if fileInfo, err := os.Stat(localPath); err == nil {
+				fileSize = fileInfo.Size()
+			}
+
+			log.Printf("[WORKER] download done — job_id=%s, local_path=%s, size=%d bytes",
+				jobIDCopy, localPath, fileSize)
+			log.Printf("[WORKER] worker switched to processing — job_id=%s", jobIDCopy)
+			return localPath, nil
+		}
+
+		// Check if download failed
+		if progress.Status == "failed" {
+			return "", fmt.Errorf("parser /download failed: %s", progress.Error)
+		}
+
+		// Continue polling if still downloading or starting
 	}
 
-	localPath := result.LocalPath
-	if localPath == "" {
-		localPath = result.FilePath
+	return "", fmt.Errorf("download polling timeout after %d seconds", maxPollCount)
+}
+
+// startDownloadAndPoll calls /download once then polls /progress
+// This is the main download flow for new jobs
+func (p *Pipeline) startDownloadAndPoll(ctx context.Context, job *models.IngestionJob) (string, error) {
+	jobID := job.ID.Hex()
+	videoURL := job.VideoURL
+
+	log.Printf("[WORKER] startDownloadAndPoll — job_id=%s, url=%s", jobID, safeTruncate(videoURL, 60))
+
+	// Build download endpoint URL
+	parserEndpoint := fmt.Sprintf("%s/download", p.config.ParserURL)
+	params := url.Values{}
+	params.Set("video_url", videoURL)
+	params.Set("job_id", jobID)
+	safeName := regexp.MustCompile(`[^\w\s-]`).ReplaceAllString(jobID, "")
+	safeName = regexp.MustCompile(`[-\s]+`).ReplaceAllString(safeName, "_")
+	params.Set("output_name", safeName+".mp4")
+
+	downloadURL := parserEndpoint + "?" + params.Encode()
+
+	// Call /download ONCE - it returns immediately
+	log.Printf("[WORKER] /download called once — job_id=%s", jobID)
+	resp, err := p.httpClient.Get(downloadURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to call parser /download: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("parser /download returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	if localPath == "" {
-		return "", fmt.Errorf("parser /download returned empty local_path")
+	var downloadResp struct {
+		Success bool   `json:"success"`
+		Status  string `json:"status"` // started, already_running, already_done
+		JobID   string `json:"job_id"`
+		Message string `json:"message"`
 	}
 
-	// Validate the file exists
-	if _, err := os.Stat(localPath); err != nil {
-		return "", fmt.Errorf("parser /download returned local_path but file does not exist: %s", localPath)
+	if err := json.NewDecoder(resp.Body).Decode(&downloadResp); err != nil {
+		return "", fmt.Errorf("failed to decode /download response: %w", err)
 	}
 
-	fileSize := int64(0)
-	if fileInfo, err := os.Stat(localPath); err == nil {
-		fileSize = fileInfo.Size()
+	log.Printf("[WORKER] /download response — job_id=%s, status=%s", jobID, downloadResp.Status)
+
+	if !downloadResp.Success {
+		return "", fmt.Errorf("parser /download failed: %s", downloadResp.Message)
 	}
 
-	log.Printf("[PARSER] DDownloader success — job_id=%s, local_path=%s, size=%d bytes", jobIDCopy, localPath, fileSize)
-	log.Printf("[PARSER] local_path received — job_id=%s, path=%s", jobIDCopy, localPath)
+	// Now poll /progress until completion
+	// NO more /download calls - only /progress
+	return p.pollDownloadProgress(ctx, job, videoURL)
+}
 
-	return localPath, nil
+// pollDownloadProgress polls /progress until download completes or fails
+// Used after /download is called (or already running)
+func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.IngestionJob, videoURL string) (string, error) {
+	jobID := job.ID.Hex()
+
+	log.Printf("[WORKER] pollDownloadProgress — job_id=%s, polling until completion", jobID)
+
+	maxPollCount := 7200 // Max 2 hours
+	pollInterval := 1 * time.Second
+
+	for pollCount := 0; pollCount < maxPollCount; pollCount++ {
+		time.Sleep(pollInterval)
+
+		// Call /progress endpoint
+		progressURL := fmt.Sprintf("%s/progress?job_id=%s", p.config.ParserURL, jobID)
+		progressResp, err := p.httpClient.Get(progressURL)
+		if err != nil {
+			log.Printf("[WORKER] /progress error — job_id=%s, error=%v, retrying...", jobID, err)
+			continue
+		}
+
+		var progress struct {
+			Success         bool    `json:"success"`
+			Status          string  `json:"status"` // starting, downloading, completed, failed
+			ProgressPercent int     `json:"progress_percent"`
+			DownloadedBytes int64   `json:"downloaded_bytes"`
+			TotalBytes      int64   `json:"total_bytes"`
+			SpeedMBps       float64 `json:"speed_mbps"`
+			EtaSeconds      int     `json:"eta_seconds"`
+			LocalPath       string  `json:"local_path"`
+			FileSize        int64   `json:"file_size"`
+			Error           string  `json:"error"`
+		}
+
+		if err := json.NewDecoder(progressResp.Body).Decode(&progress); err != nil {
+			progressResp.Body.Close()
+			log.Printf("[WORKER] /progress decode error — job_id=%s, error=%v, retrying...", jobID, err)
+			continue
+		}
+		progressResp.Body.Close()
+
+		log.Printf("[WORKER] polling — job_id=%s, status=%s, percent=%d%%",
+			jobID, progress.Status, progress.ProgressPercent)
+
+		// Update job progress in DB
+		if progress.Status == "downloading" || progress.Status == "starting" {
+			msg := fmt.Sprintf("Downloading: %d%%", progress.ProgressPercent)
+			if progress.SpeedMBps > 0 {
+				msg += fmt.Sprintf(" (%.1f MB/s)", progress.SpeedMBps)
+			}
+			p.jobRepo.UpdateDownloadProgress(ctx, jobID, progress.ProgressPercent,
+				progress.DownloadedBytes, progress.TotalBytes, progress.SpeedMBps, msg)
+		}
+
+		// Check if download completed
+		if progress.Status == "completed" {
+			localPath := progress.LocalPath
+			if localPath == "" {
+				return "", fmt.Errorf("parser /progress returned completed but empty local_path")
+			}
+
+			// Validate the file exists
+			if _, err := os.Stat(localPath); err != nil {
+				return "", fmt.Errorf("parser /progress returned local_path but file does not exist: %s", localPath)
+			}
+
+			fileSize := int64(0)
+			if fileInfo, err := os.Stat(localPath); err == nil {
+				fileSize = fileInfo.Size()
+			}
+
+			log.Printf("[WORKER] download done — job_id=%s, local_path=%s, size=%d bytes",
+				jobID, localPath, fileSize)
+			return localPath, nil
+		}
+
+		// Check if download failed
+		if progress.Status == "failed" {
+			return "", fmt.Errorf("parser /download failed: %s", progress.Error)
+		}
+
+		// Continue polling if still downloading or starting
+	}
+
+	return "", fmt.Errorf("download polling timeout after %d seconds", maxPollCount)
 }
 
 // downloadVideo - PARSER NOW HANDLES DOWNLOADING

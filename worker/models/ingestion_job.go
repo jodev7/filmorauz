@@ -91,13 +91,14 @@ type IngestionJob struct {
 
 // JobSteps tracks the completion status of each pipeline step
 type JobSteps struct {
-	Download    bool `bson:"download" json:"download"`
-	Process     bool `bson:"process" json:"process"`
-	Upload      bool `bson:"upload" json:"upload"`
-	Metadata    bool `bson:"metadata" json:"metadata"`
-	Enrich      bool `bson:"enrich" json:"enrich"`
-	Poster      bool `bson:"poster" json:"poster"`
-	CreateMovie bool `bson:"create_movie" json:"create_movie"`
+	Download        bool `bson:"download" json:"download"`
+	DownloadStarted bool `bson:"download_started" json:"download_started"` // Track if /download was called
+	Process         bool `bson:"process" json:"process"`
+	Upload          bool `bson:"upload" json:"upload"`
+	Metadata        bool `bson:"metadata" json:"metadata"`
+	Enrich          bool `bson:"enrich" json:"enrich"`
+	Poster          bool `bson:"poster" json:"poster"`
+	CreateMovie     bool `bson:"create_movie" json:"create_movie"`
 }
 
 // IngestionLog represents a log entry for an ingestion job
@@ -121,6 +122,8 @@ type ParsedMovieMetadata struct {
 	VideoURLs    []VideoSource `bson:"video_urls" json:"video_urls"`
 	Quality      string        `bson:"quality" json:"quality"`
 	Translation  string        `bson:"translation" json:"translation"`
+	// Selected best video URL (single string for convenience)
+	VideoURL string `bson:"video_url,omitempty" json:"video_url,omitempty"`
 }
 
 // VideoSource represents a video source

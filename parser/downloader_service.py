@@ -1286,6 +1286,7 @@ class DownloaderService:
         backend_job_id: str | None = None,
         referer: str | None = None,
         max_retries: int = 3,
+        progress_callback=None,
     ) -> dict:
         """
         Download video with retry support and validation.
@@ -1297,6 +1298,7 @@ class DownloaderService:
             backend_job_id: Backend job ID for progress reporting
             referer: Optional referer header
             max_retries: Maximum retry attempts (default 3)
+            progress_callback: Optional callback for progress updates (percent, downloaded, total, speed, eta)
             
         Returns:
             dict with success, type, file_path, file_name

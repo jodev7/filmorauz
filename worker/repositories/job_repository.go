@@ -48,85 +48,32 @@ func NewJobRepository(db *mongo.Database) *JobRepository {
 	}
 }
 
-// Create creates a new ingestion job
-func (r *JobRepository) Create(ctx context.Context, job *models.IngestionJob) error {
-	job.ID = primitive.NewObjectID()
-	job.CreatedAt = time.Now()
-	job.UpdatedAt = time.Now()
-	job.Status = models.IngestionStatusPending
-	job.Progress = 0
-	job.Logs = []models.IngestionLog{}
-	job.RetryCount = 0
+// UpdateVideoURL updates the video_url field of a job
+func (r *JobRepository) UpdateVideoURL(ctx context.Context, id, videoURL string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid id")
+	}
 
-	_, err := r.collection.InsertOne(ctx, job)
+	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
+		"$set": bson.M{
+			"video_url":  videoURL,
+			"updated_at": time.Now(),
+		},
+	})
+
 	return err
 }
 
-// GetByID retrieves a job by ID
-func (r *JobRepository) GetByID(ctx context.Context, id string) (*models.IngestionJob, error) {
-	objID, err := primitive.ObjectIDFromHex(id)
-	if err != nil {
-		return nil, fmt.Errorf("invalid id")
-	}
-
-	var job models.IngestionJob
-	err = r.collection.FindOne(ctx, bson.M{"_id": objID}).Decode(&job)
-	if err != nil {
-		return nil, err
-	}
-
-	return &job, nil
-}
-
-// GetPendingJobs retrieves pending jobs that are ready to process (non-atomic)
-// Use ClaimNextJob for atomic claiming in multi-worker deployments
-func (r *JobRepository) GetPendingJobs(ctx context.Context, limit int) ([]*models.IngestionJob, error) {
-	filter := bson.M{
-		"status": bson.M{
-			"$in": []models.IngestionStatus{
-				models.IngestionStatusPending,
-				models.IngestionStatusFailed,
-			},
-		},
-		"retry_count": bson.M{
-			"$lt": 3, // Max 3 retries
-		},
-	}
-
-	opts := options.Find().
-		SetSort(bson.D{{Key: "created_at", Value: 1}}).
-		SetLimit(int64(limit))
-
-	cursor, err := r.collection.Find(ctx, filter, opts)
-	if err != nil {
-		return nil, err
-	}
-	defer cursor.Close(ctx)
-
-	var jobs []*models.IngestionJob
-	if err := cursor.All(ctx, &jobs); err != nil {
-		return nil, err
-	}
-
-	return jobs, nil
-}
-
-// ClaimNextJob atomically claims the next pending job
-// This uses FindOneAndUpdate to ensure only one worker can claim a job
-// Returns nil if no jobs are available
-// NOTE: Claims jobs where steps.download is NOT true - worker will call parser to download
+// ClaimNextJob atomically claims the next pending job for download processing
+// It finds a job with status=pending, retry_count<3, and steps.download not completed
+// Returns the claimed job with status updated to processing
 func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob, error) {
-	// FIXED: Use $exists:false OR steps.download != true to find unprocessed jobs
-	// This ensures newly created jobs (without steps field or steps.download=false) are picked up
 	filter := bson.M{
-		"status": models.IngestionStatusPending,
-		"retry_count": bson.M{
-			"$lt": 3, // Max 3 retries
-		},
+		"status":      models.IngestionStatusPending,
+		"retry_count": bson.M{"$lt": 3},
 		"$or": []bson.M{
-			// Jobs where steps.download doesn't exist (newly created jobs)
 			{"steps.download": bson.M{"$exists": false}},
-			// OR steps.download is explicitly false
 			{"steps.download": false},
 		},
 	}
@@ -150,8 +97,8 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 	err := r.collection.FindOneAndUpdate(ctx, filter, update, opts).Decode(&job)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
-			log.Printf("[REPO] ClaimNextJob: no pending download jobs found (0 documents)")
-			return nil, nil // No jobs available
+			log.Printf("[REPO] ClaimNextJob: no pending download jobs found")
+			return nil, nil
 		}
 		log.Printf("[REPO] ClaimNextJob: ERROR - %v", err)
 		return nil, err
@@ -579,23 +526,6 @@ func (r *JobRepository) UpdateFinalOutputPath(ctx context.Context, id, finalPath
 	return err
 }
 
-// UpdateVideoURL updates the final video URL after upload
-func (r *JobRepository) UpdateVideoURL(ctx context.Context, id, url string) error {
-	objID, err := primitive.ObjectIDFromHex(id)
-	if err != nil {
-		return fmt.Errorf("invalid id")
-	}
-
-	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
-		"$set": bson.M{
-			"video_url":  url,
-			"updated_at": time.Now(),
-		},
-	})
-
-	return err
-}
-
 // UpdateStep marks a pipeline step as completed
 func (r *JobRepository) UpdateStep(ctx context.Context, id string, step string) error {
 	objID, err := primitive.ObjectIDFromHex(id)
@@ -611,6 +541,47 @@ func (r *JobRepository) UpdateStep(ctx context.Context, id string, step string) 
 		},
 	})
 
+	return err
+}
+
+// MarkDownloadStarted marks that /download was called for this job
+// This prevents duplicate /download calls on retries
+func (r *JobRepository) MarkDownloadStarted(ctx context.Context, id string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid id")
+	}
+
+	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
+		"$set": bson.M{
+			"steps.download_started": true,
+			"updated_at":             time.Now(),
+		},
+	})
+
+	return err
+}
+
+// UpdateDownloadProgress updates download progress fields in the job
+func (r *JobRepository) UpdateDownloadProgress(ctx context.Context, id string, progress int, downloadedBytes, totalBytes int64, speedMbps float64, message string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid id")
+	}
+
+	update := bson.M{
+		"$set": bson.M{
+			"progress":         progress,
+			"downloaded_bytes": downloadedBytes,
+			"total_bytes":      totalBytes,
+			"speed_mbps":       speedMbps,
+			"message":          message,
+			"status":           models.IngestionStatusDownloading,
+			"updated_at":       time.Now(),
+		},
+	}
+
+	_, err = r.collection.UpdateByID(ctx, objID, update)
 	return err
 }
 

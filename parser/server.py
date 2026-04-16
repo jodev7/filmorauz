@@ -98,6 +98,73 @@ PARSERS = {
 DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "downloads")
 downloader_service = DownloaderService(DOWNLOAD_DIR)
 
+# Active download registry for non-blocking downloads
+# Key: job_id, Value: DownloadState object
+_active_downloads = {}
+_downloads_lock = threading.Lock()
+
+class DownloadState:
+    """Represents the state of an active download"""
+    def __init__(self, job_id, source_url, output_name):
+        self.job_id = job_id
+        self.source_url = source_url
+        self.output_name = output_name
+        self.status = "starting"  # starting, downloading, completed, failed
+        self.started_at = time.time()
+        self.done = False
+        self.progress_percent = 0
+        self.downloaded_bytes = 0
+        self.total_bytes = 0
+        self.speed_mbps = 0.0
+        self.eta_seconds = 0
+        self.local_path = ""
+        self.file_size = 0
+        self.error = ""
+    
+    def to_dict(self):
+        return {
+            "job_id": self.job_id,
+            "status": self.status,
+            "started_at": self.started_at,
+            "done": self.done,
+            "progress_percent": self.progress_percent,
+            "downloaded_bytes": self.downloaded_bytes,
+            "total_bytes": self.total_bytes,
+            "speed_mbps": self.speed_mbps,
+            "eta_seconds": self.eta_seconds,
+            "local_path": self.local_path,
+            "file_size": self.file_size,
+            "error": self.error,
+            "source_url": self.source_url,
+            "output_name": self.output_name,
+        }
+
+def get_active_download(job_id):
+    """Get active download state for job_id"""
+    with _downloads_lock:
+        return _active_downloads.get(job_id)
+
+def set_active_download(job_id, state):
+    """Set active download state for job_id"""
+    with _downloads_lock:
+        _active_downloads[job_id] = state
+
+def clear_active_download(job_id):
+    """Clear active download state for job_id"""
+    with _downloads_lock:
+        if job_id in _active_downloads:
+            del _active_downloads[job_id]
+
+def is_download_active(job_id):
+    """Check if download is active for job_id"""
+    with _downloads_lock:
+        return job_id in _active_downloads
+
+def get_all_downloads():
+    """Get all active downloads (for cleanup, monitoring)"""
+    with _downloads_lock:
+        return dict(_active_downloads)
+
 # Worker URL (default to localhost:8083)
 WORKER_URL = os.environ.get("WORKER_URL", "http://localhost:8083")
 
@@ -818,7 +885,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                 self._send_error(f"Failed to get details: {str(e)}", 500)
             return
         
-        # NEW: /download endpoint - uses DDownloader to download the selected source
+        # NEW: /download endpoint - starts non-blocking background download
         elif path == "/download":
             source = query.get("source", [""])[0]
             video_url = query.get("video_url", [""])[0]
@@ -827,8 +894,8 @@ class ParserHandler(BaseHTTPRequestHandler):
             quality = query.get("quality", [""])[0]
             referer = query.get("referer", [""])[0]
             
-            logger.info(f"[PARSER] /download request — source={source}, video_url={safe_truncate(video_url, 60)}..., job_id={job_id}")
-            logger.info(f"[PARSER] DDownloader start — url={safe_truncate(video_url, 80)}...")
+            logger.info(f"[PARSER] /download called — job_id={job_id}")
+            logger.info(f"[PARSER] new download started — job_id={job_id}, url={safe_truncate(video_url, 60)}")
             
             if not video_url:
                 self._send_error("Missing 'video_url' parameter")
@@ -842,55 +909,161 @@ class ParserHandler(BaseHTTPRequestHandler):
             
             backend_job_id = job_id if job_id else ""
             
-            try:
-                # Use DDownloader via downloader_service (smart_download uses DDownloader internally with built-in fallbacks)
-                logger.info(f"[PARSER] DDownloader attempting download: {output_name}")
-                
-                download_result = downloader_service.smart_download(
-                    url=video_url,
-                    output_name=output_name,
-                    job_id=output_name,
-                    backend_job_id=backend_job_id,
-                    referer=referer if referer else None,
-                )
-                
-                if not download_result.get("success"):
-                    error_msg = download_result.get("error", "Download failed")
-                    logger.error(f"[PARSER] DDownloader failed: {error_msg}")
-                    raise Exception(error_msg)
-                
-                local_path = download_result.get("file_path", "")
-                
-                if not local_path or not os.path.exists(local_path):
-                    raise Exception(f"Downloaded file does not exist: {local_path}")
-                
-                file_size = os.path.getsize(local_path) if local_path else 0
-                if file_size == 0:
-                    raise Exception(f"Downloaded file is empty: {local_path}")
-                
-                stream_type = download_result.get("type", "mp4")
-                
-                logger.info(f"[PARSER] DDownloader success — local_path={local_path}, size={file_size} bytes")
-                logger.info(f"[PARSER] local_path returned — job_id={job_id}, path={local_path}")
-                
-                self._send_json({
-                    "success": True,
-                    "local_path": local_path,
-                    "file_path": local_path,
-                    "file_size": file_size,
-                    "source_quality": quality or "auto",
-                    "stream_type": stream_type,
-                    "download_completed": True,
-                })
-                
-            except Exception as e:
-                error_msg = str(e)
-                logger.error(f"[PARSER] DDownloader error: {error_msg}")
+            # Check existing download state
+            existing = get_active_download(job_id)
+            if existing:
+                if existing.status in ("starting", "downloading"):
+                    logger.info(f"[PARSER] duplicate /download request reused existing download — job_id={job_id}, status={existing.status}")
+                    self._send_json({
+                        "success": True,
+                        "status": "already_running",
+                        "job_id": job_id,
+                        "progress_percent": existing.progress_percent,
+                        "downloaded_bytes": existing.downloaded_bytes,
+                        "total_bytes": existing.total_bytes,
+                        "message": "Download already in progress",
+                    })
+                    return
+                elif existing.status == "completed" and existing.local_path:
+                    logger.info(f"[PARSER] duplicate /download request returning existing result — job_id={job_id}, local_path={existing.local_path}")
+                    self._send_json({
+                        "success": True,
+                        "status": "already_done",
+                        "job_id": job_id,
+                        "local_path": existing.local_path,
+                        "file_size": existing.file_size,
+                        "message": "Download already completed",
+                    })
+                    return
+                elif existing.status == "failed":
+                    # Allow retry after failure
+                    logger.info(f"[PARSER] previous download failed, starting new — job_id={job_id}")
+                    clear_active_download(job_id)
+            
+            # Create new download state
+            state = DownloadState(job_id, video_url, output_name)
+            set_active_download(job_id, state)
+            logger.info(f"[PARSER] new background download started — job_id={job_id}")
+            
+            # Start download in background thread
+            def background_download():
+                try:
+                    logger.info(f"[PARSER] background download worker starting — job_id={job_id}")
+                    
+                    # Progress callback to update state
+                    def progress_callback(percent, downloaded, total, speed, eta):
+                        state = get_active_download(job_id)
+                        if state and state.status != "failed":
+                            state.progress_percent = percent
+                            state.downloaded_bytes = downloaded
+                            state.total_bytes = total
+                            state.speed_mbps = speed / (1024 * 1024) if speed > 0 else 0.0
+                            state.eta_seconds = eta
+                            state.status = "downloading"
+                    
+                    download_result = downloader_service.smart_download(
+                        url=video_url,
+                        output_name=output_name,
+                        job_id=output_name,
+                        backend_job_id=backend_job_id,
+                        referer=referer if referer else None,
+                        progress_callback=progress_callback,
+                    )
+                    
+                    if not download_result.get("success"):
+                        error_msg = download_result.get("error", "Download failed")
+                        logger.error(f"[PARSER] background download failed — job_id={job_id}, error={error_msg}")
+                        state = get_active_download(job_id)
+                        if state:
+                            state.status = "failed"
+                            state.error = error_msg
+                            state.done = True
+                        return
+                    
+                    local_path = download_result.get("file_path", "")
+                    if not local_path or not os.path.exists(local_path):
+                        raise Exception(f"Downloaded file does not exist: {local_path}")
+                    
+                    file_size = os.path.getsize(local_path) if local_path else 0
+                    if file_size == 0:
+                        raise Exception(f"Downloaded file is empty: {local_path}")
+                    
+                    stream_type = download_result.get("type", "mp4")
+                    
+                    logger.info(f"[PARSER] background download completed — job_id={job_id}, local_path={local_path}, size={file_size}")
+                    
+                    # Update state to completed
+                    state = get_active_download(job_id)
+                    if state:
+                        state.status = "completed"
+                        state.done = True
+                        state.progress_percent = 100
+                        state.local_path = local_path
+                        state.file_size = file_size
+                        state.downloaded_bytes = file_size
+                        state.total_bytes = file_size
+                        
+                except Exception as e:
+                    error_msg = str(e)
+                    logger.error(f"[PARSER] background download error — job_id={job_id}, error={error_msg}")
+                    state = get_active_download(job_id)
+                    if state:
+                        state.status = "failed"
+                        state.error = error_msg
+                        state.done = True
+            
+            # Start background thread
+            download_thread = threading.Thread(target=background_download, daemon=True)
+            download_thread.start()
+            
+            # Return immediately
+            logger.info(f"[PARSER] /download returning immediately — job_id={job_id}, status=started")
+            self._send_json({
+                "success": True,
+                "status": "started",
+                "job_id": job_id,
+                "message": "Download started in background",
+            })
+            return
+        
+        # NEW: /progress endpoint - returns current download state
+        elif path == "/progress":
+            job_id = query.get("job_id", [""])[0]
+            
+            logger.info(f"[PARSER] /progress requested — job_id={job_id}")
+            
+            if not job_id:
+                self._send_error("Missing 'job_id' parameter")
+                return
+            
+            state = get_active_download(job_id)
+            
+            if not state:
+                logger.info(f"[PARSER] /progress job_id not found — job_id={job_id}")
                 self._send_json({
                     "success": False,
-                    "error": error_msg,
-                    "download_error": error_msg,
-                }, 500)
+                    "status": "not_found",
+                    "message": "No download found for this job_id",
+                })
+                return
+            
+            response = {
+                "success": True,
+                "status": state.status,
+                "progress_percent": state.progress_percent,
+                "downloaded_bytes": state.downloaded_bytes,
+                "total_bytes": state.total_bytes,
+                "speed_mbps": state.speed_mbps,
+                "eta_seconds": state.eta_seconds,
+                "local_path": state.local_path,
+                "file_size": state.file_size,
+                "error": state.error,
+                "done": state.done,
+            }
+            
+            logger.info(f"[PARSER] /progress response — job_id={job_id}, status={response['status']}, percent={response['progress_percent']}%")
+            
+            self._send_json(response)
             return
         
         # Categories: /categories?source=uzmovi
