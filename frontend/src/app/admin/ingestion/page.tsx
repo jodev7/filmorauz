@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { 
   Search, Play, RefreshCw, CheckCircle, XCircle,
   Clock, Download, Upload, Settings, AlertTriangle, Loader2,
-  ChevronLeft, ChevronRight, Film, Tv, Link, Plus, Youtube, RotateCcw
+  ChevronLeft, ChevronRight, Film, Tv, Link, Plus, Youtube, RotateCcw,
+  Power
 } from "lucide-react";
 import {
   searchSource, createIngestionJob, getIngestionJobs,
@@ -941,37 +942,94 @@ export default function IngestionPage() {
   const [jobs, setJobs] = useState<IngestionJob[]>([]);
   const [loadingJobs, setLoadingJobs] = useState(false);
   const [retryingStage, setRetryingStage] = useState<{jobId: string; stage: string} | null>(null);
+  const [syncEnabled, setSyncEnabled] = useState<boolean>(false);
+  const [isFetching, setIsFetching] = useState<boolean>(false);
+  const [hasInitialized, setHasInitialized] = useState<boolean>(false);
+  const isMounted = useRef(true);
+  const hadSavedPreference = useRef<boolean>(false);
+  const userToggledDuringInit = useRef<boolean>(false);
 
   const fetchJobs = useCallback(async () => {
-    if (!token) return;
+    if (!token || !isMounted.current || isFetching) return;
+    
+    setIsFetching(true);
     setLoadingJobs(true);
     try {
       const result = await getIngestionJobs(token, { limit: 50 });
       const jobsData = Array.isArray(result.data) ? result.data : [];
       setJobs(jobsData);
+      
+      // On first fetch, determine default sync state if no saved preference
+      if (!hasInitialized && isMounted.current) {
+        if (!hadSavedPreference.current && !userToggledDuringInit.current) {
+          // Active = any non-terminal status (exclude completed, failed, download_failed)
+          const terminalStatuses = ["completed", "failed", "download_failed"];
+          const hasActiveJobs = jobsData.some(j => !terminalStatuses.includes(j.status || ""));
+          setSyncEnabled(hasActiveJobs);
+          // Persist the auto-determined default
+          localStorage.setItem("ingestion-sync-enabled", String(hasActiveJobs));
+        }
+        setHasInitialized(true);
+      }
     } catch (err) {
       console.error("Failed to fetch jobs:", err);
       setJobs((prev) => (Array.isArray(prev) ? prev : []));
     } finally {
-      setLoadingJobs(false);
+      if (isMounted.current) {
+        setIsFetching(false);
+        setLoadingJobs(false);
+      }
     }
-  }, [token]);
+  }, [token, isFetching, hasInitialized]);
 
-  // Auto-refresh jobs every 1 second when Jobs tab is active
+  // Keep ref to latest fetchJobs to avoid stale closures in effects
+  const fetchJobsRef = useRef(fetchJobs);
   useEffect(() => {
-    if (activeTab !== "jobs" || !token) return;
-    
-    // Initial fetch
-    fetchJobs();
-    
-    // Polling interval
+    fetchJobsRef.current = fetchJobs;
+  }, [fetchJobs]);
+
+  // Initialize sync state from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem("ingestion-sync-enabled");
+    if (saved !== null) {
+      hadSavedPreference.current = true;
+      setSyncEnabled(saved === "true");
+      setHasInitialized(true);
+    } else {
+      hadSavedPreference.current = false;
+      setHasInitialized(false);
+    }
+  }, []);
+
+  // Initial fetch when token becomes available
+  useEffect(() => {
+    if (token) {
+      fetchJobsRef.current();
+    }
+  }, [token]); // Only token, uses ref to get latest fetchJobs
+
+  // Polling effect - only sets up interval when sync is ON and on Jobs tab
+  useEffect(() => {
+    if (!hasInitialized || !token || activeTab !== "jobs" || !syncEnabled) {
+      return;
+    }
+
+    // Immediate fetch when sync is enabled and viewing jobs
+    fetchJobsRef.current();
+
     const interval = setInterval(() => {
-      fetchJobs();
+      fetchJobsRef.current();
     }, 1000);
-    
-    // Cleanup on unmount or tab change
+
     return () => clearInterval(interval);
-  }, [token, activeTab, fetchJobs]);
+  }, [hasInitialized, token, activeTab, syncEnabled]); // fetchJobsRef is stable
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
 
   const handleRetry = async (jobId: string, stage: "download" | "process" | "upload" = "download") => {
     if (!token) return;
@@ -1050,6 +1108,27 @@ export default function IngestionPage() {
               </span>
             )}
           </button>
+          
+          {/* Sync toggle button (only show on jobs tab) */}
+          {activeTab === "jobs" && (
+            <button
+              onClick={() => {
+                userToggledDuringInit.current = true;
+                const newState = !syncEnabled;
+                setSyncEnabled(newState);
+                localStorage.setItem("ingestion-sync-enabled", String(newState));
+              }}
+              className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 border ${
+                syncEnabled
+                  ? "bg-green-600 text-white border-green-500 hover:bg-green-700"
+                  : "bg-brand-card text-gray-400 hover:text-white border-brand-border"
+              }`}
+              title={syncEnabled ? "Auto-refresh ON" : "Auto-refresh OFF"}
+            >
+              <Power className={`w-4 h-4 ${syncEnabled ? "fill-current" : ""}`} />
+              Sync {syncEnabled ? "ON" : "OFF"}
+            </button>
+          )}
         </div>
 
         {/* Source Content */}

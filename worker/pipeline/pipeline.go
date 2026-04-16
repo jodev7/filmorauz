@@ -755,56 +755,48 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 	log.Printf("[PIPELINE] Parser response: success=%v, local_path=%s, error=%s, download_error=%s",
 		result.Success, result.LocalPath, result.Error, result.DownloadError)
 
-	// NEW FLOW: If download_needed=true, worker must call /download to get local_path
-	// NOTE: Download is now handled in main pipeline flow via startDownloadAndPoll
-	// This code path is kept for backward compatibility but should not be reached
-	// in the new async architecture
-	if result.DownloadNeeded && result.VideoURL != "" {
-		log.Printf("[PIPELINE] WARNING: download_needed=true but download should be handled in main pipeline")
-		log.Printf("[PIPELINE] This code path should not be reached in new architecture")
-		// Don't call download here - main pipeline will handle it
-	}
+	// Log key fields from /details
+	log.Printf("[DETAILS] response received — job_id=%s, title=%s, video_url=%s, download_needed=%v, local_path=%s",
+		jobID, safeTruncate(result.Title, 60), safeTruncate(result.VideoURL, 80), result.DownloadNeeded, result.LocalPath)
 
-	// CRITICAL: Validate parser returned success=true for download
-	// Parser contract requires: if success=true, then local_path must be non-empty
-	if result.Success && result.LocalPath == "" && result.FilePath == "" {
-		log.Printf("[PIPELINE] ERROR: Parser returned success=true but empty local_path!")
-		return nil, "", fmt.Errorf("parser contract violation: success=true but local_path is empty. Parser must download the video before returning.")
+	// Validate core fields from /details
+	if !result.Success {
+		return nil, "", fmt.Errorf("parser returned success=false")
 	}
-
-	// CRITICAL: If parser says download is needed, something is wrong
-	// According to contract, parser should download first
-	if result.DownloadNeeded {
-		log.Printf("[PIPELINE] ERROR: Parser returned download_needed=true - contract violation!")
-		return nil, "", fmt.Errorf("parser contract violation: download_needed=true. Parser must download the video, not worker.")
+	if result.VideoURL == "" {
+		return nil, "", fmt.Errorf("parser did not return video_url")
 	}
+	log.Printf("[WORKER] /details returned video_url — job_id=%s, url=%s", jobID, safeTruncate(result.VideoURL, 80))
+	log.Printf("[WORKER] /details returned download_needed=%v — job_id=%s", result.DownloadNeeded, jobID)
 
-	// Defensive check: ensure we got valid metadata
-	if result.Title == "" {
-		return nil, "", fmt.Errorf("parser returned empty title")
-	}
-
-	// NEW: Get local_path from parser response (prefer LocalPath, fallback to FilePath)
+	// NEW: local_path from /details is OPTIONAL
+	// If parser already downloaded (download_needed=false), local_path should be present
+	// If download_needed=true, local_path will be empty — worker handles download
 	localPath := result.LocalPath
 	if localPath == "" {
 		localPath = result.FilePath
 	}
 
-	// CRITICAL: Validate that the downloaded file actually exists
+	// If parser claims it already downloaded (download_needed=false), validate file exists
+	if !result.DownloadNeeded && localPath == "" {
+		log.Printf("[PIPELINE] ERROR: Parser returned download_needed=false but no local_path")
+		return nil, "", fmt.Errorf("parser contract: download_needed=false requires local_path")
+	}
 	if localPath != "" {
 		if _, err := os.Stat(localPath); err != nil {
 			log.Printf("[PIPELINE] ERROR: Parser returned local_path but file does not exist: %s", localPath)
 			return nil, "", fmt.Errorf("parser returned local_path but file does not exist: %s", localPath)
 		}
-
-		// Validate file size > 0
 		fileInfo, _ := os.Stat(localPath)
 		if fileInfo != nil && fileInfo.Size() == 0 {
 			log.Printf("[PIPELINE] ERROR: Parser returned local_path but file is empty: %s", localPath)
 			return nil, "", fmt.Errorf("parser returned local_path but file is empty: %s", localPath)
 		}
-
-		log.Printf("[PARSER] local_path received — job_id=%s, path=%s, size=%d bytes", jobID, localPath, fileInfo.Size())
+		log.Printf("[PARSER] local_path received — job_id=%s, path=%s, size=%d bytes",
+			jobID, localPath, fileInfo.Size())
+	} else {
+		// localPath is empty and download_needed=true — worker will download
+		log.Printf("[WORKER] /details accepted without local_path — job_id=%s, worker will download via /download", jobID)
 	}
 
 	log.Printf("[PIPELINE] parseMovieDetails completed: title=%s, year=%d, video_urls=%d, local_path=%s",
@@ -1073,6 +1065,7 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 
 			log.Printf("[WORKER] download done — job_id=%s, local_path=%s, size=%d bytes",
 				jobID, localPath, fileSize)
+			log.Printf("[DOWNLOAD] local_path confirmed — job_id=%s, path=%s, size=%d", jobID, localPath, fileSize)
 			return localPath, nil
 		}
 
