@@ -880,10 +880,20 @@ func (p *Pipeline) callParserDownload(jobID, videoURL string) (string, error) {
 			continue
 		}
 
+		// Read raw body for debug
+		rawBody, err := io.ReadAll(progressResp.Body)
+		if err != nil {
+			progressResp.Body.Close()
+			log.Printf("[WORKER] /progress read error — job_id=%s, error=%v", jobIDCopy, err)
+			continue
+		}
+		log.Printf("[WORKER] /progress raw response — job_id=%s, body=%s", jobIDCopy, string(rawBody))
+
 		var progress struct {
 			Success         bool    `json:"success"`
 			Status          string  `json:"status"`
 			ProgressPercent int     `json:"progress_percent"`
+			Progress        int     `json:"progress,omitempty"` // legacy fallback
 			DownloadedBytes int64   `json:"downloaded_bytes"`
 			TotalBytes      int64   `json:"total_bytes"`
 			SpeedMBps       float64 `json:"speed_mbps"`
@@ -894,15 +904,29 @@ func (p *Pipeline) callParserDownload(jobID, videoURL string) (string, error) {
 			Done            bool    `json:"done"`
 		}
 
-		if err := json.NewDecoder(progressResp.Body).Decode(&progress); err != nil {
+		if err := json.Unmarshal(rawBody, &progress); err != nil {
 			progressResp.Body.Close()
-			log.Printf("[WORKER] /progress decode error — job_id=%s, error=%v, retrying...", jobIDCopy, err)
+			log.Printf("[WORKER] /progress decode error — job_id=%s, error=%v", jobIDCopy, err)
 			continue
 		}
 		progressResp.Body.Close()
 
-		log.Printf("[WORKER] polling — job_id=%s, status=%s, percent=%d%%",
-			jobIDCopy, progress.Status, progress.ProgressPercent)
+		// Fallback: if progress_percent not set but legacy 'progress' field exists, use it
+		if progress.ProgressPercent == 0 && progress.Progress > 0 {
+			progress.ProgressPercent = progress.Progress
+		}
+
+		// Compute from bytes if still zero
+		if progress.ProgressPercent == 0 && progress.DownloadedBytes > 0 && progress.TotalBytes > 0 {
+			computed := int((float64(progress.DownloadedBytes) / float64(progress.TotalBytes)) * 100)
+			if computed > 0 {
+				progress.ProgressPercent = computed
+				log.Printf("[WORKER] computed progress from bytes — job_id=%s, percent=%d%%", jobIDCopy, progress.ProgressPercent)
+			}
+		}
+
+		log.Printf("[WORKER] polling — job_id=%s, status=%s, progress_percent=%d%%, downloaded=%d/%d",
+			jobIDCopy, progress.Status, progress.ProgressPercent, progress.DownloadedBytes, progress.TotalBytes)
 
 		// Check if download completed
 		if progress.Status == "completed" {
@@ -1013,10 +1037,21 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 			continue
 		}
 
+		// Read raw body for debug logging
+		rawBody, err := io.ReadAll(progressResp.Body)
+		if err != nil {
+			progressResp.Body.Close()
+			log.Printf("[WORKER] /progress read error — job_id=%s, error=%v", jobID, err)
+			continue
+		}
+		log.Printf("[WORKER] /progress raw response — job_id=%s, body=%s", jobID, string(rawBody))
+
+		// Decode JSON
 		var progress struct {
 			Success         bool    `json:"success"`
 			Status          string  `json:"status"` // starting, downloading, completed, failed
 			ProgressPercent int     `json:"progress_percent"`
+			Progress        int     `json:"progress,omitempty"` // fallback for legacy
 			DownloadedBytes int64   `json:"downloaded_bytes"`
 			TotalBytes      int64   `json:"total_bytes"`
 			SpeedMBps       float64 `json:"speed_mbps"`
@@ -1026,23 +1061,41 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 			Error           string  `json:"error"`
 		}
 
-		if err := json.NewDecoder(progressResp.Body).Decode(&progress); err != nil {
+		if err := json.Unmarshal(rawBody, &progress); err != nil {
 			progressResp.Body.Close()
-			log.Printf("[WORKER] /progress decode error — job_id=%s, error=%v, retrying...", jobID, err)
+			log.Printf("[WORKER] /progress decode error — job_id=%s, error=%v", jobID, err)
 			continue
 		}
 		progressResp.Body.Close()
 
-		log.Printf("[WORKER] polling — job_id=%s, status=%s, percent=%d%%",
-			jobID, progress.Status, progress.ProgressPercent)
+		// Fallback: if progress_percent not set but legacy 'progress' field exists, use it
+		if progress.ProgressPercent == 0 && progress.Progress > 0 {
+			progress.ProgressPercent = progress.Progress
+		}
+
+		log.Printf("[WORKER] /progress parsed — job_id=%s, success=%v, status=%s, progress_percent=%d%%, downloaded=%d/%d bytes, speed=%.2f MB/s",
+			jobID, progress.Success, progress.Status, progress.ProgressPercent,
+			progress.DownloadedBytes, progress.TotalBytes, progress.SpeedMBps)
+
+		// Compute progress from bytes if progress_percent is 0 but bytes indicate activity
+		progressPercent := progress.ProgressPercent
+		if progressPercent == 0 && progress.DownloadedBytes > 0 && progress.TotalBytes > 0 {
+			computed := int((float64(progress.DownloadedBytes) / float64(progress.TotalBytes)) * 100)
+			if computed > 0 {
+				progressPercent = computed
+				log.Printf("[WORKER] computed progress from bytes — job_id=%s, percent=%d%% (dl=%d, total=%d)",
+					jobID, progressPercent, progress.DownloadedBytes, progress.TotalBytes)
+			}
+		}
 
 		// Update job progress in DB
 		if progress.Status == "downloading" || progress.Status == "starting" {
-			msg := fmt.Sprintf("Downloading: %d%%", progress.ProgressPercent)
+			msg := fmt.Sprintf("Downloading: %d%%", progressPercent)
 			if progress.SpeedMBps > 0 {
 				msg += fmt.Sprintf(" (%.1f MB/s)", progress.SpeedMBps)
 			}
-			p.jobRepo.UpdateDownloadProgress(ctx, jobID, progress.ProgressPercent,
+			log.Printf("[WORKER] updating job progress — job_id=%s, progress=%d%%, msg=%s", jobID, progressPercent, msg)
+			p.jobRepo.UpdateDownloadProgress(ctx, jobID, progressPercent,
 				progress.DownloadedBytes, progress.TotalBytes, progress.SpeedMBps, msg)
 		}
 

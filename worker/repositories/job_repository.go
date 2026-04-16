@@ -563,10 +563,32 @@ func (r *JobRepository) MarkDownloadStarted(ctx context.Context, id string) erro
 }
 
 // UpdateDownloadProgress updates download progress fields in the job
+// Ensures monotonicity: never overwrite with lower progress or downloaded_bytes
 func (r *JobRepository) UpdateDownloadProgress(ctx context.Context, id string, progress int, downloadedBytes, totalBytes int64, speedMbps float64, message string) error {
 	objID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
 		return fmt.Errorf("invalid id")
+	}
+
+	// Fetch current job to check monotonicity (protect against stale responses)
+	var currentJob models.IngestionJob
+	err = r.collection.FindOne(ctx, bson.M{"_id": objID}).Decode(&currentJob)
+	if err != nil {
+		log.Printf("[REPO] UpdateDownloadProgress: failed to fetch current job %s: %v (will attempt update anyway)", id, err)
+	} else {
+		// Only block if downloaded_bytes decreased (stale response) OR progress is 0 while we previously had progress > 0 AND downloaded_bytes also decreased.
+		// Allow progress to fluctuate due to total_bytes changes; bytes should only increase.
+		if currentJob.DownloadedBytes > 0 && downloadedBytes < currentJob.DownloadedBytes {
+			log.Printf("[REPO] UpdateDownloadProgress: STALE BYTES DETECTED — job_id=%s, new_bytes=%d < current_bytes=%d (ignoring update)",
+				id, downloadedBytes, currentJob.DownloadedBytes)
+			return nil
+		}
+		// Additional guard: if progress drops to 0 but we already have non-zero downloaded bytes, likely stale (worker should have computed from bytes)
+		if progress == 0 && currentJob.Progress > 0 && currentJob.DownloadedBytes > 0 && downloadedBytes <= currentJob.DownloadedBytes {
+			log.Printf("[REPO] UpdateDownloadProgress: STALE ZERO PROGRESS — job_id=%s, new_progress=0, current_progress=%d, bytes=%d->%d (ignoring)",
+				id, currentJob.Progress, currentJob.DownloadedBytes, downloadedBytes)
+			return nil
+		}
 	}
 
 	update := bson.M{
@@ -582,7 +604,14 @@ func (r *JobRepository) UpdateDownloadProgress(ctx context.Context, id string, p
 	}
 
 	_, err = r.collection.UpdateByID(ctx, objID, update)
-	return err
+	if err != nil {
+		log.Printf("[REPO] UpdateDownloadProgress: UPDATE FAILED — job_id=%s, progress=%d, err=%v", id, progress, err)
+		return err
+	}
+
+	log.Printf("[REPO] UpdateDownloadProgress: job_id=%s, progress=%d%%, downloaded=%d/%d, speed=%.2f MB/s",
+		id, progress, downloadedBytes, totalBytes, speedMbps)
+	return nil
 }
 
 // TransitionToProcessing atomically transitions job from download to processing stage

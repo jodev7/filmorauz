@@ -951,18 +951,51 @@ export default function IngestionPage() {
 
   const fetchJobs = useCallback(async () => {
     if (!token || !isMounted.current || isFetching) return;
-    
+
     setIsFetching(true);
     setLoadingJobs(true);
     try {
       const result = await getIngestionJobs(token, { limit: 50 });
       const jobsData = Array.isArray(result.data) ? result.data : [];
-      setJobs(jobsData);
-      
+
+      // Merge with previous state to prevent stale progress regressions
+      setJobs(prevJobs => {
+        if (!Array.isArray(prevJobs) || prevJobs.length === 0) {
+          return jobsData;
+        }
+
+        // Build map of previous job state
+        const prevMap = new Map(prevJobs.map(j => [j.id, j]));
+
+        // Merge: if job is downloading and new progress < old progress, keep old job state
+        const merged = jobsData.map(newJob => {
+          const prevJob = prevMap.get(newJob.id);
+          if (!prevJob) return newJob;
+
+          // Only apply protection for active downloads
+          const isDownloading = newJob.status === "downloading" || newJob.stage === "downloading" || newJob.stage === "download";
+          const prevProgress = prevJob.progress ?? 0;
+          const newProgress = newJob.progress ?? 0;
+
+          // Detect regression: new progress lower than previous, and bytes didn't increase
+          const prevBytes = prevJob.downloaded_bytes ?? 0;
+          const newBytes = newJob.downloaded_bytes ?? 0;
+          const bytesRegressed = newBytes < prevBytes;
+
+          if (isDownloading && newProgress < prevProgress && bytesRegressed) {
+            console.log(`[UI] Stale job data blocked: job ${newJob.id} progress ${newProgress} < ${prevProgress}, bytes ${newBytes} < ${prevBytes} — preserving previous state`);
+            return prevJob;
+          }
+
+          return newJob;
+        });
+
+        return merged;
+      });
+
       // On first fetch, determine default sync state if no saved preference
       if (!hasInitialized && isMounted.current) {
         if (!hadSavedPreference.current && !userToggledDuringInit.current) {
-          // Active = any non-terminal status (exclude completed, failed, download_failed)
           const terminalStatuses = ["completed", "failed", "download_failed"];
           const hasActiveJobs = jobsData.some(j => !terminalStatuses.includes(j.status || ""));
           setSyncEnabled(hasActiveJobs);

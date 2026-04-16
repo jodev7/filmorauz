@@ -57,6 +57,11 @@ type IngestionJob struct {
 	UpdatedAt         time.Time            `bson:"updated_at" json:"updated_at"`
 	CompletedAt       *time.Time           `bson:"completed_at,omitempty" json:"completed_at,omitempty"`
 
+	// Download progress fields (populated during download)
+	DownloadedBytes int64   `bson:"downloaded_bytes,omitempty" json:"downloaded_bytes,omitempty"`
+	TotalBytes      int64   `bson:"total_bytes,omitempty" json:"total_bytes,omitempty"`
+	SpeedMbps       float64 `bson:"speed_mbps,omitempty" json:"speed_mbps,omitempty"`
+
 	// NEW: Enriched metadata fields
 	EnrichedMetadata   *EnrichedMetadata `bson:"enriched_metadata,omitempty" json:"enriched_metadata,omitempty"`
 	OriginalPosterURL  string            `bson:"original_poster_url,omitempty" json:"original_poster_url,omitempty"`
