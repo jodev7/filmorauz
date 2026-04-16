@@ -28,13 +28,16 @@ import (
 
 // Config holds pipeline configuration
 type Config struct {
-	ParserURL     string
-	TempDir       string
-	StorageConfig storage.Config
-	TMDBAPIKey    string          // TMDB API key for metadata enrichment
-	DB            *mongo.Database // MongoDB database for movie insertion
-	BackendURL    string          // Backend API URL for Telegram notifications
-	WorkerToken   string          // Token for worker-to-backend authentication
+	ParserURL              string
+	TempDir                string
+	StorageConfig          storage.Config
+	TMDBAPIKey             string          // TMDB API key for metadata enrichment
+	DB                     *mongo.Database // MongoDB database for movie insertion
+	BackendURL             string          // Backend API URL for Telegram notifications
+	WorkerToken            string          // Token for worker-to-backend authentication
+	MaxRenditionConcurrent int             // Max concurrent FFmpeg processes (default: 2)
+	SegmentUploadWorkers   int             // Concurrent segment uploads per rendition (default: 10)
+	SegmentUploadRetries   int             // Max retries per segment (default: 3)
 }
 
 // Pipeline handles the video ingestion pipeline
@@ -1334,7 +1337,7 @@ func (p *Pipeline) processVideo(job *models.IngestionJob, inputPath string, cano
 	// The processed master (cut + logo) is NOT deleted inside processAdaptiveHLS;
 	// it stays alive so clip generation can use it, then the whole readyvideo dir is cleaned up.
 	var masterPlaylistPath string
-	masterPlaylistPath, processedMasterPath, err = p.processAdaptiveHLS(jobID, inputPath, outputDir, defaultCutSeconds, progressCallback)
+	masterPlaylistPath, processedMasterPath, err = p.processAdaptiveHLS(jobID, inputPath, outputDir, defaultCutSeconds, progressCallback, p.config.MaxRenditionConcurrent, p.config.SegmentUploadWorkers, p.config.SegmentUploadRetries)
 	if err != nil {
 		return "", "", fmt.Errorf("adaptive HLS processing failed: %w", err)
 	}

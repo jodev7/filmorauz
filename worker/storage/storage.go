@@ -25,6 +25,11 @@ type Storage interface {
 	GetURL(remotePath string) string
 	GetFileSize(remotePath string) (int64, error)
 	GetPresignedUploadURL(remotePath, contentType string) (string, string, error)
+	ParallelUpload(jobs []struct {
+		LocalPath  string
+		RemotePath string
+		Data       []byte
+	}) ([]parallelUploadResult, error)
 }
 
 // Config holds storage configuration
@@ -172,6 +177,49 @@ func (s *LocalStorage) GetPresignedUploadURL(remotePath, contentType string) (st
 	return uploadURL, "", nil
 }
 
+func (s *LocalStorage) ParallelUpload(jobs []struct {
+	LocalPath  string
+	RemotePath string
+	Data       []byte
+}) ([]parallelUploadResult, error) {
+	startTime := time.Now()
+	totalJobs := len(jobs)
+	totalData := 0
+
+	log.Printf("[LOCAL] Starting parallel upload: %d files", totalJobs)
+
+	for _, j := range jobs {
+		destPath := filepath.Join(s.basePath, j.RemotePath)
+		destDir := filepath.Dir(destPath)
+
+		if err := os.MkdirAll(destDir, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create directory: %w", err)
+		}
+
+		if err := os.WriteFile(destPath, j.Data, 0644); err != nil {
+			return nil, fmt.Errorf("failed to write file: %w", err)
+		}
+		totalData += len(j.Data)
+	}
+
+	results := make([]parallelUploadResult, totalJobs)
+	for i, j := range jobs {
+		results[i] = parallelUploadResult{
+			RemotePath: j.RemotePath,
+			URL:        LocalStorageUploadURL + "/uploads/" + j.RemotePath,
+			Err:        nil,
+		}
+	}
+
+	elapsed := time.Since(startTime)
+	speed := float64(totalData) / 1024 / 1024 / elapsed.Seconds()
+
+	log.Printf("[LOCAL] Parallel upload complete: %d files, %.2f MB in %.2fs (%.2f MB/s)",
+		totalJobs, float64(totalData)/1024/1024, elapsed.Seconds(), speed)
+
+	return results, nil
+}
+
 // B2Storage implements Backblaze B2 cloud storage using the native B2 API.
 type B2Storage struct {
 	bucket string
@@ -206,6 +254,22 @@ type b2UploadURLResponse struct {
 	UploadURL          string `json:"uploadUrl"`
 	AuthorizationToken string `json:"authorizationToken"`
 }
+
+type uploadJob struct {
+	localPath   string
+	remotePath  string
+	data        []byte
+	contentType string
+	result      chan string
+	err         chan error
+}
+
+var (
+	DefaultPoolSize  = 15
+	DefaultBatchSize = 20
+	MaxRetries       = 3
+	RetryDelayMs     = 500
+)
 
 // NewB2Storage creates a new B2 storage instance
 func NewB2Storage(config Config) (*B2Storage, error) {
@@ -380,6 +444,213 @@ func (s *B2Storage) UploadData(filename string, data []byte, contentType string)
 		contentType = detectContentType(filename)
 	}
 	return s.uploadBytes(data, filename, contentType)
+}
+
+type parallelUploadResult struct {
+	RemotePath string
+	URL        string
+	Err        error
+}
+
+func (s *B2Storage) getUploadURLBatch(count int) ([]uploadURL, []string, error) {
+	if err := s.authorize(); err != nil {
+		return nil, nil, err
+	}
+
+	s.mu.Lock()
+	apiURL := s.apiURL
+	authToken := s.authToken
+	bucketID := s.bucketID
+	s.mu.Unlock()
+
+	var urls []uploadURL
+	var tokens []string
+
+	for i := 0; i < count; i++ {
+		payload, _ := json.Marshal(map[string]string{"bucketId": bucketID})
+		req, err := http.NewRequest("POST", apiURL+"/b2api/v2/b2_get_upload_url", bytes.NewReader(payload))
+		if err != nil {
+			return nil, nil, fmt.Errorf("b2 getUploadURL batch: build request: %w", err)
+		}
+		req.Header.Set("Authorization", authToken)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			return nil, nil, fmt.Errorf("b2 getUploadURL batch: request: %w", err)
+		}
+		defer resp.Body.Close()
+
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			return nil, nil, fmt.Errorf("b2 getUploadURL batch: status %d: %s", resp.StatusCode, body)
+		}
+
+		var ur b2UploadURLResponse
+		if err := json.Unmarshal(body, &ur); err != nil {
+			return nil, nil, fmt.Errorf("b2 getUploadURL batch: decode: %w", err)
+		}
+
+		urls = append(urls, uploadURL{url: ur.UploadURL, token: ur.AuthorizationToken})
+		tokens = append(tokens, ur.AuthorizationToken)
+	}
+
+	return urls, tokens, nil
+}
+
+type uploadURL struct {
+	url   string
+	token string
+}
+
+func (s *B2Storage) uploadWithUrl(data []byte, uploadUrl, token, remotePath, contentType string) (string, error) {
+	req, err := http.NewRequest("POST", uploadUrl, bytes.NewReader(data))
+	if err != nil {
+		return "", fmt.Errorf("b2 upload: new request: %w", err)
+	}
+
+	req.Header.Set("Authorization", token)
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("X-Bz-File-Name", remotePath)
+	req.Header.Set("X-Bz-Info-Content-Type", contentType)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("b2 upload: request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("b2 upload: status %d: %s", resp.StatusCode, body)
+	}
+
+	return remotePath, nil
+}
+
+func (s *B2Storage) ParallelUpload(jobs []struct {
+	LocalPath  string
+	RemotePath string
+	Data       []byte
+}) ([]parallelUploadResult, error) {
+	startTime := time.Now()
+	totalJobs := len(jobs)
+	totalData := 0
+	for _, j := range jobs {
+		totalData += len(j.Data)
+	}
+
+	if totalJobs == 0 {
+		return []parallelUploadResult{}, nil
+	}
+
+	log.Printf("[B2] Starting parallel upload: %d files, %.2f MB", totalJobs, float64(totalData)/1024/1024)
+
+	batchSize := DefaultBatchSize
+	results := make([]parallelUploadResult, totalJobs)
+
+	var wg sync.WaitGroup
+	jobChan := make(chan int, totalJobs)
+
+	poolSize := DefaultPoolSize
+	if poolSize > totalJobs {
+		poolSize = totalJobs
+	}
+
+	uploadUrlChan := make(chan uploadURL, batchSize*2)
+	authError := make(chan error, 1)
+
+	go func() {
+		for {
+			urls, _, err := s.getUploadURLBatch(batchSize)
+			if err != nil {
+				authError <- err
+				close(uploadUrlChan)
+				return
+			}
+			for _, u := range urls {
+				uploadUrlChan <- u
+			}
+		}
+	}()
+
+	go func() {
+		for range authError {
+			log.Printf("[B2] ERROR: Failed to get upload URLs: %v", <-authError)
+		}
+	}()
+
+	for i := 0; i < poolSize; i++ {
+		wg.Add(1)
+		go func(workerId int) {
+			defer wg.Done()
+
+			for idx := range jobChan {
+				job := jobs[idx]
+				contentType := detectContentType(job.RemotePath)
+
+				var url string
+				var err error
+				maxRetries := MaxRetries
+
+				for attempt := 0; attempt < maxRetries; attempt++ {
+					select {
+					case uploadUrl, ok := <-uploadUrlChan:
+						if !ok {
+							err = fmt.Errorf("upload URL channel closed")
+							break
+						}
+						url, err = s.uploadWithUrl(job.Data, uploadUrl.url, uploadUrl.token, job.RemotePath, contentType)
+					case <-time.After(30 * time.Second):
+						err = fmt.Errorf("timeout waiting for upload URL")
+						break
+					}
+
+					if err == nil {
+						break
+					}
+
+					if attempt < maxRetries-1 {
+						log.Printf("[B2] Retry %d/%d for %s: %v", attempt+1, maxRetries, job.RemotePath, err)
+						time.Sleep(time.Duration(RetryDelayMs) * time.Millisecond)
+					}
+				}
+
+				results[idx] = parallelUploadResult{
+					RemotePath: job.RemotePath,
+					URL:        url,
+					Err:        err,
+				}
+			}
+		}(i)
+	}
+
+	for i := 0; i < totalJobs; i++ {
+		jobChan <- i
+	}
+	close(jobChan)
+	wg.Wait()
+
+	close(uploadUrlChan)
+
+	elapsed := time.Since(startTime)
+	speed := float64(totalData) / 1024 / 1024 / elapsed.Seconds()
+
+	successCount := 0
+	failCount := 0
+	for _, r := range results {
+		if r.Err != nil {
+			failCount++
+			log.Printf("[B2] FAILED: %s - %v", r.RemotePath, r.Err)
+		} else {
+			successCount++
+		}
+	}
+
+	log.Printf("[B2] Parallel upload complete: %d/%d succeeded, %.2f MB in %.2fs (%.2f MB/s)",
+		successCount, totalJobs, float64(totalData)/1024/1024, elapsed.Seconds(), speed)
+
+	return results, nil
 }
 
 // Download downloads a file from B2 to localPath.

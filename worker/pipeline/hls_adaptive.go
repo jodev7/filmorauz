@@ -10,9 +10,19 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/filmorauz/worker/models"
 )
+
+const DefaultMaxRenditionConcurrency = 2
+
+func getMaxRenditionConcurrency(maxConcurrent int) int {
+	if maxConcurrent > 0 {
+		return maxConcurrent
+	}
+	return DefaultMaxRenditionConcurrency
+}
 
 // RenditionConfig defines the configuration for a single HLS rendition
 type RenditionConfig struct {
@@ -40,10 +50,17 @@ func DefaultRenditions() []RenditionConfig {
 // 2. Then generates multiple quality renditions from the base
 // 3. Creates a master.m3u8 playlist referencing all variants
 // No watermark removal - use source video directly
-func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int)) (masterPlaylistPath, processedMasterPath string, err error) {
+func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int), maxConcurrentRenditions int, segmentUploadWorkers int, segmentUploadRetries int) (masterPlaylistPath, processedMasterPath string, err error) {
 	log.Printf("[HLS] Starting adaptive HLS generation for job %s", jobID)
 	log.Printf("[CHECKPOINT] hls_raw_input_path: %s", inputPath)
 	log.Printf("[HLS] Output directory: %s", outputDir)
+
+	if segmentUploadWorkers <= 0 {
+		segmentUploadWorkers = SegmentUploadConcurrency
+	}
+	if segmentUploadRetries <= 0 {
+		segmentUploadRetries = SegmentRetryMax
+	}
 
 	// Create output directory structure
 	// Structure: outputDir/
@@ -91,20 +108,77 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 
 	// Step 2: Generate each HLS rendition from the processed master
 	log.Printf("[STAGE] hls_renditions start — renditions: %d, source: %s", len(renditions), processedMasterPath)
-	totalRenditions := len(renditions)
-	for i, rendition := range renditions {
-		renditionBaseProgress := 55 + (i * 30 / totalRenditions)
-		log.Printf("[HLS] Generating %s rendition (%d/%d) at progress %d%%...", rendition.Name, i+1, totalRenditions, renditionBaseProgress)
 
-		renditionDir := filepath.Join(outputDir, rendition.Name)
+	streamingUploader := newStreamingUploader(p.storage, jobID, renditions, segmentUploadWorkers, segmentUploadRetries, outputDir)
+	streamingUploader.start()
+	log.Printf("[STAGE] streaming_upload start — folder: %s, renditions: %d, workers: %d, retries: %d", jobID, len(renditions), segmentUploadWorkers, segmentUploadRetries)
+
+	type renditionJob struct {
+		index        int
+		rendition    RenditionConfig
+		renditionDir string
+		baseProgress int
+	}
+
+	jobs := make([]renditionJob, len(renditions))
+	for i, r := range renditions {
+		renditionDir := filepath.Join(outputDir, r.Name)
 		if err = os.MkdirAll(renditionDir, 0755); err != nil {
 			return "", "", fmt.Errorf("failed to create rendition directory: %w", err)
 		}
-
-		if err = p.generateHLSRendition(jobID, processedMasterPath, renditionDir, rendition, renditionBaseProgress, jobStatusCallback); err != nil {
-			return "", "", fmt.Errorf("failed to generate %s rendition: %w", rendition.Name, err)
+		baseProgress := 55 + (i * 30 / len(renditions))
+		jobs[i] = renditionJob{
+			index:        i,
+			rendition:    r,
+			renditionDir: renditionDir,
+			baseProgress: baseProgress,
 		}
 	}
+
+	maxConc := getMaxRenditionConcurrency(maxConcurrentRenditions)
+
+	sem := make(chan struct{}, maxConc)
+	var wg sync.WaitGroup
+	errors := make([]error, len(jobs))
+
+	log.Printf("[HLS] Starting parallel rendition generation (concurrency: %d)", maxConc)
+
+	for _, job := range jobs {
+		wg.Add(1)
+		go func(j renditionJob) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			log.Printf("[HLS] Starting %s rendition...", j.rendition.Name)
+			err := p.generateHLSRendition(jobID, processedMasterPath, j.renditionDir, j.rendition, j.baseProgress, jobStatusCallback)
+			if err != nil {
+				errors[j.index] = fmt.Errorf("failed to generate %s rendition: %w", j.rendition.Name, err)
+				log.Printf("[HLS] ERROR %s: %v", j.rendition.Name, err)
+			} else {
+				log.Printf("[HLS] Completed %s rendition", j.rendition.Name)
+			}
+		}(job)
+	}
+
+	wg.Wait()
+
+	for _, err := range errors {
+		if err != nil {
+			streamingUploader.stopAndWait()
+			return "", "", fmt.Errorf("rendition generation failed: %w", err)
+		}
+	}
+
+	log.Printf("[HLS] All renditions complete, waiting for segment uploads...")
+	log.Printf("[STAGE] streaming_upload wait")
+
+	if err = streamingUploader.stopAndWait(); err != nil {
+		return "", "", fmt.Errorf("segment upload failed: %w", err)
+	}
+
+	log.Printf("[STAGE] streaming_upload done")
+	log.Printf("[HLS] All renditions complete, creating master playlist")
 	log.Printf("[STAGE] hls_renditions end — renditions: %d", len(renditions))
 
 	// Report progress: HLS encoding complete, creating master playlist (~88%)
@@ -527,9 +601,16 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 
 	if mode == "prod" {
 		// PRODUCTION: Upload to B2/CDN
-		log.Printf("[HLS] Uploading to B2/CDN...")
+		log.Printf("[HLS] Uploading to B2/CDN with parallel upload...")
 
-		// Walk the directory and upload all files
+		type fileJob struct {
+			LocalPath  string
+			RemotePath string
+			Data       []byte
+		}
+
+		var jobs []fileJob
+
 		err := filepath.Walk(hlsDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
@@ -539,30 +620,69 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 				return nil
 			}
 
-			// Calculate relative path
 			relPath, _ := filepath.Rel(hlsDir, path)
 			remotePath := filepath.Join("videos", folderName, relPath)
 
-			log.Printf("[HLS] Uploading: %s -> %s", path, remotePath)
+			if strings.HasSuffix(path, ".ts") {
+				log.Printf("[HLS] Skipping .ts segment (already uploaded via streaming): %s", relPath)
+				return nil
+			}
 
-			// Upload file
-			url, err := p.storage.Upload(path, remotePath)
+			log.Printf("[HLS] Uploading playlist: %s -> %s", path, remotePath)
+
+			data, err := os.ReadFile(path)
 			if err != nil {
-				log.Printf("[HLS] Failed to upload %s: %v", path, err)
+				log.Printf("[HLS] Failed to read %s: %v", path, err)
 				return err
 			}
 
-			// Track master playlist URL
-			if relPath == "master.m3u8" {
-				streamingURL = url
-				log.Printf("[HLS] Master playlist URL: %s", streamingURL)
-			}
+			jobs = append(jobs, fileJob{
+				LocalPath:  path,
+				RemotePath: remotePath,
+				Data:       data,
+			})
 
 			return nil
 		})
 
 		if err != nil {
+			return "", fmt.Errorf("failed to read HLS files: %w", err)
+		}
+
+		log.Printf("[HLS] Collected %d files for parallel upload", len(jobs))
+
+		ParallelUploadJobs := make([]struct {
+			LocalPath  string
+			RemotePath string
+			Data       []byte
+		}, len(jobs))
+
+		for i, job := range jobs {
+			ParallelUploadJobs[i] = struct {
+				LocalPath  string
+				RemotePath string
+				Data       []byte
+			}{
+				LocalPath:  job.LocalPath,
+				RemotePath: job.RemotePath,
+				Data:       job.Data,
+			}
+		}
+
+		results, err := p.storage.ParallelUpload(ParallelUploadJobs)
+		if err != nil {
+			log.Printf("[HLS] Parallel upload error: %v", err)
 			return "", fmt.Errorf("failed to upload HLS files: %w", err)
+		}
+
+		for _, r := range results {
+			if r.Err != nil {
+				log.Printf("[HLS] Upload failed for %s: %v", r.RemotePath, r.Err)
+			}
+			if r.RemotePath == "videos/"+folderName+"/master.m3u8" || strings.HasSuffix(r.RemotePath, "/master.m3u8") {
+				streamingURL = r.URL
+				log.Printf("[HLS] Master playlist URL: %s", streamingURL)
+			}
 		}
 
 		if streamingURL == "" {
