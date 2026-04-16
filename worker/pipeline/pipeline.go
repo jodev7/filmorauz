@@ -701,6 +701,7 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 		DownloadCompleted bool   `json:"download_completed"`
 		DownloadNeeded    bool   `json:"download_needed"`
 		VideoFound        bool   `json:"video_found"`
+		VideoURL          string `json:"video_url"` // Best source URL from /details
 		Error             string `json:"error"`
 		DownloadError     string `json:"download_error"`
 	}
@@ -738,6 +739,21 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 		jobID, resp.StatusCode, result.Success, result.LocalPath, result.Error, result.DownloadError)
 	log.Printf("[PIPELINE] Parser response: success=%v, local_path=%s, error=%s, download_error=%s",
 		result.Success, result.LocalPath, result.Error, result.DownloadError)
+
+	// NEW FLOW: If download_needed=true, worker must call /download to get local_path
+	if result.DownloadNeeded && result.VideoURL != "" {
+		log.Printf("[PIPELINE] Parser returned download_needed=true, calling /download endpoint...")
+		log.Printf("[PIPELINE] Calling parser /download for job %s with video_url=%s", jobID, result.VideoURL[:80])
+
+		localPath, err := p.callParserDownload(jobID, result.VideoURL)
+		if err != nil {
+			return nil, "", fmt.Errorf("parser /download failed: %w", err)
+		}
+
+		// Update result with local_path from download
+		result.LocalPath = localPath
+		log.Printf("[PIPELINE] Parser /download completed: local_path=%s", localPath)
+	}
 
 	// CRITICAL: Validate parser returned success=true for download
 	// Parser contract requires: if success=true, then local_path must be non-empty
@@ -789,6 +805,85 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 
 	// NEW: Return local_path so caller can update the job
 	return &result.ParsedMovieMetadata, localPath, nil
+}
+
+// callParserDownload calls the parser /download endpoint to download the video
+// This is called when /details returns download_needed=true with a video_url
+func (p *Pipeline) callParserDownload(jobID, videoURL string) (string, error) {
+	jobIDCopy := jobID // Capture for logging below
+	log.Printf("[PIPELINE] callParserDownload: job_id=%s, url=%s", jobIDCopy, videoURL[:80])
+
+	// Build download endpoint URL
+	parserEndpoint := fmt.Sprintf("%s/download", p.config.ParserURL)
+	params := url.Values{}
+	params.Set("video_url", videoURL)
+	params.Set("job_id", jobIDCopy)
+	// Generate output name from job_id
+	safeName := regexp.MustCompile(`[^\w\s-]`).ReplaceAllString(jobIDCopy, "")
+	safeName = regexp.MustCompile(`[-\s]+`).ReplaceAllString(safeName, "_")
+	params.Set("output_name", safeName+".mp4")
+
+	downloadURL := parserEndpoint + "?" + params.Encode()
+	log.Printf("[PARSER] calling parser /download — job_id=%s, url=%s", jobIDCopy, downloadURL)
+
+	resp, err := p.httpClient.Get(downloadURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to call parser /download: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("parser /download returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Success           bool   `json:"success"`
+		LocalPath         string `json:"local_path"`
+		FilePath          string `json:"file_path"`
+		FileSize          int64  `json:"file_size"`
+		SourceQuality     string `json:"source_quality"`
+		StreamType        string `json:"stream_type"`
+		DownloadCompleted bool   `json:"download_completed"`
+		Error             string `json:"error"`
+		DownloadError     string `json:"download_error"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode /download response: %w", err)
+	}
+
+	if !result.Success {
+		errMsg := result.Error
+		if result.DownloadError != "" {
+			errMsg = result.DownloadError
+		}
+		return "", fmt.Errorf("parser /download failed: %s", errMsg)
+	}
+
+	localPath := result.LocalPath
+	if localPath == "" {
+		localPath = result.FilePath
+	}
+
+	if localPath == "" {
+		return "", fmt.Errorf("parser /download returned empty local_path")
+	}
+
+	// Validate the file exists
+	if _, err := os.Stat(localPath); err != nil {
+		return "", fmt.Errorf("parser /download returned local_path but file does not exist: %s", localPath)
+	}
+
+	fileSize := int64(0)
+	if fileInfo, err := os.Stat(localPath); err == nil {
+		fileSize = fileInfo.Size()
+	}
+
+	log.Printf("[PARSER] DDownloader success — job_id=%s, local_path=%s, size=%d bytes", jobIDCopy, localPath, fileSize)
+	log.Printf("[PARSER] local_path received — job_id=%s, path=%s", jobIDCopy, localPath)
+
+	return localPath, nil
 }
 
 // downloadVideo - PARSER NOW HANDLES DOWNLOADING

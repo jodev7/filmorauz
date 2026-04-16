@@ -770,228 +770,117 @@ class ParserHandler(BaseHTTPRequestHandler):
                     return
                 
                 logger.info(f"[PARSER] Final video URL: {video_url[:80]}... (type: {url_type})")
+                logger.info(f"[PARSER] selected source url — type={url_type}, quality={source_quality or 'auto'}, url={video_url[:120]}...")
                 
-                # CRITICAL: Parser MUST download the video and return local_path
-                # Worker expects a valid local_path - cannot proceed without it
+                # NEW FLOW: /details returns metadata + source URL only, NO download
+                # Worker will call /download separately with the source URL
+                # Return metadata + best source URL + quality info
                 
-                # Get video page URL for referer
-                video_page_url = details.get('video_page_url', detail_url or source_id)
-                
-                # Determine page URL
-                page_url = detail_url if detail_url else source_id
-                
-                # Get cookies from parser session if available
-                # This is critical for CDN URLs that require cookies from the video page
-                parser_cookies = details.get('_session_cookies', {})
-                if hasattr(details, '_session_cookies'):
-                    parser_cookies = details._session_cookies
-                elif hasattr(details, 'session_cookies'):
-                    parser_cookies = details.session_cookies
-                
-                if parser_cookies:
-                    logger.info(f"[PARSER] Captured {len(parser_cookies)} cookies from parser session")
-                
-                # Initialize referer_url variable
-                referer_url = ""
-                
-                # Set referer_url from video_page_url if available, otherwise from page_url
-                if details.get('video_page_url'):
-                    referer_url = details.get('video_page_url')
-                    logger.info(f"[PARSER] Using video_page_url as referer: {referer_url[:60]}...")
-                elif page_url:
-                    referer_url = page_url
-                    logger.info(f"[PARSER] Using page_url as referer: {referer_url[:60]}...")
-                else:
-                    logger.info(f"[PARSER] No referer URL available")
-                
-                # Generate output filename from movie title
-                output_name = normalized_metadata.get('title', source_id or 'video')
-                # Sanitize filename - replace special chars
-                import re
-                output_name = re.sub(r'[^\w\s-]', '', output_name)
-                output_name = re.sub(r'[-\s]+', '_', output_name)
-                output_name = f"{output_name}.mp4"
-                
-                # Get job_id for progress reporting
-                backend_job_id = job_id if job_id else ""
-                
-                # Start download progress reporting thread
-                progress_thread = None
-                if backend_job_id and BACKEND_URL:
-                    import threading
-                    
-                    # CRITICAL: Use the SAME job_id as the downloader service
-                    # The downloader uses output_name as the job_id for progress tracking
-                    # We must use the same key to read progress updates
-                    progress_job_id = output_name
-                    
-                    # Send initial progress
-                    self._report_progress_to_backend(backend_job_id, {
-                        "stage": "download",
-                        "status": "downloading",
-                        "progress_percent": 0,
-                        "message": "Starting download...",
-                    })
-                    
-                    def report_progress():
-                        last_pct = -1
-                        last_bytes = 0
-                        while True:
-                            # CRITICAL FIX: Use the SAME key as downloader service (output_name, not MD5 hash)
-                            prog = downloader_service.progress.get(progress_job_id)
-                            if prog:
-                                pct = prog.get("progress_percent", 0)
-                                downloaded = prog.get("downloaded_bytes", 0)
-                                # Always report if bytes changed, even if percent is same
-                                if pct != last_pct or downloaded != last_bytes:
-                                    last_pct = pct
-                                    last_bytes = downloaded
-                                    self._report_progress_to_backend(backend_job_id, {
-                                        "stage": "download",
-                                        "status": "downloading",
-                                        "progress_percent": pct,
-                                        "downloaded_bytes": downloaded,
-                                        "total_bytes": prog.get("total_bytes", 0),
-                                        "speed_mbps": prog.get("speed_mb_per_sec", 0.0),
-                                        "eta_seconds": prog.get("eta_seconds", 0),
-                                        "message": prog.get("message", ""),
-                                    })
-                            # Check for completion
-                            if prog and prog.get("status") in ["completed", "failed"]:
-                                break
-                            time.sleep(0.5)  # Poll more frequently for smoother updates
-                    
-                    progress_thread = threading.Thread(target=report_progress, daemon=True)
-                    progress_thread.start()
-                
-                # Download the video
-                try:
-                    logger.info(f"[PARSER] Downloading video: {output_name}")
-                    logger.info(f"[PARSER]   source: {source}")
-                    logger.info(f"[PARSER]   video_url: {video_url[:80]}...")
-                    logger.info(f"[PARSER]   video_url_type: {url_type}")
-                    
-                    # Send parsing stage complete, starting download
-                    if backend_job_id and BACKEND_URL:
-                        self._report_progress_to_backend(backend_job_id, {
-                            "stage": "download",
-                            "status": "downloading",
-                            "progress_percent": 0,
-                            "message": "Downloading video...",
-                        })
-                    
-                    # Download the file (referer_url computed at lines above from video_page_url / page_url)
-                    download_result = downloader_service.smart_download(
-                        url=video_url,
-                        output_name=output_name,
-                        job_id=output_name,
-                        backend_job_id=backend_job_id,
-                        referer=referer_url if referer_url else None,
-                    )
-                    
-                    # Validate download result
-                    if not download_result.get("success"):
-                        error_msg = download_result.get("error", "Download failed")
-                        logger.error(f"[PARSER] Download failed: {error_msg}")
-                        raise Exception(error_msg)
-                    
-                    # Get downloaded file path
-                    local_path = download_result.get("file_path", "")
-                    
-                    # CRITICAL: Validate the file exists and has content
-                    if not local_path:
-                        raise Exception("Downloader returned empty file_path")
-                    
-                    if not os.path.exists(local_path):
-                        raise Exception(f"Downloaded file does not exist: {local_path}")
-                    
-                    file_size = os.path.getsize(local_path)
-                    if file_size == 0:
-                        raise Exception(f"Downloaded file is empty: {local_path}")
-                    
-                    logger.info(f"[PARSER] Download successful: {local_path} ({file_size} bytes)")
-                    
-                    # Send download complete progress
-                    if backend_job_id and BACKEND_URL:
-                        self._report_progress_to_backend(backend_job_id, {
-                            "stage": "process",
-                            "status": "processing",
-                            "progress_percent": 100,
-                            "steps_download": True,
-                            "file_path": local_path,
-                            "message": "Download completed, starting processing",
-                        })
-                    
-                except Exception as download_error:
-                    error_msg = str(download_error)
-                    logger.error(f"[PARSER] Download failed: {error_msg}")
-                    
-                    # Send download failed progress
-                    if backend_job_id and BACKEND_URL:
-                        self._report_progress_to_backend(backend_job_id, {
-                            "stage": "download",
-                            "status": "failed",
-                            "progress_percent": 0,
-                            "error": error_msg,
-                            "message": f"Download failed: {error_msg}",
-                        })
-                    
-                    # Return failure response - parser MUST return success=false when download fails
-                    self._send_json({
-                        "success": False,
-                        "error": f"Download failed: {error_msg}",
-                        "source": source,
-                        "title": normalized_metadata.get("title", ""),
-                        "video_url_type": url_type,
-                        "local_path": "",
-                        "download_needed": False,
-                        "download_completed": False,
-                        "download_error": error_msg,
-                    }, 500)
-                    return
-                
-                # Create structured worker payload with normalized metadata
-                # Parser has downloaded the file and returns local_path
                 response_payload = create_worker_payload(
-                        source=source,
-                        source_url=source_base_url,
-                        page_url=page_url,
-                        video_url=video_url,
-                        video_url_type=url_type,
-                        metadata=normalized_metadata,
-                        local_path=local_path,
-                        source_quality=source_quality,
-                        available_qualities=available_qualities
-                    )
+                    source=source,
+                    source_url=source_base_url,
+                    page_url=detail_url if detail_url else source_id,
+                    video_url=video_url,
+                    video_url_type=url_type,
+                    metadata=normalized_metadata,
+                    local_path="",  # No local_path yet - will be returned by /download
+                    source_quality=source_quality,
+                    available_qualities=available_qualities
+                )
                 
-                # Add additional fields for worker
+                # Add additional fields to indicate download is pending
                 response_payload["success"] = True
                 response_payload["video_found"] = True
-                response_payload["download_needed"] = False  # Parser already downloaded
-                response_payload["download_completed"] = True
-                response_payload["video_page_url"] = video_page_url
-                response_payload["file_path"] = local_path
-                response_payload["file_name"] = output_name
-                response_payload["file_size"] = file_size
-                response_payload["stream_type"] = download_result.get("type", url_type)
+                response_payload["download_needed"] = True  # Worker must call /download
+                response_payload["download_completed"] = False
+                response_payload["video_page_url"] = details.get('video_page_url', detail_url or source_id)
                 
-                logger.info("=" * 60)
-                logger.info("[PARSER DOWNLOAD COMPLETE] File ready for pipeline processing")
-                logger.info(f"[PARSER DOWNLOAD COMPLETE] local_path: {local_path}")
-                logger.info(f"[PARSER DOWNLOAD COMPLETE] file_size: {file_size} bytes")
-                logger.info(f"[PARSER DOWNLOAD COMPLETE] video_url_type: {url_type}")
-                logger.info("=" * 60)
-                
-                logger.info(f"[PARSER] Returning structured payload with local_path: {local_path}")
-                logger.info(f"[PARSER]   video_url_type: {response_payload.get('video_url_type')}")
-                logger.info(f"[PARSER]   download_completed: {response_payload.get('download_completed')}")
-                logger.info(f"[PARSER]   file_size: {file_size} bytes")
+                logger.info(f"[PARSER] /details returning metadata + source URL (download pending)")
+                logger.info(f"[PARSER]   video_url: {video_url[:80]}...")
+                logger.info(f"[PARSER]   quality: {source_quality or 'auto'}")
+                logger.info(f"[PARSER]   worker must call /download to get local_path")
                 
                 self._send_json(response_payload)
-                
+                return
+            
             except Exception as e:
                 logger.error(f"Details error: {e}", exc_info=True)
                 self._send_error(f"Failed to get details: {str(e)}", 500)
+            return
+        
+        # NEW: /download endpoint - uses DDownloader to download the selected source
+        elif path == "/download":
+            source = query.get("source", [""])[0]
+            video_url = query.get("video_url", [""])[0]
+            job_id = query.get("job_id", [""])[0]
+            output_name = query.get("output_name", [""])[0]
+            quality = query.get("quality", [""])[0]
+            referer = query.get("referer", [""])[0]
+            
+            logger.info(f"[PARSER] /download request — source={source}, video_url={video_url[:60]}..., job_id={job_id}")
+            logger.info(f"[PARSER] DDownloader start — url={video_url[:80]}...")
+            
+            if not video_url:
+                self._send_error("Missing 'video_url' parameter")
+                return
+            
+            # Generate output name if not provided
+            if not output_name:
+                safe_name = re.sub(r'[^\w\s-]', '', job_id or 'download')
+                safe_name = re.sub(r'[-\s]+', '_', safe_name)
+                output_name = f"{safe_name}.mp4"
+            
+            backend_job_id = job_id if job_id else ""
+            
+            try:
+                # Use DDownloader via downloader_service (smart_download uses DDownloader internally with built-in fallbacks)
+                logger.info(f"[PARSER] DDownloader attempting download: {output_name}")
+                
+                download_result = downloader_service.smart_download(
+                    url=video_url,
+                    output_name=output_name,
+                    job_id=output_name,
+                    backend_job_id=backend_job_id,
+                    referer=referer if referer else None,
+                )
+                
+                if not download_result.get("success"):
+                    error_msg = download_result.get("error", "Download failed")
+                    logger.error(f"[PARSER] DDownloader failed: {error_msg}")
+                    raise Exception(error_msg)
+                
+                local_path = download_result.get("file_path", "")
+                
+                if not local_path or not os.path.exists(local_path):
+                    raise Exception(f"Downloaded file does not exist: {local_path}")
+                
+                file_size = os.path.getsize(local_path) if local_path else 0
+                if file_size == 0:
+                    raise Exception(f"Downloaded file is empty: {local_path}")
+                
+                stream_type = download_result.get("type", "mp4")
+                
+                logger.info(f"[PARSER] DDownloader success — local_path={local_path}, size={file_size} bytes")
+                logger.info(f"[PARSER] local_path returned — job_id={job_id}, path={local_path}")
+                
+                self._send_json({
+                    "success": True,
+                    "local_path": local_path,
+                    "file_path": local_path,
+                    "file_size": file_size,
+                    "source_quality": quality or "auto",
+                    "stream_type": stream_type,
+                    "download_completed": True,
+                })
+                
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"[PARSER] DDownloader error: {error_msg}")
+                self._send_json({
+                    "success": False,
+                    "error": error_msg,
+                    "download_error": error_msg,
+                }, 500)
             return
         
         # Categories: /categories?source=uzmovi
