@@ -144,6 +144,7 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 
 	log.Printf("[REPO] ClaimNextJob: querying for pending download jobs...")
 	log.Printf("[REPO] ClaimNextJob filter: status=pending, retry_count<3, steps.download=$exists:false OR steps.download=false")
+	log.Printf("[REPO] ClaimNextJob FINAL QUERY: %+v", filter)
 
 	var job models.IngestionJob
 	err := r.collection.FindOneAndUpdate(ctx, filter, update, opts).Decode(&job)
@@ -165,15 +166,12 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 // This is called when steps.download=true but steps.process=false
 func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.IngestionJob, error) {
 	filter := bson.M{
-		"status":      models.IngestionStatusPending,
-		"retry_count": bson.M{"$lt": 3},
-		// Jobs where download is complete but process is NOT complete
+		"status":         models.IngestionStatusPending,
+		"retry_count":    bson.M{"$lt": 3},
 		"steps.download": true,
-		"steps.process": bson.M{
-			"$or": []bson.M{
-				{"$exists": false},
-				{"$ne": true},
-			},
+		"$or": []bson.M{
+			{"steps.process": bson.M{"$exists": false}},
+			{"steps.process": bson.M{"$ne": true}},
 		},
 	}
 
@@ -187,6 +185,7 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 
 	log.Printf("[REPO] ClaimNextProcessingJob: querying for pending processing jobs...")
 	log.Printf("[REPO] ClaimNextProcessingJob filter: status=pending, retry_count<3, steps.download=true, steps.process=$exists:false OR steps.process!=true")
+	log.Printf("[REPO] ClaimNextProcessingJob FINAL QUERY: %+v", filter)
 
 	opts := options.FindOneAndUpdate().
 		SetSort(bson.D{{Key: "created_at", Value: 1}})
@@ -227,6 +226,7 @@ func (r *JobRepository) CountPendingJobs(ctx context.Context) (int64, error) {
 			{"steps.download": false},
 		},
 	}
+	log.Printf("[REPO] CountPendingJobs download filter: %+v", downloadFilter)
 	downloadJobs, err := r.collection.CountDocuments(ctx, downloadFilter)
 	if err != nil {
 		return 0, err
