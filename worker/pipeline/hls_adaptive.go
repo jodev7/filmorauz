@@ -508,7 +508,9 @@ func (p *Pipeline) generateHLSRendition(jobID, baseVideoPath, outputDir string, 
 	// - GOP (Group of Pictures) = 2 seconds for optimal seeking
 	// - -sc_threshold 0: disable random scene detection (forces keyframes at GOP)
 	// - -force_key_frames: force IDR at segment boundaries for clean switching
-	// - -hls_time 4: 4-second segments (aligns with 2s GOP = 2 keyframes per segment)
+	// - -hls_time: segment duration (configurable, default 6s for production safety)
+	//   Longer segments reduce total upload requests significantly (2hr movie @ 4s: ~1800 segments,
+	//   @ 6s: ~1200 segments, @ 8s: ~900 segments per rendition)
 
 	// Determine FPS from base video (default 24fps)
 	fps := 24.0
@@ -516,9 +518,13 @@ func (p *Pipeline) generateHLSRendition(jobID, baseVideoPath, outputDir string, 
 		fps = fpsInfo
 	}
 	gopSize := int(fps * 2) // 2 seconds * fps = GOP in frames
-	segmentDuration := 4    // 4-second segments align with 2s GOP (2 keyframes per segment)
+	// Use configured segment duration (default 6s for production safety)
+	segmentDuration := p.config.SegmentDuration
+	if segmentDuration <= 0 {
+		segmentDuration = 6 // production-safe fallback: 6 seconds reduces segment count by 33% vs 4s
+	}
 
-	// Force keyframes every segment duration (4 seconds)
+	// Force keyframes every segment duration (configurable)
 	// This ensures IDR frames at segment boundaries for clean switching
 	forceKeyframes := fmt.Sprintf("expr:gte(t,n_forced*%.0f)", float64(segmentDuration))
 

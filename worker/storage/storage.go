@@ -275,6 +275,11 @@ type B2Storage struct {
 	downloadURL string
 	bucketID    string
 	authExpiry  time.Time
+
+	// Upload URL cache (valid for 1 hour) to reduce B2 API calls
+	uploadURLCache   string
+	uploadTokenCache string
+	uploadURLExpiry  time.Time
 }
 
 // b2AuthResponse is the response from b2_authorize_account
@@ -373,8 +378,18 @@ func (s *B2Storage) authorize() error {
 }
 
 // getUploadURL calls b2_get_upload_url to obtain a single-use upload URL.
+// Results are cached for 1 hour to reduce API calls.
 func (s *B2Storage) getUploadURL() (uploadURL, token string, err error) {
 	s.mu.Lock()
+	// Check cache: if we have a cached URL that hasn't expired, reuse it.
+	if s.uploadURLCache != "" && time.Now().Before(s.uploadURLExpiry) {
+		cachedURL := s.uploadURLCache
+		cachedToken := s.uploadTokenCache
+		s.mu.Unlock()
+		log.Printf("[B2] Using cached upload URL (expires %s)", s.uploadURLExpiry.Format(time.RFC3339))
+		return cachedURL, cachedToken, nil
+	}
+	// Not cached or expired; need to fetch a fresh upload URL
 	apiURL := s.apiURL
 	authToken := s.authToken
 	bucketID := s.bucketID
@@ -403,6 +418,14 @@ func (s *B2Storage) getUploadURL() (uploadURL, token string, err error) {
 	if err := json.Unmarshal(body, &ur); err != nil {
 		return "", "", fmt.Errorf("b2 getUploadURL: decode: %w", err)
 	}
+	// Cache the upload URL for 1 hour
+	s.mu.Lock()
+	s.uploadURLCache = ur.UploadURL
+	s.uploadTokenCache = ur.AuthorizationToken
+	s.uploadURLExpiry = time.Now().Add(1 * time.Hour)
+	s.mu.Unlock()
+	log.Printf("[B2] Cached new upload URL (valid until %s)", s.uploadURLExpiry.Format(time.RFC3339))
+
 	return ur.UploadURL, ur.AuthorizationToken, nil
 }
 
@@ -457,6 +480,11 @@ func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (st
 	if resp.StatusCode != http.StatusOK {
 		errMsg := fmt.Sprintf("b2 upload %s: status %d: %s", remotePath, resp.StatusCode, body)
 		log.Printf("[B2] Upload failed: %s", errMsg)
+		// Clear upload URL cache on auth/authorization errors
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			log.Printf("[B2] Auth error (status %d) - clearing upload URL cache, will re-authorize on next retry", resp.StatusCode)
+			s.clearUploadURLCache()
+		}
 		return "", fmt.Errorf("%s", errMsg)
 	}
 
@@ -623,33 +651,49 @@ func (s *B2Storage) ParallelUpload(jobs []struct {
 	}
 
 	uploadUrlChan := make(chan uploadURL, batchSize*2)
-	authError := make(chan error, 1)
+	urlFetcherDone := make(chan struct{})
+	stopFetch := make(chan struct{}) // signals URL fetcher to stop
 
+	// URL fetcher: fetch upload URLs in bounded batches until we have enough or are told to stop
 	go func() {
-		for {
+		defer close(urlFetcherDone)
+		totalFetched := 0
+		for totalFetched < totalJobs+batchSize {
+			// Check if we should stop early (workers finished)
+			select {
+			case <-stopFetch:
+				log.Printf("[B2] URL fetcher stopped early: %d URLs fetched for %d jobs", totalFetched, totalJobs)
+				return
+			default:
+			}
+
 			urls, _, err := s.getUploadURLBatch(batchSize)
 			if err != nil {
-				authError <- err
-				close(uploadUrlChan)
+				log.Printf("[B2] ERROR: Failed to get upload URL batch: %v", err)
 				return
 			}
 			for _, u := range urls {
-				uploadUrlChan <- u
+				select {
+				case uploadUrlChan <- u:
+					totalFetched++
+				case <-stopFetch:
+					log.Printf("[B2] URL fetcher stopped during send: %d URLs fetched", totalFetched)
+					return
+				case <-time.After(5 * time.Second):
+					// Channel full - workers may be slow; stop fetching
+					log.Printf("[B2] Upload URL channel full after %d URLs, stopping fetch", totalFetched)
+					return
+				}
 			}
 		}
+		log.Printf("[B2] URL fetcher done: fetched %d URLs for %d jobs", totalFetched, totalJobs)
 	}()
 
-	go func() {
-		for range authError {
-			log.Printf("[B2] ERROR: Failed to get upload URLs: %v", <-authError)
-		}
-	}()
-
+	// Worker pool
 	for i := 0; i < poolSize; i++ {
 		wg.Add(1)
 		go func(workerId int) {
 			defer wg.Done()
-
 			for idx := range jobChan {
 				job := jobs[idx]
 				contentType := detectContentType(job.RemotePath)
@@ -690,13 +734,16 @@ func (s *B2Storage) ParallelUpload(jobs []struct {
 		}(i)
 	}
 
+	// Distribute jobs
 	for i := 0; i < totalJobs; i++ {
 		jobChan <- i
 	}
 	close(jobChan)
-	wg.Wait()
+	wg.Wait() // all workers finished
 
-	close(uploadUrlChan)
+	// Signal URL fetcher to stop and wait for it
+	close(stopFetch)
+	<-urlFetcherDone
 
 	elapsed := time.Since(startTime)
 	speed := float64(totalData) / 1024 / 1024 / elapsed.Seconds()
@@ -891,6 +938,15 @@ func (s *B2Storage) GetPresignedUploadURL(remotePath, contentType string) (strin
 		return "", "", fmt.Errorf("b2 getUploadURL: %w", err)
 	}
 	return uploadURL, uploadToken, nil
+}
+
+// clearUploadURLCache removes cached upload URL and forces fresh fetch on next request.
+func (s *B2Storage) clearUploadURLCache() {
+	s.mu.Lock()
+	s.uploadURLCache = ""
+	s.uploadTokenCache = ""
+	s.uploadURLExpiry = time.Time{}
+	s.mu.Unlock()
 }
 
 // detectContentType returns a MIME type based on file extension.

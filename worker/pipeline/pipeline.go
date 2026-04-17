@@ -48,7 +48,8 @@ type Config struct {
 	WorkerToken            string          // Token for worker-to-backend authentication
 	MaxRenditionConcurrent int             // Max concurrent FFmpeg processes (default: 2)
 	SegmentUploadWorkers   int             // Concurrent segment uploads per rendition (default: 10)
-	SegmentUploadRetries   int             // Max retries per segment (default: 3)
+	SegmentUploadRetries   int             // Max retries per segment (default: 5)
+	SegmentDuration        int             // HLS segment duration in seconds (default: 6)
 }
 
 // Pipeline handles the video ingestion pipeline

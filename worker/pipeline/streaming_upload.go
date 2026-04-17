@@ -3,6 +3,7 @@ package pipeline
 import (
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
@@ -13,9 +14,10 @@ import (
 )
 
 const (
-	SegmentUploadConcurrency = 10
-	SegmentRetryMax          = 3
-	SegmentRetryDelayMs      = 500
+	SegmentUploadConcurrency = 10    // Concurrent segment upload workers per rendition
+	SegmentRetryMax          = 5     // Max retry attempts per segment
+	SegmentRetryBaseDelayMs  = 500   // Base delay for exponential backoff (500ms)
+	SegmentRetryMaxDelayMs   = 30000 // Max backoff cap (30s)
 	FileStabilityCheckMs     = 500
 	FileStabilityAttempts    = 3
 )
@@ -31,6 +33,8 @@ type segmentUploader struct {
 	errorsMu    sync.Mutex
 	uploadCount int32
 	failCount   int32
+	// totalRetryAttempts tracks how many times we retried a failed upload (excluding first attempt)
+	totalRetryAttempts int32
 
 	workers int
 	retries int
@@ -89,13 +93,33 @@ func (u *segmentUploader) uploadSegment(path string) {
 		return
 	}
 
+	// Retry loop with exponential backoff
 	for attempt := 0; attempt < u.retries; attempt++ {
 		_, err = u.storage.UploadData(remotePath, data, "video/mp2t")
 		if err == nil {
 			break
 		}
-		log.Printf("[STREAM_UPLOAD] Retry %d/%d for %s: %v", attempt+1, u.retries, remotePath, err)
-		time.Sleep(time.Duration(SegmentRetryDelayMs) * time.Millisecond)
+		// This attempt failed
+		if attempt < u.retries-1 {
+			// Will retry: count this retry and wait with exponential backoff
+			atomic.AddInt32(&u.totalRetryAttempts, 1)
+			// Exponential backoff: base 500ms, doubling each time
+			delayMs := SegmentRetryBaseDelayMs * (1 << attempt) // 500, 1000, 2000, 4000, 8000
+			if delayMs > SegmentRetryMaxDelayMs {
+				delayMs = SegmentRetryMaxDelayMs
+			}
+			// Add jitter +/- 10% to avoid thundering herd
+			jitter := (rand.Intn(delayMs/10) - delayMs/20) // +/- 5%
+			delayMs += jitter
+			if delayMs < 50 {
+				delayMs = 50 // minimum 50ms
+			}
+			log.Printf("[STREAM_UPLOAD] Retry %d/%d for %s after %dms: %v", attempt+1, u.retries, remotePath, delayMs, err)
+			time.Sleep(time.Duration(delayMs) * time.Millisecond)
+		} else {
+			// Final attempt failed
+			log.Printf("[STREAM_UPLOAD] Final attempt %d/%d failed: %v", attempt+1, u.retries, err)
+		}
 	}
 
 	if err != nil {
@@ -144,21 +168,28 @@ func (u *segmentUploader) stop() error {
 
 	uploadCount := atomic.LoadInt32(&u.uploadCount)
 	failCount := atomic.LoadInt32(&u.failCount)
-	log.Printf("[STREAM_UPLOAD] %s done: %d uploaded, %d failed", u.rendition, uploadCount, failCount)
+	totalRetries := atomic.LoadInt32(&u.totalRetryAttempts)
+	totalProcessed := uploadCount + failCount
+
+	log.Printf("[STREAM_UPLOAD] %s done: processed=%d, uploaded=%d, failed=%d, retries=%d",
+		u.rendition, totalProcessed, uploadCount, failCount, totalRetries)
 
 	if failCount > 0 {
 		u.errorsMu.Lock()
 		defer u.errorsMu.Unlock()
-		return fmt.Errorf("%d segment uploads failed", failCount)
+		// Log detailed error summary
+		log.Printf("[STREAM_UPLOAD] %s: %d failures out of %d segments (%.1f%% failure rate)",
+			u.rendition, failCount, totalProcessed, float64(failCount)*100.0/float64(totalProcessed))
+		return fmt.Errorf("%d segment uploads failed (see logs for details)", failCount)
 	}
 	return nil
 }
 
 func (u *segmentUploader) addFile(path string) {
-	select {
-	case u.pending <- path:
-	default:
-	}
+	// Blocking send ensures no segment loss even when channel is full.
+	// This provides natural backpressure: if upload pipeline is saturated,
+	// the file watcher will pause until workers consume pending segments.
+	u.pending <- path
 }
 
 func (u *segmentUploader) getErrors() []error {
@@ -178,6 +209,7 @@ type fileWatcher struct {
 	polling  bool
 	polled   map[string]int64
 	mu       sync.Mutex
+	wg       sync.WaitGroup // ensures goroutine has exited after stop
 }
 
 func newFileWatcher(dirs []string, uploaders map[string]*segmentUploader) *fileWatcher {
@@ -193,8 +225,10 @@ func newFileWatcher(dirs []string, uploaders map[string]*segmentUploader) *fileW
 func (f *fileWatcher) start() {
 	log.Printf("[FILE_WATCHER] Starting to watch %d directories", len(f.watchDirs))
 	f.polling = true
+	f.wg.Add(1)
 
 	go func() {
+		defer f.wg.Done()
 		for f.polling {
 			select {
 			case <-f.stopChan:
@@ -250,6 +284,7 @@ func (f *fileWatcher) scanAndNotify() {
 
 func (f *fileWatcher) stop() {
 	close(f.stopChan)
+	f.wg.Wait() // ensure goroutine exits before returning
 	log.Printf("[FILE_WATCHER] Stopped")
 }
 
@@ -299,6 +334,12 @@ func (s *streamingUploader) start() {
 }
 
 func (s *streamingUploader) stopAndWait() error {
+	// Grace period: allow file watcher to pick up any final segments created
+	// by the just-finished ffmpeg processes. Watcher polls every 500ms;
+	// waiting 2 seconds ensures at least one full scan after last segment written.
+	time.Sleep(2 * time.Second)
+
+	// Now stop the watcher and wait for its goroutine to exit
 	s.watcher.stop()
 
 	var allErrors []error
