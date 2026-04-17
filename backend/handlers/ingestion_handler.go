@@ -547,7 +547,10 @@ func (h *IngestionHandler) GetUploadURL(c *gin.Context) {
 		return
 	}
 
-	workerResp, err := h.httpClient.Get(h.workerURL + "/get-upload-url?type=" + fileType + "&filename=" + filename)
+	query := url.Values{}
+	query.Set("type", fileType)
+	query.Set("filename", filename)
+	workerResp, err := h.httpClient.Get(h.workerURL + "/get-upload-url?" + query.Encode())
 	if err != nil {
 		log.Printf("[UPLOAD_URL] Failed to call worker: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get upload URL"})

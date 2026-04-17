@@ -283,9 +283,8 @@ func fileExistsHTTP(path string) bool {
 	return err == nil
 }
 
-// sanitizeKeySegment keeps only lowercase letters, digits, '-', '_', '.' — anything
-// else (comma, space, %, non-ascii, punctuation) is dropped. Slash is NOT allowed here;
-// apply this to individual filename segments, not to whole paths that include folders.
+// sanitizeKeySegment keeps only lowercase letters, digits, '-', '_', '.'. Slash is
+// not allowed here; apply this to filename segments, not full paths.
 func sanitizeKeySegment(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -300,6 +299,42 @@ func sanitizeKeySegment(s string) string {
 		}
 	}
 	return b.String()
+}
+
+func safeExtension(originalFilename, contentType, fallback string) string {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	case "video/mp4":
+		return ".mp4"
+	case "video/webm":
+		return ".webm"
+	case "video/ogg":
+		return ".ogg"
+	case "video/quicktime":
+		return ".mov"
+	}
+
+	ext := sanitizeKeySegment(strings.ToLower(filepath.Ext(originalFilename)))
+	if ext == "" || ext == "." {
+		return fallback
+	}
+	return ext
+}
+
+func safeUploadKey(prefix, label, originalFilename, contentType, fallbackExt string) string {
+	ext := safeExtension(originalFilename, contentType, fallbackExt)
+	base := fmt.Sprintf("%d", time.Now().UnixNano())
+	if label != "" {
+		base += "_" + sanitizeKeySegment(label)
+	}
+	return strings.Trim(prefix, "/") + "/" + base + ext
 }
 
 func (h *ProcessHandler) handleUploadProfile(w http.ResponseWriter, r *http.Request) {
@@ -321,12 +356,9 @@ func (h *ProcessHandler) handleUploadProfile(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if ext == "" {
-		ext = ".jpg"
-	}
-	filename := fmt.Sprintf("images/%d%s", time.Now().UnixNano(), ext)
+	filename := safeUploadKey("images/profile", "profile", header.Filename, header.Header.Get("Content-Type"), ".jpg")
 
+	log.Printf("[B2] profile final object key: %s", filename)
 	log.Printf("[B2] Uploading profile image: bucket=filmorauznet, key=%s, size=%d", filename, len(data))
 
 	publicURL, err := h.b2Store.UploadData(filename, data, header.Header.Get("Content-Type"))
@@ -363,12 +395,7 @@ func (h *ProcessHandler) handleUploadTelegramPost(w http.ResponseWriter, r *http
 		return
 	}
 
-	ext := sanitizeKeySegment(strings.ToLower(filepath.Ext(header.Filename)))
-	if ext == "" || ext == "." {
-		ext = ".jpg"
-	}
-	filename := fmt.Sprintf("%d_telegram_post%s", time.Now().UnixNano(), ext)
-	mediaKey := "images/telegram-post/" + filename
+	mediaKey := safeUploadKey("images/telegram-post", "telegram_post", header.Filename, header.Header.Get("Content-Type"), ".jpg")
 
 	log.Printf("[B2] telegram-post final object key: %s", mediaKey)
 	log.Printf("[B2] Uploading telegram post: bucket=filmorauznet, key=%s, size=%d", mediaKey, len(data))
@@ -409,13 +436,9 @@ func (h *ProcessHandler) handleUploadTempMovie(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if ext == "" {
-		ext = ".mp4"
-	}
-	filename := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
-	tempKey := "temp/raw/" + filename
+	tempKey := safeUploadKey("temp/raw", "temp_movie", header.Filename, header.Header.Get("Content-Type"), ".mp4")
 
+	log.Printf("[B2] temp-movie final object key: %s", tempKey)
 	log.Printf("[B2] Uploading temp movie: key=%s, size=%d", tempKey, len(data))
 
 	publicURL, err := h.b2Store.UploadData(tempKey, data, header.Header.Get("Content-Type"))
@@ -466,13 +489,9 @@ func (h *ProcessHandler) handleUploadMovieImage(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if ext == "" {
-		ext = ".jpg"
-	}
-	filename := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
-	mediaKey := fmt.Sprintf("temp/%s/%s", imageType, filename)
+	mediaKey := safeUploadKey("temp/"+imageType, strings.TrimSuffix(imageType, "s"), header.Filename, header.Header.Get("Content-Type"), ".jpg")
 
+	log.Printf("[B2] movie-%s final object key: %s", imageType, mediaKey)
 	log.Printf("[B2] Uploading movie %s: key=%s, size=%d", imageType, mediaKey, len(data))
 
 	publicURL, err := h.b2Store.UploadData(mediaKey, data, header.Header.Get("Content-Type"))
@@ -505,15 +524,17 @@ func (h *ProcessHandler) handleGetUploadURL(w http.ResponseWriter, r *http.Reque
 	var tempPath string
 	switch typeParam {
 	case "poster":
-		tempPath = "temp/posters/" + filename
+		tempPath = safeUploadKey("temp/posters", "poster", filename, "", ".jpg")
 	case "backdrop":
-		tempPath = "temp/backdrops/" + filename
+		tempPath = safeUploadKey("temp/backdrops", "backdrop", filename, "", ".jpg")
 	case "video":
-		tempPath = "temp/raw/" + filename
+		tempPath = safeUploadKey("temp/raw", "video", filename, "", ".mp4")
 	default:
 		h.sendError(w, "invalid type: must be poster, backdrop, or video", http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("[B2] presigned-url final object key: %s", tempPath)
 
 	// Get presigned upload URL
 	uploadURL, authToken, err := h.b2Store.GetPresignedUploadURL(tempPath, "")
