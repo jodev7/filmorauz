@@ -50,6 +50,80 @@ function formatEta(seconds: number): string {
   return h + "h " + m + "m";
 }
 
+function getJobTime(job: IngestionJob, key: string): string | undefined {
+  const value = (job as unknown as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function isTerminalJobStatus(status: string | undefined): boolean {
+  return status === "completed" || status === "failed" || status === "download_failed";
+}
+
+const STUCK_THRESHOLD_MS = 30 * 60 * 1000;
+
+function formatElapsedTime(job: IngestionJob, now: number): string {
+  const startedAt =
+    getJobTime(job, "importStartedAt") ||
+    getJobTime(job, "import_started_at") ||
+    getJobTime(job, "startedAt") ||
+    getJobTime(job, "started_at") ||
+    job.created_at;
+
+  const startMs = startedAt ? new Date(startedAt).getTime() : NaN;
+  if (!Number.isFinite(startMs)) return "00:00";
+
+  const endedAt = isTerminalJobStatus(job.status)
+    ? job.completed_at || job.updated_at
+    : undefined;
+  const endMs = endedAt ? new Date(endedAt).getTime() : now;
+  const totalSeconds = Math.max(0, Math.floor((endMs - startMs) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad = (value: number) => String(value).padStart(2, "0");
+
+  if (hours > 0) {
+    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  }
+  return `${pad(minutes)}:${pad(seconds)}`;
+}
+
+function getTimeMs(value: string | undefined): number {
+  if (!value) return NaN;
+  return new Date(value).getTime();
+}
+
+function getLastUpdateMs(job: IngestionJob): number {
+  const updatedMs = getTimeMs(job.updated_at);
+  if (Number.isFinite(updatedMs)) return updatedMs;
+  return getTimeMs(job.created_at);
+}
+
+function getLastUpdateAgeMs(job: IngestionJob, now: number): number {
+  const updatedMs = getLastUpdateMs(job);
+  if (!Number.isFinite(updatedMs)) return 0;
+  return Math.max(0, now - updatedMs);
+}
+
+function formatDurationShort(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours < 24) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
+}
+
+function formatLogTime(timestamp: string | undefined, now: number): string {
+  if (!timestamp) return "";
+  const ageMs = Math.max(0, now - getTimeMs(timestamp));
+  return `${formatDurationShort(ageMs)} ago`;
+}
+
 const SOURCES = [
   { id: "uzmovi", name: "Uzmovi", url: "uzmovi.tv", icon: Film },
   { id: "freekino", name: "Freekino", url: "freekino.net", icon: Film },
@@ -67,7 +141,18 @@ const STATUS_CONFIG: Record<IngestionStatus, { color: string; icon: React.Elemen
   failed: { color: "bg-red-500", icon: XCircle, label: "Failed" },
   download_failed: { color: "bg-red-600", icon: XCircle, label: "Download Failed" },
   parsing_complete: { color: "bg-teal-500", icon: CheckCircle, label: "Parsing Complete" },
+  enriching_metadata: { color: "bg-cyan-500", icon: Loader2, label: "Enriching Metadata" },
+  finding_poster: { color: "bg-cyan-500", icon: Loader2, label: "Finding Poster" },
+  generating_poster: { color: "bg-cyan-500", icon: Loader2, label: "Generating Poster" },
+  uploading_poster: { color: "bg-indigo-500", icon: Upload, label: "Uploading Poster" },
+  generating_backdrop: { color: "bg-cyan-500", icon: Loader2, label: "Generating Backdrop" },
   creating_movie: { color: "bg-cyan-500", icon: Loader2, label: "Creating Movie" },
+  sending_notification: { color: "bg-cyan-500", icon: Loader2, label: "Sending Notification" },
+  cutting_video: { color: "bg-purple-500", icon: Settings, label: "Cutting Video" },
+  removing_watermark: { color: "bg-purple-500", icon: Settings, label: "Removing Watermark" },
+  adding_logo: { color: "bg-purple-500", icon: Settings, label: "Adding Logo" },
+  hls_processing: { color: "bg-purple-500", icon: Settings, label: "HLS Processing" },
+  finalizing_storage: { color: "bg-indigo-500", icon: Upload, label: "Finalizing Storage" },
 };
 
 // Stage to status mapping for badge display
@@ -84,7 +169,18 @@ const STAGE_STATUS_MAP: Record<string, IngestionStatus> = {
   pending: "pending",
   download_failed: "download_failed",
   parsing_complete: "parsing_complete",
+  enriching_metadata: "enriching_metadata",
+  finding_poster: "finding_poster",
+  generating_poster: "generating_poster",
+  uploading_poster: "uploading_poster",
+  generating_backdrop: "generating_backdrop",
   creating_movie: "creating_movie",
+  sending_notification: "sending_notification",
+  cutting_video: "cutting_video",
+  removing_watermark: "removing_watermark",
+  adding_logo: "adding_logo",
+  hls_processing: "hls_processing",
+  finalizing_storage: "finalizing_storage",
 };
 
 // Safe fallback config for unknown statuses
@@ -108,6 +204,73 @@ function getStatusMeta(status: IngestionStatus | string | undefined): {
     return FALLBACK_STATUS_CONFIG;
   }
   return config;
+}
+
+type JobFilter = "all" | "active" | "pending" | "processing" | "failed" | "completed" | "stuck";
+
+const JOB_FILTERS: { id: JobFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "active", label: "Active" },
+  { id: "pending", label: "Pending" },
+  { id: "processing", label: "Processing" },
+  { id: "failed", label: "Failed" },
+  { id: "completed", label: "Completed" },
+  { id: "stuck", label: "Stuck" },
+];
+
+function getJobDisplayStatus(job: IngestionJob): string {
+  const stage = job.stage || job.status;
+  return STAGE_STATUS_MAP[stage] || job.status || "unknown";
+}
+
+function isTerminalJob(job: IngestionJob): boolean {
+  return isTerminalJobStatus(job.status);
+}
+
+function isStuckJob(job: IngestionJob, now: number): boolean {
+  return !isTerminalJob(job) && getLastUpdateAgeMs(job, now) > STUCK_THRESHOLD_MS;
+}
+
+function getJobSummary(jobs: IngestionJob[], now: number) {
+  return jobs.reduce(
+    (summary, job) => {
+      const displayStatus = getJobDisplayStatus(job);
+      if (!isTerminalJob(job)) summary.active += 1;
+      if (displayStatus === "pending") summary.pending += 1;
+      if (displayStatus === "processing" || displayStatus === "hls_processing") summary.processing += 1;
+      if (displayStatus === "uploading" || displayStatus === "finalizing_storage") summary.uploading += 1;
+      if (job.status === "failed" || job.status === "download_failed") summary.failed += 1;
+      if (isStuckJob(job, now)) summary.stuck += 1;
+      return summary;
+    },
+    { active: 0, pending: 0, processing: 0, uploading: 0, failed: 0, stuck: 0 }
+  );
+}
+
+function matchesJobFilter(job: IngestionJob, filter: JobFilter, now: number): boolean {
+  const displayStatus = getJobDisplayStatus(job);
+  if (filter === "all") return true;
+  if (filter === "active") return !isTerminalJob(job);
+  if (filter === "stuck") return isStuckJob(job, now);
+  if (filter === "failed") return job.status === "failed" || job.status === "download_failed";
+  if (filter === "processing") return displayStatus === "processing" || displayStatus === "hls_processing";
+  return displayStatus === filter;
+}
+
+function getFilteredAndSortedJobs(jobs: IngestionJob[], filter: JobFilter, now: number): IngestionJob[] {
+  return jobs
+    .filter((job) => job.id && matchesJobFilter(job, filter, now))
+    .sort((a, b) => {
+      const aStuck = isStuckJob(a, now) ? 1 : 0;
+      const bStuck = isStuckJob(b, now) ? 1 : 0;
+      if (aStuck !== bStuck) return bStuck - aStuck;
+
+      const aActive = !isTerminalJob(a) ? 1 : 0;
+      const bActive = !isTerminalJob(b) ? 1 : 0;
+      if (aActive !== bActive) return bActive - aActive;
+
+      return getLastUpdateMs(b) - getLastUpdateMs(a);
+    });
 }
 
 // Catalog Tab Component
@@ -732,8 +895,66 @@ function JobsTab({
   handleRetry: (jobId: string, stage: "download" | "process" | "upload") => void;
   activeJobCount: number;
 }) {
+  const [now, setNow] = useState(() => Date.now());
+  const [filter, setFilter] = useState<JobFilter>("all");
+  const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
+  const hasRunningJobs = jobs.some((job) => !isTerminalJobStatus(job.status));
+  const summary = getJobSummary(jobs, now);
+  const visibleJobs = getFilteredAndSortedJobs(jobs, filter, now);
+  const summaryCards = [
+    { label: "Active", value: activeJobCount, color: "text-yellow-400" },
+    { label: "Pending", value: summary.pending, color: "text-gray-300" },
+    { label: "Processing", value: summary.processing, color: "text-purple-400" },
+    { label: "Uploading", value: summary.uploading, color: "text-indigo-400" },
+    { label: "Failed", value: summary.failed, color: "text-red-400" },
+    { label: "Stuck", value: summary.stuck, color: summary.stuck > 0 ? "text-orange-400" : "text-gray-400" },
+  ];
+
+  useEffect(() => {
+    if (!hasRunningJobs) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [hasRunningJobs]);
+
+  const toggleLogs = (jobId: string) => {
+    setExpandedLogs((prev) => {
+      const next = new Set(prev);
+      if (next.has(jobId)) {
+        next.delete(jobId);
+      } else {
+        next.add(jobId);
+      }
+      return next;
+    });
+  };
+
   return (
     <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        {summaryCards.map((card) => (
+          <div key={card.label} className="bg-brand-card border border-brand-border rounded-lg p-3">
+            <p className="text-xs text-gray-500">{card.label}</p>
+            <p className={`text-2xl font-semibold ${card.color}`}>{card.value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {JOB_FILTERS.map((item) => (
+          <button
+            key={item.id}
+            onClick={() => setFilter(item.id)}
+            className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+              filter === item.id
+                ? "bg-brand-red text-white border-brand-red"
+                : "bg-brand-card text-gray-400 border-brand-border hover:text-white"
+            }`}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
       {loadingJobs && jobs.length === 0 ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="w-8 h-8 animate-spin text-brand-red" />
@@ -743,8 +964,12 @@ function JobsTab({
         <div className="text-center text-gray-500 py-12">
           No ingestion jobs yet. Import movies from sources above to get started.
         </div>
+      ) : visibleJobs.length === 0 ? (
+        <div className="text-center text-gray-500 py-12">
+          No jobs match this filter.
+        </div>
       ) : (
-        jobs.map((job) => {
+        visibleJobs.map((job) => {
           if (!job.id) return null;
           
           const safeJob = {
@@ -763,11 +988,19 @@ function JobsTab({
             playlist_path: job.playlist_path,
             local_path: job.local_path,
             source_file_deleted: job.source_file_deleted,
+            retry_count: typeof job.retry_count === "number" ? job.retry_count : 0,
             error: job.error,
             message: job.message,
             logs: Array.isArray(job.logs) ? job.logs : [],
             created_at: job.created_at || new Date().toISOString(),
+            updated_at: job.updated_at,
+            completed_at: job.completed_at,
           };
+          const elapsedTime = formatElapsedTime(job, now);
+          const lastUpdateAge = getLastUpdateAgeMs(job, now);
+          const lastUpdateText = formatDurationShort(lastUpdateAge);
+          const stuck = isStuckJob(job, now);
+          const logsExpanded = expandedLogs.has(safeJob.id);
           
           const activeStage = safeJob.stage || safeJob.status;
           const badgeStatus = STAGE_STATUS_MAP[activeStage] || safeJob.status;
@@ -799,6 +1032,15 @@ function JobsTab({
                   <p className="text-sm text-gray-400">
                     {safeJob.message || safeJob.source} • {new Date(safeJob.created_at).toLocaleString()}
                   </p>
+                  <p className="text-xs text-gray-500">
+                    Elapsed: {elapsedTime} • Last update: {lastUpdateText} ago • Retry: {safeJob.retry_count}
+                  </p>
+                  {stuck && (
+                    <p className="mt-1 flex items-center gap-1 text-xs text-orange-400">
+                      <AlertTriangle className="w-3 h-3" />
+                      No update for {lastUpdateText}
+                    </p>
+                  )}
                 </div>
                 
                 {/* Progress bar */}
@@ -919,9 +1161,22 @@ function JobsTab({
               
               {safeJob.logs.length > 0 && safeJob.status !== "completed" && (
                 <div className="mt-3 text-xs text-gray-500 font-mono">
-                  {safeJob.logs.slice(-3).map((log, i) => (
-                    <div key={i} className="truncate">
-                      {log.message}
+                  <div className="flex items-center justify-between mb-1">
+                    <span>Logs ({safeJob.logs.length})</span>
+                    <button
+                      onClick={() => toggleLogs(safeJob.id)}
+                      className="text-gray-400 hover:text-white transition-colors"
+                    >
+                      {logsExpanded ? "Hide logs" : "Show logs"}
+                    </button>
+                  </div>
+                  {(logsExpanded ? safeJob.logs : safeJob.logs.slice(-3)).map((log, i) => (
+                    <div key={`${log.timestamp || "log"}-${i}`} className="truncate">
+                      <span className="text-gray-600">
+                        {formatLogTime(log.timestamp, now)}
+                      </span>
+                      {formatLogTime(log.timestamp, now) && <span> • </span>}
+                      <span>{log.message}</span>
                     </div>
                   ))}
                 </div>
@@ -1096,7 +1351,7 @@ export default function IngestionPage() {
     );
   }
 
-  const activeJobCount = Array.isArray(jobs) ? jobs.filter(j => j.status !== "completed").length : 0;
+  const activeJobCount = Array.isArray(jobs) ? jobs.filter(j => !isTerminalJobStatus(j.status)).length : 0;
 
   return (
     <div className="min-h-screen bg-brand-dark text-white">

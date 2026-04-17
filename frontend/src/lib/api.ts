@@ -954,7 +954,18 @@ export type IngestionStatus =
   | "failed"
   | "download_failed"
   | "parsing_complete"
-  | "creating_movie";
+  | "enriching_metadata"
+  | "finding_poster"
+  | "generating_poster"
+  | "uploading_poster"
+  | "generating_backdrop"
+  | "creating_movie"
+  | "sending_notification"
+  | "cutting_video"
+  | "removing_watermark"
+  | "adding_logo"
+  | "hls_processing"
+  | "finalizing_storage";
 
 export interface IngestionLog {
   timestamp: string;
