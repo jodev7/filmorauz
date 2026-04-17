@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -57,6 +58,11 @@ func getCacheHeaders(filename string, config CacheTTLConfig) string {
 
 func encodeB2InfoValue(value string) string {
 	return strings.ReplaceAll(url.QueryEscape(value), "+", "%20")
+}
+
+func sha1Hex(data []byte) string {
+	sum := sha1.Sum(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // Storage interface defines methods for file storage
@@ -452,10 +458,7 @@ func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (st
 		return "", fmt.Errorf("b2 getUploadURL: %w", err)
 	}
 
-	// Compute SHA1 of file content
-	h := sha1.New()
-	h.Write(data)
-	//sha1sum := hex.EncodeToString(h.Sum(nil))
+	sha1sum := sha1Hex(data)
 
 	encodedCacheControl := encodeB2InfoValue(cacheControl)
 
@@ -471,11 +474,11 @@ func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (st
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(data)))
 	req.Header.Set("X-Bz-Info-cache_control", encodedCacheControl) // Set CDN cache headers
-	//req.Header.Set("X-Bz-Content-Sha1", sha1sum)
+	req.Header.Set("X-Bz-Content-Sha1", sha1sum)
 	req.ContentLength = int64(len(data))
 
 	log.Printf("[B2] Upload request target: url=%s", uploadURL)
-	log.Printf("[B2] Upload request headers: X-Bz-File-Name=%q X-Bz-Info-cache_control=%q raw_cache_control=%q", remotePath, encodedCacheControl, cacheControl)
+	log.Printf("[B2] Upload request headers: X-Bz-File-Name=%q X-Bz-Content-Sha1=sha1:%s X-Bz-Info-cache_control=%q raw_cache_control=%q", remotePath, sha1sum, encodedCacheControl, cacheControl)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -602,13 +605,15 @@ func (s *B2Storage) uploadWithUrl(data []byte, uploadUrl, token, remotePath, con
 	req.Header.Set("Authorization", token)
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("X-Bz-File-Name", remotePath)
+	sha1sum := sha1Hex(data)
+	req.Header.Set("X-Bz-Content-Sha1", sha1sum)
 	encodedContentType := encodeB2InfoValue(contentType)
 	req.Header.Set("X-Bz-Info-Content-Type", encodedContentType)
 	encodedCacheControl := encodeB2InfoValue(cacheControl)
 	req.Header.Set("X-Bz-Info-cache_control", encodedCacheControl) // CDN cache headers
 
 	log.Printf("[B2] Parallel upload request target: url=%s", uploadUrl)
-	log.Printf("[B2] Parallel upload request headers: X-Bz-File-Name=%q X-Bz-Info-Content-Type=%q X-Bz-Info-cache_control=%q raw_cache_control=%q", remotePath, encodedContentType, encodedCacheControl, cacheControl)
+	log.Printf("[B2] Parallel upload request headers: X-Bz-File-Name=%q X-Bz-Content-Sha1=sha1:%s X-Bz-Info-Content-Type=%q X-Bz-Info-cache_control=%q raw_cache_control=%q", remotePath, sha1sum, encodedContentType, encodedCacheControl, cacheControl)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
