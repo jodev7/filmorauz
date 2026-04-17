@@ -5,6 +5,7 @@ Provides REST API for Go backend to call parsers
 import json
 import logging
 import os
+import re
 import time
 import urllib.request
 import urllib.error
@@ -289,8 +290,11 @@ class ParserHandler(BaseHTTPRequestHandler):
                 logger.info(f"[SERVER]   Reason: {error}")
                 continue
             
-            # Classify the URL type
-            url_type = v.get("type", "") or classify_media_url(url)
+            # Classify the URL type. Parser source hints like "script_extracted"
+            # are not media types and must not outrank real m3u8/mp4 detection.
+            parsed_type = v.get("type", "")
+            classified_type = classify_media_url(url)
+            url_type = parsed_type if parsed_type in ["mp4", "m3u8", "mpd", "ism"] else classified_type
             
             # FIXED: Accept any URL that passes validation, even if type is unknown
             # This is more lenient for uzmovi URLs which may not have standard extensions
@@ -366,6 +370,42 @@ class ParserHandler(BaseHTTPRequestHandler):
         logger.warning(f"[SERVER] No valid video URL found")
         logger.info(f"[SERVER] ═══════════════════════════════════════════")
         return None, None
+
+    def _verify_video_url(self, video_url: str, referer: str = ""):
+        """Verify a media URL with HEAD first, then a tiny GET fallback."""
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+        }
+        if referer:
+            headers["Referer"] = referer
+
+        for method in ("HEAD", "GET"):
+            try:
+                req_headers = dict(headers)
+                if method == "GET":
+                    req_headers["Range"] = "bytes=0-4095"
+
+                req = urllib.request.Request(video_url, headers=req_headers, method=method)
+                with urllib.request.urlopen(req, timeout=20) as response:
+                    status = getattr(response, "status", 0)
+                    content_type = response.headers.get("Content-Type", "")
+                    if status and status < 400:
+                        logger.info(f"[PARSER] verified url - method={method}, status={status}, content_type={content_type}")
+                        return True, ""
+                    logger.warning(f"[PARSER] verify failed - method={method}, status={status}, content_type={content_type}")
+            except urllib.error.HTTPError as e:
+                if method == "HEAD" and e.code in (403, 405):
+                    logger.info(f"[PARSER] HEAD verify not allowed ({e.code}), trying short GET")
+                    continue
+                return False, f"HTTP {e.code}: {e.reason}"
+            except Exception as e:
+                if method == "HEAD":
+                    logger.info(f"[PARSER] HEAD verify failed, trying short GET: {e}")
+                    continue
+                return False, str(e)
+
+        return False, "URL verification failed"
     
     def _call_worker(self, input_file, title, cut_seconds=0):
         """
@@ -847,7 +887,123 @@ class ParserHandler(BaseHTTPRequestHandler):
                     return
                 
                 logger.info(f"[PARSER] Final video URL: {safe_truncate(video_url, 80)}... (type: {url_type})")
-                logger.info(f"[PARSER] selected source url — type={url_type}, quality={source_quality or 'auto'}, url={safe_truncate(video_url, 120)}...")
+                logger.info(f"[PARSER] selected source url - type={url_type}, quality={source_quality or 'auto'}, url={safe_truncate(video_url, 120)}...")
+
+                if source in ("uzmovi", "freekino"):
+                    page_url = details.get('video_page_url', detail_url or source_id)
+                    verify_ok, verify_error = self._verify_video_url(video_url, page_url)
+                    if not verify_ok:
+                        logger.error(f"[PARSER] URL verification failed for {source}: {verify_error}")
+                        response_payload = create_worker_payload(
+                            source=source,
+                            source_url=source_base_url,
+                            page_url=page_url,
+                            video_url=video_url,
+                            video_url_type=url_type,
+                            metadata=normalized_metadata,
+                            local_path=""
+                        )
+                        response_payload["success"] = False
+                        response_payload["error"] = f"video_url_verify_failed: {verify_error}"
+                        response_payload["video_found"] = True
+                        response_payload["download_needed"] = False
+                        self._send_json(response_payload, 422)
+                        return
+
+                    safe_title = re.sub(r'[^\w\s-]', '', normalized_metadata.get("title") or source_id or "download")
+                    safe_title = re.sub(r'[-\s]+', '_', safe_title).strip("_") or "download"
+                    output_name = f"{safe_title}.mp4"
+                    backend_job_id = job_id if job_id else ""
+
+                    logger.info(f"[PARSER] download started - source={source}, output_name={output_name}")
+                    download_result = downloader_service.smart_download(
+                        url=video_url,
+                        output_name=output_name,
+                        job_id=output_name,
+                        backend_job_id=backend_job_id,
+                        referer=page_url,
+                    )
+
+                    if not download_result.get("success"):
+                        error_msg = download_result.get("error", "Download failed")
+                        logger.error(f"[PARSER] download failed - source={source}, error={error_msg}")
+                        response_payload = create_worker_payload(
+                            source=source,
+                            source_url=source_base_url,
+                            page_url=page_url,
+                            video_url=video_url,
+                            video_url_type=url_type,
+                            metadata=normalized_metadata,
+                            local_path=""
+                        )
+                        response_payload["success"] = False
+                        response_payload["error"] = f"download_failed: {error_msg}"
+                        response_payload["video_found"] = True
+                        response_payload["download_needed"] = False
+                        self._send_json(response_payload, 500)
+                        return
+
+                    local_path = download_result.get("file_path", "")
+                    if not local_path or not os.path.exists(local_path):
+                        logger.error(f"[PARSER] download completed without local_path - source={source}, local_path={local_path}")
+                        response_payload = create_worker_payload(
+                            source=source,
+                            source_url=source_base_url,
+                            page_url=page_url,
+                            video_url=video_url,
+                            video_url_type=url_type,
+                            metadata=normalized_metadata,
+                            local_path=""
+                        )
+                        response_payload["success"] = False
+                        response_payload["error"] = "download_completed_without_local_path"
+                        response_payload["video_found"] = True
+                        response_payload["download_needed"] = False
+                        self._send_json(response_payload, 500)
+                        return
+
+                    file_size = os.path.getsize(local_path)
+                    if file_size <= 0:
+                        logger.error(f"[PARSER] downloaded file is empty - source={source}, local_path={local_path}")
+                        response_payload = create_worker_payload(
+                            source=source,
+                            source_url=source_base_url,
+                            page_url=page_url,
+                            video_url=video_url,
+                            video_url_type=url_type,
+                            metadata=normalized_metadata,
+                            local_path=""
+                        )
+                        response_payload["success"] = False
+                        response_payload["error"] = "downloaded_file_empty"
+                        response_payload["video_found"] = True
+                        response_payload["download_needed"] = False
+                        self._send_json(response_payload, 500)
+                        return
+
+                    logger.info(f"[PARSER] download completed - source={source}, local_path={local_path}, size={file_size}")
+                    logger.info(f"[PARSER] local_path - {local_path}")
+
+                    response_payload = create_worker_payload(
+                        source=source,
+                        source_url=source_base_url,
+                        page_url=page_url,
+                        video_url=video_url,
+                        video_url_type=url_type,
+                        metadata=normalized_metadata,
+                        local_path=local_path,
+                        source_quality=source_quality,
+                        available_qualities=available_qualities
+                    )
+                    response_payload["success"] = True
+                    response_payload["video_found"] = True
+                    response_payload["download_needed"] = False
+                    response_payload["download_completed"] = True
+                    response_payload["video_page_url"] = page_url
+                    response_payload["file_path"] = local_path
+                    response_payload["file_size"] = file_size
+                    self._send_json(response_payload)
+                    return
                 
                 # NEW FLOW: /details returns metadata + source URL only, NO download
                 # Worker will call /download separately with the source URL
@@ -2260,9 +2416,6 @@ if __name__ == "__main__":
     logger.info(f"[STARTUP] Binding to   = {args.host}:{args.port}")
 
     run_server(args.host, args.port)
-
-
-
 
 
 

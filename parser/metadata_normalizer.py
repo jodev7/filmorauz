@@ -615,6 +615,7 @@ def create_worker_payload(
         # Video info
         "video_url": video_url if video_url else "",
         "video_url_type": video_url_type,
+        "local_path": local_path or "",
         
         # Nested metadata object for clean API design
         "metadata": {
@@ -632,10 +633,6 @@ def create_worker_payload(
             "available_qualities": available_qualities,
         }
     }
-    
-    # Add local_path if present
-    if local_path:
-        payload["local_path"] = local_path
     
     logger.info(f"[NORMALIZER] Created worker payload: source={source}, title={title}, source_quality={source_quality}")
     

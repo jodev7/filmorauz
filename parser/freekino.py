@@ -5,14 +5,17 @@ import requests
 import re
 import logging
 import os
+import html
+import base64
 from typing import List, Dict, Any, Optional
-from urllib.parse import urljoin, quote
+from urllib.parse import urljoin, quote, unquote
 from bs4 import BeautifulSoup
 
 from media_extractor import (
     is_valid_media_url,
     classify_media_url,
     validate_media_url_strict,
+    extract_from_freekino,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -470,6 +473,8 @@ class FreekinoParser:
 
         try:
             response = self.session.get(url, timeout=30)
+            response.raise_for_status()
+            logger.info(f"[FREEKINO] page fetched - url={response.url}, bytes={len(response.text)}")
             soup = BeautifulSoup(response.text, "lxml")
 
             # Title
@@ -503,7 +508,7 @@ class FreekinoParser:
                 result["type"] = "serial"
 
             # Video — extract all quality variants
-            all_entries, quality_urls = self._extract_video(soup)
+            all_entries, quality_urls = self._extract_video(soup, response.url)
 
             if all_entries:
                 # Build video_urls list expected by server._extract_best_video_url()
@@ -538,7 +543,7 @@ class FreekinoParser:
         m = re.search(r'(\d{3,4})', label)
         return int(m.group(1)) if m else 0
 
-    def _extract_video(self, soup):
+    def _extract_video(self, soup, page_url: str = ""):
         """
         Extract all available video quality variants from the page.
 
@@ -552,15 +557,17 @@ class FreekinoParser:
         # === PRIMARY: Playerjs({file:"[quality]url,[quality]url"}) ===
         for script in soup.find_all("script"):
             content = script.string or ""
-            if "Playerjs" not in content:
+            if "Playerjs" not in content and "jwplayer" not in content.lower():
                 continue
-            entries, quality_urls = self._parse_playerjs_file(content)
+            entries, quality_urls = self._parse_playerjs_file(content, page_url or self.BASE_URL)
             if entries:
+                logger.info(f"[FREEKINO] extracted url - pattern=player_config, count={len(entries)}, url={entries[0]['url'][:120]}")
                 return entries, quality_urls
 
         # === FALLBACK: <video> tag with <source> children ===
-        entries, quality_urls = self._extract_video_tags(soup)
+        entries, quality_urls = self._extract_video_tags(soup, page_url or self.BASE_URL)
         if entries:
+            logger.info(f"[FREEKINO] extracted url - selector=video/source, count={len(entries)}, url={entries[0]['url'][:120]}")
             return entries, quality_urls
 
         # === FALLBACK: any iframe — fetch and recurse ===
@@ -568,18 +575,64 @@ class FreekinoParser:
             iframe_src = iframe.get("src", "")
             if not iframe_src or iframe_src.startswith("blob"):
                 continue
+            iframe_src = normalize_url(page_url or self.BASE_URL, iframe_src)
+            logger.info(f"[FREEKINO] iframe found - src={iframe_src}")
             entries, quality_urls = self._extract_from_iframe(iframe_src)
             if entries:
+                logger.info(f"[FREEKINO] extracted url - selector=iframe, count={len(entries)}, url={entries[0]['url'][:120]}")
                 return entries, quality_urls
 
         # === FALLBACK: generic regex for absolute mp4/m3u8 URLs in scripts ===
-        entries, quality_urls = self._extract_script_fallback(soup)
+        entries, quality_urls = self._extract_script_fallback(soup, page_url or self.BASE_URL)
         if entries:
+            logger.info(f"[FREEKINO] extracted url - pattern=script_fallback, count={len(entries)}, url={entries[0]['url'][:120]}")
             return entries, quality_urls
 
+        logger.warning("[FREEKINO] script candidates found - 0")
         return [], {}
 
-    def _parse_playerjs_file(self, script_content: str):
+    def _decode_video_url(self, url: str, base_url: str = "", make_absolute: bool = True) -> str:
+        if not url:
+            return ""
+        url = html.unescape(url).strip().strip('"\'')
+        for _ in range(2):
+            try:
+                url = unquote(url)
+            except Exception:
+                break
+        url = url.replace("\\/", "/").replace("\\u0026", "&")
+        try:
+            url = url.encode("utf-8").decode("unicode_escape")
+        except Exception:
+            pass
+        if url.startswith("#2"):
+            try:
+                encoded = re.sub(r'/{1,2}[A-Za-z0-9+]+={1,2}', '', url[2:])
+                encoded += "=" * ((4 - len(encoded) % 4) % 4)
+                url = base64.b64decode(encoded).decode("utf-8", errors="ignore")
+                logger.info("[FREEKINO] extracted url - pattern=playerjs_hash2_decode")
+            except Exception as e:
+                logger.info(f"[FREEKINO] playerjs hash decode failed: {e}")
+        if not make_absolute:
+            return url
+        return normalize_url(base_url or self.BASE_URL, url)
+
+    def _entry_from_url(self, url: str, base_url: str, quality: str = "auto"):
+        url = self._decode_video_url(url, base_url)
+        media_match = re.search(
+            r'(https?://[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]+?\.(?:mp4|m3u8|mpd)(?:\?[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]*)?)',
+            url,
+            re.I,
+        )
+        if media_match:
+            url = media_match.group(1)
+        if not url or url.startswith("blob"):
+            return None
+        if validate_media_url_strict(url):
+            return None
+        return {"url": url, "type": classify_media_url(url), "quality": quality or "auto"}
+
+    def _parse_playerjs_file(self, script_content: str, base_url: str = ""):
         """
         Parse Playerjs({file:"[480p]url,[720p]url"}) — the primary freekino format.
 
@@ -591,56 +644,44 @@ class FreekinoParser:
           all_entries — list of {"url", "type", "quality"} ordered best-first
           quality_urls — {720: url, 480: url, ...}
         """
-        # Match the file:"..." value inside new Playerjs({...})
+        # Match common player configs: Playerjs, jwplayer.setup, file/source/sources.
         m = re.search(
-            r'new\s+Playerjs\s*\(\s*\{[^}]*?file\s*:\s*"((?:[^"\\]|\\.)*)"',
-            script_content, re.S
+            r'\b(?:file|source|src|url)\s*:\s*(["\'])((?:.(?!\1))*.?)\1',
+            script_content,
+            re.S | re.I,
         )
-        if not m:
-            m = re.search(r'\bfile\s*:\s*"((?:[^"\\]|\\.)*)"', script_content)
         if not m:
             return [], {}
 
-        raw = m.group(1)
-
-        # Unescape JS sequences
-        raw = raw.replace(r"\/", "/")          # literal backslash-slash
-        raw = raw.replace("\\/", "/")           # already-processed variant
-        raw = re.sub(r'\\u0026', '&', raw)      # unicode-escaped ampersand
+        raw = self._decode_video_url(m.group(2), base_url or self.BASE_URL, make_absolute=False)
 
         # Parse quality-labelled entries: [label]https://...
-        labeled = re.findall(r'\[([^\]]+)\](https?://[^,\[]+)', raw)
+        labeled = re.findall(r'\[([^\]]+)\]((?:https?:)?//[^,\[]+|/[^,\[]+)', raw)
 
         if not labeled:
             # No quality labels — single bare URL
             url = raw.strip().rstrip(",")
-            if url.startswith("http"):
-                vtype = classify_media_url(url)
-                entry = {"url": url, "type": vtype, "quality": "auto"}
+            entry = self._entry_from_url(url, base_url or self.BASE_URL, "auto")
+            if entry:
                 return [entry], {}
             return [], {}
 
         # Build per-quality map, dedup by resolution
         quality_map: Dict[int, str] = {}
         for label, url in labeled:
-            url = url.strip().rstrip(", ")
-            if not url.startswith("http"):
-                continue
-            error = validate_media_url_strict(url)
-            if error:
-                logger.debug(f"[FREEKINO] Rejected quality URL {url[:60]}: {error}")
+            entry = self._entry_from_url(url.strip().rstrip(", "), base_url or self.BASE_URL, label)
+            if not entry:
                 continue
             res = self._label_to_int(label)
             # Keep first occurrence of each resolution (avoid overwrite)
             if res not in quality_map:
-                quality_map[res] = url
+                quality_map[res] = entry["url"]
 
         if not quality_map:
             # Validation rejected everything — use raw first entry as fallback
-            url = labeled[0][1].strip().rstrip(", ")
-            if url.startswith("http"):
-                vtype = classify_media_url(url)
-                return [{"url": url, "type": vtype, "quality": labeled[0][0]}], {}
+            entry = self._entry_from_url(labeled[0][1].strip().rstrip(", "), base_url or self.BASE_URL, labeled[0][0])
+            if entry:
+                return [entry], {}
             return [], {}
 
         # Sort by resolution descending
@@ -655,7 +696,7 @@ class FreekinoParser:
         quality_urls = {res: quality_map[res] for res in sorted_res}
         return all_entries, quality_urls
 
-    def _extract_video_tags(self, soup):
+    def _extract_video_tags(self, soup, base_url: str = ""):
         """Extract URLs from <video src> and <video><source src> tags."""
         entries = []
         quality_map: Dict[int, str] = {}
@@ -664,7 +705,7 @@ class FreekinoParser:
             # Inline src on the <video> element
             src = video.get("src", "")
             if src and not src.startswith("blob"):
-                src = normalize_url(self.BASE_URL, src)
+                src = normalize_url(base_url or self.BASE_URL, src)
                 if not validate_media_url_strict(src):
                     res = 0
                     quality_map.setdefault(res, src)
@@ -679,7 +720,7 @@ class FreekinoParser:
                 src = source.get("src", "")
                 if not src or src.startswith("blob"):
                     continue
-                src = normalize_url(self.BASE_URL, src)
+                src = normalize_url(base_url or self.BASE_URL, src)
                 if validate_media_url_strict(src):
                     continue
                 label = source.get("label", "") or source.get("size", "") or ""
@@ -696,30 +737,58 @@ class FreekinoParser:
         quality_urls = {res: url for res, url in quality_map.items() if res}
         return entries, quality_urls
 
-    def _extract_script_fallback(self, soup):
+    def _extract_script_fallback(self, soup, base_url: str = ""):
         """Regex fallback: find absolute https:// mp4/m3u8/mpd URLs in script tags."""
         seen: set = set()
         entries = []
+        candidates_found = 0
+
+        def add_url(raw_url: str, quality: str = "auto"):
+            nonlocal candidates_found
+            candidates_found += 1
+            entry = self._entry_from_url(raw_url, base_url or self.BASE_URL, quality)
+            if not entry or entry["url"] in seen:
+                return
+            seen.add(entry["url"])
+            entries.append(entry)
+            logger.info(f"[FREEKINO] extracted url - pattern=script, url={entry['url'][:120]}")
 
         for script in soup.find_all("script"):
-            content = script.string or ""
-            matches = re.findall(
-                r'["\']((https?://)[^"\']+?\.(?:mp4|m3u8|mpd)(?:\?[^"\']*)?)["\']',
-                content, re.I
-            )
-            for m in matches:
-                url = m[0]
-                if url.startswith("blob") or url in seen:
-                    continue
-                if validate_media_url_strict(url):
-                    continue
-                seen.add(url)
-                res = self._label_to_int(url)  # try to infer from path (e.g. /720/)
-                entries.append({
-                    "url": url,
-                    "type": classify_media_url(url),
-                    "quality": f"{res}p" if res else "auto",
-                })
+            content = script.string or script.get_text() or ""
+            if not content:
+                continue
+
+            patterns = [
+                r'\b(?:file|source|src|url|video_url|videoUrl)\s*[:=]\s*(["\'])(.+?)\1',
+                r'\bsources\s*:\s*\[([^\]]+)\]',
+                r'(https?:\\?/\\?/[^"\'<>\s]+?(?:\.m3u8|\.mp4|\.mpd)(?:\?[^"\'<>\s]*)?)',
+                r'((?:/[^"\'<>\s]+?)(?:\.m3u8|\.mp4|\.mpd)(?:\?[^"\'<>\s]*)?)',
+            ]
+
+            for pattern in patterns:
+                for match in re.findall(pattern, content, re.I | re.S):
+                    if isinstance(match, tuple):
+                        raw = match[-1]
+                    else:
+                        raw = match
+                    if not raw:
+                        continue
+                    if "sources" in pattern:
+                        for nested in re.findall(r'\b(?:file|src|url)\s*:\s*(["\'])(.+?)\1', raw, re.I | re.S):
+                            add_url(nested[-1])
+                        for nested_url in re.findall(r'(https?:\\?/\\?/[^"\'<>\s]+?(?:\.m3u8|\.mp4|\.mpd)(?:\?[^"\'<>\s]*)?)', raw, re.I):
+                            add_url(nested_url)
+                    else:
+                        add_url(raw)
+
+        try:
+            extractor_candidates = extract_from_freekino(soup, base_url or self.BASE_URL)
+            for candidate in extractor_candidates:
+                add_url(candidate.url, candidate.quality)
+        except Exception as e:
+            logger.info(f"[FREEKINO] media_extractor fallback failed: {e}")
+
+        logger.info(f"[FREEKINO] script candidates found - {candidates_found}")
 
         entries.sort(key=lambda e: self._label_to_int(e["quality"]), reverse=True)
         quality_urls = {}

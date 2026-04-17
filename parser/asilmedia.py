@@ -150,30 +150,24 @@ class AsilmediaParser(BaseParser):
     
     def search(self, query: str) -> List[SearchResult]:
         """Search for movies using DLE POST form with strong query relevance filtering"""
-        
-        if DEBUG:
-            logger.info(f"[ASILMEDIA DLE] === SEARCH START ===")
-            logger.info(f"[ASILMEDIA DLE] Query: {query}")
+
+        logger.info(f"[ASILMEDIA] search query='{query}'")
         
         # First, try DLE POST search
         results = self._dle_post_search(query)
-        
+
         # If no results, fallback to category browsing
         if not results:
-            if DEBUG:
-                logger.info("[ASILMEDIA DLE] POST search returned 0 results, trying category fallback")
+            logger.info("[ASILMEDIA] POST search returned 0 results, trying category fallback")
             results = self._category_search(query)
-        
+
         # Apply STRONG query relevance filtering
         if results and query:
-            if DEBUG:
-                logger.info(f"[ASILMEDIA DLE] Before filtering: {len(results)} results")
-            
+            logger.info(f"[ASILMEDIA] Before relevance filtering: {len(results)} results")
             results = self._filter_by_query_relevance(results, query)
-            
-            if DEBUG:
-                logger.info(f"[ASILMEDIA DLE] After filtering: {len(results)} results")
-        
+            logger.info(f"[ASILMEDIA] After relevance filtering: {len(results)} results")
+
+        logger.info(f"[ASILMEDIA] search returning {len(results)} results")
         return results
     
     def _filter_by_query_relevance(self, results: List[SearchResult], query: str) -> List[SearchResult]:
@@ -255,35 +249,19 @@ class AsilmediaParser(BaseParser):
     def _dle_post_search(self, query: str) -> List[SearchResult]:
         """
         Perform DLE POST search with proper form fields.
-        
-        DLE-specific behavior:
-        - Uses POST form submission
-        - Requires specific hidden fields
-        - May return empty results even for valid queries
+        DLE-specific behavior: POST form submission, may need session cookies.
         """
-        
-        if DEBUG:
-            logger.info(f"[ASILMEDIA DLE] === DLE POST SEARCH ===")
-        
         results = []
-        
+
         try:
-            # Build form data with DLE fields
             form_data = self.SEARCH_FORM_FIELDS.copy()
             form_data["story"] = query
-            
-            # Get search page first to establish session (helps with some DLE sites)
-            if DEBUG:
-                logger.info(f"[ASILMEDIA DLE] 1. Establishing session...")
-            
+
+            # Establish session cookies before posting
             self.session.get(self.BASE_URL, timeout=30)
-            
-            if DEBUG:
-                logger.info(f"[ASILMEDIA DLE] 2. POST URL: {self.SEARCH_URL}")
-                logger.info(f"[ASILMEDIA DLE] 3. Form data: {form_data}")
-                logger.info(f"[ASILMEDIA DLE] 4. Cookies: {self.session.cookies.get_dict()}")
-            
-            # Make POST request
+
+            logger.info(f"[ASILMEDIA] POST search url={self.SEARCH_URL} query='{query}'")
+
             response = self.session.post(
                 self.SEARCH_URL,
                 data=form_data,
@@ -295,48 +273,29 @@ class AsilmediaParser(BaseParser):
                     "Origin": self.BASE_URL,
                 }
             )
-            
-            if DEBUG:
-                logger.info(f"[ASILMEDIA DLE] 5. Response status: {response.status_code}")
-                logger.info(f"[ASILMEDIA DLE] 6. Final URL: {response.url}")
-                logger.info(f"[ASILMEDIA DLE] 7. Content-Type: {response.headers.get('Content-Type')}")
-                logger.info(f"[ASILMEDIA DLE] 8. Content length: {len(response.text)}")
-            
-            # Parse response
+
+            logger.info(f"[ASILMEDIA] POST response status={response.status_code} final_url={response.url}")
+
             soup = BeautifulSoup(response.text, "html.parser")
-            
-            # Get page title for diagnostics
-            title = soup.find("title")
-            page_title = title.get_text() if title else "N/A"
-            if DEBUG:
-                logger.info(f"[ASILMEDIA DLE] 9. Page title: {page_title[:60]}")
-            
-            # Detect page type
+
             page_type = self._detect_dle_page_type(soup, response.url)
-            if DEBUG:
-                logger.info(f"[ASILMEDIA DLE] 10. Detected page type: {page_type}")
-            
-            # If not a search results page or empty, return []
-            if page_type != "search_results":
-                if DEBUG:
-                    logger.info(f"[ASILMEDIA DLE] Not a search results page, returning empty")
+            logger.info(f"[ASILMEDIA] Detected page type: {page_type}")
+
+            # Only skip if it's clearly a non-search page (e.g. pure category listing).
+            # "unknown" is fine — just try to extract whatever cards are there.
+            if page_type == "no_results":
+                logger.info(f"[ASILMEDIA] Search page says no results")
                 return []
-            
-            # Try to extract results using DLE selectors
+
             results = self._extract_dle_results(soup, query)
-            
-            if DEBUG:
-                logger.info(f"[ASILMEDIA DLE] 11. Extracted {len(results)} results from POST search")
-            
+            logger.info(f"[ASILMEDIA] POST search extracted {len(results)} results")
             return results
-            
+
         except requests.RequestException as e:
-            if DEBUG:
-                logger.warning(f"[ASILMEDIA DLE] Request error: {e}")
+            logger.warning(f"[ASILMEDIA] POST search request error: {e}")
             return []
         except Exception as e:
-            if DEBUG:
-                logger.warning(f"[ASILMEDIA DLE] Parse error: {e}")
+            logger.warning(f"[ASILMEDIA] POST search parse error: {e}")
             return []
     
     def _detect_dle_page_type(self, soup: BeautifulSoup, url: str) -> str:
@@ -397,62 +356,51 @@ class AsilmediaParser(BaseParser):
     
     def _extract_dle_results(self, soup: BeautifulSoup, query: str) -> List[SearchResult]:
         """
-        Extract search results from DLE search results page.
-        Uses DLE-specific selectors with detailed logging.
+        Extract search results from a DLE page.
+        Searches the full soup (DLE search items are at root level, not in a container).
         """
-        
         results = []
-        
-        # NOTE: For search results pages, the items are at page root level, NOT inside
-        # the .search-page container. We must search the full soup, not just the container.
-        # This is different from category pages where items might be in a specific container.
-        
-        # Find cards/items - search FULL page (not container) for search results
+
+        # Search FULL page — DLE search results are not always inside a named container
         cards = []
         for sel in self.DLE_CARD_SELECTORS:
-            cards = soup.select(sel)  # Use soup, not container
+            cards = soup.select(sel)
             if cards:
-                if DEBUG:
-                    logger.info(f"[ASILMEDIA DLE] Cards found (full page): {sel} = {len(cards)} items")
+                logger.info(f"[ASILMEDIA] Cards found with selector '{sel}': {len(cards)}")
                 break
-        
-        # If still no cards, try movie-like links (for category fallback)
+
+        # Fallback: any movie-like links on the page
         if not cards:
-            all_links = search_area.find_all("a", href=True)
+            all_links = soup.find_all("a", href=True)  # Fixed: was undefined 'search_area'
             cards = [a for a in all_links if self._is_movie_link(a.get("href", ""))]
-            if DEBUG and cards:
-                logger.info(f"[ASILMEDIA DLE] Movie links found: {len(cards)}")
-        
-        if DEBUG:
-            logger.info(f"[ASILMEDIA DLE] Processing {len(cards)} cards")
-        
-        # Extract from each card
+            if cards:
+                logger.info(f"[ASILMEDIA] Fallback movie links found: {len(cards)}")
+
+        logger.info(f"[ASILMEDIA] Processing {len(cards)} cards")
+
         for card in cards:
             try:
                 result = self._extract_dle_card(card)
                 if result and result.title and result.detail_url:
                     results.append(result)
             except Exception as e:
-                if DEBUG:
-                    logger.warning(f"[ASILMEDIA DLE] Card extract error: {e}")
+                logger.debug(f"[ASILMEDIA] Card extract error: {e}")
                 continue
-        
-        if DEBUG:
-            logger.info(f"[ASILMEDIA DLE] Extracted {len(results)} raw results")
-        
+
+        logger.info(f"[ASILMEDIA] Extracted {len(results)} raw results")
+
         # Deduplicate
         if results:
-            dict_results = [{"title": r.title, "link": r.detail_url, "year": r.year, 
-                           "poster": r.poster, "source_id": r.source_id, 
-                           "description": r.description, "source": r.source} for r in results]
+            dict_results = [{"title": r.title, "link": r.detail_url, "year": r.year,
+                             "poster": r.poster, "source_id": r.source_id,
+                             "description": r.description, "source": r.source} for r in results]
             dict_results = deduplicate_results(dict_results, key="link")
-            # Convert back to SearchResult objects
             results = [SearchResult(
                 title=r["title"], year=r["year"], poster=r["poster"],
                 description=r["description"], source_id=r["source_id"],
                 detail_url=r["link"], source=r["source"]
             ) for r in dict_results]
-        
+
         return results
     
     def _extract_dle_card(self, card) -> Optional[SearchResult]:
@@ -540,19 +488,23 @@ class AsilmediaParser(BaseParser):
         )
     
     def _is_movie_link(self, href: str) -> bool:
-        """Check if link is a movie detail page"""
-        if not href or "asilmedia" not in href:
+        """Check if link is a movie detail page (handles both absolute and relative URLs)"""
+        if not href:
             return False
-        
+
+        # For absolute URLs, must be on asilmedia.org
+        if href.startswith("http") and "asilmedia" not in href:
+            return False
+
         if not href.endswith(".html"):
             return False
-        
+
         # Exclude category/search/filter links
         exclude = ["/films/", "/xfsearch/", "/category/", "/page/", "/index.php"]
         for pattern in exclude:
             if pattern in href:
                 return False
-        
+
         # Must have numeric ID: /12345-title.html
         return bool(re.search(r'/\d+-', href))
     
@@ -1199,22 +1151,11 @@ class AsilmediaParser(BaseParser):
             dict with items, page, limit, total, total_pages, has_more
         """
         # Asilmedia: category pages have proper paginated listings.
-        # The homepage (/page/N/) shows the same carousel blocks on every page —
-        # no real pagination. Only category URLs produce different items per page.
-        if category_url:
-            base = category_url.rstrip("/")
-            url = f"{base}/page/{page}/" if page > 1 else base + "/"
-        else:
-            # Homepage does not paginate: page 1 = root, page 2+ = same content.
-            # Return empty immediately for page > 1 to avoid returning duplicate cards.
-            if page > 1:
-                logger.info(f"[ASILMEDIA] list_catalog: homepage has no real pagination; page {page} returning empty")
-                return {
-                    "items": [], "page": page, "limit": limit,
-                    "total": 0, "total_pages": page, "has_more": False
-                }
-            url = self.BASE_URL + "/"
-        logger.info(f"[ASILMEDIA] list_catalog: fetching {url}")
+        # The homepage has no real pagination — use the films category as the default.
+        DEFAULT_CATALOG = self.BASE_URL + "/films/tarjima_kinolar"
+        base = (category_url.rstrip("/") if category_url else DEFAULT_CATALOG)
+        url = f"{base}/page/{page}/" if page > 1 else base + "/"
+        logger.info(f"[ASILMEDIA] list_catalog: page={page} url={url}")
 
         try:
             response = self.session.get(url, timeout=30)
@@ -1263,36 +1204,49 @@ class AsilmediaParser(BaseParser):
         if type_filter:
             items = [i for i in items if i.get("type") == type_filter]
 
-        # Check for next page using known Asilmedia pagination selectors
-        has_more = False
-        pagination = soup.select_one(".pagination, .pages, .navigation, .pager, .page-nav, #bottom-nav")
-        if pagination:
-            for link in pagination.select("a"):
-                href = link.get("href", "")
-                text = link.get_text(strip=True)
-                if (
-                    "next" in text.lower()
-                    or "keyingi" in text.lower()
-                    or "»" in text
-                    or "›" in text
-                    or f"/page/{page + 1}/" in href
-                ):
-                    has_more = True
-                    break
+        # Parse actual total pages from pagination HTML
+        total_pages = self._parse_total_pages(soup, page)
 
-        # Only enable the has_more heuristic for category pages (homepage has no real pagination)
-        if category_url and len(items) >= 10 and not has_more:
-            has_more = True
+        # Heuristic fallback for category pages: if we got a full page of items and
+        # pagination parsing didn't find more pages, assume there is at least one more.
+        if category_url and len(items) >= limit and total_pages <= page:
+            total_pages = page + 1
+
+        has_more = total_pages > page
+        logger.info(f"[ASILMEDIA] list_catalog: page={page} total_pages={total_pages} has_more={has_more}")
 
         return {
             "items": items[:limit],
             "page": page,
             "limit": limit,
             "total": len(items),
-            "total_pages": page + (1 if has_more else 0),
+            "total_pages": total_pages,
             "has_more": has_more,
         }
     
+    def _parse_total_pages(self, soup, current_page: int) -> int:
+        """
+        Parse the actual total page count from pagination HTML.
+        DLE sites use /page/N/ in href — find the largest N across all pagination links.
+        """
+        pagination = soup.select_one(
+            ".navigation, .pagination, .pages, .navig, .pager, .page-nav, #bottom-nav, .page-links"
+        )
+        if not pagination:
+            return current_page
+
+        max_page = current_page
+        for link in pagination.select("a[href]"):
+            href = link.get("href", "")
+            m = re.search(r'/page/(\d+)/?', href)
+            if m:
+                pn = int(m.group(1))
+                if pn > max_page:
+                    max_page = pn
+
+        logger.info(f"[ASILMEDIA] _parse_total_pages: current={current_page} parsed_max={max_page}")
+        return max_page
+
     def _extract_catalog_card(self, card):
         """Extract a catalog item from a DLE movie card element."""
         title = ""

@@ -851,7 +851,7 @@ func (h *UploadHandler) UploadTemp(c *gin.Context) {
 
 	switch fileType {
 	case "poster", "backdrop":
-		maxSize = 10 * 1024 * 1024
+		maxSize = 20 * 1024 * 1024 // 20 MB for images
 		allowedTypes = allowedImageTypes
 	case "video", "temp_movie":
 		maxSize = 5 * 1024 * 1024 * 1024
@@ -862,12 +862,12 @@ func (h *UploadHandler) UploadTemp(c *gin.Context) {
 			"video/quicktime": true,
 		}
 	default:
-		maxSize = 10 * 1024 * 1024
+		maxSize = 20 * 1024 * 1024 // 20 MB for images
 		allowedTypes = allowedImageTypes
 	}
 
 	if header.Size > maxSize {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", maxSize/1024/1024)})
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"success": false, "error": "file too large"})
 		return
 	}
 

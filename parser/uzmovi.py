@@ -632,6 +632,16 @@ class UzmoviParser(BaseParser):
         
         if not url:
             return False
+
+        parsed = urlparse(url)
+        if "{" in url or "}" in url or not parsed.netloc:
+            if DEBUG:
+                logger.info(f"[UZMOVI] URL rejected as malformed: {url[:100]}")
+            return False
+        if "/embed/" in parsed.path.lower() and not any(ext in url.lower() for ext in [".m3u8", ".mp4", ".mpd", ".ism"]):
+            if DEBUG:
+                logger.info(f"[UZMOVI] URL rejected as player page, not media: {url[:100]}")
+            return False
         
         # Use enhanced validation from media_extractor
         is_valid, reason = is_valid_media_url(url)
@@ -1475,6 +1485,20 @@ class UzmoviParser(BaseParser):
             if not url:
                 logger.info(f"[UZMOVI]   SKIP: Empty URL")
                 continue
+
+            parsed = urlparse(url)
+            if "{" in url or "}" in url or not parsed.netloc:
+                logger.info(f"[UZMOVI]   REJECTED (malformed URL): {url[:100]}... (type: {media.get('type', 'unknown')})")
+                invalid_rejected += 1
+                continue
+            if "/embed/" in parsed.path.lower() and not any(ext in url.lower() for ext in [".m3u8", ".mp4", ".mpd", ".ism"]):
+                logger.info(f"[UZMOVI]   REJECTED (player/embed page): {url[:100]}... (type: {media.get('type', 'unknown')})")
+                invalid_rejected += 1
+                continue
+
+            media_type = classify_media_url(url)
+            if media_type in ["mp4", "m3u8", "mpd", "ism"]:
+                media["type"] = media_type
             
             # Skip duplicate URLs
             if url in seen:
@@ -1826,6 +1850,8 @@ class UzmoviParser(BaseParser):
             uzmovi_candidates = extract_from_uzmovi(soup, final_url)
             
             logger.info(f"[UZMOVI] Specialized extraction found {len(uzmovi_candidates)} raw candidates")
+            script_candidate_count = sum(1 for c in uzmovi_candidates if "script" in getattr(c, "source_hint", ""))
+            logger.info(f"[UZMOVI] script candidates found - {script_candidate_count}")
             
             # Convert candidates to dict format
             accepted_count = 0
@@ -1845,6 +1871,7 @@ class UzmoviParser(BaseParser):
                         })
                         accepted_count += 1
                         logger.info(f"[UZMOVI] ACCEPTED (media_extractor): type={media_type}, url={url_val[:120]}...")
+                        logger.info(f"[UZMOVI] extracted url - pattern={candidate.source_hint}, url={url_val[:120]}")
                     else:
                         logger.info(f"[UZMOVI] REJECTED (media_extractor): {reason}, url={url_val[:120]}...")
             

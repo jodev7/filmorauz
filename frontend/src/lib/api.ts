@@ -931,8 +931,11 @@ export async function directB2Upload(
       }
     };
 
+    // onerror fires when the TCP connection is dropped before a response arrives
+    // (e.g. nginx client_max_body_size exceeded, or genuine network failure).
+    // There is no response body to read in this case.
     xhr.onerror = () => {
-      reject(new Error("Upload failed: network error"));
+      reject(new Error("Upload failed: file may be too large or server is unreachable"));
     };
 
     const formData = new FormData();

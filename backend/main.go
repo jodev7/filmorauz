@@ -119,6 +119,9 @@ func main() {
 
 	// Setup Gin
 	r := gin.Default()
+	// Allow multipart forms up to 32 MB in memory (excess spills to disk).
+	// This must be set before any route handler that calls c.Request.FormFile().
+	r.MaxMultipartMemory = 32 << 20 // 32 MB
 
 	// CORS config
 	corsConfig := cors.Config{

@@ -633,12 +633,13 @@ def _extract_from_scripts(soup: BeautifulSoup, base_url: str) -> List[MediaCandi
         (r'["\']([^"\']*\.ism)["\']', "ism"),
         
         # Object/property patterns
-        (r'"(src|file|url|videoUrl|mediaUrl|sourceUrl)"\s*:\s*"([^"]+\.(?:mp4|m3u8|mpd|ism))"', "object_prop"),
-        (r'"(src|file|url|videoUrl|mediaUrl)"\s*:\s*"([^"]+)"', "object_prop"),
-        (r'(?:src|file|url|videoUrl)\s*[=:]\s*["\']([^"\']+(?:\.mp4|\.m3u8|\.mpd))["\']', "assignment"),
+        (r'["\'](src|file|url|source|videoUrl|mediaUrl|sourceUrl)["\']\s*:\s*["\']([^"\']+\.(?:mp4|m3u8|mpd|ism))["\']', "object_prop"),
+        (r'["\'](src|file|url|source|videoUrl|mediaUrl)["\']\s*:\s*["\']([^"\']+)["\']', "object_prop"),
+        (r'(?:src|file|url|source|videoUrl)\s*[=:]\s*["\']([^"\']+(?:\.mp4|\.m3u8|\.mpd))["\']', "assignment"),
         
         # JWPlayer patterns
         (r'file\s*:\s*["\']([^"\']+(?:\.mp4|\.m3u8|\.mpd))["\']', "jwplayer"),
+        (r'jwplayer\s*\([^)]*\)\.setup\s*\((.*?)\)', "jwplayer_setup"),
         (r'sources\s*:\s*\[([^\]]+)\]', "jwplayer_sources"),
         
         # VideoJS patterns
@@ -681,9 +682,17 @@ def _extract_from_scripts(soup: BeautifulSoup, base_url: str) -> List[MediaCandi
                     if any(p in url.lower() for p in skip_patterns):
                         continue
                     
-                    candidate = _create_candidate(url, base_url, f"script_{pattern_type}")
-                    if candidate:
-                        candidates.append(candidate)
+                    if pattern_type in ("jwplayer_sources", "jwplayer_setup"):
+                        nested_urls = re.findall(r'(?:file|src|url|source)\s*:\s*["\']([^"\']+)["\']', url, re.IGNORECASE)
+                        nested_urls.extend(re.findall(r'(https?:\\?/\\?/[^"\'<>\s]+?(?:\.mp4|\.m3u8|\.mpd)(?:\?[^"\'<>\s]*)?)', url, re.IGNORECASE))
+                        for nested_url in nested_urls:
+                            candidate = _create_candidate(nested_url, base_url, f"script_{pattern_type}")
+                            if candidate:
+                                candidates.append(candidate)
+                    else:
+                        candidate = _create_candidate(url, base_url, f"script_{pattern_type}")
+                        if candidate:
+                            candidates.append(candidate)
             except re.error:
                 continue
     
@@ -1162,11 +1171,13 @@ def extract_from_uzmovi(soup: BeautifulSoup, base_url: str) -> List[MediaCandida
     
     # Pattern: uzmovi player configs - look for any video-related config
     uzmovi_config_patterns = [
-        r'"player"?\s*:\s*"([^"]+)"',
-        r'"playlist"?\s*:\s*\[([^\]]+)\]',
-        r'"file"?\s*:\s*"([^"]+)"',
-        r'"src"?\s*:\s*"([^"]+)"',
-        r'"url"?\s*:\s*"([^"]+)"',
+        r'["\']?player["\']?\s*:\s*["\']([^"\']+)["\']',
+        r'["\']?playlist["\']?\s*:\s*\[([^\]]+)\]',
+        r'["\']?sources["\']?\s*:\s*\[([^\]]+)\]',
+        r'["\']?file["\']?\s*:\s*["\']([^"\']+)["\']',
+        r'["\']?source["\']?\s*:\s*["\']([^"\']+)["\']',
+        r'["\']?src["\']?\s*:\s*["\']([^"\']+)["\']',
+        r'["\']?url["\']?\s*:\s*["\']([^"\']+)["\']',
     ]
     
     for pattern in uzmovi_config_patterns:
@@ -1250,15 +1261,23 @@ def extract_from_freekino(soup: BeautifulSoup, base_url: str) -> List[MediaCandi
     
     # Common player patterns
     patterns = [
-        r'(?:file|src|url)\s*[=:]\s*["\']([^"\']+\.(?:mp4|m3u8))["\']',
+        r'(?:file|source|src|url)\s*[=:]\s*["\']([^"\']+\.(?:mp4|m3u8|mpd))["\']',
+        r'(?:file|source|src|url)\s*[=:]\s*["\']([^"\']*(?:video|stream|cdn)[^"\']*)["\']',
+        r'sources\s*:\s*\[([^\]]+)\]',
+        r'jwplayer\s*\([^)]*\)\.setup\s*\((.*?)\)',
     ]
     
     for pattern in patterns:
         matches = re.findall(pattern, html_content, re.IGNORECASE)
         for match in matches:
-            candidate = _create_candidate(match, base_url, "freekino")
-            if candidate:
-                candidates.append(candidate)
+            nested = [match]
+            if "sources" in pattern or "jwplayer" in pattern:
+                nested = re.findall(r'(?:file|src|url|source)\s*:\s*["\']([^"\']+)["\']', match, re.IGNORECASE)
+                nested.extend(re.findall(r'(https?:\\?/\\?/[^"\'<>\s]+?(?:\.mp4|\.m3u8|\.mpd)(?:\?[^"\'<>\s]*)?)', match, re.IGNORECASE))
+            for raw_url in nested:
+                candidate = _create_candidate(raw_url, base_url, "freekino")
+                if candidate:
+                    candidates.append(candidate)
     
     return candidates
 
