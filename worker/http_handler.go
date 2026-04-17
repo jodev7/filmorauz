@@ -283,6 +283,25 @@ func fileExistsHTTP(path string) bool {
 	return err == nil
 }
 
+// sanitizeKeySegment keeps only lowercase letters, digits, '-', '_', '.' — anything
+// else (comma, space, %, non-ascii, punctuation) is dropped. Slash is NOT allowed here;
+// apply this to individual filename segments, not to whole paths that include folders.
+func sanitizeKeySegment(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + 32)
+		case r == '-' || r == '_' || r == '.':
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 func (h *ProcessHandler) handleUploadProfile(w http.ResponseWriter, r *http.Request) {
 	if h.b2Store == nil {
 		h.sendError(w, "B2 storage not configured", http.StatusServiceUnavailable)
@@ -344,13 +363,14 @@ func (h *ProcessHandler) handleUploadTelegramPost(w http.ResponseWriter, r *http
 		return
 	}
 
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if ext == "" {
+	ext := sanitizeKeySegment(strings.ToLower(filepath.Ext(header.Filename)))
+	if ext == "" || ext == "." {
 		ext = ".jpg"
 	}
 	filename := fmt.Sprintf("%d_telegram_post%s", time.Now().UnixNano(), ext)
 	mediaKey := "images/telegram-post/" + filename
 
+	log.Printf("[B2] telegram-post final object key: %s", mediaKey)
 	log.Printf("[B2] Uploading telegram post: bucket=filmorauznet, key=%s, size=%d", mediaKey, len(data))
 
 	publicURL, err := h.b2Store.UploadData(mediaKey, data, header.Header.Get("Content-Type"))
