@@ -328,13 +328,18 @@ func safeExtension(originalFilename, contentType, fallback string) string {
 	return ext
 }
 
-func safeUploadKey(prefix, label, originalFilename, contentType, fallbackExt string) string {
+func safeUploadFilename(label, originalFilename, contentType, fallbackExt string) string {
 	ext := safeExtension(originalFilename, contentType, fallbackExt)
 	base := fmt.Sprintf("%d", time.Now().UnixNano())
 	if label != "" {
 		base += "_" + sanitizeKeySegment(label)
 	}
-	return strings.Trim(prefix, "/") + "/" + base + ext
+	return base + ext
+}
+
+func safeUploadKey(prefix, label, originalFilename, contentType, fallbackExt string) (string, string) {
+	filename := safeUploadFilename(label, originalFilename, contentType, fallbackExt)
+	return filename, strings.Trim(prefix, "/") + "/" + filename
 }
 
 func (h *ProcessHandler) handleUploadProfile(w http.ResponseWriter, r *http.Request) {
@@ -356,9 +361,9 @@ func (h *ProcessHandler) handleUploadProfile(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	filename := safeUploadKey("images/profile", "profile", header.Filename, header.Header.Get("Content-Type"), ".jpg")
+	safeFilename, filename := safeUploadKey("images/profile", "profile", header.Filename, header.Header.Get("Content-Type"), ".jpg")
 
-	log.Printf("[B2] profile final object key: %s", filename)
+	log.Printf("[B2] profile upload names: original=%q safe=%q key=%q", header.Filename, safeFilename, filename)
 	log.Printf("[B2] Uploading profile image: bucket=filmorauznet, key=%s, size=%d", filename, len(data))
 
 	publicURL, err := h.b2Store.UploadData(filename, data, header.Header.Get("Content-Type"))
@@ -395,9 +400,9 @@ func (h *ProcessHandler) handleUploadTelegramPost(w http.ResponseWriter, r *http
 		return
 	}
 
-	mediaKey := safeUploadKey("images/telegram-post", "telegram_post", header.Filename, header.Header.Get("Content-Type"), ".jpg")
+	safeFilename, mediaKey := safeUploadKey("images/telegram-post", "telegram_post", header.Filename, header.Header.Get("Content-Type"), ".jpg")
 
-	log.Printf("[B2] telegram-post final object key: %s", mediaKey)
+	log.Printf("[B2] telegram-post upload names: original=%q safe=%q key=%q", header.Filename, safeFilename, mediaKey)
 	log.Printf("[B2] Uploading telegram post: bucket=filmorauznet, key=%s, size=%d", mediaKey, len(data))
 
 	publicURL, err := h.b2Store.UploadData(mediaKey, data, header.Header.Get("Content-Type"))
@@ -436,9 +441,9 @@ func (h *ProcessHandler) handleUploadTempMovie(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	tempKey := safeUploadKey("temp/raw", "temp_movie", header.Filename, header.Header.Get("Content-Type"), ".mp4")
+	safeFilename, tempKey := safeUploadKey("temp/raw", "temp_movie", header.Filename, header.Header.Get("Content-Type"), ".mp4")
 
-	log.Printf("[B2] temp-movie final object key: %s", tempKey)
+	log.Printf("[B2] temp-movie upload names: original=%q safe=%q key=%q", header.Filename, safeFilename, tempKey)
 	log.Printf("[B2] Uploading temp movie: key=%s, size=%d", tempKey, len(data))
 
 	publicURL, err := h.b2Store.UploadData(tempKey, data, header.Header.Get("Content-Type"))
@@ -489,9 +494,9 @@ func (h *ProcessHandler) handleUploadMovieImage(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	mediaKey := safeUploadKey("temp/"+imageType, strings.TrimSuffix(imageType, "s"), header.Filename, header.Header.Get("Content-Type"), ".jpg")
+	safeFilename, mediaKey := safeUploadKey("temp/"+imageType, strings.TrimSuffix(imageType, "s"), header.Filename, header.Header.Get("Content-Type"), ".jpg")
 
-	log.Printf("[B2] movie-%s final object key: %s", imageType, mediaKey)
+	log.Printf("[B2] movie-%s upload names: original=%q safe=%q key=%q", imageType, header.Filename, safeFilename, mediaKey)
 	log.Printf("[B2] Uploading movie %s: key=%s, size=%d", imageType, mediaKey, len(data))
 
 	publicURL, err := h.b2Store.UploadData(mediaKey, data, header.Header.Get("Content-Type"))
@@ -524,11 +529,11 @@ func (h *ProcessHandler) handleGetUploadURL(w http.ResponseWriter, r *http.Reque
 	var tempPath string
 	switch typeParam {
 	case "poster":
-		tempPath = safeUploadKey("temp/posters", "poster", filename, "", ".jpg")
+		_, tempPath = safeUploadKey("temp/posters", "poster", filename, "", ".jpg")
 	case "backdrop":
-		tempPath = safeUploadKey("temp/backdrops", "backdrop", filename, "", ".jpg")
+		_, tempPath = safeUploadKey("temp/backdrops", "backdrop", filename, "", ".jpg")
 	case "video":
-		tempPath = safeUploadKey("temp/raw", "video", filename, "", ".mp4")
+		_, tempPath = safeUploadKey("temp/raw", "video", filename, "", ".mp4")
 	default:
 		h.sendError(w, "invalid type: must be poster, backdrop, or video", http.StatusBadRequest)
 		return

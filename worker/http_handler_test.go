@@ -7,10 +7,13 @@ import (
 )
 
 func TestSafeUploadKeyUsesSafeProfileImagePath(t *testing.T) {
-	key := safeUploadKey("images/profile", "profile", "My Profile, 50% готово.PNG", "image/png", ".jpg")
+	filename, key := safeUploadKey("images/profile", "profile", "My Profile, 50% готово.PNG", "image/png", ".jpg")
 
 	if !regexp.MustCompile(`^images/profile/[0-9]+_profile\.png$`).MatchString(key) {
 		t.Fatalf("unexpected key: %q", key)
+	}
+	if !regexp.MustCompile(`^[0-9]+_profile\.png$`).MatchString(filename) {
+		t.Fatalf("unexpected filename: %q", filename)
 	}
 	if strings.ContainsAny(key, " ,%") {
 		t.Fatalf("key contains unsafe characters: %q", key)
@@ -18,10 +21,13 @@ func TestSafeUploadKeyUsesSafeProfileImagePath(t *testing.T) {
 }
 
 func TestSafeUploadKeyUsesSafeTelegramPostPath(t *testing.T) {
-	key := safeUploadKey("images/telegram-post", "telegram_post", "poster, sale @ 50%.jpg", "image/jpeg", ".jpg")
+	filename, key := safeUploadKey("images/telegram-post", "telegram_post", "poster, sale @ 50%.jpg", "image/jpeg", ".jpg")
 
 	if !regexp.MustCompile(`^images/telegram-post/[0-9]+_telegram_post\.jpg$`).MatchString(key) {
 		t.Fatalf("unexpected key: %q", key)
+	}
+	if !regexp.MustCompile(`^[0-9]+_telegram_post\.jpg$`).MatchString(filename) {
+		t.Fatalf("unexpected filename: %q", filename)
 	}
 	if strings.ContainsAny(key, " ,%@") {
 		t.Fatalf("key contains unsafe characters: %q", key)
@@ -29,7 +35,7 @@ func TestSafeUploadKeyUsesSafeTelegramPostPath(t *testing.T) {
 }
 
 func TestSafeUploadKeyFallsBackToSafeExtension(t *testing.T) {
-	key := safeUploadKey("temp/raw", "video", "movie name, final", "", ".mp4")
+	_, key := safeUploadKey("temp/raw", "video", "movie name, final", "", ".mp4")
 
 	if !regexp.MustCompile(`^temp/raw/[0-9]+_video\.mp4$`).MatchString(key) {
 		t.Fatalf("unexpected key: %q", key)

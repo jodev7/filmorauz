@@ -29,6 +29,39 @@ var allowedImageTypes = map[string]bool{
 	"image/webp": true,
 }
 
+func safeUploadExt(originalFilename, contentType, fallback string) string {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	}
+
+	ext := strings.ToLower(filepath.Ext(originalFilename))
+	var b strings.Builder
+	b.Grow(len(ext))
+	for _, r := range ext {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_' || r == '.':
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 || b.String() == "." {
+		return fallback
+	}
+	return b.String()
+}
+
+func safeForwardedUploadFilename(label, originalFilename, contentType, fallbackExt string) string {
+	return fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), label, safeUploadExt(originalFilename, contentType, fallbackExt))
+}
+
 // UploadHandler handles file uploads for profile images
 type UploadHandler struct {
 	userRepo *repositories.UserRepository
@@ -98,14 +131,8 @@ func (h *UploadHandler) UploadProfileImage(c *gin.Context) {
 		return
 	}
 
-	// Generate unique filename using timestamp
-	ext := filepath.Ext(header.Filename)
-	if ext == "" {
-		ext = ".jpg"
-	}
-	// Use timestamp for unique filename
-	timestamp := time.Now().UnixNano()
-	filename := fmt.Sprintf("%d%s", timestamp, ext)
+	filename := safeForwardedUploadFilename("profile", header.Filename, contentType, ".jpg")
+	log.Printf("[UPLOAD] profile image names: original=%q safe_forwarded=%q", header.Filename, filename)
 
 	// Process based on environment
 	var savedURL string
@@ -736,12 +763,8 @@ func (h *UploadHandler) UploadTelegramPostMedia(c *gin.Context) {
 		return
 	}
 
-	ext := filepath.Ext(header.Filename)
-	if ext == "" {
-		ext = ".jpg"
-	}
-
-	filename := fmt.Sprintf("%d_telegram_post%s", time.Now().UnixNano(), ext)
+	filename := safeForwardedUploadFilename("telegram_post", header.Filename, contentType, ".jpg")
+	log.Printf("[UPLOAD] telegram-post image names: original=%q safe_forwarded=%q", header.Filename, filename)
 
 	var savedURL string
 	if h.config.IsDev {
