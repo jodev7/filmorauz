@@ -5,10 +5,14 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
 const WORKER_URL = process.env.NEXT_PUBLIC_WORKER_URL || "http://localhost:8083";
 
 interface UploadURLResponse {
-  upload_url: string;
-  auth_token: string;
-  file_key: string;
-  cdn_url: string;
+  uploadUrl?: string;
+  authorizationToken?: string;
+  fileKey?: string;
+  cdnUrl?: string;
+  upload_url?: string;
+  auth_token?: string;
+  file_key?: string;
+  cdn_url?: string;
 }
 
 export type VideoSourceType = 
@@ -898,7 +902,7 @@ export async function uploadMovieAsset(
   });
 }
 
-// Proxy upload via backend (avoids CORS issue with direct B2 upload)
+// Direct browser-to-B2 upload.
 export interface UploadProgressInfo {
   progress?: number;
   loaded: number;
@@ -914,13 +918,56 @@ export async function directB2Upload(
   type: "poster" | "backdrop" | "video",
   onProgress?: (progress: UploadProgressInfo) => void
 ): Promise<{ url: string; file_key: string }> {
+  const maxSize = type === "video" ? 5 * 1024 * 1024 * 1024 : 20 * 1024 * 1024;
+  const allowedTypes = type === "video"
+    ? ["video/mp4", "video/webm", "video/ogg", "video/quicktime"]
+    : ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+
+  if (file.size > maxSize) {
+    throw new Error(`File too large (max ${Math.round(maxSize / 1024 / 1024)}MB)`);
+  }
+  if (file.type && !allowedTypes.includes(file.type)) {
+    throw new Error(type === "video"
+      ? "Invalid video type. Allowed: mp4, webm, ogg, mov"
+      : "Invalid image type. Allowed: jpg, png, webp");
+  }
+
+  const qs = new URLSearchParams({
+    type,
+    filename: file.name,
+    size: String(file.size),
+  });
+  if (file.type) qs.set("contentType", file.type);
+
+  const authRes = await fetch(`${API_URL}/upload/b2-url?${qs}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  if (!authRes.ok) {
+    const err = await authRes.json().catch(() => ({ error: "Failed to get upload URL" }));
+    throw new Error(err.error || "Failed to get upload URL");
+  }
+
+  const uploadAuth: UploadURLResponse = await authRes.json();
+  const uploadUrl = uploadAuth.uploadUrl || uploadAuth.upload_url;
+  const authorizationToken = uploadAuth.authorizationToken || uploadAuth.auth_token;
+  const fileKey = uploadAuth.fileKey || uploadAuth.file_key;
+  const cdnUrl = uploadAuth.cdnUrl || uploadAuth.cdn_url;
+
+  if (!uploadUrl || !authorizationToken || !fileKey) {
+    throw new Error("Upload authorization response is incomplete");
+  }
+
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const startedAt = Date.now();
     let lastProgressAt = 0;
 
-    xhr.open("POST", `${API_URL}/admin/upload-temp`);
-    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.open("POST", uploadUrl);
+    xhr.setRequestHeader("Authorization", authorizationToken);
+    xhr.setRequestHeader("X-Bz-File-Name", encodeURIComponent(fileKey));
+    xhr.setRequestHeader("X-Bz-Content-Sha1", "do_not_verify");
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
 
     xhr.upload.onprogress = (event) => {
       if (!onProgress) return;
@@ -962,15 +1009,35 @@ export async function directB2Upload(
       }
     };
 
-    xhr.onload = () => {
+    xhr.onload = async () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        const response = JSON.parse(xhr.responseText);
-        resolve({ url: response.url, file_key: response.file_key });
+        try {
+          const completeRes = await fetch(`${API_URL}/upload/b2-complete`, {
+            method: "POST",
+            headers: authHeaders(token),
+            body: JSON.stringify({
+              fileKey,
+              fileName: file.name,
+              size: file.size,
+              type,
+              contentType: file.type,
+            }),
+          });
+          if (!completeRes.ok) {
+            const err = await completeRes.json().catch(() => ({ error: "Upload completed but metadata save failed" }));
+            reject(new Error(err.error || "Upload completed but metadata save failed"));
+            return;
+          }
+          const completed = await completeRes.json();
+          resolve({ url: completed.url || cdnUrl || "", file_key: completed.file_key || completed.fileKey || fileKey });
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error("Upload completed but metadata save failed"));
+        }
       } else {
         let errorMsg = "Upload failed";
         try {
           const errResp = JSON.parse(xhr.responseText);
-          errorMsg = errResp.error || errResp.message || errorMsg;
+          errorMsg = errResp.message || errResp.code || errResp.error || errorMsg;
         } catch {}
         reject(new Error(errorMsg));
       }
@@ -983,10 +1050,7 @@ export async function directB2Upload(
       reject(new Error("Upload failed: file may be too large or server is unreachable"));
     };
 
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("type", type);
-    xhr.send(formData);
+    xhr.send(file);
   });
 }
 

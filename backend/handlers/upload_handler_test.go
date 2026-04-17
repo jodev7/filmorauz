@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"regexp"
 	"testing"
 
 	"github.com/filmorauz/backend/config"
@@ -88,6 +89,106 @@ func TestUploadTempForwardsPosterBackdropAsImageField(t *testing.T) {
 				t.Fatalf("file_key = %q, want %q", response["file_key"], wantKey)
 			}
 		})
+	}
+}
+
+func TestDirectUploadFileKeyUsesRequestedPrefixes(t *testing.T) {
+	tests := []struct {
+		name        string
+		uploadType  string
+		filename    string
+		contentType string
+		wantPattern string
+	}{
+		{
+			name:        "video",
+			uploadType:  "video",
+			filename:    "Movie Final.mp4",
+			contentType: "video/mp4",
+			wantPattern: `^temp/videos/[0-9]+_video\.mp4$`,
+		},
+		{
+			name:        "poster",
+			uploadType:  "poster",
+			filename:    "poster final.png",
+			contentType: "image/png",
+			wantPattern: `^posters/[0-9]+_poster\.png$`,
+		},
+		{
+			name:        "backdrop",
+			uploadType:  "backdrop",
+			filename:    "backdrop final.webp",
+			contentType: "image/webp",
+			wantPattern: `^backdrops/[0-9]+_backdrop\.webp$`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, err := directUploadFileKey(tt.uploadType, tt.filename, tt.contentType)
+			if err != nil {
+				t.Fatalf("directUploadFileKey returned error: %v", err)
+			}
+			if !regexp.MustCompile(tt.wantPattern).MatchString(key) {
+				t.Fatalf("file key = %q, want pattern %s", key, tt.wantPattern)
+			}
+		})
+	}
+}
+
+func TestDirectUploadFileKeyRejectsBadExtensionWithoutContentType(t *testing.T) {
+	if _, err := directUploadFileKey("video", "movie.exe", ""); err == nil {
+		t.Fatal("expected bad extension to be rejected")
+	}
+}
+
+func TestCompleteB2UploadValidatesMetadata(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler := NewUploadHandler(nil, &config.Config{
+		IsDev: true,
+		Port:  "8080",
+	})
+
+	router := gin.New()
+	router.POST("/api/upload/b2-complete", handler.CompleteB2Upload)
+
+	body := bytes.NewBufferString(`{"fileKey":"temp/videos/123_video.mp4","fileName":"movie.mp4","size":1234,"type":"video","contentType":"video/mp4"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/upload/b2-complete", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var response map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response["file_key"] != "temp/videos/123_video.mp4" {
+		t.Fatalf("file_key = %q", response["file_key"])
+	}
+}
+
+func TestCompleteB2UploadRejectsWrongPrefix(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler := NewUploadHandler(nil, &config.Config{IsDev: true, Port: "8080"})
+	router := gin.New()
+	router.POST("/api/upload/b2-complete", handler.CompleteB2Upload)
+
+	body := bytes.NewBufferString(`{"fileKey":"posters/123_poster.jpg","fileName":"movie.mp4","size":1234,"type":"video","contentType":"video/mp4"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/upload/b2-complete", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body = %s", rec.Code, rec.Body.String())
 	}
 }
 

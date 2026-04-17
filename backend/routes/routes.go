@@ -163,6 +163,8 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 
 	// Get presigned upload URL for direct B2 upload
 	api.GET("/get-upload-url", ingestionHandler.GetUploadURL)
+	api.GET("/upload/b2-url", middleware.RequireAdmin(authService), uploadHandler.GetB2UploadURL)
+	api.POST("/upload/b2-complete", middleware.RequireAdmin(authService), uploadHandler.CompleteB2Upload)
 
 	// Admin routes — protected by JWT and admin role check
 	admin := api.Group("/admin")
