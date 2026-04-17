@@ -931,6 +931,7 @@ func (h *UploadHandler) UploadTemp(c *gin.Context) {
 
 	var savedURL string
 	var fileKey string
+	isTempUpload := fileType == "video" || fileType == "temp_movie"
 
 	if h.config.IsDev {
 		savedURL, err = h.saveMovieAssetLocal(file, filename, fileType)
@@ -955,7 +956,7 @@ func (h *UploadHandler) UploadTemp(c *gin.Context) {
 
 		var endpoint string
 		workerFieldName := "file"
-		if fileType == "temp_movie" {
+		if fileType == "temp_movie" || fileType == "video" {
 			endpoint = "/upload-temp-movie"
 		} else if fileType == "poster" {
 			endpoint = "/upload-poster"
@@ -983,7 +984,7 @@ func (h *UploadHandler) UploadTemp(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to finalize upload form"})
 			return
 		}
-		log.Printf("[UPLOAD_TEMP] forwarding to worker: endpoint=%s field=%q filename=%q bytes_attached=%d has_file=%t", endpoint, workerFieldName, filename, written, written > 0)
+		log.Printf("[UPLOAD_TEMP] forwarding to worker: type=%s temp=%t endpoint=%s field=%q filename=%q bytes_attached=%d has_file=%t", fileType, isTempUpload, endpoint, workerFieldName, filename, written, written > 0)
 
 		resp, err := http.Post(workerURL+endpoint, wr.FormDataContentType(), &b)
 		if err != nil {
@@ -1021,7 +1022,7 @@ func (h *UploadHandler) UploadTemp(c *gin.Context) {
 		}
 	}
 
-	log.Printf("[UPLOAD_TEMP] Uploaded: type=%s, key=%s, url=%s", fileType, fileKey, savedURL)
+	log.Printf("[UPLOAD_TEMP] Uploaded: type=%s, temp=%t, key=%s, url=%s", fileType, isTempUpload, fileKey, savedURL)
 
 	c.JSON(http.StatusOK, gin.H{
 		"url":      savedURL,

@@ -462,8 +462,7 @@ func (h *ProcessHandler) handleUploadTempMovie(w http.ResponseWriter, r *http.Re
 	})
 }
 
-// handleUploadMovieImage handles poster/backdrop image uploads for movies
-// Uploads to temp/posters or temp/backdrops path in B2 (temp storage for ingestion)
+// handleUploadMovieImage handles final poster/backdrop image uploads for movies.
 func (h *ProcessHandler) handleUploadMovieImage(w http.ResponseWriter, r *http.Request) {
 	if h.b2Store == nil {
 		h.sendError(w, "B2 storage not configured", http.StatusServiceUnavailable)
@@ -472,10 +471,16 @@ func (h *ProcessHandler) handleUploadMovieImage(w http.ResponseWriter, r *http.R
 
 	path := r.URL.Path
 	var imageType string
+	var keyPrefix string
+	var keyLabel string
 	if path == "/upload-poster" {
 		imageType = "posters"
+		keyPrefix = "posters"
+		keyLabel = "poster"
 	} else if path == "/upload-backdrop" {
 		imageType = "backdrops"
+		keyPrefix = "backdrops"
+		keyLabel = "backdrop"
 	} else {
 		h.sendError(w, "Invalid upload path", http.StatusBadRequest)
 		return
@@ -501,10 +506,10 @@ func (h *ProcessHandler) handleUploadMovieImage(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	safeFilename, mediaKey := safeUploadKey("temp/"+imageType, strings.TrimSuffix(imageType, "s"), header.Filename, header.Header.Get("Content-Type"), ".jpg")
+	safeFilename, mediaKey := safeUploadKey(keyPrefix, keyLabel, header.Filename, header.Header.Get("Content-Type"), ".jpg")
 
 	log.Printf("[B2] movie-%s upload names: original=%q safe=%q key=%q", imageType, header.Filename, safeFilename, mediaKey)
-	log.Printf("[B2] Uploading movie %s: key=%s, size=%d", imageType, mediaKey, len(data))
+	log.Printf("[B2] Uploading movie %s final asset: key=%s, size=%d, temp=%t", imageType, mediaKey, len(data), false)
 
 	publicURL, err := h.b2Store.UploadData(mediaKey, data, header.Header.Get("Content-Type"))
 	if err != nil {
@@ -517,7 +522,8 @@ func (h *ProcessHandler) handleUploadMovieImage(w http.ResponseWriter, r *http.R
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"url": publicURL,
+		"url":      publicURL,
+		"file_key": mediaKey,
 	})
 }
 
@@ -536,9 +542,9 @@ func (h *ProcessHandler) handleGetUploadURL(w http.ResponseWriter, r *http.Reque
 	var tempPath string
 	switch typeParam {
 	case "poster":
-		_, tempPath = safeUploadKey("temp/posters", "poster", filename, "", ".jpg")
+		_, tempPath = safeUploadKey("posters", "poster", filename, "", ".jpg")
 	case "backdrop":
-		_, tempPath = safeUploadKey("temp/backdrops", "backdrop", filename, "", ".jpg")
+		_, tempPath = safeUploadKey("backdrops", "backdrop", filename, "", ".jpg")
 	case "video":
 		_, tempPath = safeUploadKey("temp/raw", "video", filename, "", ".mp4")
 	default:

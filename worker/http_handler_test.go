@@ -34,6 +34,18 @@ func TestSafeUploadKeyUsesSafeTelegramPostPath(t *testing.T) {
 	}
 }
 
+func TestSafeUploadKeyUsesFinalMovieAssetPath(t *testing.T) {
+	_, posterKey := safeUploadKey("posters", "poster", "poster, final.png", "image/png", ".jpg")
+	if !regexp.MustCompile(`^posters/[0-9]+_poster\.png$`).MatchString(posterKey) {
+		t.Fatalf("unexpected poster key: %q", posterKey)
+	}
+
+	_, backdropKey := safeUploadKey("backdrops", "backdrop", "backdrop, final.png", "image/png", ".jpg")
+	if !regexp.MustCompile(`^backdrops/[0-9]+_backdrop\.png$`).MatchString(backdropKey) {
+		t.Fatalf("unexpected backdrop key: %q", backdropKey)
+	}
+}
+
 func TestSafeUploadKeyFallsBackToSafeExtension(t *testing.T) {
 	_, key := safeUploadKey("temp/raw", "video", "movie name, final", "", ".mp4")
 
