@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
 import MovieForm from "@/components/MovieForm";
 import { useAuth } from "@/lib/auth-context";
-import { adminCreateMovie, MovieInput } from "@/lib/api";
+import { adminCreateMovie, IngestionJob, MovieInput } from "@/lib/api";
 
 export default function NewMoviePage() {
   const { token } = useAuth();
@@ -15,6 +15,10 @@ export default function NewMoviePage() {
     if (!token) throw new Error("Not authenticated");
     await adminCreateMovie(token, data);
     router.push("/admin/movies");
+  };
+
+  const handleDirectUploadJobCreated = (_job: IngestionJob) => {
+    router.push("/admin/ingestion");
   };
 
   return (
@@ -34,7 +38,12 @@ export default function NewMoviePage() {
         </p>
       </div>
 
-      <MovieForm onSubmit={handleSubmit} submitLabel="Create Movie" token={token ?? undefined} />
+      <MovieForm
+        onSubmit={handleSubmit}
+        submitLabel="Create Movie"
+        token={token ?? undefined}
+        onDirectUploadJobCreated={handleDirectUploadJobCreated}
+      />
     </div>
   );
 }

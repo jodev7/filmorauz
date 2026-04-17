@@ -61,6 +61,7 @@ interface Props {
   onSubmit: (data: MovieInput) => Promise<void>;
   submitLabel?: string;
   token?: string;
+  onDirectUploadJobCreated?: (job: IngestionJob) => void;
 }
 
 const emptyForm: MovieInput = {
@@ -97,6 +98,7 @@ export default function MovieForm({
   onSubmit,
   submitLabel = "Save Movie",
   token,
+  onDirectUploadJobCreated,
 }: Props) {
   const safeInitialData = initialData ? {
     ...initialData,
@@ -240,7 +242,11 @@ export default function MovieForm({
       setError("Video URL is required for this source type");
       return;
     }
-    if (form.source_type === "direct_upload") {
+    const shouldCreateDirectUploadJob =
+      form.source_type === "direct_upload" ||
+      (form.source_type === "direct_mp4" && uploads.video.status === "success" && !!tempFileKey);
+
+    if (shouldCreateDirectUploadJob) {
       // Handle direct upload flow
       if (!token) {
         setError("Authentication required");
@@ -273,6 +279,7 @@ export default function MovieForm({
         };
         const job = await createDirectUploadJob(token, input);
         setDirectUploadJob({ status: "job_created", job });
+        onDirectUploadJobCreated?.(job);
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "Failed to create job");
       } finally {

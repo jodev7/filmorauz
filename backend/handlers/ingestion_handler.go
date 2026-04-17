@@ -495,11 +495,17 @@ func (h *IngestionHandler) CreateDirectUploadJob(c *gin.Context) {
 		VideoPageURL: input.TempFileURL,
 	}
 
-	// Create job with direct_upload source
+	sourceID := input.TempFileKey
+	if sourceID == "" {
+		sourceID = fmt.Sprintf("manual/direct_mp4:%d", time.Now().UnixNano())
+	}
+
+	// Create job with direct_upload source. The worker uses this source value to
+	// run the direct MP4 pipeline; source_id identifies this manual upload.
 	job := &models.IngestionJob{
 		Title:       input.Title,
 		Source:      "direct_upload",
-		SourceID:    "",                // No source_id for direct upload
+		SourceID:    sourceID,
 		DetailURL:   input.TempFileURL, // Store temp URL in DetailURL
 		TempFileURL: input.TempFileURL,
 		TempFileKey: input.TempFileKey, // Store B2 temp key for cleanup tracking
