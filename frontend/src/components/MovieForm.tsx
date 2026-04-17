@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Loader2, Plus, X, Info, Upload, CheckCircle, AlertCircle } from "lucide-react";
-import { MovieInput, VideoSourceType, directB2Upload, createDirectUploadJob, DirectUploadInput, IngestionJob } from "@/lib/api";
+import { MovieInput, VideoSourceType, directB2Upload, createDirectUploadJob, DirectUploadInput, IngestionJob, UploadProgressInfo } from "@/lib/api";
 
 const QUALITIES = ["480p", "720p", "1080p", "1080p Ultra", "4K"];
 const GENRE_OPTIONS = [
@@ -44,6 +44,10 @@ interface UploadState {
   message?: string;
   tempKey?: string;
   progress?: number;
+  uploadedMB?: number;
+  totalMB?: number;
+  speedMBps?: number;
+  etaSeconds?: number;
 }
 
 interface DirectUploadState {
@@ -74,6 +78,19 @@ const emptyForm: MovieInput = {
   quality: "1080p",
   is_premium: false,
 };
+
+function formatSpeed(speedMBps?: number) {
+  if (!speedMBps || !Number.isFinite(speedMBps) || speedMBps <= 0) return "";
+  return `${speedMBps.toFixed(1)} MB/s`;
+}
+
+function formatETA(seconds?: number) {
+  if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return "";
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}m ${remainingSeconds}s`;
+}
 
 export default function MovieForm({
   initialData,
@@ -122,10 +139,17 @@ export default function MovieForm({
     }));
 
     try {
-      const result = await directB2Upload(token, file, type, (progress: number) => {
+      const result = await directB2Upload(token, file, type, (uploadProgress: UploadProgressInfo) => {
         setUploads(prev => ({
           ...prev,
-          [type]: { status: "uploading", progress }
+          [type]: {
+            status: "uploading",
+            progress: uploadProgress.progress,
+            uploadedMB: uploadProgress.uploadedMB,
+            totalMB: uploadProgress.total ? uploadProgress.total / 1024 / 1024 : undefined,
+            speedMBps: uploadProgress.speedMBps,
+            etaSeconds: uploadProgress.etaSeconds,
+          }
         }));
       });
       
@@ -170,6 +194,37 @@ export default function MovieForm({
     } else {
       set("genre", [...form.genre, g]);
     }
+  };
+
+  const renderUploadProgress = (state: UploadState, label: string) => {
+    const progress = state.progress ?? 0;
+    const speed = formatSpeed(state.speedMBps);
+    const eta = formatETA(state.etaSeconds);
+
+    return (
+      <div className="upload-progress">
+        <Loader2 size={20} className="animate-spin" />
+        <div className="progress-content">
+          <span>
+            {state.progress !== undefined
+              ? `Uploading ${label}: ${progress}%`
+              : `Uploading ${label}: ${(state.uploadedMB ?? 0).toFixed(1)} MB`}
+          </span>
+          {state.progress !== undefined && (
+            <div className="progress-bar">
+              <div className="progress-fill" style={{ width: `${progress}%` }} />
+            </div>
+          )}
+          <div className="progress-meta">
+            {speed && <span>Speed: {speed}</span>}
+            {eta && <span>ETA: {eta}</span>}
+            {state.progress === undefined && state.uploadedMB !== undefined && (
+              <span>Uploaded: {state.uploadedMB.toFixed(1)} MB</span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -307,10 +362,7 @@ export default function MovieForm({
           </label>
           <div className="upload-box">
             {uploads.poster.status === "uploading" && (
-              <div className="upload-status">
-                <Loader2 size={20} className="animate-spin" />
-                <span>Uploading poster...</span>
-              </div>
+              renderUploadProgress(uploads.poster, "poster")
             )}
             {uploads.poster.status === "success" && (
               <div className="upload-status success">
@@ -364,10 +416,7 @@ export default function MovieForm({
           </label>
           <div className="upload-box">
             {uploads.backdrop.status === "uploading" && (
-              <div className="upload-status">
-                <Loader2 size={20} className="animate-spin" />
-                <span>Uploading backdrop...</span>
-              </div>
+              renderUploadProgress(uploads.backdrop, "backdrop")
             )}
             {uploads.backdrop.status === "success" && (
               <div className="upload-status success">
@@ -467,15 +516,7 @@ export default function MovieForm({
           </label>
           <div className="upload-box">
             {uploads.video.status === "uploading" && (
-              <div className="upload-progress">
-                <Loader2 size={20} className="animate-spin" />
-                <div className="progress-content">
-                  <span>Uploading video... {uploads.video.progress ?? 0}%</span>
-                  <div className="progress-bar">
-                    <div className="progress-fill" style={{ width: `${uploads.video.progress ?? 0}%` }} />
-                  </div>
-                </div>
-              </div>
+              renderUploadProgress(uploads.video, "video")
             )}
             {uploads.video.status === "success" && (
               <div className="upload-status success">
@@ -728,6 +769,7 @@ export default function MovieForm({
           display: flex;
           flex-direction: column;
           gap: 0.25rem;
+          min-width: 0;
         }
         .progress-bar {
           width: 100%;
@@ -741,6 +783,14 @@ export default function MovieForm({
           background: #e63946;
           border-radius: 3px;
           transition: width 0.2s ease;
+        }
+        .progress-meta {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.25rem 0.75rem;
+          color: #6b7280;
+          font-size: 0.75rem;
+          line-height: 1.2;
         }
       `}</style>
     </form>

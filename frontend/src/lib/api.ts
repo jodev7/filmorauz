@@ -899,21 +899,66 @@ export async function uploadMovieAsset(
 }
 
 // Proxy upload via backend (avoids CORS issue with direct B2 upload)
+export interface UploadProgressInfo {
+  progress?: number;
+  loaded: number;
+  total?: number;
+  uploadedMB: number;
+  speedMBps?: number;
+  etaSeconds?: number;
+}
+
 export async function directB2Upload(
   token: string,
   file: File,
   type: "poster" | "backdrop" | "video",
-  onProgress?: (progress: number) => void
+  onProgress?: (progress: UploadProgressInfo) => void
 ): Promise<{ url: string; file_key: string }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    const startedAt = Date.now();
+    let lastProgressAt = 0;
+
     xhr.open("POST", `${API_URL}/admin/upload-temp`);
     xhr.setRequestHeader("Authorization", `Bearer ${token}`);
 
     xhr.upload.onprogress = (event) => {
-      if (onProgress && event.lengthComputable) {
-        const percent = Math.round((event.loaded / event.total) * 100);
-        onProgress(percent);
+      if (!onProgress) return;
+
+      const now = Date.now();
+      const shouldUpdate = now - lastProgressAt >= 400 || (event.lengthComputable && event.loaded >= event.total);
+      if (!shouldUpdate) return;
+      lastProgressAt = now;
+
+      const elapsedSeconds = Math.max((now - startedAt) / 1000, 0.001);
+      const speedBytesPerSecond = event.loaded / elapsedSeconds;
+      const hasTotal = event.lengthComputable && event.total > 0;
+      const total = hasTotal ? event.total : undefined;
+      const progress = total ? Math.min(100, Math.round((event.loaded / total) * 100)) : undefined;
+      const etaSeconds = total && speedBytesPerSecond > 0
+        ? Math.max(0, Math.round((total - event.loaded) / speedBytesPerSecond))
+        : undefined;
+
+      onProgress({
+        progress,
+        loaded: event.loaded,
+        total,
+        uploadedMB: event.loaded / 1024 / 1024,
+        speedMBps: speedBytesPerSecond / 1024 / 1024,
+        etaSeconds,
+      });
+    };
+
+    xhr.upload.onload = () => {
+      if (onProgress) {
+        onProgress({
+          progress: 100,
+          loaded: file.size,
+          total: file.size || undefined,
+          uploadedMB: file.size / 1024 / 1024,
+          speedMBps: undefined,
+          etaSeconds: 0,
+        });
       }
     };
 
