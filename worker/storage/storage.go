@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +53,10 @@ func getCacheHeaders(filename string, config CacheTTLConfig) string {
 		// Default: moderate TTL
 		return fmt.Sprintf("public, max-age=%.0f", config.OtherTTL.Seconds())
 	}
+}
+
+func encodeB2InfoValue(value string) string {
+	return strings.ReplaceAll(url.QueryEscape(value), "+", "%20")
 }
 
 // Storage interface defines methods for file storage
@@ -452,9 +457,11 @@ func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (st
 	h.Write(data)
 	//sha1sum := hex.EncodeToString(h.Sum(nil))
 
-	// B2 uses X-Bz-File-Name for the object key - do NOT URL-encode it
-	// B2 handles folder creation via path prefix automatically
-	// Cache-Control is set via X-Bz-Info-* headers
+	encodedCacheControl := encodeB2InfoValue(cacheControl)
+
+	// B2 handles folder creation via path prefix automatically.
+	// X-Bz-Info-* values must be URL-encoded; otherwise commas in Cache-Control
+	// are rejected as bad percent-encoded strings by B2.
 	req, err := http.NewRequest("POST", uploadURL, bytes.NewReader(data))
 	if err != nil {
 		return "", fmt.Errorf("b2 upload: build request: %w", err)
@@ -463,11 +470,12 @@ func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (st
 	req.Header.Set("X-Bz-File-Name", remotePath) // raw path - B2 creates folders via prefix
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(data)))
-	req.Header.Set("X-Bz-Info-cache_control", cacheControl) // Set CDN cache headers
+	req.Header.Set("X-Bz-Info-cache_control", encodedCacheControl) // Set CDN cache headers
 	//req.Header.Set("X-Bz-Content-Sha1", sha1sum)
 	req.ContentLength = int64(len(data))
 
-	log.Printf("[B2] Sending upload request: key=%s", remotePath)
+	log.Printf("[B2] Upload request target: url=%s", uploadURL)
+	log.Printf("[B2] Upload request headers: X-Bz-File-Name=%q X-Bz-Info-cache_control=%q raw_cache_control=%q", remotePath, encodedCacheControl, cacheControl)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -594,10 +602,13 @@ func (s *B2Storage) uploadWithUrl(data []byte, uploadUrl, token, remotePath, con
 	req.Header.Set("Authorization", token)
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("X-Bz-File-Name", remotePath)
-	req.Header.Set("X-Bz-Info-Content-Type", contentType)
-	req.Header.Set("X-Bz-Info-cache_control", cacheControl) // CDN cache headers
+	encodedContentType := encodeB2InfoValue(contentType)
+	req.Header.Set("X-Bz-Info-Content-Type", encodedContentType)
+	encodedCacheControl := encodeB2InfoValue(cacheControl)
+	req.Header.Set("X-Bz-Info-cache_control", encodedCacheControl) // CDN cache headers
 
-	log.Printf("[CDN] Parallel upload cache-control for %s: %s", filepath.Ext(remotePath), cacheControl)
+	log.Printf("[B2] Parallel upload request target: url=%s", uploadUrl)
+	log.Printf("[B2] Parallel upload request headers: X-Bz-File-Name=%q X-Bz-Info-Content-Type=%q X-Bz-Info-cache_control=%q raw_cache_control=%q", remotePath, encodedContentType, encodedCacheControl, cacheControl)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {

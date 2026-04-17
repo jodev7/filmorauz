@@ -178,7 +178,9 @@ func (h *UploadHandler) UploadProfileImage(c *gin.Context) {
 		wr.Close()
 
 		// Upload to worker
-		resp, err := http.Post(workerURL+"/upload-profile", wr.FormDataContentType(), &b)
+		workerEndpoint := workerURL + "/upload-profile"
+		log.Printf("[UPLOAD] forwarding profile image to worker: url=%s query=%q filename=%q", workerEndpoint, "", filename)
+		resp, err := http.Post(workerEndpoint, wr.FormDataContentType(), &b)
 		if err != nil {
 			log.Printf("[UPLOAD] Error uploading to worker: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
@@ -796,7 +798,9 @@ func (h *UploadHandler) UploadTelegramPostMedia(c *gin.Context) {
 		}
 		wr.Close()
 
-		resp, err := http.Post(workerURL+"/upload-telegram-post", wr.FormDataContentType(), &b)
+		workerEndpoint := workerURL + "/upload-telegram-post"
+		log.Printf("[UPLOAD] forwarding telegram-post image to worker: url=%s query=%q filename=%q", workerEndpoint, "", filename)
+		resp, err := http.Post(workerEndpoint, wr.FormDataContentType(), &b)
 		if err != nil {
 			log.Printf("[UPLOAD] Error uploading to worker: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
