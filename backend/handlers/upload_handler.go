@@ -860,12 +860,22 @@ func (h *UploadHandler) saveTelegramPostLocal(file multipart.File, filename stri
 
 // UploadTemp handles proxy upload to B2 via worker (avoids CORS issue with direct browser upload)
 func (h *UploadHandler) UploadTemp(c *gin.Context) {
+	if err := c.Request.ParseMultipartForm(maxFileSize); err == nil && c.Request.MultipartForm != nil {
+		for field, files := range c.Request.MultipartForm.File {
+			log.Printf("[UPLOAD_TEMP] incoming multipart field=%q file_count=%d", field, len(files))
+		}
+		for field, values := range c.Request.MultipartForm.Value {
+			log.Printf("[UPLOAD_TEMP] incoming multipart value field=%q value_count=%d", field, len(values))
+		}
+	}
+
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no file provided"})
 		return
 	}
 	defer file.Close()
+	log.Printf("[UPLOAD_TEMP] detected upload file: field=%q name=%q size=%d", "file", header.Filename, header.Size)
 
 	fileType := c.PostForm("type")
 	if fileType == "" {
@@ -943,29 +953,37 @@ func (h *UploadHandler) UploadTemp(c *gin.Context) {
 			return
 		}
 
-		var b bytes.Buffer
-		wr := multipart.NewWriter(&b)
-		part, err := wr.CreateFormFile("file", filename)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload form"})
-			return
-		}
-		if _, err := io.Copy(part, file); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
-			return
-		}
-		wr.Close()
-
 		var endpoint string
+		workerFieldName := "file"
 		if fileType == "temp_movie" {
 			endpoint = "/upload-temp-movie"
 		} else if fileType == "poster" {
 			endpoint = "/upload-poster"
+			workerFieldName = "image"
 		} else if fileType == "backdrop" {
 			endpoint = "/upload-backdrop"
+			workerFieldName = "image"
 		} else {
 			endpoint = "/upload-video"
 		}
+
+		var b bytes.Buffer
+		wr := multipart.NewWriter(&b)
+		part, err := wr.CreateFormFile(workerFieldName, filename)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload form"})
+			return
+		}
+		written, err := io.Copy(part, file)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
+			return
+		}
+		if err := wr.Close(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to finalize upload form"})
+			return
+		}
+		log.Printf("[UPLOAD_TEMP] forwarding to worker: endpoint=%s field=%q filename=%q bytes_attached=%d has_file=%t", endpoint, workerFieldName, filename, written, written > 0)
 
 		resp, err := http.Post(workerURL+endpoint, wr.FormDataContentType(), &b)
 		if err != nil {

@@ -481,12 +481,19 @@ func (h *ProcessHandler) handleUploadMovieImage(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	if err := r.ParseMultipartForm(32 << 20); err == nil && r.MultipartForm != nil {
+		for field, files := range r.MultipartForm.File {
+			log.Printf("[WORKER] movie image incoming multipart field=%q file_count=%d", field, len(files))
+		}
+	}
+
 	file, header, err := r.FormFile("image")
 	if err != nil {
 		h.sendError(w, fmt.Sprintf("no file provided: %v", err), http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
+	log.Printf("[WORKER] movie image file detected: field=%q name=%q size=%d", "image", header.Filename, header.Size)
 
 	data, err := io.ReadAll(file)
 	if err != nil {
