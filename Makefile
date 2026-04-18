@@ -9,7 +9,7 @@ else
     PARSER_PYTHON := $(PARSER_VENV)/bin/python
 endif
 
-.PHONY: help dev prod backend frontend parser worker bot bot-prod install tidy tidy-bot tidy-worker build setup-parser setup-bot
+.PHONY: help dev prod backend frontend parser worker bot bot-prod install tidy tidy-bot tidy-worker build setup-parser setup-bot b2-cors b2-cors-apply
 
 help:
 	@echo ""
@@ -104,6 +104,17 @@ worker:
 
 yusuf:
 	cd $(ROOT_DIR)backend && go mod tidy && go mod download && cd $(ROOT_DIR)worker && go mod tidy && go mod download && cd $(ROOT_DIR)bot && go mod tidy && go mod download && cd $(ROOT_DIR) parser && pip install -r $(ROOT_DIR)parser/requirements.txt && cd $(ROOT_DIR)frontend && npm install
+
+# ── Backblaze B2 CORS ─────────────────────────────────────────
+# Inspect current CORS rules on the bucket (dry-run).
+b2-cors:
+	cd $(ROOT_DIR)backend && go run ./cmd/b2-cors
+
+# Apply the CORS rules required for browser-to-B2 direct uploads.
+# Allowed origin comes from BASE_SITE_URL in backend/.env (plus localhost:3000).
+# Override with: make b2-cors-apply ORIGIN=https://a.tld,https://b.tld
+b2-cors-apply:
+	cd $(ROOT_DIR)backend && go run ./cmd/b2-cors --apply $(if $(ORIGIN),--origin $(ORIGIN))
 
 # ── Bot ────────────────────────────────────────────────────────
 bot:
