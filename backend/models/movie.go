@@ -64,11 +64,14 @@ type Movie struct {
 	ApprovedBy     string     `bson:"approved_by,omitempty" json:"approved_by,omitempty"`
 }
 
-// MovieInput is used for create/update requests
+// MovieInput is used for create/update requests.
+// Note: PosterURL is NOT marked required here so the same struct can be used
+// for partial updates (edit flow preserves existing poster when unchanged).
+// CreateMovie enforces PosterURL explicitly at the handler level.
 type MovieInput struct {
 	Title       string          `json:"title" binding:"required"`
 	Description string          `json:"description" binding:"required"`
-	PosterURL   string          `json:"poster_url" binding:"required"`
+	PosterURL   string          `json:"poster_url"`
 	BackdropURL string          `json:"backdrop_url"`
 	Year        int             `json:"year" binding:"required"`
 	Genre       []string        `json:"genre"`

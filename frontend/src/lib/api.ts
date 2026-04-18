@@ -213,7 +213,7 @@ function recommendationToMovie(r: RecommendationMovie): Movie {
 // Get trending movies - returns as Movie[] for carousel compatibility
 export async function getTrendingMovies(period: string = "24h", limit: number = 12): Promise<Movie[]> {
   const res = await fetch(`${API_URL}/movies/trending?period=${period}&limit=${limit}`, {
-    cache: "no-store",
+    next: { revalidate: 60 }, // ISR: public trending list, 60s cache
   });
   if (!res.ok) throw new Error("Failed to fetch trending movies");
   const json = await res.json();
@@ -1696,7 +1696,7 @@ export interface CollectionInput {
 // Get featured collections (public)
 export async function getFeaturedCollections(): Promise<Collection[]> {
   const res = await fetch(`${API_URL}/collections/featured`, {
-    cache: "no-store",
+    next: { revalidate: 60 }, // ISR: public featured collections, 60s cache
   });
   if (!res.ok) throw new Error("Failed to fetch featured collections");
   const data = await res.json();

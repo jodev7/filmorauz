@@ -263,6 +263,12 @@ func (h *MovieHandler) CreateMovie(c *gin.Context) {
 		return
 	}
 
+	// Create flow stays strict: poster is required for new movies.
+	if strings.TrimSpace(input.PosterURL) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "poster_url is required"})
+		return
+	}
+
 	movie, err := h.movieService.CreateMovie(&input)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -273,20 +279,31 @@ func (h *MovieHandler) CreateMovie(c *gin.Context) {
 }
 
 // UpdateMovie PUT /api/admin/movies/:id
+// Supports partial edits: empty poster_url / backdrop_url / video_url / embed_url
+// are treated as "keep existing value", so admins can edit title/year/description
+// without re-uploading media.
 func (h *MovieHandler) UpdateMovie(c *gin.Context) {
 	id := c.Param("id")
 
 	var input models.MovieInput
 	if err := c.ShouldBindJSON(&input); err != nil {
+		log.Printf("[UpdateMovie] id=%s bind error: %v", id, err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
+	log.Printf("[UpdateMovie] incoming id=%s title=%q poster=%q backdrop=%q video=%q embed=%q source_type=%q",
+		id, input.Title, input.PosterURL, input.BackdropURL, input.VideoURL, input.EmbedURL, input.SourceType)
+
 	movie, err := h.movieService.UpdateMovie(id, &input)
 	if err != nil {
+		log.Printf("[UpdateMovie] id=%s service error: %v", id, err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	log.Printf("[UpdateMovie] id=%s saved poster=%q backdrop=%q video=%q",
+		id, movie.PosterURL, movie.BackdropURL, movie.VideoURL)
 
 	c.JSON(http.StatusOK, gin.H{"data": movie, "message": "Movie updated"})
 }

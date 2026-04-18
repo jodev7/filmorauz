@@ -109,6 +109,10 @@ export default function MovieForm({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [genreInput, setGenreInput] = useState("");
+  // Upload state always starts idle; initial poster/backdrop/video URLs live on
+  // `form` directly. The "Choose …" button stays visible so the admin can
+  // optionally replace media; if they don't upload, the existing form value is
+  // what gets submitted.
   const [uploads, setUploads] = useState<{
     poster: UploadState;
     backdrop: UploadState;
@@ -304,10 +308,38 @@ export default function MovieForm({
       return;
     }
 
+    if (uploads.poster.status === "uploading" || uploads.backdrop.status === "uploading" || uploads.video.status === "uploading") {
+      setError("Iltimos, fayl yuklanib bo'lishini kuting.");
+      return;
+    }
+    if (uploads.poster.status === "error") {
+      setError(`Poster upload failed: ${uploads.poster.message || "please retry"}`);
+      return;
+    }
+    if (uploads.backdrop.status === "error") {
+      setError(`Backdrop upload failed: ${uploads.backdrop.message || "please retry"}`);
+      return;
+    }
+
+    console.log("[MovieForm] submitting:", {
+      title: form.title,
+      poster_url: form.poster_url,
+      backdrop_url: form.backdrop_url,
+      video_url: form.video_url,
+      embed_url: form.embed_url,
+      source_type: form.source_type,
+      uploadStatus: {
+        poster: uploads.poster.status,
+        backdrop: uploads.backdrop.status,
+        video: uploads.video.status,
+      },
+    });
+
     setLoading(true);
     try {
       await onSubmit(form);
     } catch (err: unknown) {
+      console.error("[MovieForm] submit failed:", err);
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setLoading(false);

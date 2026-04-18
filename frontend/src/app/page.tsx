@@ -25,7 +25,10 @@ const GENRE_CHIPS = [
   { label: "Klassika", slug: "classic" },
 ];
 
-export const dynamic = "force-dynamic";
+// ISR: regenerate the homepage shell every 60s. User-specific sections
+// (ContinueWatchingSection, ads) are client components and still fetch
+// per-session on their own.
+export const revalidate = 60;
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 
@@ -67,37 +70,29 @@ export default async function HomePage() {
   let trending: Movie[] = [];
   let featuredCollections: any[] = [];
   let seriesData: Series[] = [];
-  
-  try {
-    const res = await getMovies({ limit: 30 });
-    movies = res.data || [];
-  } catch {
-    // Silently handle — show empty state
-  }
 
-  // Fetch trending movies
-  try {
-    trending = await getTrendingMovies("24h", 12);
-  } catch {
-    // Silently handle — trending is optional
-  }
+  // Run all four public fetches in parallel. Each has ISR caching (revalidate=60)
+  // so Next.js dedupes them across renders. allSettled keeps the page rendering
+  // even if one endpoint is down.
+  const fetchStartedAt = Date.now();
+  const [moviesRes, trendingRes, collectionsRes, seriesRes] = await Promise.allSettled([
+    getMovies({ limit: 30 }),
+    getTrendingMovies("24h", 12),
+    getFeaturedCollections(),
+    getSeries(1, 20),
+  ]);
+  console.log(`[HomePage] parallel fetches done in ${Date.now() - fetchStartedAt}ms`, {
+    movies: moviesRes.status,
+    trending: trendingRes.status,
+    collections: collectionsRes.status,
+    series: seriesRes.status,
+  });
 
-  // Fetch featured collections
-  try {
-    featuredCollections = await getFeaturedCollections();
-    console.log("Featured collections:", featuredCollections);
-  } catch (err) {
-    // Log error for debugging
-    console.error("Failed to fetch featured collections:", err);
-  }
-
-  // Fetch series
-  try {
-    const seriesRes = await getSeries(1, 20);
-    seriesData = seriesRes.data || [];
-  } catch {
-    // Silently handle — series is optional
-  }
+  if (moviesRes.status === "fulfilled") movies = moviesRes.value.data || [];
+  if (trendingRes.status === "fulfilled") trending = trendingRes.value;
+  if (collectionsRes.status === "fulfilled") featuredCollections = collectionsRes.value;
+  else console.error("[HomePage] featured collections failed:", collectionsRes.reason);
+  if (seriesRes.status === "fulfilled") seriesData = seriesRes.value.data || [];
 
   const hero = movies[0];
   const featured = movies.slice(1, 7);

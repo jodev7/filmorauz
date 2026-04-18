@@ -26,6 +26,15 @@ export default function EditMoviePage() {
         if (!found) {
           setError("Movie not found");
         } else {
+          console.log("[EditMovie] loaded movie:", {
+            id: found.id,
+            title: found.title,
+            poster_url: found.poster_url,
+            backdrop_url: found.backdrop_url,
+            video_url: found.video_url,
+            embed_url: found.embed_url,
+            source_type: found.source_type,
+          });
           setMovie(found);
         }
       })
@@ -35,6 +44,15 @@ export default function EditMoviePage() {
 
   const handleSubmit = async (data: MovieInput) => {
     if (!token) throw new Error("Not authenticated");
+    console.log("[EditMovie] PUT payload:", {
+      id,
+      title: data.title,
+      poster_url: data.poster_url,
+      backdrop_url: data.backdrop_url,
+      video_url: data.video_url,
+      embed_url: data.embed_url,
+      source_type: data.source_type,
+    });
     await adminUpdateMovie(token, id, data);
     router.push("/admin/movies");
   };

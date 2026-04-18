@@ -78,7 +78,7 @@ export function buildSeriesUrl(seriesSlug: string): string {
 // Get all series
 export async function getSeries(page: number = 1, limit: number = 20): Promise<SeriesListResponse> {
   const res = await fetch(`${API_URL}/series?page=${page}&limit=${limit}`, {
-    cache: "no-store",
+    next: { revalidate: 60 }, // ISR: public series list, 60s cache
   });
   if (!res.ok) throw new Error("Failed to fetch series");
   return res.json();

@@ -72,13 +72,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Check if user is banned
   const isBanned = user?.ban?.is_banned === true;
 
-  // Load token from cookie on mount
+  // Load token from cookie on mount.
+  // If a token exists, we stay in isLoading=true until the /auth/me fetch below
+  // resolves — otherwise the Navbar would flash the guest login button between
+  // "cookie read" and "user fetched".
   useEffect(() => {
     const saved = Cookies.get("auth_token");
     if (saved) {
       setTokenState(saved);
+      // keep isLoading=true; the user-fetch effect flips it off
+    } else {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   }, []);
 
   // Fetch user when token is available
@@ -107,6 +112,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .catch(() => {
           Cookies.remove("auth_token");
           setTokenState(null);
+        })
+        .finally(() => {
+          setIsLoading(false);
         });
     }
   }, [token, user]);

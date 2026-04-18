@@ -46,6 +46,9 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
               <img
                 src={movie.backdrop_url || movie.poster_url}
                 alt={movie.title}
+                loading={index === 0 ? "eager" : "lazy"}
+                fetchPriority={index === 0 ? "high" : "auto"}
+                decoding="async"
                 className={`w-full h-full object-cover transition-transform duration-700 ease-in-out ${
                   index === currentIndex ? "scale-105" : "scale-100"
                 }`}

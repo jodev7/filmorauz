@@ -407,17 +407,29 @@ func (s *MovieService) UpdateMovie(id string, input *models.MovieInput) (*models
 		return nil, fmt.Errorf("movie not found")
 	}
 
-	// Update fields; keep the original slug and code
+	// Update fields; keep the original slug and code.
+	// For media URLs, empty input means "keep existing" so admins can do
+	// partial edits (e.g. change title) without re-uploading poster/backdrop/video.
 	existing.Title = input.Title
 	existing.Description = input.Description
-	existing.PosterURL = input.PosterURL
-	existing.BackdropURL = input.BackdropURL
+	if input.PosterURL != "" {
+		existing.PosterURL = input.PosterURL
+	}
+	if input.BackdropURL != "" {
+		existing.BackdropURL = input.BackdropURL
+	}
 	existing.Year = input.Year
 	existing.Genre = input.Genre
 	existing.Country = input.Country
-	existing.VideoURL = input.VideoURL
-	existing.EmbedURL = input.EmbedURL
-	existing.SourceType = input.SourceType
+	if input.VideoURL != "" {
+		existing.VideoURL = input.VideoURL
+	}
+	if input.EmbedURL != "" {
+		existing.EmbedURL = input.EmbedURL
+	}
+	if input.SourceType != "" {
+		existing.SourceType = input.SourceType
+	}
 	existing.Duration = input.Duration
 	existing.Quality = input.Quality
 	existing.IsPremium = input.IsPremium

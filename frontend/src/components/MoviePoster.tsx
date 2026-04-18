@@ -13,6 +13,8 @@ export default function MoviePoster({ src, alt, className }: Props) {
       src={src}
       alt={alt}
       className={className}
+      loading="lazy"
+      decoding="async"
       onError={(e) => {
         (e.target as HTMLImageElement).src = "/placeholder-poster.jpg";
       }}
