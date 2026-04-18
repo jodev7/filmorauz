@@ -30,6 +30,7 @@ type segmentUploader struct {
 	uploaded    sync.Map
 	pending     chan string
 	errors      []error
+	firstErr    error // first real upload failure for this rendition
 	errorsMu    sync.Mutex
 	uploadCount int32
 	failCount   int32
@@ -80,16 +81,22 @@ func (u *segmentUploader) uploadSegment(path string) {
 		return
 	}
 
-	log.Printf("[STREAM_UPLOAD] Segment detected: %s", path)
+	log.Printf("[STREAM_UPLOAD] Segment detected: rendition=%s, local=%s, remote=%s", u.rendition, path, remotePath)
 
 	if !u.waitForStableFile(path) {
-		u.recordError(fmt.Errorf("file not stable: %s", path))
+		err := fmt.Errorf("file not stable: %s", path)
+		log.Printf("[STREAM_UPLOAD] FAILED: rendition=%s, key=%s, reason=%v", u.rendition, remotePath, err)
+		atomic.AddInt32(&u.failCount, 1)
+		u.recordError(err)
 		return
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		u.recordError(fmt.Errorf("read file: %w", err))
+		wrapped := fmt.Errorf("read file %s: %w", path, err)
+		log.Printf("[STREAM_UPLOAD] FAILED: rendition=%s, key=%s, reason=%v", u.rendition, remotePath, wrapped)
+		atomic.AddInt32(&u.failCount, 1)
+		u.recordError(wrapped)
 		return
 	}
 
@@ -100,6 +107,8 @@ func (u *segmentUploader) uploadSegment(path string) {
 			break
 		}
 		// This attempt failed
+		log.Printf("[STREAM_UPLOAD] Upload attempt failed: rendition=%s, key=%s, attempt=%d/%d, bytes=%d, error=%v",
+			u.rendition, remotePath, attempt+1, u.retries, len(data), err)
 		if attempt < u.retries-1 {
 			// Will retry: count this retry and wait with exponential backoff
 			atomic.AddInt32(&u.totalRetryAttempts, 1)
@@ -116,16 +125,14 @@ func (u *segmentUploader) uploadSegment(path string) {
 			}
 			log.Printf("[STREAM_UPLOAD] Retry %d/%d for %s after %dms: %v", attempt+1, u.retries, remotePath, delayMs, err)
 			time.Sleep(time.Duration(delayMs) * time.Millisecond)
-		} else {
-			// Final attempt failed
-			log.Printf("[STREAM_UPLOAD] Final attempt %d/%d failed: %v", attempt+1, u.retries, err)
 		}
 	}
 
 	if err != nil {
-		log.Printf("[STREAM_UPLOAD] FAILED: %s - %v", remotePath, err)
+		log.Printf("[STREAM_UPLOAD] FAILED_FINAL: rendition=%s, key=%s, after=%d attempts, error=%v",
+			u.rendition, remotePath, u.retries, err)
 		atomic.AddInt32(&u.failCount, 1)
-		u.recordError(err)
+		u.recordError(fmt.Errorf("%s/%s: %w", u.rendition, filepath.Base(path), err))
 		return
 	}
 
@@ -159,6 +166,9 @@ func (u *segmentUploader) waitForStableFile(path string) bool {
 func (u *segmentUploader) recordError(err error) {
 	u.errorsMu.Lock()
 	u.errors = append(u.errors, err)
+	if u.firstErr == nil {
+		u.firstErr = err
+	}
 	u.errorsMu.Unlock()
 }
 
@@ -176,11 +186,16 @@ func (u *segmentUploader) stop() error {
 
 	if failCount > 0 {
 		u.errorsMu.Lock()
-		defer u.errorsMu.Unlock()
+		firstErr := u.firstErr
+		u.errorsMu.Unlock()
 		// Log detailed error summary
-		log.Printf("[STREAM_UPLOAD] %s: %d failures out of %d segments (%.1f%% failure rate)",
-			u.rendition, failCount, totalProcessed, float64(failCount)*100.0/float64(totalProcessed))
-		return fmt.Errorf("%d segment uploads failed (see logs for details)", failCount)
+		log.Printf("[STREAM_UPLOAD] %s: %d failures out of %d segments (%.1f%% failure rate), first_error=%v",
+			u.rendition, failCount, totalProcessed, float64(failCount)*100.0/float64(totalProcessed), firstErr)
+		if firstErr != nil {
+			return fmt.Errorf("%s: %d/%d segment uploads failed — first error: %w",
+				u.rendition, failCount, totalProcessed, firstErr)
+		}
+		return fmt.Errorf("%s: %d/%d segment uploads failed", u.rendition, failCount, totalProcessed)
 	}
 	return nil
 }
@@ -343,14 +358,32 @@ func (s *streamingUploader) stopAndWait() error {
 	s.watcher.stop()
 
 	var allErrors []error
-	for name, u := range s.uploaders {
-		if err := u.stop(); err != nil {
-			allErrors = append(allErrors, fmt.Errorf("%s: %w", name, err))
+	var firstErr error
+	totalFailed := int32(0)
+	for _, r := range s.renditions {
+		u := s.uploaders[r.Name]
+		if u == nil {
+			continue
+		}
+		err := u.stop()
+		totalFailed += atomic.LoadInt32(&u.failCount)
+		if err != nil {
+			allErrors = append(allErrors, err)
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 
 	if len(allErrors) > 0 {
-		return fmt.Errorf("streaming upload errors: %v", allErrors)
+		log.Printf("[STREAM_UPLOAD] Aggregate failure: renditions_failed=%d, total_segments_failed=%d, first_error=%v",
+			len(allErrors), totalFailed, firstErr)
+		if firstErr != nil {
+			return fmt.Errorf("segment upload failed across %d renditions (%d segments): %w",
+				len(allErrors), totalFailed, firstErr)
+		}
+		return fmt.Errorf("segment upload failed across %d renditions (%d segments)",
+			len(allErrors), totalFailed)
 	}
 	log.Printf("[STREAM_UPLOAD] All uploads complete")
 	return nil

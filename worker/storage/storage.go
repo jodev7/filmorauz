@@ -286,11 +286,6 @@ type B2Storage struct {
 	downloadURL string
 	bucketID    string
 	authExpiry  time.Time
-
-	// Upload URL cache (valid for 1 hour) to reduce B2 API calls
-	uploadURLCache   string
-	uploadTokenCache string
-	uploadURLExpiry  time.Time
 }
 
 // b2AuthResponse is the response from b2_authorize_account
@@ -388,19 +383,11 @@ func (s *B2Storage) authorize() error {
 	return nil
 }
 
-// getUploadURL calls b2_get_upload_url to obtain a single-use upload URL.
-// Results are cached for 1 hour to reduce API calls.
+// getUploadURL calls b2_get_upload_url to obtain a fresh single-use upload URL.
+// B2 upload URLs cannot be safely reused across concurrent goroutines (B2 rejects
+// concurrent POSTs to the same upload URL), so we fetch a fresh one per call.
 func (s *B2Storage) getUploadURL() (uploadURL, token string, err error) {
 	s.mu.Lock()
-	// Check cache: if we have a cached URL that hasn't expired, reuse it.
-	if s.uploadURLCache != "" && time.Now().Before(s.uploadURLExpiry) {
-		cachedURL := s.uploadURLCache
-		cachedToken := s.uploadTokenCache
-		s.mu.Unlock()
-		log.Printf("[B2] Using cached upload URL (expires %s)", s.uploadURLExpiry.Format(time.RFC3339))
-		return cachedURL, cachedToken, nil
-	}
-	// Not cached or expired; need to fetch a fresh upload URL
 	apiURL := s.apiURL
 	authToken := s.authToken
 	bucketID := s.bucketID
@@ -429,13 +416,6 @@ func (s *B2Storage) getUploadURL() (uploadURL, token string, err error) {
 	if err := json.Unmarshal(body, &ur); err != nil {
 		return "", "", fmt.Errorf("b2 getUploadURL: decode: %w", err)
 	}
-	// Cache the upload URL for 1 hour
-	s.mu.Lock()
-	s.uploadURLCache = ur.UploadURL
-	s.uploadTokenCache = ur.AuthorizationToken
-	s.uploadURLExpiry = time.Now().Add(1 * time.Hour)
-	s.mu.Unlock()
-	log.Printf("[B2] Cached new upload URL (valid until %s)", s.uploadURLExpiry.Format(time.RFC3339))
 
 	return ur.UploadURL, ur.AuthorizationToken, nil
 }
@@ -490,12 +470,7 @@ func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (st
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		errMsg := fmt.Sprintf("b2 upload %s: status %d: %s", remotePath, resp.StatusCode, body)
-		log.Printf("[B2] Upload failed: %s", errMsg)
-		// Clear upload URL cache on auth/authorization errors
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			log.Printf("[B2] Auth error (status %d) - clearing upload URL cache, will re-authorize on next retry", resp.StatusCode)
-			s.clearUploadURLCache()
-		}
+		log.Printf("[B2] Upload failed: key=%s, status=%d, response_body=%s", remotePath, resp.StatusCode, body)
 		return "", fmt.Errorf("%s", errMsg)
 	}
 
@@ -954,15 +929,6 @@ func (s *B2Storage) GetPresignedUploadURL(remotePath, contentType string) (strin
 		return "", "", fmt.Errorf("b2 getUploadURL: %w", err)
 	}
 	return uploadURL, uploadToken, nil
-}
-
-// clearUploadURLCache removes cached upload URL and forces fresh fetch on next request.
-func (s *B2Storage) clearUploadURLCache() {
-	s.mu.Lock()
-	s.uploadURLCache = ""
-	s.uploadTokenCache = ""
-	s.uploadURLExpiry = time.Time{}
-	s.mu.Unlock()
 }
 
 // detectContentType returns a MIME type based on file extension.

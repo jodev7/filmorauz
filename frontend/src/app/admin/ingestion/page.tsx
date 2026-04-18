@@ -1046,11 +1046,20 @@ function JobsTab({
                 {/* Progress bar */}
                 <div className="w-64">
                   {(() => {
+                    const isFailed = safeJob.status === 'failed' || safeJob.status === 'download_failed';
+                    const isCompleted = safeJob.status === 'completed';
+                    // For failed jobs, the byte-based % is stale from the download phase (100%)
+                    // while the real failure happened later during processing — use the raw
+                    // progress value so the bar reflects where the pipeline actually stopped.
+                    // Never let a failed job display 100%; cap at 99 to avoid implying success.
                     const bytePercent =
-                      safeJob.total_bytes > 0 && safeJob.downloaded_bytes > 0
+                      !isFailed && safeJob.total_bytes > 0 && safeJob.downloaded_bytes > 0
                         ? Math.min((safeJob.downloaded_bytes / safeJob.total_bytes) * 100, 100)
                         : null;
-                    const displayProgress = bytePercent !== null ? bytePercent : safeJob.progress;
+                    let displayProgress = bytePercent !== null ? bytePercent : safeJob.progress;
+                    if (isFailed && !isCompleted) {
+                      displayProgress = Math.min(safeJob.progress || 0, 99);
+                    }
                     if (process.env.NODE_ENV !== "production") {
                       console.debug(`[progress] job=${safeJob.id} stage=${activeStage} bytes=${safeJob.downloaded_bytes}/${safeJob.total_bytes} bytePercent=${bytePercent?.toFixed(1)} coarse=${safeJob.progress} display=${displayProgress.toFixed(1)}`);
                     }
@@ -1152,7 +1161,7 @@ function JobsTab({
                 </div>
               </div>
               
-              {safeJob.error && !(safeJob.status === 'downloading' || activeStage === 'downloading' || safeJob.progress > 0) && (
+              {safeJob.error && safeJob.status !== 'downloading' && activeStage !== 'downloading' && (
                 <div className="mt-3 flex items-start gap-2 text-red-400 text-sm">
                   <AlertTriangle className="w-4 h-4 mt-0.5" />
                   {safeJob.error}

@@ -428,19 +428,76 @@ func (r *JobRepository) SetError(ctx context.Context, id string, errMsg string) 
 	return err
 }
 
-// IncrementRetry increments the retry count for a job
+// IncrementRetry increments the retry count for a job.
+// If the incremented count is below the max (3), the job is reset to pending for another attempt.
+// If the incremented count reaches or exceeds the max, the job stays in a terminal failed state
+// (status=failed, stage=failed) so it will never be picked up again and the UI shows it as failed.
 func (r *JobRepository) IncrementRetry(ctx context.Context, id string) error {
 	objID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
 		return fmt.Errorf("invalid id")
 	}
 
+	const maxRetries = 3
+
+	var current models.IngestionJob
+	if err := r.collection.FindOne(ctx, bson.M{"_id": objID}).Decode(&current); err != nil {
+		log.Printf("[REPO] IncrementRetry: failed to fetch job %s: %v", id, err)
+		return err
+	}
+
+	newRetry := current.RetryCount + 1
+	setFields := bson.M{"updated_at": time.Now()}
+
+	if newRetry >= maxRetries {
+		setFields["status"] = models.IngestionStatusFailed
+		setFields["stage"] = "failed"
+		setFields["completed_at"] = time.Now()
+		log.Printf("[REPO] IncrementRetry: job %s reached max retries (%d) — marking as failed (terminal)", id, newRetry)
+	} else {
+		setFields["status"] = models.IngestionStatusPending
+		log.Printf("[REPO] IncrementRetry: job %s retry %d/%d — resetting to pending", id, newRetry, maxRetries)
+	}
+
 	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
 		"$inc": bson.M{"retry_count": 1},
-		"$set": bson.M{"status": models.IngestionStatusPending, "updated_at": time.Now()},
+		"$set": setFields,
 	})
 
 	return err
+}
+
+// FailStaleProcessingJobs marks jobs stuck in "processing" for over 1 hour as failed.
+// These jobs are stuck due to worker crashes or hung uploads; leaving them in "processing"
+// forever is worse than failing them (admin can re-trigger manually).
+func (r *JobRepository) FailStaleProcessingJobs(ctx context.Context) (int64, error) {
+	oneHourAgo := time.Now().Add(-1 * time.Hour)
+	filter := bson.M{
+		"status":     models.IngestionStatusProcessing,
+		"updated_at": bson.M{"$lt": oneHourAgo},
+	}
+
+	update := bson.M{
+		"$set": bson.M{
+			"status":       models.IngestionStatusFailed,
+			"stage":        "failed",
+			"error":        "Job stuck in processing for over 1 hour — marked as failed by stale-job protection",
+			"completed_at": time.Now(),
+			"updated_at":   time.Now(),
+		},
+	}
+
+	result, err := r.collection.UpdateMany(ctx, filter, update)
+	if err != nil {
+		log.Printf("[REPO] FailStaleProcessingJobs: ERROR - %v", err)
+		return 0, err
+	}
+
+	if result.ModifiedCount > 0 {
+		log.Printf("[REPO] FailStaleProcessingJobs: failed %d stale jobs (stuck in processing for >1 hour)",
+			result.ModifiedCount)
+	}
+	return result.ModifiedCount, nil
 }
 
 // UpdateLocalPath updates the local file path after download

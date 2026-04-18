@@ -179,6 +179,30 @@ func main() {
 		workerCancel()
 	}()
 
+	// Stale-job protection - marks jobs stuck in "processing" for >1 hour as failed.
+	// This prevents jobs from being stuck forever if the worker crashes mid-upload
+	// or if a non-retryable pipeline error leaves the status field in a bad state.
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		// Run once at startup so restarting the worker cleans up leftover stuck jobs
+		if n, err := jobRepo.FailStaleProcessingJobs(workerCtx); err == nil && n > 0 {
+			log.Printf("[WORKER] Startup stale-job sweep: failed %d jobs stuck >1h in processing", n)
+		}
+
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case <-ticker.C:
+				if _, err := jobRepo.FailStaleProcessingJobs(workerCtx); err != nil {
+					log.Printf("[WORKER] FailStaleProcessingJobs error: %v", err)
+				}
+			}
+		}
+	}()
+
 	// Main worker loop - uses atomic job claiming for multi-worker safety
 	go func() {
 		pollInterval := 5 * time.Second
