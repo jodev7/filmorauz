@@ -939,13 +939,16 @@ export async function directB2Upload(
   });
   if (file.type) qs.set("contentType", file.type);
 
+  console.log(`[B2Upload] requesting fresh upload URL: type=${type} filename=${file.name} size=${file.size}`);
   const authRes = await fetch(`${API_URL}/upload/b2-url?${qs}`, {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   });
   if (!authRes.ok) {
     const err = await authRes.json().catch(() => ({ error: "Failed to get upload URL" }));
-    throw new Error(err.error || "Failed to get upload URL");
+    const msg = err.error || `Failed to get upload URL (status ${authRes.status})`;
+    console.error(`[B2Upload] authorize failed: type=${type} status=${authRes.status} error=${msg}`);
+    throw new Error(msg);
   }
 
   const uploadAuth: UploadURLResponse = await authRes.json();
@@ -955,8 +958,10 @@ export async function directB2Upload(
   const cdnUrl = uploadAuth.cdnUrl || uploadAuth.cdn_url;
 
   if (!uploadUrl || !authorizationToken || !fileKey) {
+    console.error(`[B2Upload] incomplete auth response: type=${type}`, uploadAuth);
     throw new Error("Upload authorization response is incomplete");
   }
+  console.log(`[B2Upload] got fresh URL: type=${type} fileKey=${fileKey}`);
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -1011,6 +1016,7 @@ export async function directB2Upload(
 
     xhr.onload = async () => {
       if (xhr.status >= 200 && xhr.status < 300) {
+        console.log(`[B2Upload] B2 upload succeeded: type=${type} fileKey=${fileKey} status=${xhr.status}`);
         try {
           const completeRes = await fetch(`${API_URL}/upload/b2-complete`, {
             method: "POST",
@@ -1025,20 +1031,30 @@ export async function directB2Upload(
           });
           if (!completeRes.ok) {
             const err = await completeRes.json().catch(() => ({ error: "Upload completed but metadata save failed" }));
-            reject(new Error(err.error || "Upload completed but metadata save failed"));
+            const msg = err.error || "Upload completed but metadata save failed";
+            console.error(`[B2Upload] complete failed: type=${type} status=${completeRes.status} error=${msg}`);
+            reject(new Error(msg));
             return;
           }
           const completed = await completeRes.json();
+          console.log(`[B2Upload] upload finalized: type=${type} url=${completed.url || cdnUrl}`);
           resolve({ url: completed.url || cdnUrl || "", file_key: completed.file_key || completed.fileKey || fileKey });
         } catch (err) {
+          console.error(`[B2Upload] complete threw: type=${type}`, err);
           reject(err instanceof Error ? err : new Error("Upload completed but metadata save failed"));
         }
       } else {
-        let errorMsg = "Upload failed";
+        let errorDetail = "";
         try {
           const errResp = JSON.parse(xhr.responseText);
-          errorMsg = errResp.message || errResp.code || errResp.error || errorMsg;
-        } catch {}
+          errorDetail = errResp.message || errResp.code || errResp.error || "";
+        } catch {
+          errorDetail = xhr.responseText?.slice(0, 200) || "";
+        }
+        const errorMsg = errorDetail
+          ? `B2 upload rejected (${xhr.status}): ${errorDetail}`
+          : `B2 upload rejected with status ${xhr.status}`;
+        console.error(`[B2Upload] B2 upload rejected: type=${type} fileKey=${fileKey} status=${xhr.status} body=${xhr.responseText?.slice(0, 500)}`);
         reject(new Error(errorMsg));
       }
     };
@@ -1047,7 +1063,20 @@ export async function directB2Upload(
     // (e.g. nginx client_max_body_size exceeded, or genuine network failure).
     // There is no response body to read in this case.
     xhr.onerror = () => {
-      reject(new Error("Upload failed: file may be too large or server is unreachable"));
+      const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+      const msg = file.size > 100 * 1024 * 1024
+        ? `Yuklash uzildi: fayl juda katta bo'lishi mumkin (${sizeMB} MB) yoki tarmoq xatosi.`
+        : `Yuklash uzildi (${sizeMB} MB): tarmoq xatosi yoki B2 server ulanmadi.`;
+      console.error(`[B2Upload] xhr.onerror: type=${type} fileKey=${fileKey} sizeMB=${sizeMB}`);
+      reject(new Error(msg));
+    };
+    xhr.ontimeout = () => {
+      console.error(`[B2Upload] xhr.ontimeout: type=${type} fileKey=${fileKey}`);
+      reject(new Error("Yuklash vaqti tugadi (timeout). Qaytadan urinib ko'ring."));
+    };
+    xhr.onabort = () => {
+      console.warn(`[B2Upload] xhr.onabort: type=${type} fileKey=${fileKey}`);
+      reject(new Error("Yuklash bekor qilindi."));
     };
 
     xhr.send(file);

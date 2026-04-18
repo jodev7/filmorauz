@@ -232,6 +232,13 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
     setQualities([]);
     setSelectedQuality(-1);
 
+    console.log("[HLSPlayer] initializing with src:", src);
+
+    if (!src) {
+      setError("Video manbasi mavjud emas.");
+      return;
+    }
+
     if (Hls.isSupported()) {
       const hls = new Hls({ startLevel: -1 });
       hlsRef.current = hls;
@@ -257,10 +264,50 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
         }
       });
 
+      // Track network error retries so we don't loop forever on a dead URL.
+      // hls.js fires repeated fatal NETWORK_ERROR events on a 404/CORS manifest;
+      // we give it two automatic startLoad() attempts, then surface a real message.
+      let networkRetries = 0;
+      const MAX_NETWORK_RETRIES = 2;
+
       hls.on(Hls.Events.ERROR, (_, data) => {
-        if (data.fatal) {
-          setError("Video yuklanmadi. Sahifani yangilang.");
-          hls.destroy();
+        console.error("[HLSPlayer] error event:", {
+          type: data.type,
+          details: data.details,
+          fatal: data.fatal,
+          url: (data as unknown as { url?: string }).url,
+          responseCode: (data as unknown as { response?: { code?: number } }).response?.code,
+          src,
+        });
+        if (!data.fatal) return;
+
+        const respCode = (data as unknown as { response?: { code?: number } }).response?.code;
+
+        switch (data.type) {
+          case Hls.ErrorTypes.NETWORK_ERROR:
+            if (networkRetries < MAX_NETWORK_RETRIES) {
+              networkRetries += 1;
+              console.warn(`[HLSPlayer] network error — retry ${networkRetries}/${MAX_NETWORK_RETRIES}`);
+              hls.startLoad();
+              return;
+            }
+            if (respCode === 404) {
+              setError("Video fayli topilmadi (404).");
+            } else if (respCode === 403) {
+              setError("Video kirish taqiqlangan (403).");
+            } else {
+              setError("Video yuklanmadi (tarmoq xatosi).");
+            }
+            hls.destroy();
+            break;
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            console.warn("[HLSPlayer] media error — attempting recover");
+            hls.recoverMediaError();
+            break;
+          default:
+            setError("Video yuklanmadi. Sahifani yangilang.");
+            hls.destroy();
+            break;
         }
       });
 
@@ -271,6 +318,21 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
       // Native HLS (Safari)
       video.src = src;
+      const onVideoError = () => {
+        const code = video.error?.code;
+        console.error("[HLSPlayer] native video error:", code, video.error?.message, "src:", src);
+        if (code === 4) {
+          setError("Video manbasi qo'llab-quvvatlanmaydi yoki topilmadi.");
+        } else {
+          setError("Video yuklanmadi. Sahifani yangilang.");
+        }
+      };
+      video.addEventListener("error", onVideoError);
+      return () => {
+        video.removeEventListener("error", onVideoError);
+        video.removeAttribute("src");
+        video.load();
+      };
     } else {
       setError("Brauzeringiz HLS formatini qo'llab-quvvatlamaydi.");
     }
@@ -557,25 +619,56 @@ export default function VideoPlayer({
     if (forceStart && !started) setStarted(true);
   }, [forceStart, started]);
 
+  // If the backend hasn't set a canonical source_type but the video_url looks
+  // like an HLS master playlist, treat it as direct_hls so the HLS player is used.
+  // This protects against legacy/ingestion records that missed source_type mapping.
+  const looksLikeHls = (url: string): boolean =>
+    /\.m3u8($|\?)/i.test(url) || url.includes("/master.m3u8");
+
+  const looksLikeMp4 = (url: string): boolean => /\.mp4($|\?)/i.test(url);
+
+  let effectiveSourceType: VideoSourceType = sourceType;
+  if (
+    (sourceType === "iframe_embed" || sourceType === ("ingestion" as VideoSourceType)) &&
+    videoUrl &&
+    !isEmbedUrl(videoUrl)
+  ) {
+    if (looksLikeHls(videoUrl)) {
+      effectiveSourceType = "direct_hls";
+    } else if (looksLikeMp4(videoUrl)) {
+      effectiveSourceType = "direct_mp4";
+    }
+  }
+
   // Determine which URL to use based on source type
   const getEffectiveUrl = (): string | null => {
-    if (sourceType === "iframe_embed" && embedUrl) {
+    if (effectiveSourceType === "iframe_embed" && embedUrl) {
       return embedUrl;
     }
-    if (sourceType === "iframe_embed" && videoUrl) {
+    if (effectiveSourceType === "iframe_embed" && videoUrl) {
       // Fallback to videoUrl if no embedUrl provided
       if (isEmbedUrl(videoUrl)) {
         return toEmbedUrl(videoUrl);
       }
       return null;
     }
-    if (sourceType === "direct_mp4" || sourceType === "direct_hls") {
+    if (effectiveSourceType === "direct_mp4" || effectiveSourceType === "direct_hls") {
       return videoUrl;
     }
     return null;
   };
 
   const effectiveUrl = getEffectiveUrl();
+
+  useEffect(() => {
+    console.log("[VideoPlayer] source fields:", {
+      sourceType,
+      effectiveSourceType,
+      videoUrl,
+      embedUrl,
+      effectiveUrl,
+    });
+  }, [sourceType, effectiveSourceType, videoUrl, embedUrl, effectiveUrl]);
 
   const handlePlay = () => {
     if (onPlayIntent) {
@@ -640,22 +733,22 @@ export default function VideoPlayer({
   }
 
   // Render based on source type
-  switch (sourceType) {
+  switch (effectiveSourceType) {
     case "iframe_embed":
       return <IframePlayer src={effectiveUrl} title={title} />;
-    
+
     case "direct_mp4":
       return (
-        <DirectVideoPlayer 
-          src={effectiveUrl} 
-          title={title} 
-          poster={posterUrl} 
+        <DirectVideoPlayer
+          src={effectiveUrl}
+          title={title}
+          poster={posterUrl}
         />
       );
-    
+
     case "direct_hls":
       return <HLSPlayer src={effectiveUrl} poster={posterUrl} autoPlay={forceStart} />;
-    
+
     default:
       return <IframePlayer src={effectiveUrl} title={title} />;
   }

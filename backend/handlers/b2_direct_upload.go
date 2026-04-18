@@ -252,26 +252,27 @@ func (h *UploadHandler) GetB2UploadURL(c *gin.Context) {
 
 	auth, err := h.authorizeB2()
 	if err != nil {
-		log.Printf("[B2_DIRECT] authorize failed: %v", err)
+		log.Printf("[B2_DIRECT] authorize failed: type=%s filename=%q err=%v", fileType, originalFilename, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to authorize B2 upload"})
 		return
 	}
 	bucketID, err := h.resolveB2BucketID(auth)
 	if err != nil {
-		log.Printf("[B2_DIRECT] bucket resolve failed: %v", err)
+		log.Printf("[B2_DIRECT] bucket resolve failed: type=%s filename=%q err=%v", fileType, originalFilename, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve B2 bucket"})
 		return
 	}
 	upload, err := h.requestB2UploadURL(auth.APIURL, auth.AuthorizationToken, bucketID)
 	if err != nil {
-		log.Printf("[B2_DIRECT] get upload url failed: %v", err)
+		log.Printf("[B2_DIRECT] get upload url failed: type=%s filename=%q err=%v", fileType, originalFilename, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get B2 upload URL"})
 		return
 	}
 
 	cdnURL := h.config.GetCDNFileURL(fileKey)
-	log.Printf("[B2_DIRECT] generated upload URL: fileKey=%s uploadUrl=%s", fileKey, upload.UploadURL)
+	log.Printf("[B2_DIRECT] NEW upload URL issued: type=%s filename=%q fileKey=%s uploadUrl=%s", fileType, originalFilename, fileKey, upload.UploadURL)
 
+	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, gin.H{
 		"uploadUrl":          upload.UploadURL,
 		"authorizationToken": upload.AuthorizationToken,

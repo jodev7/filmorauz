@@ -294,6 +294,20 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
     markWatchComplete(token, movie.id, Math.floor(movie.duration * 60)).catch(console.error);
   };
 
+  // One-time diagnostic: log exactly which playback fields the movie API returned.
+  // These are the same values passed to <VideoPlayer />, so any missing/wrong URL
+  // shows up immediately next to the player error in the console.
+  useEffect(() => {
+    console.log("[WatchPage] movie playback fields:", {
+      id: movie.id,
+      slug: movie.slug,
+      source_type: movie.source_type,
+      video_url: movie.video_url,
+      embed_url: movie.embed_url,
+      master_playlist_url: (movie as unknown as { master_playlist_url?: string }).master_playlist_url,
+    });
+  }, [movie.id, movie.slug, movie.source_type, movie.video_url, movie.embed_url]);
+
   // Record view and watch history on mount
   useEffect(() => {
     // Avoid duplicate recordings in the same session
@@ -405,7 +419,10 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
         ) : (
           <div className="relative">
             <VideoPlayer
-              videoUrl={movie.video_url}
+              videoUrl={
+                (movie as unknown as { master_playlist_url?: string }).master_playlist_url ||
+                movie.video_url
+              }
               embedUrl={movie.embed_url}
               sourceType={movie.source_type}
               title={localizedTitle}

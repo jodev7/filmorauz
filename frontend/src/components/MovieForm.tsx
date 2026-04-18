@@ -252,8 +252,24 @@ export default function MovieForm({
         setError("Authentication required");
         return;
       }
-      if (!form.title || !form.poster_url) {
-        setError("Title and poster are required for direct upload");
+      if (uploads.poster.status === "uploading" || uploads.backdrop.status === "uploading" || uploads.video.status === "uploading") {
+        setError("Iltimos, fayl yuklanib bo'lishini kuting.");
+        return;
+      }
+      if (!form.title) {
+        setError("Title is required");
+        return;
+      }
+      if (uploads.poster.status === "error") {
+        setError(`Poster upload failed: ${uploads.poster.message || "please retry"}`);
+        return;
+      }
+      if (!form.poster_url) {
+        setError("Poster yuklash majburiy. Iltimos, poster faylini yuklang.");
+        return;
+      }
+      if (uploads.video.status === "error") {
+        setError(`Video upload failed: ${uploads.video.message || "please retry"}`);
         return;
       }
       if (uploads.video.status !== "success" || !form.video_url) {
