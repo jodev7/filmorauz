@@ -2200,6 +2200,25 @@ class UzmoviParser(BaseParser):
         Returns:
             dict with items, page, limit, total, total_pages, has_more
         """
+        # When the caller requests the serial list without picking a category,
+        # auto-select a serial-named category from list_categories(). The homepage
+        # is a mixed feed that is film-heavy, so relying on a post-filter yields 0
+        # items. This routes the request to a real serial listing page.
+        if type_filter == "serial" and not category_url:
+            try:
+                cats = self.list_categories() or []
+                for c in cats:
+                    name = (c.get("name") or "").lower()
+                    curl = (c.get("url") or "")
+                    if "serial" in name or "/serial" in curl.lower():
+                        category_url = curl
+                        logger.info(f"[UZMOVI] list_catalog: auto-selected serial category: name={c.get('name')!r}, url={category_url}")
+                        break
+                if not category_url:
+                    logger.warning("[UZMOVI] list_catalog: no serial category found via list_categories()")
+            except Exception as e:
+                logger.warning(f"[UZMOVI] list_catalog: serial category auto-detect failed: {e}")
+
         # Build candidate URLs.
         # Uzmovi homepage does NOT support /page/N/ (returns 404).
         # Only category/xfsearch URLs have real paginated listings.
@@ -2274,8 +2293,17 @@ class UzmoviParser(BaseParser):
         
         logger.info(f"[UZMOVI] list_catalog: extracted {len(items)} items from page {page}")
 
+        # Uzmovi serial cards often point to /serialar/... (not /serial/), so the
+        # per-URL heuristic in _extract_catalog_card tags them as "movie". When the
+        # scraped page is a serial listing, force page-level type on all items.
+        if type_filter == "serial" or "serial" in (category_url or "").lower():
+            for it in items:
+                it["type"] = "serial"
+            logger.info(f"[UZMOVI] list_catalog: forced type=serial on {len(items)} items (serial listing page)")
+
         if type_filter:
             items = [i for i in items if i.get("type") == type_filter]
+            logger.info(f"[UZMOVI] list_catalog: {len(items)} items after type_filter={type_filter!r}")
 
         # Check for next page using Uzmovi-specific selectors.
         # Uzmovi uses .pages (not .pagination/.navigation) and "Keyingi" for "Next" in Uzbek.

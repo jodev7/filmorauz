@@ -331,6 +331,8 @@ function CatalogTab({
       if (typeFilter) params.type = typeFilter;
       if (selectedCategory) params.category_url = selectedCategory;
 
+      console.log(`[CatalogTab] fetching catalog source=${source.id} page=${pageNum} type=${typeFilter || "(all)"} category=${selectedCategory || "(default)"}`);
+
       const result = await listCatalog(source.id, params);
       setCatalog(prev => append ? [...prev, ...result.items] : result.items);
       setTotalPages(result.total_pages);

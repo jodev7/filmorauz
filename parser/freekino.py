@@ -905,6 +905,24 @@ class FreekinoParser:
         Returns:
             dict with items, page, limit, total, total_pages, has_more, next_url
         """
+        # Default catalog is film-only (/movie/genre/...). When the caller asks
+        # for serials without picking a category, auto-select a serial-named
+        # category; otherwise we'd scrape a film listing and filter to zero.
+        if type_filter == "serial" and not category_url:
+            try:
+                cats = self.list_categories() or []
+                for c in cats:
+                    name = (c.get("name") or "").lower()
+                    curl = (c.get("url") or "")
+                    if "serial" in name or "/serial" in curl.lower():
+                        category_url = curl
+                        logger.info(f"[FREEKINO] list_catalog: auto-selected serial category: name={c.get('name')!r}, url={category_url}")
+                        break
+                if not category_url:
+                    logger.warning("[FREEKINO] list_catalog: no serial category found via list_categories()")
+            except Exception as e:
+                logger.warning(f"[FREEKINO] list_catalog: serial category auto-detect failed: {e}")
+
         base = (category_url.rstrip("/") if category_url else self.CATALOG_BASE)
 
         # Build the target URL for this page
@@ -970,8 +988,17 @@ class FreekinoParser:
         
         logger.info(f"[FREEKINO] list_catalog: extracted {len(items)} items from page {page}")
 
+        # When the scraped page is a serial listing, force page-level type on all
+        # items — freekino serial card URLs do contain /serial/ so this is mostly
+        # belt-and-suspenders, but it keeps behavior consistent with other providers.
+        if type_filter == "serial" or "serial" in (category_url or "").lower():
+            for it in items:
+                it["type"] = "serial"
+            logger.info(f"[FREEKINO] list_catalog: forced type=serial on {len(items)} items (serial listing page)")
+
         if type_filter:
             items = [i for i in items if i.get("type") == type_filter]
+            logger.info(f"[FREEKINO] list_catalog: {len(items)} items after type_filter={type_filter!r}")
 
 
         # Check for next page

@@ -979,6 +979,7 @@ func (h *IngestionHandler) ListCatalog(c *gin.Context) {
 	}
 
 	parserURL := fmt.Sprintf("%s/catalog?%s", parserBaseURL, params.Encode())
+	log.Printf("[INGESTION] CATALOG: forwarding to parser source=%s page=%d limit=%d type=%q category_url=%q", source, page, limit, typeFilter, categoryURL)
 	log.Printf("[INGESTION] CATALOG: calling parser: %s", parserURL)
 
 	resp, err := h.httpClient.Get(parserURL)

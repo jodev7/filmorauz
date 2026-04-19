@@ -1324,19 +1324,30 @@ class ParserHandler(BaseHTTPRequestHandler):
             if limit < 1 or limit > 50:
                 limit = 20
             
-            logger.info(f"[SERVER] Catalog request: source={source}, page={page}, limit={limit}, type={type_filter}")
-            
+            # Normalize plural UI values ("movies"/"serials") to the singular
+            # form that catalog item `type` fields use ("movie"/"serial").
+            # Without this, filtering against item["type"] always matches zero.
+            raw_type_filter = type_filter
+            if type_filter == "serials":
+                type_filter = "serial"
+            elif type_filter == "movies":
+                type_filter = "movie"
+
+            logger.info(f"[SERVER] Catalog request: source={source}, page={page}, limit={limit}, type_raw={raw_type_filter!r}, type_normalized={type_filter!r}, category_url={category_url!r}")
+            if type_filter == "serial":
+                logger.info(f"[SERVER] Catalog mode: SERIAL list requested for source={source}")
+
             if not source or source not in PARSERS:
                 self._send_error(f"Invalid source for catalog. Available: {list(PARSERS.keys())}")
                 return
-            
+
             try:
                 parser = PARSERS[source]
 
                 # Check if parser has list_catalog method
                 if hasattr(parser, 'list_catalog'):
                     catalog_result = parser.list_catalog(page=page, limit=limit, type_filter=type_filter, category_url=category_url)
-                    logger.info(f"[SERVER] Catalog: {len(catalog_result.get('items', []))} items from {source}")
+                    logger.info(f"[SERVER] Catalog: source={source}, type={type_filter!r}, returned {len(catalog_result.get('items', []))} items")
                     self._send_json(catalog_result)
                 else:
                     # Fallback: scrape the homepage/listing page
@@ -1372,7 +1383,11 @@ class ParserHandler(BaseHTTPRequestHandler):
             if limit < 1 or limit > 50:
                 limit = 20
             
-            logger.info(f"[SERVER] List request (alias for catalog): source={source}, page={page}")
+            if type_filter == "serials":
+                type_filter = "serial"
+            elif type_filter == "movies":
+                type_filter = "movie"
+            logger.info(f"[SERVER] List request (alias for catalog): source={source}, page={page}, type={type_filter!r}")
             
             if not source or source not in PARSERS:
                 self._send_error(f"Invalid source for list. Available: {list(PARSERS.keys())}")
