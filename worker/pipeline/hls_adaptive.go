@@ -112,9 +112,16 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	// Step 2: Generate each HLS rendition from the processed master
 	log.Printf("[STAGE] hls_renditions start — renditions: %d, source: %s", len(renditions), processedMasterPath)
 
-	streamingUploader := newStreamingUploader(p.storage, jobID, renditions, segmentUploadWorkers, segmentUploadRetries, outputDir)
+	// Use the canonical movie folder (derived from outputDir basename) so that
+	// .ts segments land under videos/<folder>/<rendition>/... — the same root
+	// the playlists are later uploaded to. Previously this used jobID, which
+	// caused segments and playlists to land in different B2 folders.
+	hlsFolderName := filepath.Base(outputDir)
+	log.Printf("[HLS] Streaming uploader folder (segment root): %s (outputDir=%s, jobID=%s)", hlsFolderName, outputDir, jobID)
+
+	streamingUploader := newStreamingUploader(p.storage, hlsFolderName, renditions, segmentUploadWorkers, segmentUploadRetries, outputDir)
 	streamingUploader.start()
-	log.Printf("[STAGE] streaming_upload start — folder: %s, renditions: %d, workers: %d, retries: %d", jobID, len(renditions), segmentUploadWorkers, segmentUploadRetries)
+	log.Printf("[STAGE] streaming_upload start — folder: %s, renditions: %d, workers: %d, retries: %d", hlsFolderName, len(renditions), segmentUploadWorkers, segmentUploadRetries)
 
 	type renditionJob struct {
 		index        int
@@ -192,6 +199,7 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	// Step 3: Create master playlist
 	log.Printf("[STAGE] master_playlist start")
 	masterPlaylistPath = filepath.Join(outputDir, "master.m3u8")
+	log.Printf("[HLS_PATH] master_playlist_local=%s", masterPlaylistPath)
 	if err = p.createMasterPlaylist(masterPlaylistPath, renditions); err != nil {
 		return "", "", nil, fmt.Errorf("failed to create master playlist: %w", err)
 	}
@@ -493,6 +501,8 @@ func (p *Pipeline) generateHLSRendition(jobID, baseVideoPath, outputDir string, 
 	// HLS playlist path
 	hlsPlaylist := filepath.Join(outputDir, "index.m3u8")
 	segmentPattern := filepath.Join(outputDir, "segment_%03d.ts")
+	log.Printf("[HLS_PATH] rendition=%s playlist_local=%s", rendition.Name, hlsPlaylist)
+	log.Printf("[HLS_PATH] rendition=%s segment_pattern_local=%s", rendition.Name, segmentPattern)
 
 	// Build maxrate and bufsize from rendition config or use defaults
 	maxRate := rendition.MaxBitrate
@@ -760,6 +770,7 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 			}
 
 			log.Printf("[HLS] Uploading playlist: %s -> %s", path, remotePath)
+			log.Printf("[HLS_KEY] playlist_local=%s playlist_b2_key=%s", path, remotePath)
 
 			data, err := os.ReadFile(path)
 			if err != nil {

@@ -139,6 +139,7 @@ func (u *segmentUploader) uploadSegment(path string) {
 	u.uploaded.Store(remotePath, true)
 	atomic.AddInt32(&u.uploadCount, 1)
 	log.Printf("[STREAM_UPLOAD] Segment uploaded: %s", remotePath)
+	log.Printf("[HLS_KEY] segment_local=%s segment_b2_key=%s", path, remotePath)
 }
 
 func (u *segmentUploader) waitForStableFile(path string) bool {
