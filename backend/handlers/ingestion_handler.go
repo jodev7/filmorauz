@@ -22,13 +22,14 @@ import (
 // IngestionHandler handles ingestion API requests
 type IngestionHandler struct {
 	jobRepo    *repositories.JobRepository
+	seriesRepo *repositories.SeriesRepository
 	parserURL  string
 	workerURL  string
 	httpClient *http.Client
 }
 
 // NewIngestionHandler creates a new ingestion handler
-func NewIngestionHandler(jobRepo *repositories.JobRepository, parserURL string, workerURL string) *IngestionHandler {
+func NewIngestionHandler(jobRepo *repositories.JobRepository, seriesRepo *repositories.SeriesRepository, parserURL string, workerURL string) *IngestionHandler {
 	// Create HTTP client with explicit timeout
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
@@ -44,6 +45,7 @@ func NewIngestionHandler(jobRepo *repositories.JobRepository, parserURL string, 
 
 	return &IngestionHandler{
 		jobRepo:    jobRepo,
+		seriesRepo: seriesRepo,
 		parserURL:  parserURL,
 		workerURL:  workerURL,
 		httpClient: httpClient,
@@ -1220,7 +1222,7 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[INGESTION] IMPORT: importing - source=%s, source_id=%s, title=%s", input.Source, input.SourceID, input.Title)
+	log.Printf("[INGESTION] IMPORT: importing - source=%s, source_id=%s, type=%s, title=%s", input.Source, input.SourceID, input.Type, input.Title)
 
 	// Validate source
 	validSources := map[string]bool{
@@ -1235,16 +1237,27 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 		return
 	}
 
+	// Serial branch — call parser /serial-details and fan out one job per episode.
+	if input.Type == "serial" {
+		if input.DetailURL == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "detail_url is required for serial import"})
+			return
+		}
+		h.importSerial(c, input.Source, input.SourceID, input.DetailURL, input.Title)
+		return
+	}
+
 	// Create job
 	job := &models.IngestionJob{
-		Title:     input.Title,
-		Source:    input.Source,
-		SourceID:  input.SourceID,
-		DetailURL: input.DetailURL,
-		Status:    models.IngestionStatusPending,
-		Progress:  0,
-		Steps:     models.JobSteps{},
-		Logs:      []models.IngestionLog{},
+		Title:       input.Title,
+		Source:      input.Source,
+		SourceID:    input.SourceID,
+		DetailURL:   input.DetailURL,
+		Status:      models.IngestionStatusPending,
+		Progress:    0,
+		Steps:       models.JobSteps{},
+		Logs:        []models.IngestionLog{},
+		ContentType: "movie",
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

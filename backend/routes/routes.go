@@ -157,6 +157,10 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	// Process endpoint - triggers worker to process downloaded video
 	api.POST("/ingestion/jobs/:id/process", ingestionHandler.ProcessIngestionJob)
 
+	// Episode complete endpoint — worker posts here after HLS upload so the
+	// backend can attach the final playback URL to the Episode record.
+	api.POST("/ingestion/episodes/:id/complete", ingestionHandler.CompleteEpisode)
+
 	// Worker claim endpoint - worker calls this to get a job for ffmpeg processing
 	// Returns job where steps.download=true and steps.process=false
 	api.GET("/ingestion/jobs/worker/claim", ingestionHandler.WorkerClaimJob)

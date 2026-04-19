@@ -63,6 +63,9 @@ from uzmovi import UzmoviParser
 from freekino import FreekinoParser
 from asilmedia import AsilmediaParser
 from kinolar import KinolarParser
+from asilmedia_serial import AsilmediaSerialParser
+from freekino_serial import FreekinoSerialParser
+from uzmovi_serial import UzmoviSerialParser
 from downloader_service import DownloaderService
 from metadata_normalizer import normalize_metadata, validate_metadata, create_worker_payload
 from source_config import get_source_config
@@ -94,6 +97,26 @@ PARSERS = {
     "asilmedia": AsilmediaParser(),
     "kinolar": KinolarParser(),
 }
+
+# Provider-specific serial parsers. Distinct from PARSERS because serial
+# scraping follows a different contract (episode list + per-episode video).
+SERIAL_PARSERS = {
+    "asilmedia": AsilmediaSerialParser(),
+    "freekino": FreekinoSerialParser(),
+    "uzmovi": UzmoviSerialParser(),
+}
+
+
+def _detect_serial_provider(url: str) -> str:
+    """Return a SERIAL_PARSERS key based on the URL host, or '' if unknown."""
+    u = (url or "").lower()
+    if "asilmedia." in u:
+        return "asilmedia"
+    if "freekino." in u:
+        return "freekino"
+    if "uzmovi." in u:
+        return "uzmovi"
+    return ""
 
 # Initialize downloader service
 DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "downloads")
@@ -547,6 +570,42 @@ class ParserHandler(BaseHTTPRequestHandler):
                 self._send_json({"status": "unknown", "message": "No active download for this job"})
             return
         
+        # Serial import: /serial-details?url=<serial page url>  [&source=<provider>]
+        # Returns a normalized serial payload with an episodes[] list.
+        elif path == "/serial-details":
+            serial_url = query.get("url", [""])[0].strip()
+            source_hint = query.get("source", [""])[0].strip().lower()
+
+            if not serial_url:
+                self._send_error("Missing 'url' parameter")
+                return
+
+            provider = source_hint or _detect_serial_provider(serial_url)
+            logger.info(f"[SERIAL] provider detected={provider!r} for url={serial_url}")
+
+            if provider not in SERIAL_PARSERS:
+                self._send_error(
+                    f"Unsupported serial provider. Supported: {sorted(SERIAL_PARSERS.keys())}",
+                    400,
+                )
+                return
+
+            try:
+                result = SERIAL_PARSERS[provider].parse(serial_url)
+                status = 200 if result.get("success") else 422
+                self._send_json(result, status=status)
+            except Exception as e:
+                logger.exception(f"[SERIAL] {provider} parse failed")
+                self._send_json(
+                    {
+                        "success": False,
+                        "provider": provider,
+                        "error": f"{provider} serial parse failed: {e}",
+                    },
+                    status=500,
+                )
+            return
+
         # Search: /search?source=uzmovi&q=interstellar
         elif path == "/search":
             source = query.get("source", [""])[0]

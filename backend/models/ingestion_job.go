@@ -85,6 +85,16 @@ type IngestionJob struct {
 	SourceResolution   string   `bson:"source_resolution,omitempty" json:"source_resolution,omitempty"`
 	GeneratedQualities []string `bson:"generated_qualities,omitempty" json:"generated_qualities,omitempty"`
 	MasterPlaylistURL  string   `bson:"master_playlist_url,omitempty" json:"master_playlist_url,omitempty"`
+
+	// Serial ingestion linkage. Set only when this job processes a single
+	// episode (ContentType == "episode"); otherwise left empty for movies.
+	ContentType   string             `bson:"content_type,omitempty" json:"content_type,omitempty"` // "" | "movie" | "episode"
+	SeriesID      primitive.ObjectID `bson:"series_id,omitempty" json:"series_id,omitempty"`
+	SeasonID      primitive.ObjectID `bson:"season_id,omitempty" json:"season_id,omitempty"`
+	EpisodeID     primitive.ObjectID `bson:"episode_id,omitempty" json:"episode_id,omitempty"`
+	SeriesSlug    string             `bson:"series_slug,omitempty" json:"series_slug,omitempty"`
+	SeasonNumber  int                `bson:"season_number,omitempty" json:"season_number,omitempty"`
+	EpisodeNumber int                `bson:"episode_number,omitempty" json:"episode_number,omitempty"`
 }
 
 // JobSteps tracks the completion status of each pipeline step

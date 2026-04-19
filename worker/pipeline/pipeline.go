@@ -156,6 +156,13 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		return p.processDirectUploadJob(ctx, job)
 	}
 
+	// Serial episode jobs skip the movie-enrichment + movie-creation path and
+	// instead save their HLS into a per-episode folder and update the linked
+	// Episode row on the backend.
+	if job.ContentType == "episode" {
+		return p.processEpisodeJob(ctx, job)
+	}
+
 	// CRITICAL: Create safe variables for metadata fields to prevent nil pointer access
 	// These will be used throughout the processing instead of direct job.Metadata.* access
 	title := "video"

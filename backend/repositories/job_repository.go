@@ -86,6 +86,20 @@ func (r *JobRepository) GetByID(ctx context.Context, id string) (*models.Ingesti
 	return &job, nil
 }
 
+// GetBySourceAndID retrieves a job by its (source, source_id) tuple. Returns
+// (nil, nil) if no such job exists.
+func (r *JobRepository) GetBySourceAndID(ctx context.Context, source, sourceID string) (*models.IngestionJob, error) {
+	var job models.IngestionJob
+	err := r.collection.FindOne(ctx, bson.M{"source": source, "source_id": sourceID}).Decode(&job)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &job, nil
+}
+
 // GetPendingJobs retrieves pending jobs that are ready to process (non-atomic)
 // Use ClaimNextJob for atomic claiming in multi-worker deployments
 func (r *JobRepository) GetPendingJobs(ctx context.Context, limit int) ([]*models.IngestionJob, error) {

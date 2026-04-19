@@ -162,7 +162,7 @@ func main() {
 	// Initialize handlers
 	authHandler := handlers.NewAuthHandler(authService)
 	movieHandler := handlers.NewMovieHandler(movieService, userRepo)
-	ingestionHandler := handlers.NewIngestionHandler(jobRepo, parserURL, cfg.WorkerUploadURL)
+	ingestionHandler := handlers.NewIngestionHandler(jobRepo, seriesRepo, parserURL, cfg.WorkerUploadURL)
 	uploadHandler := handlers.NewUploadHandler(userRepo, cfg)
 	adminUserHandler := handlers.NewAdminUserHandler(userRepo, movieRepo, seriesRepo, banHistoryRepo, notificationService)
 	userHandler := handlers.NewUserHandler(watchHistoryRepo, favoriteRepo, movieRepo, userRepo)
