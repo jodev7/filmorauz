@@ -1083,6 +1083,83 @@ export async function directB2Upload(
   });
 }
 
+// Backend-proxied upload for movie poster/backdrop. The browser POSTs the file
+// to /api/admin/upload-temp; the backend (or worker in PROD) uploads to B2 and
+// returns the final URL + file key. Same pattern used by profile image and
+// telegram-post media uploads — avoids browser→B2 CORS preflight failures.
+export async function backendUploadMovieImage(
+  token: string,
+  file: File,
+  type: "poster" | "backdrop",
+  onProgress?: (progress: UploadProgressInfo) => void
+): Promise<{ url: string; file_key: string }> {
+  console.log("[BackendUpload] start:", { type, name: file.name, size: file.size, contentType: file.type });
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_URL}/admin/upload-temp`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+
+    const startedAt = Date.now();
+    xhr.upload.onprogress = (event) => {
+      if (!onProgress) return;
+      const elapsedSec = Math.max(0.001, (Date.now() - startedAt) / 1000);
+      const speedMBps = event.loaded / 1024 / 1024 / elapsedSec;
+      const info: UploadProgressInfo = {
+        loaded: event.loaded,
+        total: event.lengthComputable ? event.total : undefined,
+        uploadedMB: event.loaded / 1024 / 1024,
+        speedMBps,
+      };
+      if (event.lengthComputable) {
+        info.progress = Math.round((event.loaded / event.total) * 100);
+        const remaining = event.total - event.loaded;
+        info.etaSeconds = Math.round(remaining / 1024 / 1024 / Math.max(0.001, speedMBps));
+      }
+      onProgress(info);
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const resp = JSON.parse(xhr.responseText);
+          console.log("[BackendUpload] success:", { type, url: resp.url, file_key: resp.file_key });
+          resolve({ url: resp.url, file_key: resp.file_key });
+        } catch (e) {
+          console.error("[BackendUpload] bad JSON:", xhr.responseText);
+          reject(new Error("Invalid upload response"));
+        }
+      } else {
+        let msg = `Upload failed (${xhr.status})`;
+        try {
+          const err = JSON.parse(xhr.responseText);
+          msg = err.error || err.message || msg;
+        } catch {}
+        console.error("[BackendUpload] failed:", { type, status: xhr.status, body: xhr.responseText.slice(0, 500) });
+        reject(new Error(msg));
+      }
+    };
+
+    xhr.onerror = () => {
+      console.error("[BackendUpload] network error:", { type });
+      reject(new Error("Tarmoq xatosi. Serverga ulanib bo'lmadi."));
+    };
+    xhr.ontimeout = () => {
+      console.error("[BackendUpload] timeout:", { type });
+      reject(new Error("Yuklash vaqti tugadi."));
+    };
+    xhr.onabort = () => {
+      console.error("[BackendUpload] aborted:", { type });
+      reject(new Error("Yuklash to'xtatildi."));
+    };
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("type", type);
+    xhr.send(formData);
+  });
+}
+
 // ── Ingestion API ────────────────────────────────────────────────
 
 export type IngestionStatus = 

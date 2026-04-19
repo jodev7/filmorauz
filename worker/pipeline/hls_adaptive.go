@@ -701,6 +701,14 @@ func (p *Pipeline) createMasterPlaylist(masterPath string, renditions []Renditio
 
 // uploadAdaptiveHLSFiles uploads all adaptive HLS files to storage
 // Returns the master playlist URL
+//
+// Only HLS assets are uploaded. Intermediate .mp4 files (processed_master.mp4,
+// base_video.mp4) that live in the same local dir are excluded — they are
+// kept local for clip generation and deleted by the pipeline cleanup stage.
+// Final B2 layout:
+//   videos/<folder>/master.m3u8
+//   videos/<folder>/<quality>/index.m3u8
+//   videos/<folder>/<quality>/segment_*.ts   (uploaded by streaming uploader)
 func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir string, folderName string) (string, error) {
 	jobID := job.ID.Hex()
 	log.Printf("[HLS] Uploading adaptive HLS files for job %s from %s", jobID, hlsDir)
@@ -734,9 +742,20 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 
 			relPath, _ := filepath.Rel(hlsDir, path)
 			remotePath := filepath.Join("videos", folderName, relPath)
+			log.Printf("[HLS] Walked local file: %s (rel=%s)", path, relPath)
 
+			// .ts segments are streamed directly to B2 by the segment uploader
+			// as they are written by ffmpeg — skip them here to avoid double upload.
 			if strings.HasSuffix(path, ".ts") {
 				log.Printf("[HLS] Skipping .ts segment (already uploaded via streaming): %s", relPath)
+				return nil
+			}
+
+			// Only HLS playlists are allowed to reach B2. Anything else in the
+			// work dir (processed_master.mp4, base_video.mp4, thumbnails, logs)
+			// is an intermediate and stays local until pipeline cleanup.
+			if !strings.HasSuffix(path, ".m3u8") {
+				log.Printf("[HLS] Skipping non-HLS intermediate (will be cleaned up locally): %s", relPath)
 				return nil
 			}
 
@@ -814,7 +833,9 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 			return "", fmt.Errorf("failed to create target directory: %w", err)
 		}
 
-		// Copy all files
+		// Copy only HLS assets. In dev the .ts segments are served off the local
+		// disk (no streaming uploader), so we keep both .m3u8 and .ts. Skip any
+		// intermediate .mp4 / other files — pipeline cleanup will remove them.
 		err := filepath.Walk(hlsDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
@@ -826,6 +847,13 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 
 			// Calculate relative path
 			relPath, _ := filepath.Rel(hlsDir, path)
+			log.Printf("[HLS] Walked local file: %s (rel=%s)", path, relPath)
+
+			if !strings.HasSuffix(path, ".m3u8") && !strings.HasSuffix(path, ".ts") {
+				log.Printf("[HLS] Skipping non-HLS intermediate (will be cleaned up locally): %s", relPath)
+				return nil
+			}
+
 			dstPath := filepath.Join(targetDir, relPath)
 
 			// Ensure subdirectory exists
@@ -849,6 +877,8 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 			if _, err := io.Copy(dst, src); err != nil {
 				return err
 			}
+
+			log.Printf("[HLS] Copied to local storage: %s", dstPath)
 
 			// Track master playlist URL
 			if relPath == "master.m3u8" {

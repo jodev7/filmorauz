@@ -534,6 +534,11 @@ func (h *MovieHandler) ApproveMovie(c *gin.Context) {
 	id := c.Param("id")
 	byUserID := c.GetString("user_id")
 
+	// Snapshot whether Telegram was already posted before this approve click —
+	// a re-approval (status was already "approved") must not re-broadcast.
+	prior, priorErr := h.movieService.GetMovieByID(id)
+	alreadyPosted := priorErr == nil && prior != nil && prior.TelegramPostedOnApproval
+
 	if err := h.movieService.SetMovieApprovalStatus(id, "approved", byUserID); err != nil {
 		if err.Error() == "movie not found" {
 			c.JSON(http.StatusNotFound, gin.H{"error": "movie not found"})
@@ -544,11 +549,16 @@ func (h *MovieHandler) ApproveMovie(c *gin.Context) {
 	}
 
 	// Async Telegram post — non-blocking
-	if h.telegramService != nil {
+	if h.telegramService != nil && !alreadyPosted {
 		go func() {
+			log.Printf("[TELEGRAM APPROVE] triggered for movie id=%s by user=%s", id, byUserID)
 			movie, err := h.movieService.GetMovieByID(id)
 			if err != nil {
 				log.Printf("[TELEGRAM APPROVE] could not fetch movie %s: %v", id, err)
+				return
+			}
+			if movie.TelegramPostedOnApproval {
+				log.Printf("[TELEGRAM APPROVE] movie id=%s already posted — skipping duplicate", id)
 				return
 			}
 			watchURL := h.telegramService.GetBaseSiteURL() + "/movies/" + movie.Slug
@@ -556,14 +566,26 @@ func (h *MovieHandler) ApproveMovie(c *gin.Context) {
 				Title:       movie.Title,
 				Year:        movie.Year,
 				Genres:      movie.Genre,
+				GenresUz:    movie.GenresUz,
+				Code:        movie.Code,
 				PosterURL:   movie.PosterURL,
+				Quality:     movie.Quality,
 				Description: movie.Description,
 				Slug:        movie.Slug,
 				MovieURL:    watchURL,
 			}
-			data.Code = movie.Code
-			h.telegramService.PostContentApproval(data, false)
+			posted := h.telegramService.PostContentApproval(data, false)
+			log.Printf("[TELEGRAM APPROVE] movie id=%s result: posted_to=%v", id, posted)
+			if len(posted) == 0 {
+				log.Printf("[TELEGRAM APPROVE] movie id=%s no channels received the post — not marking as posted", id)
+				return
+			}
+			if err := h.movieService.MarkTelegramPostedOnApproval(id); err != nil {
+				log.Printf("[TELEGRAM APPROVE] failed to mark movie id=%s as posted: %v", id, err)
+			}
 		}()
+	} else if alreadyPosted {
+		log.Printf("[TELEGRAM APPROVE] movie id=%s already posted on a previous approval — skipping", id)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "approval_status": "approved"})

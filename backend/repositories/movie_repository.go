@@ -943,6 +943,24 @@ func (r *MovieRepository) ListAdmin(page, limit int) ([]models.Movie, int64, err
 	return movies, total, nil
 }
 
+// MarkTelegramPostedOnApproval sets telegram_posted_on_approval=true so a
+// subsequent approval click doesn't re-post to Telegram.
+func (r *MovieRepository) MarkTelegramPostedOnApproval(idHex string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	id, err := primitive.ObjectIDFromHex(idHex)
+	if err != nil {
+		return err
+	}
+	_, err = r.col.UpdateOne(
+		ctx,
+		bson.M{"_id": id},
+		bson.M{"$set": bson.M{"telegram_posted_on_approval": true}},
+	)
+	return err
+}
+
 // SetApprovalStatus sets the approval status and publishes/unpublishes a movie.
 func (r *MovieRepository) SetApprovalStatus(idHex, status, byUserID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

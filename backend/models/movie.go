@@ -62,6 +62,11 @@ type Movie struct {
 	IsPublished    bool       `bson:"is_published" json:"is_published"`
 	ApprovedAt     *time.Time `bson:"approved_at,omitempty" json:"approved_at,omitempty"`
 	ApprovedBy     string     `bson:"approved_by,omitempty" json:"approved_by,omitempty"`
+
+	// TelegramPostedOnApproval is set to true after the approval auto-post
+	// succeeded at least once. Used to prevent re-posting on subsequent
+	// approve calls. omitempty keeps the field off the document when false.
+	TelegramPostedOnApproval bool `bson:"telegram_posted_on_approval,omitempty" json:"telegram_posted_on_approval,omitempty"`
 }
 
 // MovieInput is used for create/update requests.

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Loader2, Plus, X, Info, Upload, CheckCircle, AlertCircle } from "lucide-react";
-import { MovieInput, VideoSourceType, directB2Upload, createDirectUploadJob, DirectUploadInput, IngestionJob, UploadProgressInfo } from "@/lib/api";
+import { MovieInput, VideoSourceType, directB2Upload, backendUploadMovieImage, createDirectUploadJob, DirectUploadInput, IngestionJob, UploadProgressInfo } from "@/lib/api";
 
 const QUALITIES = ["480p", "720p", "1080p", "1080p Ultra", "4K"];
 const GENRE_OPTIONS = [
@@ -139,26 +139,37 @@ export default function MovieForm({
       return;
     }
 
+    console.log("[MovieForm] file chosen:", { type, name: file.name, size: file.size, contentType: file.type });
+
     setUploads(prev => ({
       ...prev,
       [type]: { status: "uploading", progress: 0 }
     }));
 
+    const onUploadProgress = (uploadProgress: UploadProgressInfo) => {
+      setUploads(prev => ({
+        ...prev,
+        [type]: {
+          status: "uploading",
+          progress: uploadProgress.progress,
+          uploadedMB: uploadProgress.uploadedMB,
+          totalMB: uploadProgress.total ? uploadProgress.total / 1024 / 1024 : undefined,
+          speedMBps: uploadProgress.speedMBps,
+          etaSeconds: uploadProgress.etaSeconds,
+        }
+      }));
+    };
+
     try {
-      const result = await directB2Upload(token, file, type, (uploadProgress: UploadProgressInfo) => {
-        setUploads(prev => ({
-          ...prev,
-          [type]: {
-            status: "uploading",
-            progress: uploadProgress.progress,
-            uploadedMB: uploadProgress.uploadedMB,
-            totalMB: uploadProgress.total ? uploadProgress.total / 1024 / 1024 : undefined,
-            speedMBps: uploadProgress.speedMBps,
-            etaSeconds: uploadProgress.etaSeconds,
-          }
-        }));
-      });
-      
+      // Poster/backdrop go through backend proxy (same pattern as profile image /
+      // telegram-post). Only video stays on the direct-to-B2 path.
+      const result =
+        type === "video"
+          ? await directB2Upload(token, file, type, onUploadProgress)
+          : await backendUploadMovieImage(token, file, type, onUploadProgress);
+
+      console.log("[MovieForm] upload success:", { type, url: result.url, file_key: result.file_key });
+
       setUploads(prev => ({
         ...prev,
         [type]: { status: "success", message: result.url, tempKey: result.file_key, progress: 100 }
@@ -172,11 +183,12 @@ export default function MovieForm({
         setTempFileKey(result.file_key);
       }
     } catch (err) {
+      console.error("[MovieForm] upload failed:", { type, error: err });
       setUploads(prev => ({
         ...prev,
-        [type]: { 
-          status: "error", 
-          message: err instanceof Error ? err.message : "Upload failed" 
+        [type]: {
+          status: "error",
+          message: err instanceof Error ? err.message : "Upload failed"
         }
       }));
     }

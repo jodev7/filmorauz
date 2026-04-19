@@ -1,11 +1,25 @@
 // Command b2-cors inspects and (optionally) applies the Backblaze B2 bucket
-// CORS rules that are required for browser-to-B2 direct uploads.
+// CORS rules that are required for browser-to-B2 direct uploads and for HLS
+// playback of .m3u8 / .ts segments served from the bucket.
 //
 // Why this exists:
 //   B2 bucket CORS is configured on B2's side via the b2_update_bucket API —
-//   not in this repo's code. The symptom of missing/incorrect CORS rules is
-//   that browsers get a 401 on the preflight OPTIONS request and the upload
-//   never starts. This tool fixes that from the developer machine.
+//   not in this repo's code. Two symptoms of missing/incorrect rules:
+//     - Upload: 401 on preflight OPTIONS, upload never starts.
+//     - Playback: "No 'Access-Control-Allow-Origin' header" on .m3u8 / .ts
+//       requests, video player fails to start.
+//   This tool writes both rules in one call (b2_update_bucket replaces the
+//   entire corsRules array, so they must be sent together).
+//
+// Cloudflare note:
+//   When cdn.filmorauz.net fronts the bucket, Cloudflare's own response must
+//   also carry Access-Control-Allow-Origin. If the origin rule below isn't
+//   enough (e.g. Cloudflare strips it), add a Transform Rule on the zone:
+//     When:  Hostname equals cdn.filmorauz.net
+//     Then:  Set static response headers
+//            Access-Control-Allow-Origin: *
+//            Access-Control-Allow-Methods: GET, HEAD, OPTIONS
+//            Access-Control-Allow-Headers: *
 //
 // Usage:
 //   cd backend
@@ -89,22 +103,47 @@ func main() {
 	log.Printf("bucket: name=%s id=%s", bucket.BucketName, bucket.BucketID)
 	printCurrentRules(bucket.CorsRules)
 
-	desired := []b2CorsRule{{
-		CorsRuleName:   *ruleName,
-		AllowedOrigins: origins,
-		AllowedOperations: []string{
-			"b2_upload_file",
-			"b2_upload_part",
+	desired := []b2CorsRule{
+		{
+			CorsRuleName:   *ruleName,
+			AllowedOrigins: origins,
+			AllowedOperations: []string{
+				"b2_upload_file",
+				"b2_upload_part",
+			},
+			AllowedHeaders: []string{
+				"authorization",
+				"x-bz-file-name",
+				"x-bz-content-sha1",
+				"content-type",
+			},
+			ExposeHeaders: []string{},
+			MaxAgeSeconds: *maxAge,
 		},
-		AllowedHeaders: []string{
-			"authorization",
-			"x-bz-file-name",
-			"x-bz-content-sha1",
-			"content-type",
+		// Playback rule: browser fetches .m3u8 / .ts segments from the bucket
+		// (directly or via Cloudflare in front of it). HLS needs a simple GET
+		// with the Range header allowed, and Content-Length / Content-Range
+		// exposed so the player can seek. Origins match the upload rule.
+		{
+			CorsRuleName:   "filmorauzPlayback",
+			AllowedOrigins: origins,
+			AllowedOperations: []string{
+				"b2_download_file_by_name",
+				"b2_download_file_by_id",
+				"s3_get",
+				"s3_head",
+			},
+			AllowedHeaders: []string{"*"},
+			ExposeHeaders: []string{
+				"Content-Length",
+				"Content-Range",
+				"Content-Type",
+				"Accept-Ranges",
+				"ETag",
+			},
+			MaxAgeSeconds: *maxAge,
 		},
-		ExposeHeaders: []string{},
-		MaxAgeSeconds: *maxAge,
-	}}
+	}
 
 	if !*apply {
 		log.Printf("dry-run: would apply %d rule(s). Re-run with --apply to write.", len(desired))

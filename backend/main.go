@@ -199,6 +199,7 @@ func main() {
 		SerialsChannelUsername: cfg.TelegramSerialsChannel,
 		AdminTelegramID:        cfg.AdminTelegramID,
 		BaseSiteURL:            cfg.BaseSiteURL,
+		ChannelsList:           cfg.TelegramChannels,
 	})
 	if err != nil {
 		log.Printf("Warning: Failed to initialize Telegram service: %v", err)
@@ -227,6 +228,16 @@ func main() {
 	// Clip repository and handler
 	clipRepo := repositories.NewClipRepository(db)
 	clipHandler := handlers.NewClipHandler(clipRepo, parserURL)
+
+	// B2 cleanup service — nil in DEV when credentials are not set; DeleteMovie
+	// then falls through to DB-only removal without aborting.
+	b2Cleanup := services.NewB2CleanupService(services.B2CleanupConfig{
+		KeyID:      cfg.B2KeyID,
+		AppKey:     cfg.B2AppKey,
+		BucketName: cfg.B2Bucket,
+		CDNURL:     cfg.CDNURL,
+	})
+	movieService.SetStorageDependencies(clipRepo, b2Cleanup)
 
 	// Instagram schedule repository and handler
 	igScheduleRepo := repositories.NewInstagramScheduleRepository(db)

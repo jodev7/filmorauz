@@ -56,6 +56,7 @@ type TelegramService struct {
 	adminTelegramID        int64
 	baseSiteURL            string
 	channels               []TelegramChannel
+	extraChannels          []string // raw channel identifiers from TELEGRAM_CHANNELS env (e.g. "@filmorauznet_drama")
 	httpClient             *http.Client
 }
 
@@ -68,6 +69,7 @@ type TelegramConfig struct {
 	AdminTelegramID        int64
 	BaseSiteURL            string
 	MovieChannels          []TelegramChannel // Genre-routed channels
+	ChannelsList           []string          // raw TELEGRAM_CHANNELS list — used for approval auto-posts
 }
 
 // NewTelegramService creates a new Telegram notification service
@@ -91,6 +93,7 @@ func NewTelegramService(config TelegramConfig) (*TelegramService, error) {
 		adminTelegramID:        config.AdminTelegramID,
 		baseSiteURL:            config.BaseSiteURL,
 		channels:               channels,
+		extraChannels:          config.ChannelsList,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -633,112 +636,189 @@ func (s *TelegramService) NotifyMovieCreated(movie *TelegramMovieData) *Telegram
 
 // PostContentApproval posts an approved movie or serial to Telegram.
 // isSerial=true → posts only to the serials channel.
-// isSerial=false → posts to main channel + any genre-matched channels.
-// Both include an inline "🎬 Tomosha qilish" button.
-func (s *TelegramService) PostContentApproval(data *TelegramMovieData, isSerial bool) {
+// isSerial=false → posts to the main movie channel + any genre-matched
+// channels from TELEGRAM_CHANNELS. Returns the list of targets that
+// received the message successfully — the caller persists this to skip
+// re-posting on a duplicate approve click.
+//
+// Genre matching (movies only): a channel from TELEGRAM_CHANNELS is
+// considered a genre channel if its identifier contains an underscore —
+// the suffix after the last underscore is matched (substring, case-
+// insensitive) against each of the movie's genres. Example:
+//   movie genres "Drama"  +  channel "@filmorauznet_drama"   → match
+//   movie genres "Anime"  +  channel "@filmorauznet_anime"   → match
+//   channel "@filmorauznet" (no underscore) → always sent as the main channel
+func (s *TelegramService) PostContentApproval(data *TelegramMovieData, isSerial bool) []string {
 	if s.botToken == "" {
 		log.Printf("[TELEGRAM APPROVE] bot token not configured, skipping")
-		return
+		return nil
 	}
 
 	api, err := tgbotapi.NewBotAPI(s.botToken)
 	if err != nil {
 		log.Printf("[TELEGRAM APPROVE] failed to create bot API: %v", err)
-		return
+		return nil
 	}
 
 	caption := s.buildApprovalCaption(data, isSerial)
-	keyboard := buildAdKeyboard(data.MovieURL, "🎬 Tomosha qilish")
+	keyboard := buildAdKeyboard(data.MovieURL, "🎬 Saytda ko‘rish")
 
+	var posted []string
 	send := func(target string) {
 		if target == "" {
 			return
 		}
 		log.Printf("[TELEGRAM APPROVE] posting to %s", target)
-		if data.PosterURL != "" {
-			msg := tgbotapi.NewPhotoToChannel(target, tgbotapi.FileURL(data.PosterURL))
-			msg.Caption = caption
-			msg.ParseMode = "HTML"
-			if keyboard != nil {
-				msg.ReplyMarkup = keyboard
-			}
-			if _, sendErr := api.Send(msg); sendErr != nil {
-				// Fallback to text
-				log.Printf("[TELEGRAM APPROVE] photo send failed (%v), falling back to text", sendErr)
-				txt := tgbotapi.NewMessageToChannel(target, caption)
-				txt.ParseMode = "HTML"
-				if keyboard != nil {
-					txt.ReplyMarkup = keyboard
-				}
-				if _, sendErr2 := api.Send(txt); sendErr2 != nil {
-					log.Printf("[TELEGRAM APPROVE] text fallback also failed: %v", sendErr2)
-				}
-			}
-		} else {
-			txt := tgbotapi.NewMessageToChannel(target, caption)
-			txt.ParseMode = "HTML"
-			if keyboard != nil {
-				txt.ReplyMarkup = keyboard
-			}
-			if _, sendErr := api.Send(txt); sendErr != nil {
-				log.Printf("[TELEGRAM APPROVE] text send failed: %v", sendErr)
-			}
+		sendErr := s.sendApprovalToChannel(api, target, caption, data.PosterURL, keyboard)
+		if sendErr != nil {
+			log.Printf("[TELEGRAM APPROVE] FAILED target=%s err=%v", target, sendErr)
+			return
 		}
+		log.Printf("[TELEGRAM APPROVE] ✓ target=%s", target)
+		posted = append(posted, target)
 	}
 
 	if isSerial {
 		if s.serialsChannelUsername != "" {
-			send("@" + s.serialsChannelUsername)
+			send(ensureAtPrefix(s.serialsChannelUsername))
 		} else {
 			log.Printf("[TELEGRAM APPROVE] TELEGRAM_SERIALS_CHANNEL not configured, skipping serial post")
 		}
-		return
+		return posted
 	}
 
-	// Movie: post to main channel
+	targets := s.resolveMovieApprovalTargets(data.Genres)
+	if len(targets) == 0 {
+		log.Printf("[TELEGRAM APPROVE] no channels resolved for movie %q — check TG_CHANNEL_USERNAME / TELEGRAM_CHANNELS", data.Title)
+		return posted
+	}
+	log.Printf("[TELEGRAM APPROVE] movie=%q genres=%v targets=%v", data.Title, data.Genres, targets)
+	for _, t := range targets {
+		send(t)
+	}
+	return posted
+}
+
+// sendApprovalToChannel sends the rendered caption (with optional poster
+// and inline button) to a single channel identifier. Falls back to a
+// text-only message when the poster send fails.
+func (s *TelegramService) sendApprovalToChannel(api *tgbotapi.BotAPI, target, caption, posterURL string, keyboard *tgbotapi.InlineKeyboardMarkup) error {
+	if posterURL != "" {
+		msg := tgbotapi.NewPhotoToChannel(target, tgbotapi.FileURL(posterURL))
+		msg.Caption = caption
+		msg.ParseMode = "HTML"
+		if keyboard != nil {
+			msg.ReplyMarkup = keyboard
+		}
+		if _, sendErr := api.Send(msg); sendErr == nil {
+			return nil
+		} else {
+			log.Printf("[TELEGRAM APPROVE] photo send failed target=%s (%v), falling back to text", target, sendErr)
+		}
+	}
+	txt := tgbotapi.NewMessageToChannel(target, caption)
+	txt.ParseMode = "HTML"
+	if keyboard != nil {
+		txt.ReplyMarkup = keyboard
+	}
+	_, sendErr := api.Send(txt)
+	return sendErr
+}
+
+// resolveMovieApprovalTargets returns de-duplicated channel identifiers
+// (each "@username") to post a movie approval to: the main channel always,
+// plus any TELEGRAM_CHANNELS entry whose trailing genre token matches one
+// of the movie's genres. If TELEGRAM_CHANNELS has a bare entry (no
+// underscore), it's treated as an additional main channel.
+func (s *TelegramService) resolveMovieApprovalTargets(genres []string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(raw string) {
+		t := ensureAtPrefix(strings.TrimSpace(raw))
+		if t == "" || t == "@" {
+			return
+		}
+		if _, ok := seen[t]; ok {
+			return
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+
 	if s.channelUsername != "" {
-		send("@" + s.channelUsername)
+		add(s.channelUsername)
 	}
 
-	// Movie: also post to any genre-matched channels that have a numeric ID
-	for _, ch := range s.getTargetChannels(data.Genres) {
-		if ch.ID != 0 {
-			log.Printf("[TELEGRAM APPROVE] posting to genre channel %s", ch.Title)
-			if data.PosterURL != "" {
-				msg := tgbotapi.NewPhoto(ch.ID, tgbotapi.FileURL(data.PosterURL))
-				msg.Caption = caption
-				msg.ParseMode = "HTML"
-				if keyboard != nil {
-					msg.ReplyMarkup = keyboard
-				}
-				if _, sendErr := api.Send(msg); sendErr != nil {
-					log.Printf("[TELEGRAM APPROVE] genre channel %s failed: %v", ch.Title, sendErr)
-				}
-			} else {
-				msg := tgbotapi.NewMessage(ch.ID, caption)
-				msg.ParseMode = "HTML"
-				if keyboard != nil {
-					msg.ReplyMarkup = keyboard
-				}
-				if _, sendErr := api.Send(msg); sendErr != nil {
-					log.Printf("[TELEGRAM APPROVE] genre channel %s text failed: %v", ch.Title, sendErr)
-				}
+	lowerGenres := make([]string, 0, len(genres))
+	for _, g := range genres {
+		lowerGenres = append(lowerGenres, strings.ToLower(strings.TrimSpace(g)))
+	}
+
+	for _, raw := range s.extraChannels {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		name := strings.TrimPrefix(raw, "@")
+		idx := strings.LastIndex(name, "_")
+		if idx == -1 {
+			// Bare channel (no underscore) — treat as a main channel.
+			add(raw)
+			continue
+		}
+		suffix := strings.ToLower(name[idx+1:])
+		for _, g := range lowerGenres {
+			if g == "" {
+				continue
+			}
+			if strings.Contains(g, suffix) || strings.Contains(suffix, g) {
+				add(raw)
+				break
 			}
 		}
 	}
+	return out
+}
+
+func ensureAtPrefix(ch string) string {
+	ch = strings.TrimSpace(ch)
+	if ch == "" {
+		return ""
+	}
+	if strings.HasPrefix(ch, "@") {
+		return ch
+	}
+	return "@" + ch
 }
 
 // buildApprovalCaption builds the caption for an approved content post.
+// Format (movies):
+//
+//	🎬 Yangi kino platformaga qo‘shildi!
+//
+//	📌 <title>
+//	📅 Yil: <year>
+//	🎭 Janr: <genres>
+//	📝 <short description>
+//	🔢 Kino kodi: <code>
+//
+//	📢 @<main channel>
+//
+// Serials use the "📺 Yangi serial" header and otherwise follow the same layout.
 func (s *TelegramService) buildApprovalCaption(data *TelegramMovieData, isSerial bool) string {
 	var b strings.Builder
 
-	emoji := "🎬"
 	if isSerial {
-		emoji = "📺"
+		b.WriteString("📺 <b>Yangi serial platformaga qo‘shildi!</b>\n\n")
+	} else {
+		b.WriteString("🎬 <b>Yangi kino platformaga qo‘shildi!</b>\n\n")
 	}
-	b.WriteString(emoji + " <b>")
-	b.WriteString(html.EscapeString(data.Title))
-	b.WriteString("</b>\n")
+
+	if t := strings.TrimSpace(data.Title); t != "" {
+		b.WriteString("📌 <b>")
+		b.WriteString(html.EscapeString(t))
+		b.WriteString("</b>\n")
+	}
 
 	if data.Year > 0 {
 		b.WriteString(fmt.Sprintf("📅 Yil: %d\n", data.Year))
@@ -749,21 +829,26 @@ func (s *TelegramService) buildApprovalCaption(data *TelegramMovieData, isSerial
 		genres = data.Genres
 	}
 	if len(genres) > 0 {
-		b.WriteString(fmt.Sprintf("🎭 Janr: %s\n", strings.Join(genres, ", ")))
+		b.WriteString("🎭 Janr: ")
+		b.WriteString(html.EscapeString(strings.Join(genres, ", ")))
+		b.WriteString("\n")
 	}
 
 	if data.Quality != "" {
 		b.WriteString(fmt.Sprintf("🎞 Sifat: %s\n", data.Quality))
 	}
 
-	if data.Description != "" {
-		desc := data.Description
-		if len([]rune(desc)) > 200 {
-			runes := []rune(desc)
+	if desc := strings.TrimSpace(data.Description); desc != "" {
+		if runes := []rune(desc); len(runes) > 200 {
 			desc = string(runes[:200]) + "..."
 		}
-		b.WriteString("\n")
+		b.WriteString("\n📝 ")
 		b.WriteString(html.EscapeString(desc))
+		b.WriteString("\n")
+	}
+
+	if data.Code != "" {
+		b.WriteString(fmt.Sprintf("\n🔢 Kino kodi: <code>%s</code>", html.EscapeString(data.Code)))
 	}
 
 	if s.channelUsername != "" {

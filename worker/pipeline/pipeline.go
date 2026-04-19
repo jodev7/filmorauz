@@ -1482,12 +1482,9 @@ func (p *Pipeline) processDirectUploadJob(ctx context.Context, job *models.Inges
 	}
 	log.Printf("[DIRECT_UPLOAD] Processed video: hls_dir=%s, master=%s", hlsDir, masterPath)
 
-	// Cleanup temp input file after processing
-	if err := os.Remove(localTempPath); err != nil {
-		log.Printf("[DIRECT_UPLOAD] Warning: failed to cleanup temp input file: %v", err)
-	} else {
-		log.Printf("[DIRECT_UPLOAD] Cleaned up temp input file")
-	}
+	// NOTE: Do NOT delete localTempPath here — the pipeline may still fail
+	// (upload or DB save), and retries need the source file. Cleanup runs
+	// after createMovieInDatabase succeeds below.
 
 	// Update status to uploading
 	if err := p.updateStatus(jobID, models.IngestionStatusUploading, 60); err != nil {
@@ -1534,6 +1531,10 @@ func (p *Pipeline) processDirectUploadJob(ctx context.Context, job *models.Inges
 		}
 		return fmt.Errorf(errMsg)
 	}
+
+	// Upload + DB save both succeeded — now safe to delete the local temp source.
+	log.Printf("[DIRECT_UPLOAD] deleting temp input after full success: %s", localTempPath)
+	p.cleanupFile(localTempPath)
 
 	// Step 5: Generate clips (optional - don't fail if clips fail)
 	if movieResult != nil {
@@ -1903,15 +1904,10 @@ func (p *Pipeline) uploadProcessedFiles(job *models.IngestionJob, hlsDir string,
 		log.Printf("[PIPELINE] uploadProcessedFiles completed: streamingURL=%s, finalUploadsPath=%s", streamingURL, finalUploadsPath)
 	}
 
-	// Cleanup: Delete original downloaded file after successful HLS finalization
-	if inputPath != "" {
-		log.Printf("[WORKER] Deleting original downloaded mp4: %s", inputPath)
-		if err := os.Remove(inputPath); err != nil {
-			log.Printf("[WORKER] WARNING: Failed to delete original file: %v", err)
-		} else {
-			log.Printf("[WORKER] Deleted original downloaded mp4: %s", inputPath)
-		}
-	}
+	// NOTE: Source file cleanup is deliberately NOT performed here. It runs
+	// in the main pipeline (see cleanupFile call after createMovieInDatabase)
+	// so the source survives a DB-save failure and a subsequent retry.
+	_ = inputPath
 
 	return streamingURL, finalUploadsPath, nil
 }
@@ -2663,26 +2659,48 @@ func getMapKeys(m map[string]bool) []string {
 	return keys
 }
 
-// CRITICAL: Only deletes .tmp files, never deletes .mp4 files
+// cleanupFile removes a temporary source file (parser download or B2 temp
+// download) after the pipeline has successfully processed it AND saved the
+// movie to the database. Safe to call with an empty path or a non-existent
+// path — both are logged and skipped.
+//
+// Why the old `.mp4` blanket refusal was removed: the final output is HLS
+// (.m3u8 + .ts), never the source .mp4. Parser downloads land in
+// parser/downloads/... as .mp4 and are strictly intermediate, so the old
+// guard was silently keeping every source file on disk.
 func (p *Pipeline) cleanupFile(path string) {
 	if path == "" {
+		log.Printf("[CLEANUP] SKIP: empty path")
 		return
 	}
 
-	// Safety check: Never delete .mp4 files (final output from parser)
-	if strings.HasSuffix(path, ".mp4") {
-		log.Printf("[CLEANUP] SKIP: Not deleting .mp4 file: %s", path)
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("[CLEANUP] SKIP: file does not exist: %s", path)
+		} else {
+			log.Printf("[CLEANUP] SKIP: stat failed for %s: %v", path, err)
+		}
+		return
+	}
+	if info.IsDir() {
+		log.Printf("[CLEANUP] SKIP: path is a directory, not a file: %s", path)
 		return
 	}
 
-	// Only delete temporary files
-	if strings.HasSuffix(path, ".tmp") || strings.HasPrefix(filepath.Base(path), "part_") {
-		log.Printf("[CLEANUP] Deleting temp file: %s", path)
-		os.Remove(path)
+	if err := os.Remove(path); err != nil {
+		log.Printf("[CLEANUP] FAILED: remove %s: %v", path, err)
 		return
 	}
+	log.Printf("[CLEANUP] DELETED: source file %s", path)
 
-	log.Printf("[CLEANUP] SKIP: Not a temp file, keeping: %s", path)
+	// Best-effort: remove parent dir if empty (e.g. parser/downloads/<job_id>/).
+	parent := filepath.Dir(path)
+	if entries, rerr := os.ReadDir(parent); rerr == nil && len(entries) == 0 {
+		if rmErr := os.Remove(parent); rmErr == nil {
+			log.Printf("[CLEANUP] DELETED: empty parent dir %s", parent)
+		}
+	}
 }
 
 // cleanupDir removes a temporary directory

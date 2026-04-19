@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -28,10 +29,19 @@ type MovieService struct {
 	counterRepo     *repositories.CounterRepository
 	notificationSvc *NotificationService
 	viewEventRepo   *repositories.MovieViewEventRepository
+	clipRepo        *repositories.ClipRepository // optional — enables clip cleanup on delete
+	b2Cleanup       *B2CleanupService            // optional — nil means skip B2 cleanup
 }
 
 func NewMovieService(repo *repositories.MovieRepository, counterRepo *repositories.CounterRepository, notificationSvc *NotificationService, viewEventRepo *repositories.MovieViewEventRepository) *MovieService {
 	return &MovieService{repo: repo, counterRepo: counterRepo, notificationSvc: notificationSvc, viewEventRepo: viewEventRepo}
+}
+
+// SetStorageDependencies wires optional cleanup helpers so DeleteMovie can
+// purge B2 assets and clip DB rows. Safe to call with nils (cleanup skipped).
+func (s *MovieService) SetStorageDependencies(clipRepo *repositories.ClipRepository, b2 *B2CleanupService) {
+	s.clipRepo = clipRepo
+	s.b2Cleanup = b2
 }
 
 // GetTrendingMovies returns the most popular movies based on recent view events
@@ -450,12 +460,129 @@ func (s *MovieService) UpdateMovie(id string, input *models.MovieInput) (*models
 	return existing, nil
 }
 
+// DeleteMovie removes the movie's B2 assets (HLS folder, poster, backdrop,
+// clips), its clip DB rows, and the movie document. B2/clip cleanup runs
+// best-effort: a missing file or transient delete error is logged but does
+// not abort the flow — the DB record is always removed at the end so the
+// admin UI never gets stuck on a half-deleted movie.
 func (s *MovieService) DeleteMovie(id string) error {
-	_, err := primitive.ObjectIDFromHex(id)
+	objID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
 		return fmt.Errorf("invalid movie id")
 	}
-	return s.repo.Delete(id)
+
+	movie, findErr := s.repo.FindByID(objID)
+	if findErr != nil || movie == nil {
+		// Movie already gone — still try the final DeleteOne so the caller
+		// sees a consistent response.
+		log.Printf("[MOVIE DELETE] id=%s not found in DB (err=%v), attempting repo.Delete anyway", id, findErr)
+		return s.repo.Delete(id)
+	}
+
+	log.Printf("[MOVIE DELETE] start — id=%s title=%q code=%s", id, movie.Title, movie.Code)
+
+	s.cleanupMovieStorage(objID, movie)
+
+	if delErr := s.repo.Delete(id); delErr != nil {
+		log.Printf("[MOVIE DELETE] FAILED repo.Delete id=%s: %v", id, delErr)
+		return delErr
+	}
+	log.Printf("[MOVIE DELETE] done — id=%s removed from DB", id)
+	return nil
+}
+
+// cleanupMovieStorage deletes every B2 asset associated with a movie and
+// wipes its clip rows. Every step is best-effort + logged.
+func (s *MovieService) cleanupMovieStorage(objID primitive.ObjectID, movie *models.Movie) {
+	if s.b2Cleanup == nil {
+		log.Printf("[MOVIE DELETE] B2 cleanup disabled (no service configured) — skipping storage delete")
+	} else {
+		// 1) HLS folder: wipe videos/<folder>/ recursively so master.m3u8,
+		//    quality subfolders, and all .ts segments are removed in one pass.
+		prefix := firstNonEmpty(
+			s.b2Cleanup.DeriveVideoFolderPrefix(movie.MasterPlaylistURL),
+			s.b2Cleanup.DeriveVideoFolderPrefix(movie.VideoURL),
+		)
+		if prefix != "" {
+			log.Printf("[MOVIE DELETE] HLS prefix to purge: %s", prefix)
+			if _, err := s.b2Cleanup.DeleteByPrefix(prefix); err != nil {
+				log.Printf("[MOVIE DELETE] HLS prefix delete failed (continuing): %v", err)
+			}
+		} else {
+			log.Printf("[MOVIE DELETE] no videos/ prefix derivable from master=%q video=%q — skipping HLS folder purge",
+				movie.MasterPlaylistURL, movie.VideoURL)
+		}
+
+		// 2) Individual video URL if it points outside the HLS folder (e.g.
+		//    an .mp4 upload that lives in temp/videos/…). Safe if already covered.
+		if videoKey := s.b2Cleanup.ExtractKeyFromURL(movie.VideoURL); videoKey != "" && !strings.HasPrefix(videoKey, prefix) {
+			if _, err := s.b2Cleanup.DeleteByKey(videoKey); err != nil {
+				log.Printf("[MOVIE DELETE] video key delete failed key=%s err=%v", videoKey, err)
+			}
+		}
+
+		// 3) Poster + backdrop images.
+		for label, u := range map[string]string{
+			"poster":   movie.PosterURL,
+			"backdrop": movie.BackdropURL,
+		} {
+			key := s.b2Cleanup.ExtractKeyFromURL(u)
+			if key == "" {
+				log.Printf("[MOVIE DELETE] %s: no key derivable from url=%q", label, u)
+				continue
+			}
+			if _, err := s.b2Cleanup.DeleteByKey(key); err != nil {
+				log.Printf("[MOVIE DELETE] %s delete failed key=%s err=%v", label, key, err)
+			}
+		}
+	}
+
+	// 4) Clips — delete B2 files then DB rows.
+	if s.clipRepo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		clips, cErr := s.clipRepo.FindByMovieID(ctx, objID)
+		if cErr != nil {
+			log.Printf("[MOVIE DELETE] FindByMovieID failed (continuing): %v", cErr)
+		} else {
+			log.Printf("[MOVIE DELETE] %d clip(s) linked to movie — cleaning up", len(clips))
+			if s.b2Cleanup != nil {
+				for _, clip := range clips {
+					key := s.b2Cleanup.ExtractKeyFromURL(clip.URL)
+					if key == "" {
+						key = strings.TrimPrefix(clip.Path, "/")
+					}
+					if key == "" {
+						log.Printf("[MOVIE DELETE] clip id=%s: no key derivable, skipping B2 delete", clip.ID.Hex())
+						continue
+					}
+					if _, err := s.b2Cleanup.DeleteByKey(key); err != nil {
+						log.Printf("[MOVIE DELETE] clip delete failed key=%s err=%v", key, err)
+					}
+				}
+			}
+			if err := s.clipRepo.DeleteByMovieID(ctx, objID); err != nil {
+				log.Printf("[MOVIE DELETE] clipRepo.DeleteByMovieID failed (continuing): %v", err)
+			} else {
+				log.Printf("[MOVIE DELETE] removed %d clip row(s) from DB", len(clips))
+			}
+		}
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// MarkTelegramPostedOnApproval flips telegram_posted_on_approval=true so the
+// next approve click does not re-post to Telegram.
+func (s *MovieService) MarkTelegramPostedOnApproval(id string) error {
+	return s.repo.MarkTelegramPostedOnApproval(id)
 }
 
 // BackfillMovieCodes assigns codes to existing movies that don't have one.
