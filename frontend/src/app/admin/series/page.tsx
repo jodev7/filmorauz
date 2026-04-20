@@ -307,7 +307,7 @@ export default function AdminSeriesPage() {
                         {s.genre?.slice(0, 2).map((g, i) => (
                           <span
                             key={i}
-                            className="px-2 py-0.5 bg-brand-dark text-gray-300 text-xs rounded"
+                            className="px-2 py-0.5 bg-brand-dark text-gray-300 text-xs rounded capitalize"
                           >
                             {g}
                           </span>

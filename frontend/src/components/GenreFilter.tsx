@@ -3,20 +3,20 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { localizeSingleGenre } from "@/lib/localization";
 
-// English genre names (used for filtering and as keys)
+// Lowercase English keys — matches DB/API format. Display is localized to Uzbek.
 const GENRES = [
   "All",
-  "Action",
-  "Drama",
-  "Comedy",
-  "Thriller",
-  "Horror",
-  "Romance",
-  "Sci-Fi",
-  "Animation",
-  "Documentary",
-  "Crime",
-  "Fantasy",
+  "action",
+  "drama",
+  "comedy",
+  "thriller",
+  "horror",
+  "romance",
+  "sci-fi",
+  "animation",
+  "documentary",
+  "crime",
+  "fantasy",
 ];
 
 export default function GenreFilter() {

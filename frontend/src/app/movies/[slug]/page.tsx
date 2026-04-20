@@ -23,6 +23,7 @@ import {
 	getLocalizedDescription,
 	getLocalizedGenres,
 	getLocalizedCountry,
+	localizeSingleGenre,
 } from "@/lib/localization";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
@@ -83,8 +84,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       },
     };
   } catch {
-    return { 
-      title: "Movie Not Found — FILMORAUZ",
+    return {
+      title: "Kino topilmadi — FILMORAUZ",
       robots: { index: false, follow: false },
     };
   }
@@ -253,15 +254,15 @@ export default async function MovieDetailPage({ params }: Props) {
                 )}
               </div>
 
-              {localizedGenres?.length > 0 && (
+              {(movie.genre?.length || 0) > 0 && (
                 <div className="flex flex-wrap gap-2 mb-5">
-                  {localizedGenres.map((g) => (
+                  {(movie.genre || []).map((g) => (
                     <Link
                       key={g}
-                      href={`/movies?genre=${g}`}
+                      href={`/movies?genre=${g.toLowerCase()}`}
                       className="text-xs sm:text-sm bg-brand-card border border-brand-border text-gray-300 px-3 py-1 rounded-full hover:border-brand-red hover:text-brand-red transition-colors"
                     >
-                      {g}
+                      {localizeSingleGenre(g)}
                     </Link>
                   ))}
                 </div>

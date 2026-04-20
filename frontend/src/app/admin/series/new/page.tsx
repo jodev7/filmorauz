@@ -24,7 +24,7 @@ export default function NewSeriesPage() {
     poster_url: "",
     backdrop_url: "",
     year: new Date().getFullYear(),
-    genres: [],
+    genre: [],
     country: "",
     is_premium: false,
   });
@@ -52,9 +52,9 @@ export default function NewSeriesPage() {
     if (genreInput.trim()) {
       const genres = genreInput
         .split(",")
-        .map((g) => g.trim())
+        .map((g) => g.trim().toLowerCase())
         .filter((g) => g);
-      form.genres = genres;
+      form.genre = genres;
     }
 
     setSaving(true);

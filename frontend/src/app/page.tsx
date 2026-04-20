@@ -21,7 +21,7 @@ const GENRE_CHIPS = [
   { label: "Triller", slug: "thriller" },
   { label: "Multfilm", slug: "animation" },
   { label: "Romantika", slug: "romance" },
-  { label: "Daxvo", slug: "horror" },
+  { label: "Dahshat", slug: "horror" },
   { label: "Klassika", slug: "classic" },
 ];
 
@@ -154,7 +154,7 @@ export default async function HomePage() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
                 <Flame size={20} className="text-orange-500" />
-                Trending
+                Mashhur
               </h2>
             </div>
             <MovieCarousel movies={trending} />

@@ -17,6 +17,25 @@ func NewSeriesService(seriesRepo *repositories.SeriesRepository) *SeriesService 
 	return &SeriesService{seriesRepo: seriesRepo}
 }
 
+// normalizeGenres trims, lowercases, and dedupes genre strings.
+// Backend + DB store genres as lowercase English (e.g. "drama", "comedy").
+func normalizeGenres(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, g := range in {
+		g = strings.ToLower(strings.TrimSpace(g))
+		if g == "" {
+			continue
+		}
+		if _, ok := seen[g]; ok {
+			continue
+		}
+		seen[g] = struct{}{}
+		out = append(out, g)
+	}
+	return out
+}
+
 // GenerateSlug creates a URL-friendly slug from title
 func (s *SeriesService) GenerateSlug(title string) string {
 	// Convert to lowercase and replace spaces with dashes
@@ -41,7 +60,7 @@ func (s *SeriesService) CreateSeries(input *models.SeriesInput) (*models.Series,
 		PosterURL:   input.PosterURL,
 		BackdropURL: input.BackdropURL,
 		Year:        input.Year,
-		Genre:       input.Genre,
+		Genre:       normalizeGenres(input.Genre),
 		Country:     input.Country,
 		IsPremium:   input.IsPremium,
 		IsCompleted: input.IsCompleted,
@@ -102,7 +121,7 @@ func (s *SeriesService) UpdateSeries(id primitive.ObjectID, input *models.Series
 	series.PosterURL = input.PosterURL
 	series.BackdropURL = input.BackdropURL
 	series.Year = input.Year
-	series.Genre = input.Genre
+	series.Genre = normalizeGenres(input.Genre)
 	series.Country = input.Country
 	series.IsPremium = input.IsPremium
 	series.IsCompleted = input.IsCompleted

@@ -401,18 +401,18 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
             
             {/* Lock overlay */}
             <PremiumLockOverlay
-              title="Premium Content"
-              message="This movie is available for premium members only."
+              title="Premium kontent"
+              message="Bu kino faqat Premium foydalanuvchilar uchun."
               className="absolute inset-0 m-auto"
             />
-            
+
             {/* Upgrade button */}
             <div className="absolute bottom-8 left-0 right-0 flex justify-center">
               <PremiumButton
                 onClick={() => window.open('https://t.me/filmorauz_bot', '_blank')}
               >
                 <Crown size={18} />
-                Upgrade to Premium
+                Premium olish
               </PremiumButton>
             </div>
           </div>

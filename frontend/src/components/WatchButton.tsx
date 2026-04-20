@@ -24,11 +24,11 @@ export default function WatchButton({ movieSlug, movieTitle, isPremium }: WatchB
         onClick={() => window.open('http://localhost:3000/premium', '_blank')}
       >
         <Crown size={18} />
-        Upgrade to Watch
+        Premium olish
       </PremiumButton>
     );
   }
-  
+
   // Otherwise show normal watch button
   return (
     <Link
@@ -36,7 +36,7 @@ export default function WatchButton({ movieSlug, movieTitle, isPremium }: WatchB
       className="inline-flex items-center gap-2 sm:gap-3 bg-brand-red hover:bg-orange-700 text-white font-semibold px-6 sm:px-8 py-3 sm:py-4 rounded-xl transition-colors text-sm sm:text-base"
     >
       <Play size={20} className="sm:w-6 sm:h-6" fill="white" />
-      Watch Now
+      Hozir tomosha qilish
     </Link>
   );
 }

@@ -304,7 +304,7 @@ export default function AdminMoviesPage() {
                         {movie.genre?.slice(0, 2).map((g) => (
                           <span
                             key={g}
-                            className="text-xs bg-brand-border text-gray-400 px-2 py-0.5 rounded-full"
+                            className="text-xs bg-brand-border text-gray-400 px-2 py-0.5 rounded-full capitalize"
                           >
                             {g}
                           </span>

@@ -1,19 +1,21 @@
-// Uzbek genre mappings
+// Uzbek genre mappings.
+// Keys are English genre names; lookup is case-insensitive (see UZBEK_GENRE_LOOKUP).
+// Backend stores genres as lowercase English; display always uses Uzbek labels below.
 export const UZBEK_GENRE_MAP: Record<string, string> = {
-	"Action": "Jangovar",
+	"Action": "Jangari",
 	"Adventure": "Sarguzasht",
 	"Animation": "Animatsiya",
 	"Comedy": "Komediya",
 	"Crime": "Jinoyat",
-	"Documentary": "Hujjatli film",
+	"Documentary": "Hujjatli",
 	"Drama": "Drama",
 	"Family": "Oila",
 	"Fantasy": "Fantastika",
 	"History": "Tarixiy",
-	"Horror": "Qo'rqinchli",
+	"Horror": "Dahshat",
 	"Kids": "Bolalar",
 	"Music": "Musiqa",
-	"Mystery": "Sir",
+	"Mystery": "Sirli",
 	"News": "Yangiliklar",
 	"Romance": "Romantika",
 	"Science Fiction": "Ilmiy fantastika",
@@ -23,9 +25,14 @@ export const UZBEK_GENRE_MAP: Record<string, string> = {
 	"Thriller": "Triller",
 	"TV Movie": "TV film",
 	"War": "Urush",
-	"Western": "G'arbiy",
+	"Western": "Vestern",
 	"Cartoon": "Multfilm",
 };
+
+// Case-insensitive lookup — DB stores lowercase, legacy data may be capitalized.
+const UZBEK_GENRE_LOOKUP: Record<string, string> = Object.fromEntries(
+	Object.entries(UZBEK_GENRE_MAP).map(([k, v]) => [k.toLowerCase(), v])
+);
 
 // Uzbek country mappings
 export const UZBEK_COUNTRY_MAP: Record<string, string> = {
@@ -227,11 +234,16 @@ export function getLocalizedCountry(movie: LocalizedMovie | null, _locale: Local
 }
 
 /**
- * Localize a single genre name to Uzbek
+ * Localize a single genre name to Uzbek.
+ * Case-insensitive — accepts "drama", "Drama", "DRAMA" equally.
+ * Unknown genres fall back to the input with first letter capitalized.
  */
 export function localizeSingleGenre(genre: string): string {
 	if (!genre) return "";
-	return UZBEK_GENRE_MAP[genre] || genre;
+	const trimmed = genre.trim();
+	const uz = UZBEK_GENRE_LOOKUP[trimmed.toLowerCase()];
+	if (uz) return uz;
+	return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 
 /**

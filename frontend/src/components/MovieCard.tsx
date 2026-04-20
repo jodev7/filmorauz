@@ -73,7 +73,7 @@ export default function MovieCard({ movie }: Props) {
           <div className="flex flex-col gap-1.5">
             {isNew && (
               <span className="bg-blue-600/90 text-white text-xs font-medium px-2 py-0.5 rounded-md">
-                New
+                Yangi
               </span>
             )}
             {movie.code && (
@@ -117,7 +117,7 @@ export default function MovieCard({ movie }: Props) {
             <>
               <span>·</span>
               <Clock size={11} />
-              <span>{movie.duration}m</span>
+              <span>{movie.duration} daq</span>
             </>
           )}
           

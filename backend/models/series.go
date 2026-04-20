@@ -75,11 +75,14 @@ type SeriesWithSeasons struct {
 	Seasons []SeasonWithEpisodes `json:"seasons"`
 }
 
-// SeriesInput is used for create/update requests
+// SeriesInput is used for create/update requests.
+// Note: PosterURL is NOT marked required here so the same struct can be used
+// for partial updates (edit flow preserves existing poster when unchanged).
+// CreateSeries can enforce PosterURL at the handler level if needed.
 type SeriesInput struct {
 	Title       string   `json:"title" binding:"required"`
 	Description string   `json:"description"`
-	PosterURL   string   `json:"poster_url" binding:"required"`
+	PosterURL   string   `json:"poster_url"`
 	BackdropURL string   `json:"backdrop_url"`
 	Year        int      `json:"year" binding:"required"`
 	Genre       []string `json:"genre"`

@@ -187,15 +187,22 @@ func (h *SeriesHandler) UpdateSeries(c *gin.Context) {
 
 	var input models.SeriesInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		log.Printf("[UpdateSeries] id=%s bind error: %v", idStr, err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
+	log.Printf("[UpdateSeries] incoming id=%s title=%q poster=%q backdrop=%q year=%d country=%q genres=%v",
+		idStr, input.Title, input.PosterURL, input.BackdropURL, input.Year, input.Country, input.Genre)
+
 	series, err := h.seriesService.UpdateSeries(id, &input)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update series"})
+		log.Printf("[UpdateSeries] id=%s service error: %v", idStr, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	log.Printf("[UpdateSeries] id=%s saved title=%q genres=%v", idStr, series.Title, series.Genre)
 
 	c.JSON(http.StatusOK, series)
 }

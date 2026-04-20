@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Play } from "lucide-react";
 import { Movie } from "@/lib/api";
+import { localizeSingleGenre } from "@/lib/localization";
 
 interface HeroCarouselProps {
   movies: Movie[];
@@ -69,7 +70,7 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
                       key={g}
                       className="text-xs border border-brand-red/60 text-brand-red px-2.5 py-0.5 rounded-full"
                     >
-                      {g}
+                      {localizeSingleGenre(g)}
                     </span>
                   ))}
                 </div>

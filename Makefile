@@ -9,7 +9,7 @@ else
     PARSER_PYTHON := $(PARSER_VENV)/bin/python
 endif
 
-.PHONY: help dev prod backend frontend parser worker bot bot-prod install tidy tidy-bot tidy-worker build setup-parser setup-bot b2-cors b2-cors-apply
+.PHONY: help dev prod backend frontend parser worker bot bot-prod install tidy tidy-bot tidy-worker build setup-parser setup-bot b2-cors b2-cors-apply b2-cors-probe
 
 help:
 	@echo ""
@@ -110,11 +110,20 @@ yusuf:
 b2-cors:
 	cd $(ROOT_DIR)backend && go run ./cmd/b2-cors
 
-# Apply the CORS rules required for browser-to-B2 direct uploads.
-# Allowed origin comes from BASE_SITE_URL in backend/.env (plus localhost:3000).
+# Apply the CORS rules required for browser-to-B2 direct uploads AND for HLS
+# playback of .m3u8 / .ts through cdn.filmorauz.net.
+# Allowed origins default to BASE_SITE_URL + its www variant + http://localhost:3000.
 # Override with: make b2-cors-apply ORIGIN=https://a.tld,https://b.tld
 b2-cors-apply:
 	cd $(ROOT_DIR)backend && go run ./cmd/b2-cors --apply $(if $(ORIGIN),--origin $(ORIGIN))
+
+# Probe a CDN URL for CORS response headers. Diagnoses whether B2 or
+# Cloudflare is the one dropping Access-Control-Allow-Origin.
+# Example:
+#   make b2-cors-probe URL=https://cdn.filmorauz.net/file/filmorauznet/videos/<slug>/master.m3u8
+b2-cors-probe:
+	@if [ -z "$(URL)" ]; then echo "Usage: make b2-cors-probe URL=<cdn-url>"; exit 2; fi
+	cd $(ROOT_DIR)backend && go run ./cmd/b2-cors --probe $(URL)
 
 # ── Bot ────────────────────────────────────────────────────────
 bot:

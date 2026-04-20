@@ -1,6 +1,6 @@
-// Command b2-cors inspects and (optionally) applies the Backblaze B2 bucket
-// CORS rules that are required for browser-to-B2 direct uploads and for HLS
-// playback of .m3u8 / .ts segments served from the bucket.
+// Command b2-cors inspects, applies, and probes the Backblaze B2 bucket CORS
+// rules required for browser-to-B2 direct uploads and for HLS playback of
+// .m3u8 / .ts segments served through cdn.filmorauz.net.
 //
 // Why this exists:
 //   B2 bucket CORS is configured on B2's side via the b2_update_bucket API —
@@ -12,20 +12,26 @@
 //   entire corsRules array, so they must be sent together).
 //
 // Cloudflare note:
-//   When cdn.filmorauz.net fronts the bucket, Cloudflare's own response must
-//   also carry Access-Control-Allow-Origin. If the origin rule below isn't
-//   enough (e.g. Cloudflare strips it), add a Transform Rule on the zone:
+//   cdn.filmorauz.net fronts the bucket, so even a correctly-configured B2
+//   rule can end up hidden if Cloudflare cached a non-CORS response (its
+//   default cache key does not vary on the Origin request header). If the
+//   --probe output below shows B2 returning CORS headers but the CDN URL
+//   not, add a Cloudflare Transform Rule on the cdn.filmorauz.net zone:
 //     When:  Hostname equals cdn.filmorauz.net
 //     Then:  Set static response headers
-//            Access-Control-Allow-Origin: *
+//            Access-Control-Allow-Origin: https://filmorauz.net
 //            Access-Control-Allow-Methods: GET, HEAD, OPTIONS
-//            Access-Control-Allow-Headers: *
+//            Access-Control-Allow-Headers: Range, Origin, Accept, Content-Type
+//            Access-Control-Expose-Headers: Content-Length, Content-Range
+//   Then purge the cdn.filmorauz.net cache so the next browser fetch sees
+//   the new headers.
 //
 // Usage:
 //   cd backend
-//   go run ./cmd/b2-cors --apply                            # apply defaults
 //   go run ./cmd/b2-cors                                    # dry-run / inspect
+//   go run ./cmd/b2-cors --apply                            # apply defaults
 //   go run ./cmd/b2-cors --apply --origin https://a.tld,http://localhost:3000
+//   go run ./cmd/b2-cors --probe https://cdn.filmorauz.net/file/filmorauznet/videos/<slug>/master.m3u8
 //
 // The tool reads B2 credentials and bucket name from backend/.env (same as
 // the API server), so there is nothing to configure twice.
@@ -78,17 +84,26 @@ type b2ListBucketsResponse struct {
 
 func main() {
 	apply := flag.Bool("apply", false, "apply CORS rules (otherwise just inspect current rules)")
-	originsFlag := flag.String("origin", "", "comma-separated list of allowed origins (default: BASE_SITE_URL + http://localhost:3000)")
+	originsFlag := flag.String("origin", "", "comma-separated list of allowed origins (default: BASE_SITE_URL + www variant + http://localhost:3000)")
 	ruleName := flag.String("name", "filmorauzDirectUpload", "CORS rule name")
 	maxAge := flag.Int("max-age", 3600, "preflight cache max-age in seconds")
+	probeURL := flag.String("probe", "", "probe CORS response on the given CDN URL (e.g. https://cdn.filmorauz.net/.../master.m3u8); no B2 changes")
 	flag.Parse()
 
 	cfg := config.Load()
+	origins := buildOrigins(*originsFlag, cfg.BaseSiteURL)
+
+	// Probe mode exits without touching B2 — it just reports what the CDN
+	// is currently returning for a CORS preflight and a ranged GET.
+	if strings.TrimSpace(*probeURL) != "" {
+		probeCORS(*probeURL, firstOrigin(origins))
+		return
+	}
+
 	if cfg.B2KeyID == "" || cfg.B2AppKey == "" || cfg.B2Bucket == "" {
 		log.Fatalf("B2_KEY_ID / B2_APP_KEY / B2_BUCKET must be set in backend/.env")
 	}
 
-	origins := buildOrigins(*originsFlag, cfg.BaseSiteURL)
 	log.Printf("allowed origins: %v", origins)
 
 	auth, err := authorizeB2(cfg.B2KeyID, cfg.B2AppKey)
@@ -121,9 +136,10 @@ func main() {
 			MaxAgeSeconds: *maxAge,
 		},
 		// Playback rule: browser fetches .m3u8 / .ts segments from the bucket
-		// (directly or via Cloudflare in front of it). HLS needs a simple GET
-		// with the Range header allowed, and Content-Length / Content-Range
-		// exposed so the player can seek. Origins match the upload rule.
+		// (directly or via Cloudflare in front of it). hls.js issues ranged
+		// GETs for segments, so Range must be in AllowedHeaders, and
+		// Content-Length / Content-Range / Accept-Ranges must be exposed so
+		// the player can seek. Header names match the task spec exactly.
 		{
 			CorsRuleName:   "filmorauzPlayback",
 			AllowedOrigins: origins,
@@ -133,7 +149,13 @@ func main() {
 				"s3_get",
 				"s3_head",
 			},
-			AllowedHeaders: []string{"*"},
+			AllowedHeaders: []string{
+				"Range",
+				"Origin",
+				"Accept",
+				"Content-Type",
+				"Authorization",
+			},
 			ExposeHeaders: []string{
 				"Content-Length",
 				"Content-Range",
@@ -169,7 +191,14 @@ func buildOrigins(flagValue, baseSite string) []string {
 		if site == "" {
 			site = "https://filmorauz.net"
 		}
-		return dedup([]string{site, "http://localhost:3000"})
+		// Also allow the www-variant of the apex — browsers on www.filmorauz.net
+		// send Origin: https://www.filmorauz.net, which must match a rule or
+		// B2 returns no Access-Control-Allow-Origin.
+		origins := []string{site, "http://localhost:3000"}
+		if strings.HasPrefix(site, "https://") && !strings.Contains(site, "://www.") {
+			origins = append(origins, "https://www."+strings.TrimPrefix(site, "https://"))
+		}
+		return dedup(origins)
 	}
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))
@@ -180,6 +209,85 @@ func buildOrigins(flagValue, baseSite string) []string {
 		}
 	}
 	return dedup(out)
+}
+
+func firstOrigin(origins []string) string {
+	for _, o := range origins {
+		if strings.HasPrefix(o, "http://") || strings.HasPrefix(o, "https://") {
+			return o
+		}
+	}
+	return "https://filmorauz.net"
+}
+
+// probeCORS fires a real preflight + ranged GET against the given URL and
+// prints the CORS-relevant response headers. Use this after --apply to
+// confirm the CDN is echoing the rules B2 was told to serve.
+func probeCORS(target, origin string) {
+	client := &http.Client{Timeout: 20 * time.Second}
+
+	log.Printf("probing target: %s", target)
+	log.Printf("probe origin:   %s", origin)
+
+	// --- Preflight (OPTIONS) ---
+	fmt.Println()
+	fmt.Println("=== OPTIONS preflight ===")
+	preReq, err := http.NewRequest("OPTIONS", target, nil)
+	if err != nil {
+		log.Fatalf("build preflight: %v", err)
+	}
+	preReq.Header.Set("Origin", origin)
+	preReq.Header.Set("Access-Control-Request-Method", "GET")
+	preReq.Header.Set("Access-Control-Request-Headers", "Range")
+	printCORSResponse(client, preReq)
+
+	// --- Ranged GET (mirrors hls.js segment fetch) ---
+	fmt.Println()
+	fmt.Println("=== Ranged GET ===")
+	getReq, err := http.NewRequest("GET", target, nil)
+	if err != nil {
+		log.Fatalf("build GET: %v", err)
+	}
+	getReq.Header.Set("Origin", origin)
+	getReq.Header.Set("Range", "bytes=0-0")
+	printCORSResponse(client, getReq)
+
+	fmt.Println()
+	fmt.Println("Interpretation:")
+	fmt.Println("  - OPTIONS missing Access-Control-Allow-Origin => B2 rule missing or not applied")
+	fmt.Println("    Fix: run `make b2-cors-apply` (rules above match the task spec).")
+	fmt.Println("  - OPTIONS OK but GET missing the header => Cloudflare cached a non-CORS response.")
+	fmt.Println("    Fix: add the Cloudflare Transform Rule described at the top of this file,")
+	fmt.Println("    then purge the cdn.filmorauz.net cache.")
+}
+
+func printCORSResponse(client *http.Client, req *http.Request) {
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("  request error: %v\n", err)
+		return
+	}
+	defer resp.Body.Close()
+	// Drain a small chunk so the server completes even on GET.
+	_, _ = io.CopyN(io.Discard, resp.Body, 1024)
+	fmt.Printf("  %s %s -> %d %s\n", req.Method, req.URL.String(), resp.StatusCode, resp.Status)
+	corsHeaders := []string{
+		"Access-Control-Allow-Origin",
+		"Access-Control-Allow-Methods",
+		"Access-Control-Allow-Headers",
+		"Access-Control-Expose-Headers",
+		"Access-Control-Max-Age",
+		"Vary",
+		"Cf-Cache-Status",
+		"Server",
+	}
+	for _, h := range corsHeaders {
+		if v := resp.Header.Get(h); v != "" {
+			fmt.Printf("  %s: %s\n", h, v)
+		} else {
+			fmt.Printf("  %s: (missing)\n", h)
+		}
+	}
 }
 
 func dedup(in []string) []string {

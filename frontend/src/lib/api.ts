@@ -2101,7 +2101,9 @@ export interface CreateSeriesData {
   poster_url?: string;
   backdrop_url?: string;
   year?: number;
-  genres?: string[];
+  // Field name must match backend SeriesInput JSON tag "genre" (singular) —
+  // sending "genres" caused admin edits to be silently dropped.
+  genre?: string[];
   country?: string;
   is_premium?: boolean;
 }

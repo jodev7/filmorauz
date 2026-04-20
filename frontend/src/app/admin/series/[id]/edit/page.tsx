@@ -14,6 +14,8 @@ import {
   Play,
   ChevronDown,
   ChevronUp,
+  Plus,
+  X,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -51,6 +53,13 @@ interface SeasonWithEpisodes {
   episodes: Episode[];
 }
 
+// Stored lowercase English (matches DB). Displayed with `capitalize` CSS.
+const GENRE_OPTIONS = [
+  "action", "adventure", "animation", "comedy", "crime",
+  "documentary", "drama", "fantasy", "horror", "mystery",
+  "romance", "sci-fi", "thriller", "western",
+];
+
 export default function EditSeriesPage() {
   const { token } = useAuth();
   const router = useRouter();
@@ -73,7 +82,7 @@ export default function EditSeriesPage() {
     poster_url: "",
     backdrop_url: "",
     year: new Date().getFullYear(),
-    genres: [],
+    genre: [],
     country: "",
     is_premium: false,
   });
@@ -136,11 +145,10 @@ export default function EditSeriesPage() {
             poster_url: series.poster_url,
             backdrop_url: series.backdrop_url,
             year: series.year,
-            genres: series.genre || [],
+            genre: (series.genre || []).map((g) => g.toLowerCase()),
             country: series.country,
             is_premium: series.is_premium,
           });
-          setGenreInput((series.genre || []).join(", "));
         }
 
         // Load seasons with episodes using public API
@@ -178,13 +186,6 @@ export default function EditSeriesPage() {
       return;
     }
 
-    // Add genres
-    const genres = genreInput
-      .split(",")
-      .map((g) => g.trim())
-      .filter((g) => g);
-    form.genres = genres;
-
     setSaving(true);
     setError("");
 
@@ -195,6 +196,26 @@ export default function EditSeriesPage() {
       setError(err instanceof Error ? err.message : "Xatolik yuz berdi");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const addGenre = () => {
+    const g = genreInput.trim().toLowerCase();
+    if (g && !(form.genre || []).includes(g)) {
+      setForm({ ...form, genre: [...(form.genre || []), g] });
+    }
+    setGenreInput("");
+  };
+
+  const removeGenre = (g: string) => {
+    setForm({ ...form, genre: (form.genre || []).filter((x) => x !== g) });
+  };
+
+  const toggleGenre = (g: string) => {
+    if ((form.genre || []).includes(g)) {
+      removeGenre(g);
+    } else {
+      setForm({ ...form, genre: [...(form.genre || []), g] });
     }
   };
 
@@ -398,14 +419,73 @@ export default function EditSeriesPage() {
 
             {/* Genres */}
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Genres</label>
-              <input
-                type="text"
-                value={genreInput}
-                onChange={(e) => setGenreInput(e.target.value)}
-                className="w-full px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
-                placeholder="Drama, Mystery, Comedy"
-              />
+              <label className="block text-sm font-medium text-gray-300 mb-2">Janrlar</label>
+
+              {/* Quick-select chips */}
+              <div className="flex flex-wrap gap-2 mb-3">
+                {GENRE_OPTIONS.map((g) => {
+                  const selected = (form.genre || []).includes(g);
+                  return (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => toggleGenre(g)}
+                      className={`text-xs px-3 py-1.5 rounded-full border transition-colors capitalize ${
+                        selected
+                          ? "bg-brand-red border-brand-red text-white"
+                          : "border-brand-border text-gray-400 hover:border-gray-500 hover:text-white"
+                      }`}
+                    >
+                      {g}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Custom genre input */}
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={genreInput}
+                  onChange={(e) => setGenreInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addGenre();
+                    }
+                  }}
+                  placeholder="Boshqa janr..."
+                  className="flex-1 px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white text-sm focus:outline-none focus:border-brand-red"
+                />
+                <button
+                  type="button"
+                  onClick={addGenre}
+                  className="px-3 py-2 bg-brand-border hover:bg-gray-600 text-white rounded-lg transition-colors"
+                >
+                  <Plus size={16} />
+                </button>
+              </div>
+
+              {/* Selected genres */}
+              {(form.genre || []).length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {(form.genre || []).map((g) => (
+                    <span
+                      key={g}
+                      className="flex items-center gap-1.5 text-xs bg-brand-red/20 text-brand-red border border-brand-red/30 px-2.5 py-1 rounded-full capitalize"
+                    >
+                      {g}
+                      <button
+                        type="button"
+                        onClick={() => removeGenre(g)}
+                        className="hover:text-white"
+                      >
+                        <X size={11} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Premium */}

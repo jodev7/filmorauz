@@ -118,13 +118,13 @@ export default function StarRating({ movieId, seriesId, initialData, onRatingCha
                   {summary.rating_avg.toFixed(1)}
                 </span>
               </span>
-              <span>({summary.rating_count} {summary.rating_count === 1 ? "rating" : "ratings"})</span>
+              <span>({summary.rating_count} {summary.rating_count === 1 ? "baho" : "baho"})</span>
             </>
           ) : (
-            <span>No ratings yet</span>
+            <span>Hali baholanmagan</span>
           )}
           {!isAuthenticated && (
-            <span className="text-xs text-gray-500">(login to rate)</span>
+            <span className="text-xs text-gray-500">(baholash uchun kiring)</span>
           )}
         </div>
       )}

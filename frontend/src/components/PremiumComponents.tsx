@@ -118,10 +118,10 @@ export function PremiumLockOverlay({
       </div>
       <div className="text-center">
         <h3 className="text-lg font-semibold text-white mb-1">
-          {title || "Premium Content"}
+          {title || "Premium kontent"}
         </h3>
         <p className="text-gray-400 text-sm">
-          {message || "Upgrade to Premium to watch this content"}
+          {message || "Bu kontentni tomosha qilish uchun Premium oling"}
         </p>
       </div>
     </div>

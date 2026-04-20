@@ -4,6 +4,7 @@ import { useRef, useState, useEffect } from "react";
 import { ChevronRight, ChevronLeft, Play, Star, Tv } from "lucide-react";
 import { Series } from "@/lib/series-api";
 import Link from "next/link";
+import { localizeSingleGenre } from "@/lib/localization";
 
 interface SeriesCarouselProps {
   series: Series[];
@@ -134,7 +135,7 @@ export default function SeriesCarousel({ series }: SeriesCarouselProps) {
                 {s.genre && s.genre.length > 0 && (
                   <>
                     <span>•</span>
-                    <span className="truncate">{s.genre[0]}</span>
+                    <span className="truncate">{localizeSingleGenre(s.genre[0])}</span>
                   </>
                 )}
                 {/* Rating */}

@@ -9,6 +9,7 @@ import SeasonList from "@/components/SeasonList";
 import SeriesCarousel from "@/components/SeriesCarousel";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getSeriesBySlug, getSeries } from "@/lib/series-api";
+import { localizeSingleGenre } from "@/lib/localization";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 
@@ -123,7 +124,7 @@ export default async function SeriesDetailPage({ params }: Props) {
                       key={g}
                       className="text-xs sm:text-sm bg-brand-card border border-brand-border text-gray-300 px-3 py-1 rounded-full"
                     >
-                      {g}
+                      {localizeSingleGenre(g)}
                     </span>
                   ))}
                 </div>

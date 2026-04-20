@@ -214,7 +214,7 @@ export default function CommentsSection({
 
       {/* Comments list */}
       {loading ? (
-        <div className="text-gray-400">Loading...</div>
+        <div className="text-gray-400">Yuklanmoqda...</div>
       ) : comments.length === 0 ? (
         <div className="text-gray-400">{tt.noComments}</div>
       ) : (

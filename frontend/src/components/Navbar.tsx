@@ -133,19 +133,19 @@ export default function Navbar() {
             Seriallar
           </Link>
           <Link
-            href="/movies?genre=Action"
+            href="/movies?genre=action"
             className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors"
           >
             {t("common.action")}
           </Link>
           <Link
-            href="/movies?genre=Drama"
+            href="/movies?genre=drama"
             className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors"
           >
             {t("common.drama")}
           </Link>
           <Link
-            href="/movies?genre=Comedy"
+            href="/movies?genre=comedy"
             className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors"
           >
             {t("common.comedy")}
@@ -348,9 +348,9 @@ export default function Navbar() {
             { href: "/", label: t("common.home") },
             { href: "/movies", label: t("common.movies") },
             { href: "/series", label: "Seriallar" },
-            { href: "/movies?genre=Action", label: t("common.action") },
-            { href: "/movies?genre=Drama", label: t("common.drama") },
-            { href: "/movies?genre=Comedy", label: t("common.comedy") },
+            { href: "/movies?genre=action", label: t("common.action") },
+            { href: "/movies?genre=drama", label: t("common.drama") },
+            { href: "/movies?genre=comedy", label: t("common.comedy") },
           ].map((item) => (
             <Link
               key={item.href}

@@ -55,7 +55,7 @@ export default function ShareButton({ movieId, movieTitle, movieSlug }: Props) {
   const shareToTelegram = () => {
     if (!shareData?.share_url) return;
 
-    const text = encodeURIComponent(`🎬 ${movieTitle}\nWatch on FILMORAUZ`);
+    const text = encodeURIComponent(`🎬 ${movieTitle}\nFILMORAUZ'da tomosha qiling`);
     const url = encodeURIComponent(shareData.share_url);
     window.open(`https://t.me/share/url?url=${url}&text=${text}`, "_blank");
   };
@@ -74,14 +74,14 @@ export default function ShareButton({ movieId, movieTitle, movieSlug }: Props) {
           <button
             onClick={copyToClipboard}
             className="p-2 bg-brand-card border border-brand-border rounded-lg text-white hover:bg-brand-border transition-colors"
-            title="Copy link"
+            title="Havolani nusxalash"
           >
             {copied ? <Check size={18} className="text-green-400" /> : <Copy size={18} />}
           </button>
           <button
             onClick={shareToTelegram}
             className="p-2 bg-[#229ED9] rounded-lg text-white hover:bg-[#1c8ac4] transition-colors"
-            title="Share to Telegram"
+            title="Telegramda ulashish"
           >
             <Send size={18} />
           </button>
@@ -90,7 +90,7 @@ export default function ShareButton({ movieId, movieTitle, movieSlug }: Props) {
           onClick={() => setShareData(null)}
           className="text-sm text-gray-400 hover:text-white transition-colors"
         >
-          Create new share link
+          Yangi havola yaratish
         </button>
       </div>
     );
@@ -103,7 +103,7 @@ export default function ShareButton({ movieId, movieTitle, movieSlug }: Props) {
       className="flex items-center gap-2 px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white hover:bg-brand-border transition-colors disabled:opacity-50"
     >
       <Share2 size={18} />
-      {loading ? "Creating..." : "Share"}
+      {loading ? "Yaratilmoqda..." : "Ulashish"}
     </button>
   );
 }

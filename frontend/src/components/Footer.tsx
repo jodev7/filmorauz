@@ -28,9 +28,9 @@ export default function Footer() {
             <div className="flex flex-col gap-2">
               <span className="text-white font-medium mb-1">{t("footer.browse")}</span>
               <Link href="/movies" className="hover:text-white transition-colors">{t("footer.allMovies")}</Link>
-              <Link href="/movies?genre=Action" className="hover:text-white transition-colors">{t("common.action")}</Link>
-              <Link href="/movies?genre=Drama" className="hover:text-white transition-colors">{t("common.drama")}</Link>
-              <Link href="/movies?genre=Comedy" className="hover:text-white transition-colors">{t("common.comedy")}</Link>
+              <Link href="/movies?genre=action" className="hover:text-white transition-colors">{t("common.action")}</Link>
+              <Link href="/movies?genre=drama" className="hover:text-white transition-colors">{t("common.drama")}</Link>
+              <Link href="/movies?genre=comedy" className="hover:text-white transition-colors">{t("common.comedy")}</Link>
             </div>
           </div>
         </div>

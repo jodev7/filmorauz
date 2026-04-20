@@ -8,6 +8,7 @@ import GenreFilter from "@/components/GenreFilter";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getMovies, searchMovies, Movie } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
+import { localizeSingleGenre } from "@/lib/localization";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
@@ -68,7 +69,7 @@ export default async function MoviesPage({ searchParams }: Props) {
   const pageTitle = search
     ? `${t("movies.searchPrefix")} "${search}"`
     : genre
-    ? genre.toUpperCase()
+    ? localizeSingleGenre(genre).toUpperCase()
     : "BARCHA FILMLAR";
 
   return (
