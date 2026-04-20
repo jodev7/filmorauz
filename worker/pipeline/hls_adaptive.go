@@ -24,6 +24,22 @@ func getMaxRenditionConcurrency(maxConcurrent int) int {
 	return DefaultMaxRenditionConcurrency
 }
 
+// ffmpegThreadsFromEnv returns the per-process thread cap for ffmpeg.
+// Without this, ffmpeg defaults to using every available core, so
+// MAX_RENDITION_CONCURRENT>1 can trivially saturate a shared VPS and
+// starve the parser service on the same host. FFMPEG_THREADS=1 keeps
+// each encoder single-threaded; set to 2 to trade latency for throughput.
+func ffmpegThreadsFromEnv() string {
+	v := strings.TrimSpace(os.Getenv("FFMPEG_THREADS"))
+	if v == "" {
+		return "1"
+	}
+	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		return strconv.Itoa(n)
+	}
+	return "1"
+}
+
 // RenditionConfig defines the configuration for a single HLS rendition
 type RenditionConfig struct {
 	Name         string // Display name (e.g., "360p", "480p")
@@ -53,10 +69,17 @@ func DefaultRenditions() []RenditionConfig {
 // 2. Then generates multiple quality renditions from the base
 // 3. Creates a master.m3u8 playlist referencing all variants
 // No watermark removal - use source video directly
-func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int), maxConcurrentRenditions int, segmentUploadWorkers int, segmentUploadRetries int) (masterPlaylistPath, processedMasterPath string, generatedQualities []string, err error) {
+//
+// hlsFolderName is the canonical B2 folder (e.g. "some-movie_abcd1234" or
+// "serials/<slug>/season-1/episode-1"). It is used verbatim as the root for
+// streaming segment uploads so segments and playlists land in the same B2
+// path. A nested value is required for serial episodes — deriving it from
+// filepath.Base(outputDir) would flatten nested serial paths.
+func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir, hlsFolderName string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int), maxConcurrentRenditions int, segmentUploadWorkers int, segmentUploadRetries int) (masterPlaylistPath, processedMasterPath string, generatedQualities []string, err error) {
 	log.Printf("[HLS] Starting adaptive HLS generation for job %s", jobID)
 	log.Printf("[CHECKPOINT] hls_raw_input_path: %s", inputPath)
 	log.Printf("[HLS] Output directory: %s", outputDir)
+	log.Printf("[HLS] B2 folder root: %s", hlsFolderName)
 
 	if segmentUploadWorkers <= 0 {
 		segmentUploadWorkers = SegmentUploadConcurrency
@@ -112,11 +135,16 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir string, cutSec
 	// Step 2: Generate each HLS rendition from the processed master
 	log.Printf("[STAGE] hls_renditions start — renditions: %d, source: %s", len(renditions), processedMasterPath)
 
-	// Use the canonical movie folder (derived from outputDir basename) so that
-	// .ts segments land under videos/<folder>/<rendition>/... — the same root
-	// the playlists are later uploaded to. Previously this used jobID, which
-	// caused segments and playlists to land in different B2 folders.
-	hlsFolderName := filepath.Base(outputDir)
+	// hlsFolderName is the canonical B2 folder root (passed in by the caller)
+	// so that .ts segments land under videos/<folder>/<rendition>/... — the
+	// same root the playlists are later uploaded to. Deriving from
+	// filepath.Base(outputDir) would drop nested prefixes (e.g. the
+	// serials/<slug>/season-N path for episodes) and flatten everything to a
+	// loose folder at the B2 root.
+	if hlsFolderName == "" {
+		hlsFolderName = filepath.Base(outputDir)
+		log.Printf("[HLS] WARNING: empty hlsFolderName, falling back to basename: %s", hlsFolderName)
+	}
 	log.Printf("[HLS] Streaming uploader folder (segment root): %s (outputDir=%s, jobID=%s)", hlsFolderName, outputDir, jobID)
 
 	streamingUploader := newStreamingUploader(p.storage, hlsFolderName, renditions, segmentUploadWorkers, segmentUploadRetries, outputDir)
@@ -354,8 +382,14 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 
 	// Build ffmpeg args: use filter_complex (two inputs) when logo exists,
 	// plain -vf otherwise. Audio is always copied from input 0.
+	// -threads caps CPU usage so parallel renditions do not starve the
+	// parser service running on the same VPS.
+	ffThreads := ffmpegThreadsFromEnv()
 	baseArgs := []string{
 		"-y",
+		"-threads", ffThreads,
+		"-filter_threads", ffThreads,
+		"-filter_complex_threads", ffThreads,
 		"-ss", strconv.Itoa(cutSeconds),
 		"-i", inputPath,
 	}
@@ -546,8 +580,13 @@ func (p *Pipeline) generateHLSRendition(jobID, baseVideoPath, outputDir string, 
 	log.Printf("[KEYFRAME] %s: GOP=%d frames (%.1ffps × 2s), segment=%ds, force_keyframes=%s",
 		rendition.Name, gopSize, fps, segmentDuration, forceKeyframes)
 
+	// -threads caps CPU usage so parallel renditions do not starve the
+	// parser service running on the same VPS.
+	ffThreads := ffmpegThreadsFromEnv()
 	ffmpegArgs := []string{
 		"-y",                // Overwrite output
+		"-threads", ffThreads,
+		"-filter_threads", ffThreads,
 		"-i", baseVideoPath, // Input: base video with filters applied
 		"-vf", fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2",
 			rendition.Width, rendition.Height, rendition.Width, rendition.Height), // Scale and pad to exact resolution

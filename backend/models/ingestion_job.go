@@ -63,7 +63,11 @@ type IngestionJob struct {
 	RetryCount        int                  `bson:"retry_count" json:"retry_count"`
 	CreatedAt         time.Time            `bson:"created_at" json:"created_at"`
 	UpdatedAt         time.Time            `bson:"updated_at" json:"updated_at"`
-	CompletedAt       *time.Time           `bson:"completed_at,omitempty" json:"completed_at,omitempty"`
+	// StartedAt is set when a worker first claims the job (status -> processing).
+	// Elapsed time should be measured from this, NOT created_at, so jobs sitting
+	// in the pending queue do not show a growing timer.
+	StartedAt   *time.Time `bson:"started_at,omitempty" json:"started_at,omitempty"`
+	CompletedAt *time.Time `bson:"completed_at,omitempty" json:"completed_at,omitempty"`
 
 	// Real-time download progress fields
 	Stage           string  `bson:"stage,omitempty" json:"stage,omitempty"`     // "parsing", "downloading", "processing", "uploading"

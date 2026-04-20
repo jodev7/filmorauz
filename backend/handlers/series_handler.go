@@ -384,6 +384,7 @@ func (h *SeriesHandler) ApproveSeries(c *gin.Context) {
 				Title:       series.Title,
 				Year:        series.Year,
 				Genres:      series.Genre,
+				Country:     series.Country,
 				PosterURL:   series.PosterURL,
 				Description: series.Description,
 				Slug:        series.Slug,

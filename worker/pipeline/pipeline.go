@@ -1744,7 +1744,7 @@ func (p *Pipeline) processVideo(job *models.IngestionJob, inputPath string, cano
 	// it stays alive so clip generation can use it, then the whole readyvideo dir is cleaned up.
 	var masterPlaylistPath string
 	var generatedQualities []string
-	masterPlaylistPath, processedMasterPath, generatedQualities, err = p.processAdaptiveHLS(jobID, inputPath, outputDir, defaultCutSeconds, progressCallback, p.config.MaxRenditionConcurrent, p.config.SegmentUploadWorkers, p.config.SegmentUploadRetries)
+	masterPlaylistPath, processedMasterPath, generatedQualities, err = p.processAdaptiveHLS(jobID, inputPath, outputDir, folderName, defaultCutSeconds, progressCallback, p.config.MaxRenditionConcurrent, p.config.SegmentUploadWorkers, p.config.SegmentUploadRetries)
 	if err != nil {
 		return "", "", fmt.Errorf("adaptive HLS processing failed: %w", err)
 	}

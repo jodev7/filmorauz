@@ -510,6 +510,19 @@ class FreekinoParser:
             # Video — extract all quality variants
             all_entries, quality_urls = self._extract_video(soup, response.url)
 
+            # Final sanity pass: drop any entry whose URL still carries
+            # multi-URL artifacts. video_url must be a single, real URL.
+            clean_entries = []
+            for e in all_entries or []:
+                u = (e or {}).get("url", "")
+                if not u or any(ch in u for ch in ('[', ']', ',')):
+                    logger.warning(f"[FREEKINO] dropping malformed entry: quality={e.get('quality','?')}, url={u[:120]}")
+                    continue
+                clean_entries.append(e)
+            all_entries = clean_entries
+            quality_urls = {res: url for res, url in (quality_urls or {}).items()
+                            if url and not any(ch in url for ch in ('[', ']', ','))}
+
             if all_entries:
                 # Build video_urls list expected by server._extract_best_video_url()
                 result["video_urls"] = all_entries
@@ -520,12 +533,14 @@ class FreekinoParser:
                 result["video_url"] = best["url"]
                 result["video_type"] = best["type"]
 
+                qualities_summary = [e.get("quality", "?") for e in all_entries]
+                logger.info(f"[FREEKINO] qualities extracted: {qualities_summary}")
                 logger.info(
-                    f"[FREEKINO] {len(all_entries)} quality variant(s) found. "
-                    f"Best: {best.get('quality','?')} → {best['url'][:80]}"
+                    f"[FREEKINO] chosen video_url: quality={best.get('quality','?')}, "
+                    f"type={best.get('type','?')}, url={best['url'][:120]}"
                 )
             else:
-                logger.warning(f"[FREEKINO] No video URL found for {url}")
+                logger.warning(f"[FREEKINO] No valid video URL found for {url}")
 
         except Exception as e:
             logger.error(f"[FREEKINO] Detail error: {e}")
@@ -619,14 +634,20 @@ class FreekinoParser:
 
     def _entry_from_url(self, url: str, base_url: str, quality: str = "auto"):
         url = self._decode_video_url(url, base_url)
+        # Stricter character class: excludes ',', '[', ']' so the regex cannot
+        # swallow across multiple Playerjs entries like "[480p]a.mp4,[720p]b.mp4".
         media_match = re.search(
-            r'(https?://[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]+?\.(?:mp4|m3u8|mpd)(?:\?[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]*)?)',
+            r'(https?://[A-Za-z0-9._~:/?#@!$&()*+;=%-]+?\.(?:mp4|m3u8|mpd)(?:\?[A-Za-z0-9._~:/?#@!$&()*+;=%-]*)?)',
             url,
             re.I,
         )
         if media_match:
             url = media_match.group(1)
         if not url or url.startswith("blob"):
+            return None
+        # Defense in depth: reject anything that still carries multi-URL artifacts.
+        if any(ch in url for ch in ('[', ']', ',')):
+            logger.warning(f"[FREEKINO] rejected malformed url (contains [ ] or , ): {url[:120]}")
             return None
         if validate_media_url_strict(url):
             return None
@@ -773,6 +794,15 @@ class FreekinoParser:
                         raw = match
                     if not raw:
                         continue
+                    # Playerjs quality-labelled bundle: "[480p]url1,[720p]url2".
+                    # Split into per-quality URLs instead of letting the broad
+                    # regex capture the whole string as a single (broken) URL.
+                    if re.search(r'\[\s*(?:auto|\d+p?)\s*\]', raw, re.I):
+                        labeled = re.findall(r'\[([^\]]+)\]((?:https?:)?//[^,\[]+|/[^,\[]+)', raw)
+                        if labeled:
+                            for label, lab_url in labeled:
+                                add_url(lab_url.strip().rstrip(", "), label.strip())
+                            continue
                     if "sources" in pattern:
                         for nested in re.findall(r'\b(?:file|src|url)\s*:\s*(["\'])(.+?)\1', raw, re.I | re.S):
                             add_url(nested[-1])

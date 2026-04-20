@@ -2058,6 +2058,11 @@ class ParserHandler(BaseHTTPRequestHandler):
                             return "checkpoint_required"
                         if "login_required" in e or "not_authenticated" in e or "not authenticated" in e or "login required" in e:
                             return "session_expired"
+                        # Instagram returns 403 / "forbidden" when the session cookie has been
+                        # invalidated server-side (logout, password change, suspicious activity).
+                        # Treat as session_expired so the operator is told to re-run ig_login.py.
+                        if "403" in e or "forbidden" in e:
+                            return "session_expired"
                         if "bad_password" in e or ("password" in e and ("incorrect" in e or "wrong" in e)):
                             return "bad_credentials"
                         if "please wait" in e or "too many" in e or "spam" in e:
@@ -2152,8 +2157,10 @@ class ParserHandler(BaseHTTPRequestHandler):
                 try:
                     from google.oauth2.credentials import Credentials
                     from google.auth.transport.requests import Request
+                    from google.auth.exceptions import RefreshError
                     from googleapiclient.discovery import build
                     from googleapiclient.http import MediaFileUpload
+                    from googleapiclient.errors import HttpError
                 except ImportError as _ie:
                     import sys as _sys
                     self._send_error(
@@ -2164,7 +2171,12 @@ class ParserHandler(BaseHTTPRequestHandler):
                     return
 
                 import tempfile, json as _json
+                from datetime import datetime
                 from pathlib import Path
+
+                # Required scope for uploading; if the saved token has different scopes,
+                # Google returns 403 on videos().insert() — so we always pin this.
+                YT_UPLOAD_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
                 token_path = Path(__file__).parent / token_file
                 if not token_path.exists():
@@ -2172,18 +2184,73 @@ class ParserHandler(BaseHTTPRequestHandler):
                     return
 
                 creds_data = _json.loads(token_path.read_text())
-                creds = Credentials(
-                    token=creds_data.get("token"),
-                    refresh_token=creds_data.get("refresh_token"),
-                    token_uri=creds_data.get("token_uri", "https://oauth2.googleapis.com/token"),
-                    client_id=creds_data.get("client_id"),
-                    client_secret=creds_data.get("client_secret"),
+
+                # Parse stored expiry (ISO string) so the library knows token age
+                expiry_dt = None
+                if creds_data.get("expiry"):
+                    try:
+                        expiry_dt = datetime.fromisoformat(creds_data["expiry"].replace("Z", ""))
+                    except Exception as _exp_err:
+                        logger.warning(f"[YouTube] could not parse stored expiry: {_exp_err}")
+
+                # Use the scopes saved at login time; fall back to upload scope if missing
+                stored_scopes = creds_data.get("scopes") or YT_UPLOAD_SCOPES
+
+                creds_kwargs = {
+                    "token": creds_data.get("token"),
+                    "refresh_token": creds_data.get("refresh_token"),
+                    "token_uri": creds_data.get("token_uri", "https://oauth2.googleapis.com/token"),
+                    "client_id": creds_data.get("client_id"),
+                    "client_secret": creds_data.get("client_secret"),
+                    "scopes": stored_scopes,
+                }
+                creds = Credentials(**creds_kwargs)
+                if expiry_dt is not None:
+                    creds.expiry = expiry_dt
+
+                # Sanitized debug: never log the full bearer token
+                _tok = creds_data.get("token") or ""
+                _tok_preview = (_tok[:8] + "...") if _tok else "<empty>"
+                logger.info(
+                    f"[YouTube] account={account_name} scopes={stored_scopes} "
+                    f"token_prefix=Bearer {_tok_preview} expired={creds.expired} "
+                    f"has_refresh_token={bool(creds.refresh_token)}"
                 )
+
+                # Verify the upload scope is actually granted
+                if "https://www.googleapis.com/auth/youtube.upload" not in stored_scopes:
+                    logger.error(
+                        f"[YouTube] account={account_name} missing youtube.upload scope; got {stored_scopes}"
+                    )
+                    self._send_json({
+                        "status": "failed",
+                        "error": "token expired or invalid",
+                        "error_type": "token_invalid",
+                        "detail": f"Token does not include youtube.upload scope. Re-run yt_login.py for account '{account_name}'.",
+                    })
+                    return
+
                 if creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
+                    try:
+                        creds.refresh(Request())
+                    except RefreshError as _rerr:
+                        logger.error(
+                            f"[YouTube] token refresh failed account={account_name}: {_rerr}",
+                            exc_info=True,
+                        )
+                        self._send_json({
+                            "status": "failed",
+                            "error": "token expired or invalid",
+                            "error_type": "token_invalid",
+                            "detail": f"Refresh failed: {_rerr}. Re-run yt_login.py for account '{account_name}'.",
+                        })
+                        return
                     creds_data["token"] = creds.token
-                    token_path.write_text(_json.dumps(creds_data))
-                    logger.info(f"[YouTube] token refreshed for account={account_name}")
+                    if creds.expiry:
+                        creds_data["expiry"] = creds.expiry.isoformat()
+                    creds_data["scopes"] = stored_scopes
+                    token_path.write_text(_json.dumps(creds_data, indent=2))
+                    logger.info(f"[YouTube] token refreshed and persisted for account={account_name}")
 
                 youtube = build("youtube", "v3", credentials=creds)
 
@@ -2212,6 +2279,10 @@ class ParserHandler(BaseHTTPRequestHandler):
                         body=yt_body,
                         media_body=media,
                     )
+                    logger.info(
+                        f"[YouTube] POST https://www.googleapis.com/upload/youtube/v3/videos "
+                        f"(part=snippet,status) account={account_name}"
+                    )
                     response = None
                     while response is None:
                         _, response = request.next_chunk()
@@ -2219,9 +2290,36 @@ class ParserHandler(BaseHTTPRequestHandler):
                     video_id = response.get("id", "")
                     logger.info(f"[YouTube] upload success video_id={video_id} account={account_name}")
                     self._send_json({"status": "success", "video_id": video_id, "account": account_name, "platform": "youtube"})
+                except HttpError as http_err:
+                    status = getattr(getattr(http_err, "resp", None), "status", 0)
+                    raw_content = b""
+                    try:
+                        raw_content = http_err.content or b""
+                    except Exception:
+                        pass
+                    body_text = raw_content.decode("utf-8", errors="replace") if raw_content else ""
+                    logger.error(
+                        f"[YouTube] HttpError account={account_name} status={status} body={body_text[:1000]}"
+                    )
+                    if status in (401, 403):
+                        self._send_json({
+                            "status": "failed",
+                            "error": "token expired or invalid",
+                            "error_type": "token_invalid",
+                            "http_status": status,
+                            "detail": body_text[:500],
+                        })
+                    else:
+                        self._send_json({
+                            "status": "failed",
+                            "error": str(http_err),
+                            "error_type": "upload_failed",
+                            "http_status": status,
+                            "detail": body_text[:500],
+                        })
                 except Exception as e:
                     logger.error(f"[YouTube] upload error account={account_name}: {e}", exc_info=True)
-                    self._send_json({"status": "failed", "error": str(e)})
+                    self._send_json({"status": "failed", "error": str(e), "error_type": "upload_failed"})
                 finally:
                     try:
                         if tmp_path and os.path.exists(tmp_path):

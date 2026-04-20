@@ -17,11 +17,14 @@ import (
 // processEpisodeJob runs a serial-episode ingestion job through the same
 // download + HLS pipeline used for movies, but writes the output under
 //
-//	videos/serials/<series-slug>/season-<N>/episode-<M>_<shortJobId>/
+//	videos/serials/<series-slug>/season-<N>/episode-<M>/
 //
 // and, on success, notifies the backend to attach the master playlist URL
 // to the linked Episode row. This is deliberately a reduced pipeline: no
 // TMDB enrichment, no movie-code assignment, no Telegram notification.
+// The episode folder intentionally has no job-id suffix: a re-run for the
+// same (series, season, episode) must overwrite the previous HLS so the
+// tree stays clean and matches the required serial→season→episode layout.
 func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJob) error {
 	jobID := job.ID.Hex()
 	log.Printf("[EPISODE] start job=%s series=%s S%02dE%02d",
@@ -95,25 +98,26 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 		return fmt.Errorf("episode update_status processing: %w", err)
 	}
 
-	// Folder layout: serials/<slug>/season-N/episode-M_<shortJobId>
-	// This keeps each episode's HLS assets isolated while preserving the
-	// grouping the user asked for.
-	shortID := jobID
-	if len(shortID) > 8 {
-		shortID = shortID[:8]
-	}
+	// Folder layout: serials/<slug>/season-N/episode-M
+	// Nested under serial → season → episode so master.m3u8 and the rendition
+	// folders (1080p/, 720p/, …) live together at the episode root in B2 as:
+	//   videos/serials/<slug>/season-N/episode-M/master.m3u8
+	//   videos/serials/<slug>/season-N/episode-M/<quality>/index.m3u8
+	//   videos/serials/<slug>/season-N/episode-M/<quality>/segment_*.ts
 	folderName := filepath.Join(
 		"serials",
 		job.SeriesSlug,
 		fmt.Sprintf("season-%d", job.SeasonNumber),
-		fmt.Sprintf("episode-%d_%s", job.EpisodeNumber, shortID),
+		fmt.Sprintf("episode-%d", job.EpisodeNumber),
 	)
-	log.Printf("[EPISODE] folder=%s", folderName)
+	log.Printf("[EPISODE] layout series_slug=%s season=%d episode=%d folder=%s",
+		job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, folderName)
 
 	hlsDir, processedMaster, err := p.processVideo(job, localPath, folderName)
 	if err != nil {
 		return fmt.Errorf("episode processVideo failed: %w", err)
 	}
+	log.Printf("[EPISODE] local_hls_dir=%s processed_master=%s", hlsDir, processedMaster)
 	if stepErr := p.jobRepo.UpdateStep(ctx, jobID, "process"); stepErr != nil {
 		log.Printf("[EPISODE] WARNING: mark process step failed: %v", stepErr)
 	}
@@ -128,6 +132,7 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	if err != nil {
 		return fmt.Errorf("episode uploadProcessedFiles failed: %w", err)
 	}
+	log.Printf("[EPISODE] b2_root=videos/%s master_b2_key=videos/%s/master.m3u8", folderName, folderName)
 	log.Printf("[EPISODE] streamingURL=%s", streamingURL)
 
 	mode := p.config.StorageConfig.Mode

@@ -8,7 +8,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 )
+
+// ttParserClient has a bounded timeout so a stuck parser (e.g. CPU
+// starved while the worker is transcoding on the same VPS) cannot hang
+// backend goroutines indefinitely.
+var ttParserClient = &http.Client{Timeout: 15 * time.Minute}
 
 // TikTokAccount holds credentials for a TikTok account.
 // TIKTOK_ACCOUNTS_JSON env format:
@@ -57,11 +63,18 @@ func UploadVideoToTikTok(parserURL, videoURL, caption string, account *TikTokAcc
 	}
 	body, _ := json.Marshal(payload)
 
-	resp, err := http.Post(parserURL+"/tiktok/upload", "application/json", bytes.NewReader(body))
+	start := time.Now()
+	resp, err := ttParserClient.Post(parserURL+"/tiktok/upload", "application/json", bytes.NewReader(body))
+	latency := time.Since(start)
 	if err != nil {
+		log.Printf("[TikTok] parser request FAILED account=%s latency=%s err=%v",
+			account.Name, latency, err)
 		return fmt.Errorf("parser unreachable: %w", err)
 	}
 	defer resp.Body.Close()
+
+	log.Printf("[TikTok] parser response account=%s http_status=%d latency=%s",
+		account.Name, resp.StatusCode, latency)
 
 	data, _ := io.ReadAll(resp.Body)
 	var result struct {

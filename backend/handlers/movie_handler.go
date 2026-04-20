@@ -567,6 +567,8 @@ func (h *MovieHandler) ApproveMovie(c *gin.Context) {
 				Year:        movie.Year,
 				Genres:      movie.Genre,
 				GenresUz:    movie.GenresUz,
+				Country:     movie.Country,
+				CountriesUz: movie.CountriesUz,
 				Code:        movie.Code,
 				PosterURL:   movie.PosterURL,
 				Quality:     movie.Quality,

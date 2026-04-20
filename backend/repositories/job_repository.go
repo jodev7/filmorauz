@@ -150,10 +150,15 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 		},
 	}
 
+	now := time.Now()
+	// started_at: stamp when work actually begins so the UI elapsed timer
+	// does not run while the job is sitting in the pending queue. On retry
+	// we re-stamp it so each attempt has its own timer.
 	update := bson.M{
 		"$set": bson.M{
 			"status":     models.IngestionStatusProcessing,
-			"updated_at": time.Now(),
+			"updated_at": now,
+			"started_at": now,
 		},
 	}
 
@@ -182,11 +187,17 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 		"steps.process":  bson.M{"$ne": true},
 	}
 
-	update := bson.M{
-		"$set": bson.M{
-			"status":     models.IngestionStatusProcessing,
-			"stage":      "process",
-			"updated_at": time.Now(),
+	now := time.Now()
+	// Preserve started_at if download already stamped it; only initialize
+	// when missing so the elapsed timer is continuous across stages.
+	update := bson.A{
+		bson.M{
+			"$set": bson.M{
+				"status":     models.IngestionStatusProcessing,
+				"stage":      "process",
+				"updated_at": now,
+				"started_at": bson.M{"$ifNull": bson.A{"$started_at", now}},
+			},
 		},
 	}
 

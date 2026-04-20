@@ -62,14 +62,18 @@ function isTerminalJobStatus(status: string | undefined): boolean {
 const STUCK_THRESHOLD_MS = 30 * 60 * 1000;
 
 function formatElapsedTime(job: IngestionJob, now: number): string {
+  // Elapsed must only count once a worker actually starts the job. Falling
+  // back to created_at would make pending jobs appear to "run" while still
+  // in the queue. If no started_at is set (job is still pending), show 00:00.
   const startedAt =
     getJobTime(job, "importStartedAt") ||
     getJobTime(job, "import_started_at") ||
     getJobTime(job, "startedAt") ||
-    getJobTime(job, "started_at") ||
-    job.created_at;
+    getJobTime(job, "started_at");
 
-  const startMs = startedAt ? new Date(startedAt).getTime() : NaN;
+  if (!startedAt) return "00:00";
+
+  const startMs = new Date(startedAt).getTime();
   if (!Number.isFinite(startMs)) return "00:00";
 
   const endedAt = isTerminalJobStatus(job.status)

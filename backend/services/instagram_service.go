@@ -8,7 +8,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 )
+
+// parserUploadClient has a bounded timeout so a stuck parser (e.g. CPU
+// starved while the worker is transcoding on the same VPS) cannot hang
+// backend goroutines indefinitely. Uploads can legitimately take minutes,
+// hence 15m rather than a short admin-API timeout.
+var parserUploadClient = &http.Client{Timeout: 15 * time.Minute}
 
 type InstagramAccount struct {
 	Name     string `json:"name"`
@@ -54,7 +61,7 @@ func (e *InstagramUploadError) Error() string { return e.RawError }
 var errorTypeMessages = map[string]string{
 	"challenge_required":  "Instagram tekshiruvi talab qilinadi (qayta login kerak)",
 	"checkpoint_required": "Hisob tekshiruvi talab qilinadi",
-	"session_expired":     "Sessiya muddati tugagan, qayta login kerak",
+	"session_expired":     "Sessiya muddati tugagan yoki bekor qilingan (token expired or invalid), qayta login kerak",
 	"no_session":          "Sessiya fayli topilmadi",
 	"bad_credentials":     "Login yoki parol noto'g'ri",
 	"rate_limited":        "Juda ko'p so'rov yuborildi, keyinroq urinib ko'ring",
@@ -99,8 +106,15 @@ func UploadReelToInstagram(parserURL, videoURL, caption string, account *Instagr
 	}
 	body, _ := json.Marshal(payload)
 
-	resp, err := http.Post(parserURL+"/instagram/upload", "application/json", bytes.NewReader(body))
+	endpoint := parserURL + "/instagram/upload"
+	log.Printf("[Instagram] POST %s account=%s", endpoint, account.Name)
+
+	start := time.Now()
+	resp, err := parserUploadClient.Post(endpoint, "application/json", bytes.NewReader(body))
+	latency := time.Since(start)
 	if err != nil {
+		log.Printf("[Instagram] parser request FAILED account=%s latency=%s err=%v",
+			account.Name, latency, err)
 		return &InstagramUploadError{
 			ErrorType:    "network_error",
 			HumanMessage: humanMessage("network_error"),
@@ -110,6 +124,13 @@ func UploadReelToInstagram(parserURL, videoURL, caption string, account *Instagr
 	defer resp.Body.Close()
 
 	data, _ := io.ReadAll(resp.Body)
+	bodyPreview := string(data)
+	if len(bodyPreview) > 500 {
+		bodyPreview = bodyPreview[:500] + "...(truncated)"
+	}
+	log.Printf("[Instagram] parser response account=%s http_status=%d latency=%s body=%s",
+		account.Name, resp.StatusCode, latency, bodyPreview)
+
 	var result struct {
 		Status         string `json:"status"`
 		Error          string `json:"error"`
@@ -122,7 +143,7 @@ func UploadReelToInstagram(parserURL, videoURL, caption string, account *Instagr
 			ErrorType:      "publish_failed",
 			HumanMessage:   humanMessage("publish_failed"),
 			ActionRequired: actionRequired("publish_failed"),
-			RawError:       fmt.Sprintf("bad response from parser: %s", data),
+			RawError:       fmt.Sprintf("bad response from parser (http=%d): %s", resp.StatusCode, data),
 		}
 	}
 	if result.Status != "success" {

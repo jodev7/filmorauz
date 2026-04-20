@@ -29,6 +29,8 @@ type TelegramMovieData struct {
 	Year        int      `json:"year"`
 	Genres      []string `json:"genres"`
 	GenresUz    []string `json:"genres_uz"`
+	Country     string   `json:"country"`
+	CountriesUz []string `json:"countries_uz"`
 	Code        string   `json:"code"`
 	PosterURL   string   `json:"poster_url"`
 	Quality     string   `json:"quality"`
@@ -796,14 +798,23 @@ func ensureAtPrefix(ch string) string {
 //
 //	🎬 Yangi kino platformaga qo‘shildi!
 //
-//	📌 <title>
+//	🔥 <b><title></b>
+//
 //	📅 Yil: <year>
+//	🌍 Davlat: <country>
 //	🎭 Janr: <genres>
-//	📝 <short description>
-//	🔢 Kino kodi: <code>
+//	🎞 Sifat: <quality>
 //
-//	📢 @<main channel>
+//	📖 <i><description></i>
 //
+//	🆔 Kino kodi: <b><code></b>
+//
+//	🤖 Bizning bot: <b>@<botUsername></b>
+//
+//	━━━━━━━━━━━━━━━
+//	🎥 <b>Saytda ko‘rish</b>
+//
+// Empty fields (country, genres, quality, description, code) are skipped.
 // Serials use the "📺 Yangi serial" header and otherwise follow the same layout.
 func (s *TelegramService) buildApprovalCaption(data *TelegramMovieData, isSerial bool) string {
 	var b strings.Builder
@@ -815,13 +826,27 @@ func (s *TelegramService) buildApprovalCaption(data *TelegramMovieData, isSerial
 	}
 
 	if t := strings.TrimSpace(data.Title); t != "" {
-		b.WriteString("📌 <b>")
+		b.WriteString("🔥 <b>")
 		b.WriteString(html.EscapeString(t))
-		b.WriteString("</b>\n")
+		b.WriteString("</b>\n\n")
 	}
 
 	if data.Year > 0 {
 		b.WriteString(fmt.Sprintf("📅 Yil: %d\n", data.Year))
+	}
+
+	// Country — prefer the Uzbek-localized list, fall back to the single
+	// bson `country` string. Both empty → skip the line entirely.
+	countries := data.CountriesUz
+	if len(countries) == 0 {
+		if c := strings.TrimSpace(data.Country); c != "" {
+			countries = []string{c}
+		}
+	}
+	if len(countries) > 0 {
+		b.WriteString("🌍 Davlat: ")
+		b.WriteString(html.EscapeString(strings.Join(countries, ", ")))
+		b.WriteString("\n")
 	}
 
 	genres := data.GenresUz
@@ -834,27 +859,40 @@ func (s *TelegramService) buildApprovalCaption(data *TelegramMovieData, isSerial
 		b.WriteString("\n")
 	}
 
-	if data.Quality != "" {
-		b.WriteString(fmt.Sprintf("🎞 Sifat: %s\n", data.Quality))
+	if q := strings.TrimSpace(data.Quality); q != "" {
+		b.WriteString("🎞 Sifat: ")
+		b.WriteString(html.EscapeString(q))
+		b.WriteString("\n")
 	}
 
 	if desc := strings.TrimSpace(data.Description); desc != "" {
 		if runes := []rune(desc); len(runes) > 200 {
 			desc = string(runes[:200]) + "..."
 		}
-		b.WriteString("\n📝 ")
+		b.WriteString("\n📖 <i>")
 		b.WriteString(html.EscapeString(desc))
-		b.WriteString("\n")
+		b.WriteString("</i>\n")
 	}
 
-	if data.Code != "" {
-		b.WriteString(fmt.Sprintf("\n🔢 Kino kodi: <code>%s</code>", html.EscapeString(data.Code)))
+	if code := strings.TrimSpace(data.Code); code != "" {
+		b.WriteString("\n🆔 Kino kodi: <b>")
+		b.WriteString(html.EscapeString(code))
+		b.WriteString("</b>\n")
 	}
 
-	if s.channelUsername != "" {
-		b.WriteString("\n\n📢 @")
-		b.WriteString(s.channelUsername)
+	// Bot mention — use configured TELEGRAM_BOT_USERNAME so the handle stays
+	// in sync with whichever bot this deployment actually runs. Falls back to
+	// the default @filmorauzbot if unconfigured.
+	botName := strings.TrimPrefix(strings.TrimSpace(s.botUsername), "@")
+	if botName == "" {
+		botName = "filmorauzbot"
 	}
+	b.WriteString("\n🤖 Bizning bot: <b>@")
+	b.WriteString(html.EscapeString(botName))
+	b.WriteString("</b>\n")
+
+	b.WriteString("\n━━━━━━━━━━━━━━━\n")
+	b.WriteString("🎥 <b>Saytda ko‘rish</b>")
 
 	return b.String()
 }
