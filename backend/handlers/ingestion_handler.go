@@ -172,6 +172,13 @@ func (h *IngestionHandler) SearchSource(c *gin.Context) {
 	// Log response body length for debugging
 	log.Printf("[INGESTION] SEARCH: response_body_length=%d", len(body))
 
+	// Debug: print response body sample
+	bodySample := string(body)
+	if len(bodySample) > 500 {
+		bodySample = bodySample[:500] + "..."
+	}
+	log.Printf("[INGESTION] SEARCH: response_body_sample=%s", bodySample)
+
 	if resp.StatusCode != http.StatusOK {
 		bodyStr := string(body)
 		if len(bodyStr) > 500 {

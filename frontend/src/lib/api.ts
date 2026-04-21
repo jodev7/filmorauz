@@ -1281,6 +1281,7 @@ export interface SearchResult {
   source_id: string;
   detail_url: string;
   source: string;
+  type?: "movie" | "serial";
 }
 
 export interface IngestionJobInput {

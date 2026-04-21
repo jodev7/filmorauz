@@ -456,11 +456,12 @@ function CatalogTab({
     setError("");
     
     try {
-      await createIngestionJob(token, {
+      await importFromCatalog(token, {
         source: result.source,
         source_id: result.source_id,
         detail_url: result.detail_url,
         title: result.title,
+        type: (result as any).type || "movie",
       });
       onImportSuccess();
     } catch (err) {

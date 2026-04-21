@@ -224,7 +224,7 @@ func (r *JobRepository) CountPendingJobs(ctx context.Context) (int64, error) {
 }
 
 func (r *JobRepository) ResetStaleJobs(ctx context.Context) (int64, error) {
-	staleThreshold := 15 * time.Minute
+	staleThreshold := 90 * time.Minute
 	staleCutoff := time.Now().Add(-staleThreshold)
 	filter := bson.M{
 		"status":     bson.M{"$in": activeIngestionStatuses},
@@ -246,7 +246,7 @@ func (r *JobRepository) ResetStaleJobs(ctx context.Context) (int64, error) {
 	}
 
 	if result.ModifiedCount > 0 {
-		log.Printf("[REPO] ResetStaleJobs: reset %d stale jobs (no update for >15 minutes)",
+		log.Printf("[REPO] ResetStaleJobs: reset %d stale jobs (no update for >90 minutes)",
 			result.ModifiedCount)
 	}
 	return result.ModifiedCount, nil
@@ -274,6 +274,22 @@ func (r *JobRepository) UpdateStatus(ctx context.Context, id string, status mode
 	}
 
 	_, err = r.collection.UpdateByID(ctx, objID, update)
+	return err
+}
+
+// Heartbeat updates only the timestamp, keeping progress/status unchanged.
+// This prevents stale-job detection during long-running processing (FFmpeg can take 30-60+ min).
+func (r *JobRepository) Heartbeat(ctx context.Context, id string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid id")
+	}
+
+	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
+		"$set": bson.M{
+			"updated_at": time.Now(),
+		},
+	})
 	return err
 }
 
@@ -497,7 +513,7 @@ var activeIngestionStatuses = []interface{}{
 }
 
 func (r *JobRepository) FailStaleProcessingJobs(ctx context.Context) (int64, error) {
-	staleThreshold := 15 * time.Minute
+	staleThreshold := 90 * time.Minute
 	staleCutoff := time.Now().Add(-staleThreshold)
 	filter := bson.M{
 		"status":     bson.M{"$in": activeIngestionStatuses},
@@ -508,7 +524,7 @@ func (r *JobRepository) FailStaleProcessingJobs(ctx context.Context) (int64, err
 		"$set": bson.M{
 			"status":       models.IngestionStatusFailed,
 			"stage":        "failed",
-			"error":        "Job stuck with no update for over 15 minutes — marked as failed by stale-job protection",
+			"error":        "Job stuck with no update for over 90 minutes — marked as failed by stale-job protection",
 			"completed_at": time.Now(),
 			"updated_at":   time.Now(),
 		},
@@ -521,7 +537,7 @@ func (r *JobRepository) FailStaleProcessingJobs(ctx context.Context) (int64, err
 	}
 
 	if result.ModifiedCount > 0 {
-		log.Printf("[REPO] FailStaleProcessingJobs: failed %d stale jobs (no update for >15 minutes)",
+		log.Printf("[REPO] FailStaleProcessingJobs: failed %d stale jobs (no update for >90 minutes)",
 			result.ModifiedCount)
 	}
 	return result.ModifiedCount, nil

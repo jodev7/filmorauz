@@ -203,7 +203,9 @@ func (b *Bot) handleStart(chatID int64, userID int64, from *tgbotapi.User) {
 <code>/code KINO_KODI</code>
 
 💡 Masalan:
-<code>/code 0001</code>`
+<code>/code 0001</code>
+
+	Yoki filmorauz.net web sahifamiz orqali barcha kinolarni ko'rishingiz mumkin.`
 	b.sendMessage(chatID, usageText)
 }
 

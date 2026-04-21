@@ -144,7 +144,7 @@ class UzmoviParser(BaseParser):
         results = [SearchResult(
             title=r["title"], year=r["year"], poster=r["poster"],
             description=r["description"], source_id=r["source_id"],
-            detail_url=r["link"], source=r["source"]
+            detail_url=r["link"], source=r["source"], content_type="movie"
         ) for r in results]
         
         # Filter and rank by relevance
@@ -154,7 +154,7 @@ class UzmoviParser(BaseParser):
             results = [SearchResult(
                 title=r["title"], year=r["year"], poster=r["poster"],
                 description=r["description"], source_id=r["source_id"],
-                detail_url=r["detail_url"], source=r["source"]
+                detail_url=r["detail_url"], source=r["source"], content_type="movie"
             ) for r in dict_results]
         
         if DEBUG:

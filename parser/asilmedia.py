@@ -154,15 +154,23 @@ class AsilmediaParser(BaseParser):
         logger.info(f"[ASILMEDIA] search query='{query}'")
         
         # First, try DLE POST search
-        results = self._dle_post_search(query)
-
-        # If no results, fallback to category browsing
-        if not results:
+        dle_results = self._dle_post_search(query)
+        
+        # Track if we got results from DLE search
+        has_dle_results = len(dle_results) > 0
+        
+        # Use DLE results if available, otherwise fallback to category browsing
+        if has_dle_results:
+            results = dle_results
+        else:
             logger.info("[ASILMEDIA] POST search returned 0 results, trying category fallback")
             results = self._category_search(query)
 
-        # Apply STRONG query relevance filtering
-        if results and query:
+        # Apply query relevance filtering ONLY when DLE search actually returned results.
+        # When using category fallback, the results aren't filtered by query anyway,
+        # so relevance filtering would incorrectly filter out valid movies (especially
+        # foreign films with translated titles).
+        if results and query and has_dle_results:
             logger.info(f"[ASILMEDIA] Before relevance filtering: {len(results)} results")
             results = self._filter_by_query_relevance(results, query)
             logger.info(f"[ASILMEDIA] After relevance filtering: {len(results)} results")
@@ -398,7 +406,7 @@ class AsilmediaParser(BaseParser):
             results = [SearchResult(
                 title=r["title"], year=r["year"], poster=r["poster"],
                 description=r["description"], source_id=r["source_id"],
-                detail_url=r["link"], source=r["source"]
+                detail_url=r["link"], source=r["source"], content_type="movie"
             ) for r in dict_results]
 
         return results
@@ -484,7 +492,8 @@ class AsilmediaParser(BaseParser):
             description="",
             source_id=source_id,
             detail_url=detail_url,
-            source=self.source_name
+            source=self.source_name,
+            content_type="movie"
         )
     
     def _is_movie_link(self, href: str) -> bool:
@@ -579,7 +588,7 @@ class AsilmediaParser(BaseParser):
             all_results = [SearchResult(
                 title=r["title"], year=r["year"], poster=r["poster"],
                 description=r["description"], source_id=r["source_id"],
-                detail_url=r["link"], source=r["source"]
+                detail_url=r["link"], source=r["source"], content_type="movie"
             ) for r in dict_results]
         
         if DEBUG:

@@ -28,7 +28,8 @@ class SearchResult:
         description: str,
         source_id: str,
         detail_url: str,
-        source: str
+        source: str,
+        content_type: str = "movie"  # "movie" or "serial"
     ):
         self.title = title
         self.year = year
@@ -37,6 +38,7 @@ class SearchResult:
         self.source_id = source_id
         self.detail_url = detail_url
         self.source = source
+        self.content_type = content_type
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -46,7 +48,8 @@ class SearchResult:
             "description": self.description,
             "source_id": self.source_id,
             "detail_url": self.detail_url,
-            "source": self.source
+            "source": self.source,
+            "type": self.content_type
         }
 
 

@@ -1670,6 +1670,26 @@ func (p *Pipeline) processVideo(job *models.IngestionJob, inputPath string, cano
 
 	jobID := job.ID.Hex()
 
+	// Heartbeat: update job every 30 seconds during processing to prevent stale-job detection
+	// FFmpeg processing can take 30-60+ minutes, so we need heartbeats to keep the job alive
+	heartbeatCtx, heartbeatCancel := context.WithCancel(context.Background())
+	defer heartbeatCancel()
+	go func() {
+		heartbeatTicker := time.NewTicker(30 * time.Second)
+		defer heartbeatTicker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-heartbeatTicker.C:
+				// Heartbeat update - only update timestamp, keep current progress/status
+				if err := p.jobRepo.Heartbeat(context.Background(), jobID); err == nil {
+					log.Printf("[WORKER] heartbeat: job %s still processing", jobID)
+				}
+			}
+		}
+	}()
+
 	metadata := job.Metadata
 	if metadata == nil {
 		log.Printf("[PIPELINE] WARNING: job metadata is nil, using fallback values")
