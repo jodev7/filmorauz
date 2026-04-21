@@ -149,33 +149,37 @@ class AsilmediaParser(BaseParser):
         return self.BASE_URL
     
     def search(self, query: str) -> List[SearchResult]:
-        """Search for movies using DLE POST form with strong query relevance filtering"""
-
+        """Search for movies using DLE POST form with query relevance filtering"""
+        
+        # Debug log: incoming query
         logger.info(f"[ASILMEDIA] search query='{query}'")
         
-        # First, try DLE POST search
+        # Try DLE POST search first
         dle_results = self._dle_post_search(query)
         
         # Track if we got results from DLE search
         has_dle_results = len(dle_results) > 0
+        logger.info(f"[ASILMEDIA] DLE POST search returned {len(dle_results)} results")
         
-        # Use DLE results if available, otherwise fallback to category browsing
+        # Use DLE results if available, otherwise fallback to category search
         if has_dle_results:
             results = dle_results
+            logger.info(f"[ASILMEDIA] Using DLE search results: {len(results)}")
         else:
-            logger.info("[ASILMEDIA] POST search returned 0 results, trying category fallback")
+            # Debug log: source request
+            logger.info("[ASILMEDIA] DLE search empty, using category fallback search")
             results = self._category_search(query)
+            logger.info(f"[ASILMEDIA] Category search returned {len(results)} raw results")
 
-        # Apply query relevance filtering ONLY when DLE search actually returned results.
-        # When using category fallback, the results aren't filtered by query anyway,
-        # so relevance filtering would incorrectly filter out valid movies (especially
-        # foreign films with translated titles).
-        if results and query and has_dle_results:
-            logger.info(f"[ASILMEDIA] Before relevance filtering: {len(results)} results")
+        # Apply query relevance filtering
+        if results and query:
+            # Debug log: raw result count
+            logger.info(f"[ASILMEDIA] Before filtering: {len(results)} results")
             results = self._filter_by_query_relevance(results, query)
-            logger.info(f"[ASILMEDIA] After relevance filtering: {len(results)} results")
+            # Debug log: filtered result count
+            logger.info(f"[ASILMEDIA] After filtering: {len(results)} results")
 
-        logger.info(f"[ASILMEDIA] search returning {len(results)} results")
+        logger.info(f"[ASILMEDIA] Final search results: {len(results)}")
         return results
     
     def _filter_by_query_relevance(self, results: List[SearchResult], query: str) -> List[SearchResult]:
@@ -229,12 +233,12 @@ class AsilmediaParser(BaseParser):
         # Sort by score descending
         scored.sort(key=lambda x: x[0], reverse=True)
         
-        # Keep ONLY results with score >= 40 (relevant matches)
-        # This ensures we never return unrelated movies
-        filtered = [r for score, r in scored if score >= 40]
+        # Keep results with score >= 30 (looser threshold for category fallback).
+        # Score 40+: exact/strong matches. Score 30-39: partial matches.
+        filtered = [r for score, r in scored if score >= 30]
         
         if DEBUG:
-            logger.info(f"[ASILMEDIA DLE] Final results: {len(filtered)} (kept score >= 40)")
+            logger.info(f"[ASILMEDIA DLE] Final results: {len(filtered)} (kept score >= 30)")
         
         # NOTE: We intentionally return empty if no relevant results
         # Better to return nothing than unrelated movies
@@ -542,57 +546,53 @@ class AsilmediaParser(BaseParser):
     
     def _category_search(self, query: str) -> List[SearchResult]:
         """
-        Fallback: Browse category pages to find movies.
+        Fallback: Browse catalog pages to find movies matching query.
         Used when DLE POST search returns empty results.
+        Searches through multiple pages to find the query.
         """
         
         if DEBUG:
-            logger.info(f"[ASILMEDIA DLE] === CATEGORY FALLBACK ===")
+            logger.info(f"[ASILMEDIA DLE] === CATEGORY FALLBACK (query: {query}) ===")
         
         all_results = []
+        query_lower = query.lower()
         
-        for cat_path in self.CATEGORY_PAGES:
+        # Browse catalog pages to find matching titles
+        max_pages = 30  # Search through 30 pages (~360 movies)
+        for page in range(1, max_pages + 1):
             try:
-                url = f"{self.BASE_URL.rstrip('/')}{cat_path}"
+                cat_result = self.list_catalog(page=page, limit=20)
+                items = cat_result.get('items', [])
                 
-                if DEBUG:
-                    logger.info(f"[ASILMEDIA DLE] Category: {url}")
+                if not items:
+                    break
                 
-                response = self.session.get(url, timeout=30)
-                if response.status_code != 200:
-                    continue
-                
-                soup = BeautifulSoup(response.text, "html.parser")
-                
-                # Extract using DLE selectors
-                results = self._extract_dle_results(soup, query)
-                
-                if results:
-                    if DEBUG:
-                        logger.info(f"[ASILMEDIA DLE] Category {cat_path}: {len(results)} results")
-                    all_results.extend(results)
+                for item in items:
+                    title = item.get('title', '')
+                    # Check if query is in title (case-insensitive partial match)
+                    if title and query_lower in title.lower():
+                        all_results.append(SearchResult(
+                            title=title,
+                            year=item.get('year', 0),
+                            poster=item.get('poster', ''),
+                            description=item.get('description', ''),
+                            source_id=item.get('source_id', ''),
+                            detail_url=item.get('detail_url', ''),
+                            source=self.source_name,
+                            content_type=item.get('type', 'movie')
+                        ))
+                        
+                # Stop early if we found matches
+                if all_results and len(all_results) >= 5:
+                    break
                     
             except Exception as e:
                 if DEBUG:
-                    logger.warning(f"[ASILMEDIA DLE] Category error: {e}")
+                    logger.warning(f"[ASILMEDIA DLE] Category page {page} error: {e}")
                 continue
         
-        # Deduplicate
-        if all_results:
-            # Convert to dicts for deduplication
-            dict_results = [{"title": r.title, "link": r.detail_url, "year": r.year, 
-                           "poster": r.poster, "source_id": r.source_id, 
-                           "description": r.description, "source": r.source} for r in all_results]
-            dict_results = deduplicate_results(dict_results, key="link")
-            # Convert back to SearchResult objects
-            all_results = [SearchResult(
-                title=r["title"], year=r["year"], poster=r["poster"],
-                description=r["description"], source_id=r["source_id"],
-                detail_url=r["link"], source=r["source"], content_type="movie"
-            ) for r in dict_results]
-        
         if DEBUG:
-            logger.info(f"[ASILMEDIA DLE] Category fallback total: {len(all_results)} results")
+            logger.info(f"[ASILMEDIA DLE] Category fallback total: {len(all_results)} results for query '{query}'")
         
         return all_results
     
