@@ -190,11 +190,28 @@ class AsilmediaParser(BaseParser):
         if not results or not query:
             return results
         
-        # Normalize query
+        # Normalize query with better noise removal
         query_normalized = self._normalize_for_match(query)
-        query_words = query_normalized.split()
         
-        if not query_words:
+        # Alias mapping for common transliterations
+        aliases = {
+            "forsaj": ["fast", "furious", "форсаж", "forsazh", "forsage"],
+            "interstellar": ["interstellar"],
+            "avatar": ["avatar", "avatarr"],
+            "iron": ["iron", "ayron"],
+            "spider": ["spider", "spayder"],
+            "batman": ["batman", "betmen"],
+            "superman": ["superman", "syuper men"],
+            "transformers": ["transformers", "transformer"],
+        }
+        alias_expansions = []
+        if query_normalized in aliases:
+            alias_expansions = aliases[query_normalized]
+        
+        query_words = query_normalized.split()
+        all_query_terms = query_words + alias_expansions
+        
+        if not all_query_terms:
             return results
         
         # Score each result
@@ -209,52 +226,51 @@ class AsilmediaParser(BaseParser):
             # Exact match (full query in title) - 100 points
             if query_normalized in title_normalized:
                 score = 100
+            # Any alias in title - 90 points
+            elif any(alias in title_normalized for alias in alias_expansions):
+                score = 90
             # All query words match - 80 points
-            elif all(word in title_normalized for word in query_words):
+            elif all(word in title_normalized for word in query_words if len(word) >= 2):
                 score = 80
-            # Query as substring in title - 70 points  
+            # Any significant word in title - partial match
             else:
-                # Check if any significant match
-                has_match = False
-                for word in query_words:
-                    if len(word) >= 3 and word in title_normalized:  # Only words >= 3 chars
-                        has_match = True
-                        break
-                if has_match:
-                    # Count matching words
-                    matches = sum(1 for word in query_words if len(word) >= 3 and word in title_normalized)
-                    score = min(60, matches * 20)  # Max 60 points
+                matches = 0
+                for word in all_query_terms:
+                    if len(word) >= 2 and word in title_normalized:
+                        matches += 1
+                if matches > 0:
+                    score = min(70, matches * 20)
             
             scored.append((score, r))
             
-            if DEBUG:
+            if DEBUG and score > 0:
                 logger.info(f"[ASILMEDIA DLE] Scored: score={score}, title={title[:40]}")
         
         # Sort by score descending
         scored.sort(key=lambda x: x[0], reverse=True)
         
-        # Keep results with score >= 30 (looser threshold for category fallback).
-        # Score 40+: exact/strong matches. Score 30-39: partial matches.
-        filtered = [r for score, r in scored if score >= 30]
+        # Keep results with score >= 20 (very loose to catch partial matches)
+        filtered = [r for score, r in scored if score >= 20]
         
         if DEBUG:
-            logger.info(f"[ASILMEDIA DLE] Final results: {len(filtered)} (kept score >= 30)")
-        
-        # NOTE: We intentionally return empty if no relevant results
-        # Better to return nothing than unrelated movies
-        # This is because the DLE site's search doesn't work, and category pages
-        # don't contain the queried content
+            logger.info(f"[ASILMEDIA DLE] Final results: {len(filtered)} (kept score >= 20)")
         
         return filtered
     
     def _normalize_for_match(self, text: str) -> str:
-        """Normalize text for matching: lowercase, trim, collapse whitespace"""
+        """Normalize text for matching: lowercase, trim, collapse whitespace, remove noise"""
         if not text:
             return ""
+        import re
         # Lowercase
         text = text.lower()
+        # Remove quality prefixes like "1080p", "720p", "480p", "+56", etc.
+        text = re.sub(r'^\+?\d+\s*', '', text)  # Remove leading +number or number
+        text = re.sub(r'(\d{3,4}p)\s*', '', text)  # Remove quality like 1080p, 720p
+        text = re.sub(r'\d{4}\s*', '', text)  # Remove year numbers at start
+        # Remove common noise characters
+        text = re.sub(r'[/|,|-]', ' ', text)  # Replace separators with spaces
         # Remove extra whitespace
-        import re
         text = re.sub(r'\s+', ' ', text)
         return text.strip()
     

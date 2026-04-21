@@ -16,28 +16,42 @@ import {
   createManualImport, importFromCatalog
 } from "@/lib/api";
 
+// Season type for serial grouping
+type SeasonGroup = {
+  season_number: number;
+  episodes: IngestionJob[];
+};
+
 // Grouped job type for serial display
 type JobGroup = 
   | { type: "single"; job: IngestionJob }
-  | { type: "serial"; id: string; title: string; jobs: IngestionJob[]; expanded: boolean };
+  | { type: "serial"; id: string; title: string; seasons: SeasonGroup[]; expanded: boolean; totalEpisodes: number; totalSeasons: number };
 
 // Group jobs by serial - serials are identified by season_number or episode_number being set
 function groupJobsBySerial(jobs: IngestionJob[]): JobGroup[] {
-  const serialMap = new Map<string, IngestionJob[]>();
+  // Map: seriesKey -> Map: seasonNumber -> episodes[]
+  const seriesMap = new Map<string, Map<number, IngestionJob[]>>();
   const singles: IngestionJob[] = [];
   
   for (const job of jobs) {
-    // Check if this is a serial episode (has episode_number or season_number)
     const isEpisode = !!job.episode_number || !!job.season_number;
-    const serialKey = job.metadata?.title || job.source_id;
     
-    if (isEpisode && serialKey) {
-      // Group by serial title
-      if (!serialMap.has(serialKey)) {
-        serialMap.set(serialKey, []);
+    if (isEpisode) {
+      // Use metadata.title or source_id as series identifier
+      const seriesKey = job.metadata?.title || job.source_id || "";
+      
+      if (!seriesKey) continue; // Skip if no identifier
+      
+      if (!seriesMap.has(seriesKey)) {
+        seriesMap.set(seriesKey, new Map());
       }
-      const existing = serialMap.get(serialKey);
-      if (existing) existing.push(job);
+      const seasonMap = seriesMap.get(seriesKey)!;
+      
+      const seasonNum = job.season_number || 1;
+      if (!seasonMap.has(seasonNum)) {
+        seasonMap.set(seasonNum, []);
+      }
+      seasonMap.get(seasonNum)!.push(job);
     } else {
       singles.push(job);
     }
@@ -46,22 +60,28 @@ function groupJobsBySerial(jobs: IngestionJob[]): JobGroup[] {
   // Convert to JobGroup array
   const groups: JobGroup[] = [];
   
-  // Add serial groups (sorted by title)
-  Array.from(serialMap.entries()).forEach(([title, epJobs]) => {
-    // Sort episodes by season/episode number
-    const sorted = epJobs.sort((a: IngestionJob, b: IngestionJob) => {
-      const aSeason = a.season_number || 0;
-      const bSeason = b.season_number || 0;
-      if (aSeason !== bSeason) return aSeason - bSeason;
-      return (a.episode_number || 0) - (b.episode_number || 0);
+  // Add serial groups
+  seriesMap.forEach((seasonMap, seriesKey) => {
+    const seasons: SeasonGroup[] = [];
+    let totalEpisodes = 0;
+    
+    Array.from(seasonMap.entries()).sort((a, b) => a[0] - b[0]).forEach(([seasonNum, epJobs]) => {
+      epJobs.sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0));
+      seasons.push({ season_number: seasonNum, episodes: epJobs });
+      totalEpisodes += epJobs.length;
     });
-    // Use first episode's source_id as the group id
+    
+    const firstEp = seasons[0]?.episodes[0];
+    const seriesTitle = firstEp?.metadata?.title || seriesKey;
+    
     groups.push({
       type: "serial",
-      id: epJobs[0]?.id || title,
-      title,
-      jobs: sorted,
-      expanded: false
+      id: firstEp?.id || seriesKey,
+      title: seriesTitle,
+      seasons,
+      expanded: false,
+      totalEpisodes,
+      totalSeasons: seasons.length
     });
   });
   
@@ -357,6 +377,8 @@ function CatalogTab({
   const [importing, setImporting] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [error, setError] = useState("");
+  const [directUrl, setDirectUrl] = useState("");
+  const [directImporting, setDirectImporting] = useState(false);
   const [categories, setCategories] = useState<CatalogCategory[]>([]);
   const [categoriesLoading, setCategoriesLoading] = useState<boolean>(true);
   const [selectedCategory, setSelectedCategory] = useState<string>("");
@@ -471,6 +493,29 @@ function CatalogTab({
     }
   };
 
+  const handleDirectUrlImport = async () => {
+    if (!token || !directUrl.trim()) return;
+    
+    setDirectImporting(true);
+    setError("");
+    
+    try {
+      await importFromCatalog(token, {
+        source: source.id,
+        source_id: "",
+        detail_url: directUrl.trim(),
+        title: "",
+        type: "movie",
+      });
+      onImportSuccess();
+      setDirectUrl("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Havola orqali import xatosiz");
+    } finally {
+      setDirectImporting(false);
+    }
+  };
+
   const SourceIcon = source.icon;
 
   return (
@@ -518,6 +563,38 @@ function CatalogTab({
             Search
           </button>
         </div>
+      </div>
+
+      {/* Direct URL Import panel */}
+      <div className="bg-brand-card border border-brand-border rounded-lg p-4">
+        <h3 className="text-white font-semibold mb-3">Manba havolasi orqali import</h3>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={directUrl}
+            onChange={(e) => setDirectUrl(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleDirectUrlImport()}
+            placeholder="Kino yoki serial sahifa linkini kiriting..."
+            className="flex-1 bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
+          />
+          <button
+            onClick={handleDirectUrlImport}
+            disabled={directImporting || !directUrl.trim()}
+            className="bg-brand-red hover:bg-orange-700 disabled:opacity-60 px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
+          >
+            {directImporting ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <>
+                <Link className="w-5 h-5" />
+                <span>Havola orqali import</span>
+              </>
+            )}
+          </button>
+        </div>
+        <p className="text-gray-500 text-sm mt-2">
+          Qidiruv natijasi topilmasa, havola orqali import qilib ko'ring
+        </p>
       </div>
 
       {/* Search panel */}
@@ -605,8 +682,12 @@ function CatalogTab({
         </div>
       )}
 
-      {/* Catalog Grid */}
-      {loading ? (
+      {/* Catalog Grid - hide when search mode is active with query */}
+      {showSearch && searchQuery ? (
+        <div className="text-center text-gray-500 py-12">
+          {searchResults.length > 0 ? `Found ${searchResults.length} search results` : 'No search results'}
+        </div>
+      ) : loading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="w-8 h-8 animate-spin text-brand-red" />
           <span className="ml-3 text-gray-400">Loading catalog...</span>
@@ -999,7 +1080,7 @@ function JobsTab({
         return matchesJobFilter(group.job, filter, now);
       }
       // For serial groups, check if any job matches the filter
-      return group.jobs.some(job => matchesJobFilter(job, filter, now));
+      return group.seasons.some(s => s.episodes.some(job => matchesJobFilter(job, filter, now)));
     });
   }, [jobGroups, filter, now]);
   
@@ -1461,12 +1542,14 @@ function JobsTab({
             // Render serial group as tree structure
             const serial = group;
             const isExpanded = expandedSerials.has(serial.id);
-            const summary = getSerialSummary(serial.jobs);
-            const seasons = groupJobsBySeason(serial.jobs);
+            
+            // Collect all episodes from all seasons for summary
+            const allEpisodes = serial.seasons.flatMap(s => s.episodes);
+            const summary = getSerialSummary(allEpisodes);
             
             // Get overall status for serial
-            const hasActive = serial.jobs.some(j => !isTerminalJobStatus(j.status));
-            const hasFailed = serial.jobs.some(j => j.status === "failed" || j.status === "download_failed");
+            const hasActive = allEpisodes.some(j => !isTerminalJobStatus(j.status));
+            const hasFailed = allEpisodes.some(j => j.status === "failed" || j.status === "download_failed");
             const statusColor = hasFailed ? "bg-red-500" : hasActive ? "bg-yellow-500" : "bg-green-500";
             const statusLabel = hasFailed ? "Failed" : hasActive ? "Processing" : "Completed";
             
@@ -1523,10 +1606,10 @@ function JobsTab({
                 {/* Seasons and episodes - collapsible */}
                 {isExpanded && (
                   <div className="border-t border-brand-border bg-brand-dark/30">
-                    {Array.from(seasons.entries()).map(([seasonName, epJobs]) => {
+                    {serial.seasons.map(season => {
+                      const seasonName = `S${season.season_number}`;
                       const seasonExpanded = expandedSeasons.has(`${serial.id}-${seasonName}`);
-                      const seasonCompleted = epJobs.filter(j => j.status === "completed").length;
-                      const seasonProcessing = epJobs.filter(j => !isTerminalJobStatus(j.status)).length;
+                      const seasonCompleted = season.episodes.filter(j => j.status === "completed").length;
                       
                       return (
                         <div key={seasonName} className="border-b border-brand-border last:border-b-0">
@@ -1539,17 +1622,17 @@ function JobsTab({
                             <Tv className="w-4 h-4 text-blue-400" />
                             <span className="font-medium text-white text-sm">{seasonName}</span>
                             <span className="text-xs text-gray-500">
-                              {epJobs.length} episode{epJobs.length !== 1 ? 's' : ''}
+                              {season.episodes.length} episode{season.episodes.length !== 1 ? 's' : ''}
                             </span>
                             <span className="text-xs text-gray-500 ml-auto">
-                              {seasonCompleted}/{epJobs.length} done
+                              {seasonCompleted}/{season.episodes.length} done
                             </span>
                           </div>
                           
                           {/* Episodes */}
                           {seasonExpanded && (
                             <div className="pb-2">
-                              {epJobs.map(job => renderJobCard(job))}
+                              {season.episodes.map(job => renderJobCard(job))}
                             </div>
                           )}
                         </div>

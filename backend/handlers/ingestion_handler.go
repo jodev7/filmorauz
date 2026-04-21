@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/filmorauz/backend/models"
@@ -1234,7 +1235,7 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 
 	var input struct {
 		Source    string `json:"source" binding:"required"`
-		SourceID  string `json:"source_id" binding:"required"`
+		SourceID  string `json:"source_id"`
 		DetailURL string `json:"detail_url"`
 		Title     string `json:"title"`
 		Type      string `json:"type"` // "movie" or "serial"
@@ -1244,6 +1245,46 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 		log.Printf("[INGESTION] IMPORT: invalid request - %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	// For direct URL import mode: if source_id not provided but detail_url is, fetch details from parser first
+	if input.SourceID == "" && input.DetailURL != "" {
+		detailsURL := fmt.Sprintf("%s/details?source=%s&url=%s", h.parserURL, input.Source, url.QueryEscape(input.DetailURL))
+		resp, err := h.httpClient.Get(detailsURL)
+		if err == nil && resp.StatusCode == 200 {
+			var details map[string]interface{}
+			if body, err := io.ReadAll(resp.Body); err == nil {
+				json.Unmarshal(body, &details)
+				// Extract source_id from details
+				if sid, ok := details["source_id"].(string); ok && sid != "" {
+					input.SourceID = sid
+				}
+				// Extract title if not provided
+				if input.Title == "" {
+					if t, ok := details["title"].(string); ok {
+						input.Title = t
+					}
+				}
+				// Extract type if not provided
+				if input.Type == "" {
+					if t, ok := details["type"].(string); ok {
+						input.Type = t
+					}
+				}
+			}
+		}
+		resp.Body.Close()
+	}
+
+	// If still no source_id, generate from detail_url
+	if input.SourceID == "" && input.DetailURL != "" {
+		parts := strings.Split(input.DetailURL, "/")
+		if len(parts) > 0 {
+			last := parts[len(parts)-1]
+			last = strings.TrimSuffix(last, ".html")
+			last = strings.TrimSuffix(last, ".htm")
+			input.SourceID = last
+		}
 	}
 
 	log.Printf("[INGESTION] IMPORT: importing - source=%s, source_id=%s, type=%s, title=%s", input.Source, input.SourceID, input.Type, input.Title)
