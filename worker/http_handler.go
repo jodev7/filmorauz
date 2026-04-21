@@ -96,6 +96,11 @@ func (h *ProcessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodPost && r.URL.Path == "/upload-suggestion" {
+		h.handleUploadSuggestion(w, r)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -409,6 +414,45 @@ func (h *ProcessHandler) handleUploadTelegramPost(w http.ResponseWriter, r *http
 
 	log.Printf("[B2] telegram-post upload names: original=%q safe=%q key=%q", header.Filename, safeFilename, mediaKey)
 	log.Printf("[B2] Uploading telegram post: bucket=filmorauznet, key=%s, size=%d", mediaKey, len(data))
+
+	publicURL, err := h.b2Store.UploadData(mediaKey, data, header.Header.Get("Content-Type"))
+	if err != nil {
+		log.Printf("[B2] Upload failed: %v", err)
+		h.sendError(w, fmt.Sprintf("B2 upload failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[B2] Upload success: %s", publicURL)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"url": publicURL,
+	})
+}
+
+func (h *ProcessHandler) handleUploadSuggestion(w http.ResponseWriter, r *http.Request) {
+	if h.b2Store == nil {
+		h.sendError(w, "B2 storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	file, header, err := r.FormFile("image")
+	if err != nil {
+		h.sendError(w, fmt.Sprintf("no file provided: %v", err), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		h.sendError(w, fmt.Sprintf("failed to read file: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	safeFilename, mediaKey := safeUploadKey("images/suggestions", "suggestion", header.Filename, header.Header.Get("Content-Type"), ".jpg")
+
+	log.Printf("[B2] suggestion upload names: original=%q safe=%q key=%q", header.Filename, safeFilename, mediaKey)
+	log.Printf("[B2] Uploading suggestion image: bucket=filmorauznet, key=%s, size=%d", mediaKey, len(data))
 
 	publicURL, err := h.b2Store.UploadData(mediaKey, data, header.Header.Get("Content-Type"))
 	if err != nil {

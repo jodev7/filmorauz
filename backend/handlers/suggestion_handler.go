@@ -157,7 +157,7 @@ func (h *SuggestionHandler) CreateSuggestion(c *gin.Context) {
 
 func (h *SuggestionHandler) uploadImageToStorage(file multipart.File, filename, contentType string) (string, string, error) {
 	if h.config == nil {
-		return "", "", nil
+		return "", "", fmt.Errorf("config not initialized")
 	}
 
 	cfg := h.config
@@ -195,37 +195,52 @@ func (h *SuggestionHandler) uploadImageToStorage(file multipart.File, filename, 
 	}
 
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("failed to seek file: %w", err)
 	}
 
 	var b bytes.Buffer
 	wr := multipart.NewWriter(&b)
 	part, err := wr.CreateFormFile("image", filename)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("failed to create form: %w", err)
 	}
 	if _, err := io.Copy(part, file); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("failed to copy file: %w", err)
 	}
 	wr.Close()
 
-	resp, err := http.Post(workerURL+"/upload-suggestion", wr.FormDataContentType(), &b)
+	uploadURL := workerURL + "/upload-suggestion"
+	log.Printf("[SuggestionHandler] Uploading suggestion image to worker: %s", uploadURL)
+
+	resp, err := http.Post(uploadURL, wr.FormDataContentType(), &b)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("failed to upload to worker: %w", err)
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read worker response: %w", err)
+	}
+
+	log.Printf("[SuggestionHandler] Worker response status: %d, body: %s", resp.StatusCode, string(body))
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", "", fmt.Errorf("worker returned status %d: %s", resp.StatusCode, body)
+		return "", "", fmt.Errorf("worker returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", "", err
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", "", fmt.Errorf("failed to decode worker response: %w, body: %s", err, string(body))
 	}
 
-	return result["url"], result["temp_key"], nil
+	imageURL := result["url"]
+	if imageURL == "" {
+		return "", "", fmt.Errorf("worker returned empty URL, response: %s", string(body))
+	}
+
+	log.Printf("[SuggestionHandler] Upload success, URL: %s", imageURL)
+	return imageURL, "suggestions/" + filename, nil
 }
 
 func (h *SuggestionHandler) GetMySuggestions(c *gin.Context) {

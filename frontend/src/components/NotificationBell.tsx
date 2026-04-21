@@ -153,7 +153,7 @@ export default function NotificationBell() {
 
       {/* Dropdown */}
       {showDropdown && (
-        <div className="absolute right-0 mt-2 w-[calc(100vw-2rem)] max-w-[20rem] sm:w-80 bg-brand-card border border-brand-border rounded-xl shadow-2xl z-[60] overflow-hidden">
+        <div className="absolute right-0 sm:right-auto sm:left-0 mt-2 w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] sm:max-w-[20rem] sm:w-80 bg-brand-card border border-brand-border rounded-xl shadow-2xl z-[60] overflow-hidden">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-brand-border shrink-0">
             <h3 className="text-white font-medium">Bildirishnomalar</h3>

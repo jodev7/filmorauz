@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { X, Loader2, Film, Tv, ExternalLink, Upload, Image as ImageIcon } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { createSuggestion, SuggestionFormData } from "@/lib/api";
@@ -19,6 +20,12 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+    return () => setMounted(false);
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
@@ -31,6 +38,14 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
     };
   }, [isOpen]);
 
+  useEffect(() => {
+    return () => {
+      if (imagePreview) {
+        URL.revokeObjectURL(imagePreview);
+      }
+    };
+  }, [imagePreview]);
+
   // Handle Escape key
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -41,14 +56,6 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
     document.addEventListener("keydown", handleEscape);
     return () => document.removeEventListener("keydown", handleEscape);
   }, [isOpen, onClose]);
-
-  useEffect(() => {
-    return () => {
-      if (imagePreview) {
-        URL.revokeObjectURL(imagePreview);
-      }
-    };
-  }, [imagePreview]);
   
   const [formData, setFormData] = useState<SuggestionFormData>({
     type: "movie",
@@ -132,22 +139,22 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
     }
   };
 
-  if (!isOpen) return null;
+  if (!isOpen || !mounted) return null;
 
-  return (
-    <div className="fixed inset-0 z-[100] overflow-hidden">
+  const modalContent = (
+    <div className="fixed inset-0 z-[9999] overflow-hidden">
       <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/80 backdrop-blur-sm"
         onClick={onClose}
       />
       <div className="flex items-center justify-center min-h-full p-4 sm:p-6">
         <div 
-          className="relative bg-brand-card border border-brand-border rounded-2xl p-6 w-full max-w-lg max-h-[calc(100vh-2rem)] sm:max-h-[90vh] overflow-y-auto"
+          className="relative bg-brand-card border border-brand-border rounded-2xl p-6 w-full max-w-lg max-h-[calc(100vh-2rem)] sm:max-h-[90vh] overflow-y-auto shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
           <button
             onClick={onClose}
-            className="absolute top-4 right-4 text-gray-400 hover:text-white p-1"
+            className="absolute top-4 right-4 text-gray-400 hover:text-white p-1 z-10"
           >
             <X size={20} />
           </button>
@@ -316,4 +323,8 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
       </div>
     </div>
   );
+
+  if (typeof window === "undefined") return null;
+
+  return createPortal(modalContent, document.body);
 }
