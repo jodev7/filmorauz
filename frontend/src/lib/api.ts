@@ -222,14 +222,24 @@ export async function getTrendingMovies(period: string = "24h", limit: number = 
 }
 
 // Get movie recommendations - returns as Movie[] for carousel compatibility
+// Uses new endpoint with hybrid scoring (content + popularity + user personalization)
 export async function getRecommendations(movieId: string, limit: number = 12): Promise<Movie[]> {
-  const res = await fetch(`${API_URL}/movies/${movieId}/recommendations?limit=${limit}`, {
+  const res = await fetch(`${API_URL}/movies/recommendations?movie_id=${movieId}&limit=${limit}`, {
     cache: "no-store",
   });
-  if (!res.ok) throw new Error("Failed to fetch recommendations");
+  if (!res.ok) {
+    // Fallback to old endpoint if new one fails
+    const fallbackRes = await fetch(`${API_URL}/movies/${movieId}/recommendations?limit=${limit}`, {
+      cache: "no-store",
+    });
+    if (!fallbackRes.ok) throw new Error("Failed to fetch recommendations");
+    const json = await fallbackRes.json();
+    const recommendations: RecommendationMovie[] = json.data || [];
+    return recommendations.map(recommendationToMovie);
+  }
   const json = await res.json();
-  const recommendations: RecommendationMovie[] = json.data || [];
-  return recommendations.map(recommendationToMovie);
+  const movies: Movie[] = json.data || [];
+  return movies;
 }
 
 // ── Auth ──────────────────────────────────────────────────────
@@ -373,6 +383,18 @@ export async function logout(token: string): Promise<void> {
     const err = await res.json();
     throw new Error(err.error || "Logout failed");
   }
+}
+
+// Refresh token - extends session without requiring re-login
+export async function refreshAuthToken(token: string): Promise<{ token: string; authenticated: boolean }> {
+  const res = await fetch(`${API_URL}/auth/refresh`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    throw new Error("Token refresh failed");
+  }
+  return res.json();
 }
 
 // Update user profile (display name / first name)
@@ -2964,4 +2986,124 @@ export async function uploadTelegramPostMedia(
   }
   const json = await res.json();
   return json.url as string;
+}
+
+// ── Suggestion API ──────────────────────────────────────────────────────────
+
+export interface Suggestion {
+  id: string;
+  user_id: string;
+  user_name: string;
+  type: "movie" | "series";
+  title: string;
+  message: string;
+  source_url?: string;
+  attachment_url?: string;
+  status: "pending" | "accepted" | "rejected";
+  admin_message?: string;
+  reviewed_by?: string;
+  reviewed_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SuggestionInput {
+  type: "movie" | "series";
+  title: string;
+  message: string;
+  source_url?: string;
+}
+
+export interface SuggestionUpdateInput {
+  status: "accepted" | "rejected";
+  admin_message?: string;
+}
+
+export interface SuggestionListResponse {
+  suggestions: Suggestion[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export async function createSuggestion(
+  token: string,
+  input: SuggestionInput
+): Promise<{ message: string; suggestion: Suggestion }> {
+  const res = await fetch(`${API_URL}/suggestions`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Tavsiya yuborishda xatolik");
+  }
+  return res.json();
+}
+
+export async function getMySuggestions(
+  token: string,
+  page = 1,
+  limit = 10
+): Promise<SuggestionListResponse> {
+  const qs = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
+  const res = await fetch(`${API_URL}/suggestions?${qs}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Tavsiyalarni olishda xatolik");
+  return res.json();
+}
+
+export async function adminListSuggestions(
+  token: string,
+  page = 1,
+  limit = 20,
+  status?: "pending" | "accepted" | "rejected" | "all"
+): Promise<SuggestionListResponse> {
+  const qs = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
+  if (status && status !== "all") {
+    qs.set("status", status);
+  }
+  const res = await fetch(`${API_URL}/admin/suggestions?${qs}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Tavsiyalarni olishda xatolik");
+  return res.json();
+}
+
+export async function adminUpdateSuggestion(
+  token: string,
+  id: string,
+  input: SuggestionUpdateInput
+): Promise<{ message: string; suggestion: Suggestion }> {
+  const res = await fetch(`${API_URL}/admin/suggestions/${id}`, {
+    method: "PATCH",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Tavsiyani yangilashda xatolik");
+  }
+  return res.json();
+}
+
+export async function adminGetSuggestionStats(
+  token: string
+): Promise<{ total: number; pending: number; accepted: number; rejected: number }> {
+  const res = await fetch(`${API_URL}/admin/suggestions/stats`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Statistikani olishda xatolik");
+  return res.json();
 }

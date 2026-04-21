@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { Film, LayoutDashboard, List, LogOut, PlusCircle, Download, Users, FolderHeart, MessageSquare, Settings, Tv, Ban, History, MessageCircle, Video, Megaphone, Send } from "lucide-react";
+import { Film, LayoutDashboard, List, LogOut, PlusCircle, Download, Users, FolderHeart, MessageSquare, Settings, Tv, Ban, History, MessageCircle, Video, Megaphone, Send, Lightbulb } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
 export default function AdminLayout({
@@ -56,6 +56,7 @@ export default function AdminLayout({
     { href: "/admin/users/banned", icon: Ban, label: "Ban olganlar" },
     { href: "/admin/users/ban-history", icon: History, label: "Ban tarixi" },
     { href: "/admin/appeals", icon: MessageCircle, label: "Apellyatsiyalar" },
+    { href: "/admin/suggestions", icon: Lightbulb, label: "Tavsiyalar" },
     { href: "/admin/comments", icon: MessageSquare, label: "Comments" },
     { href: "/admin/comments/settings", icon: Settings, label: "Comment Settings" },
     ...(isSuperAdmin ? [

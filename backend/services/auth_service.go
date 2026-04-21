@@ -259,6 +259,11 @@ func (s *AuthService) ValidateToken(tokenStr string) (jwt.MapClaims, error) {
 	return claims, nil
 }
 
+// RefreshUserToken generates a new JWT token for an existing user (used for session refresh)
+func (s *AuthService) RefreshUserToken(user *models.User) (string, error) {
+	return s.generateToken(user)
+}
+
 // HashPassword creates a bcrypt hash
 func HashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)

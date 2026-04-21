@@ -14,6 +14,7 @@ import {
   getTelegramAuthStatus,
   getCurrentUser,
   logout as apiLogout,
+  refreshAuthToken,
   CurrentUser,
   TelegramAuthStartResponse,
   TelegramAuthStatusResponse,
@@ -87,6 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Fetch user when token is available
+  // More resilient: try token refresh on 401 before logging out
   useEffect(() => {
     if (token && !user) {
       getCurrentUser(token)
@@ -104,14 +106,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
             setUser(response.user);
           } else {
-            // Token invalid, clear it
+            // Token invalid (not just expired), clear it
             Cookies.remove("auth_token");
             setTokenState(null);
           }
         })
-        .catch(() => {
-          Cookies.remove("auth_token");
-          setTokenState(null);
+        .catch(async (error: unknown) => {
+          const err = error as { response?: { status?: number } };
+          const status = err?.response?.status;
+          
+          // Only logout on confirmed auth failure (401/403)
+          if (status === 401 || status === 403) {
+            // Try to refresh the token first
+            try {
+              const refreshResult = await refreshAuthToken(token);
+              if (refreshResult.authenticated && refreshResult.token) {
+                // Token refreshed successfully - update token and retry fetch
+                console.log("[Auth] Token refreshed successfully");
+                Cookies.set("auth_token", refreshResult.token, { expires: 7 });
+                setTokenState(refreshResult.token);
+                
+                // Fetch user with new token
+                const userResponse = await getCurrentUser(refreshResult.token);
+                if (userResponse.authenticated && userResponse.user) {
+                  setUser(userResponse.user);
+                }
+              }
+            } catch {
+              // Refresh failed - clear auth
+              console.warn("[Auth] Token refresh failed, logging out");
+              Cookies.remove("auth_token");
+              setTokenState(null);
+            }
+          } else {
+            // Network error or 5xx - keep user logged in, they'll try again
+            console.warn("[Auth] User fetch failed (non-auth), keeping session:", status);
+          }
         })
         .finally(() => {
           setIsLoading(false);
@@ -133,6 +163,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setBanInfo(null);
     }
   }, [user]);
+
+  // Periodic token validation to prevent session expiry
+  // Refresh user data every 4 hours to keep session alive
+  useEffect(() => {
+    if (!token || !user) return;
+    
+    const refreshInterval = setInterval(() => {
+      getCurrentUser(token)
+        .then((response) => {
+          if (response.authenticated && response.user) {
+            setUser(response.user);
+          }
+        })
+        .catch(() => {
+          // Silently fail on refresh - don't logout on network issues
+        });
+    }, 4 * 60 * 60 * 1000); // 4 hours
+    
+    return () => clearInterval(refreshInterval);
+  }, [token, user]);
 
   const startTelegramAuth = useCallback(async (): Promise<TelegramAuthStartResponse | null> => {
     try {

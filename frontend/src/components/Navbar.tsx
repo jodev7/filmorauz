@@ -3,11 +3,12 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Search, Menu, X, Film, User, LogIn, Crown } from "lucide-react";
+import { Search, Menu, X, Film, User, LogIn, Crown, Lightbulb } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { useAuth } from "@/lib/auth-context";
 import { searchMovies, Movie } from "@/lib/api";
 import TelegramLoginModal from "./TelegramLoginModal";
+import SuggestionModal from "./SuggestionModal";
 import NotificationBell from "./NotificationBell";
 import { resolveIsPremium } from "./PremiumComponents";
 import { getLocalizedTitle, getLocalizedGenres } from "@/lib/localization";
@@ -23,6 +24,7 @@ export default function Navbar() {
   const router = useRouter();
   const { isAuthenticated, user, isLoading } = useAuth();
   const [loginModalOpen, setLoginModalOpen] = useState(false);
+  const [suggestionModalOpen, setSuggestionModalOpen] = useState(false);
 
   // Handle Telegram auth status check on page load (if URL has auth code)
   useEffect(() => {
@@ -244,6 +246,14 @@ export default function Navbar() {
             isAuthenticated ? (
               <div className="flex items-center gap-2">
                 <NotificationBell />
+                <button
+                  onClick={() => setSuggestionModalOpen(true)}
+                  className="text-zinc-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                  aria-label="Kino tavsiya qilish"
+                  title="Kino tavsiya qilish"
+                >
+                  <Lightbulb size={20} />
+                </button>
                 <Link
                   href="/user"
                   className="flex items-center justify-center w-10 h-10 rounded-full bg-[#12121a] border border-[#1e1e2e] hover:border-orange-500/50 transition-colors relative"
@@ -404,6 +414,12 @@ export default function Navbar() {
       <TelegramLoginModal
         isOpen={loginModalOpen}
         onClose={() => setLoginModalOpen(false)}
+      />
+
+      {/* Suggestion Modal */}
+      <SuggestionModal
+        isOpen={suggestionModalOpen}
+        onClose={() => setSuggestionModalOpen(false)}
       />
     </header>
   );

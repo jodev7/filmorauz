@@ -253,6 +253,11 @@ func main() {
 	}
 	publishJobHandler := handlers.NewPublishJobHandler(publishJobRepo, clipRepo, parserURL)
 
+	// Suggestion repository, service, and handler
+	suggestionRepo := repositories.NewSuggestionRepository(db)
+	suggestionService := services.NewSuggestionService(suggestionRepo, userRepo, notificationService)
+	suggestionHandler := handlers.NewSuggestionHandler(suggestionService)
+
 	// Serve uploaded files in dev mode
 	if cfg.IsDev {
 		r.Static("/uploads", "./uploads")
@@ -265,7 +270,7 @@ func main() {
 	}
 
 	// Register routes
-	routes.Setup(r, authHandler, movieHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler)
+	routes.Setup(r, authHandler, movieHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler)
 
 	// Start premium cleanup background job (runs every 10 minutes)
 	go startPremiumCleanupJob(userRepo, notificationService)

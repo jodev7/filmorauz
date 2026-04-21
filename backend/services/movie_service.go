@@ -722,3 +722,11 @@ func (s *MovieService) ListAllMoviesAdmin(page, limit int) ([]models.Movie, int6
 func (s *MovieService) SetMovieApprovalStatus(id, status, byUserID string) error {
 	return s.repo.SetApprovalStatus(id, status, byUserID)
 }
+
+// GetRecommendationsAdvanced returns recommendations using hybrid scoring (content + popularity + user personalization)
+func (s *MovieService) GetRecommendationsAdvanced(movieID string, userID string, limit int) ([]models.Movie, error) {
+	if limit < 1 || limit > 20 {
+		limit = 12
+	}
+	return s.repo.GetRecommendations(movieID, userID, limit)
+}

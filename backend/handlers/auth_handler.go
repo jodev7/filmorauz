@@ -414,3 +414,33 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		"message": "Logout successful",
 	})
 }
+
+// RefreshToken godoc
+// POST /api/auth/refresh
+// Refreshes the authentication token, extending the session
+func (h *AuthHandler) RefreshToken(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
+		return
+	}
+
+	// Get user to generate new token
+	user, err := h.authService.GetCurrentUser(userID.(string))
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		return
+	}
+
+	// Generate new token
+	newToken, err := h.authService.RefreshUserToken(user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate token"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"token":         newToken,
+		"authenticated": true,
+	})
+}

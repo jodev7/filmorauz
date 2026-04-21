@@ -9,9 +9,10 @@ import MovieCarousel from "@/components/MovieCarousel";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n";
 import Link from "next/link";
-import { Heart, History, User as UserIcon, Crown, Calendar, Shield, Clock, Camera, Edit2, Check, X, Send, Hash, LayoutDashboard, BadgeCheck, Sparkles, RefreshCw, Zap, Palette, Eye, EyeOff, Lock, Star, LogOut } from "lucide-react";
+import { Heart, History, User as UserIcon, Crown, Calendar, Shield, Clock, Camera, Edit2, Check, X, Send, Hash, LayoutDashboard, BadgeCheck, Sparkles, RefreshCw, Zap, Palette, Eye, EyeOff, Lock, Star, LogOut, Lightbulb } from "lucide-react";
 import { PremiumBadge, PremiumButton, PremiumAvatarRing, resolveIsPremium, resolvePremiumStatus } from "@/components/PremiumComponents";
 import { getFavorites, getWatchHistory, getCurrentUser, updateProfile, uploadProfileImage, updateProfileStyle, updatePrivacySettings, ProfileStyle } from "@/lib/api";
+import SuggestionModal from "@/components/SuggestionModal";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { CurrentUser } from "@/lib/api";
 
@@ -165,6 +166,9 @@ export default function UserPage() {
   // Privacy settings states
   const [isPrivate, setIsPrivate] = useState(false);
   const [isSavingPrivacy, setIsSavingPrivacy] = useState(false);
+  
+  // Suggestion modal state
+  const [suggestionModalOpen, setSuggestionModalOpen] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -692,6 +696,15 @@ export default function UserPage() {
                 <span className="text-sm text-gray-300">{watchHistory.length} Tarix</span>
               </div>
             </div>
+
+            {/* Suggestion button */}
+            <button
+              onClick={() => setSuggestionModalOpen(true)}
+              className="mt-4 w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-brand-dark hover:bg-brand-border rounded-lg border border-brand-border text-gray-300 hover:text-white transition-colors"
+            >
+              <Lightbulb size={18} className="text-yellow-400" />
+              Kino tavsiya qilish
+            </button>
           </div>
 
           {/* Detailed profile info card */}
@@ -1183,6 +1196,12 @@ export default function UserPage() {
           <div className="max-w-7xl mx-auto px-4 mt-6 mb-4">
             <WebsiteAdSlot placement="profile_page_inline_block" variant="inline" />
           </div>
+
+          {/* Suggestion Modal */}
+          <SuggestionModal 
+            isOpen={suggestionModalOpen} 
+            onClose={() => setSuggestionModalOpen(false)} 
+          />
         </div>
       </main>
       <Footer />

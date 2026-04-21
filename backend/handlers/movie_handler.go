@@ -371,7 +371,7 @@ func (h *MovieHandler) GetRecommendations(c *gin.Context) {
 		limit = 12
 	}
 
-	recommendations, err := h.movieService.GetRecommendations(movieID, limit)
+	recommendations, err := h.movieService.GetRecommendationsAdvanced(movieID, "", limit)
 	if err != nil {
 		log.Printf("[ERROR] GetRecommendations: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get recommendations"})

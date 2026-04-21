@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler) {
+func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler) {
 	api := r.Group("/api")
 
 	// Health check
@@ -33,6 +33,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	api.PATCH("/auth/profile-style", middleware.RequireAuth(authService), authHandler.UpdateProfileStyle)
 	api.PATCH("/auth/privacy", middleware.RequireAuth(authService), authHandler.UpdatePrivacy)
 	api.POST("/auth/logout", middleware.RequireAuth(authService), authHandler.Logout)
+	api.POST("/auth/refresh", middleware.RequireAuth(authService), authHandler.RefreshToken)
 
 	// Ban appeal routes (for banned users)
 	appeals := api.Group("/appeals")
@@ -50,6 +51,14 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 		notifications.GET("/unread-count", notificationHandler.GetUnreadCount)
 		notifications.PATCH("/:id/read", notificationHandler.MarkAsRead)
 		notifications.PATCH("/read-all", notificationHandler.MarkAllAsRead)
+	}
+
+	// Suggestion routes (for authenticated users)
+	suggestions := api.Group("/suggestions")
+	suggestions.Use(middleware.RequireAuth(authService))
+	{
+		suggestions.POST("", suggestionHandler.CreateSuggestion)
+		suggestions.GET("", suggestionHandler.GetMySuggestions)
 	}
 
 	// User-protected routes (history, favorites)
@@ -93,6 +102,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	api.GET("/movies/slug/:slug", movieHandler.GetMovieBySlug)
 	// Movie by ID and recommendations
 	api.GET("/movies/:id", movieHandler.GetMovieByID)
+	api.GET("/movies/recommendations", movieHandler.GetRecommendations) // ?movie_id=xxx&limit=12
 	api.GET("/movies/:id/recommendations", movieHandler.GetRecommendations)
 	api.GET("/search", movieHandler.SearchMovies)
 
@@ -251,6 +261,12 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 		admin.GET("/publish/jobs", publishJobHandler.ListAll)
 		admin.PATCH("/publish/jobs/:jobId", publishJobHandler.UpdateTime)
 		admin.DELETE("/publish/jobs/:jobId", publishJobHandler.Cancel)
+
+		// Suggestion management
+		admin.GET("/suggestions", suggestionHandler.AdminListSuggestions)
+		admin.GET("/suggestions/stats", suggestionHandler.AdminGetStats)
+		admin.GET("/suggestions/:id", suggestionHandler.AdminGetSuggestion)
+		admin.PATCH("/suggestions/:id", suggestionHandler.AdminUpdateSuggestion)
 	}
 
 	// Public collection routes
