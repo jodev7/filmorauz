@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Play } from "lucide-react";
 import { Movie } from "@/lib/api";
 import { localizeSingleGenre } from "@/lib/localization";
+import { formatDuration } from "@/lib/movie-utils";
 
 interface HeroCarouselProps {
   movies: Movie[];
@@ -107,7 +108,7 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
                         {movie.quality}
                       </span>
                     )}
-                    {movie.duration > 0 && <span>{movie.duration} min</span>}
+                    {movie.duration > 0 && <span>{formatDuration(movie.duration)}</span>}
                   </div>
                 </div>
               </div>

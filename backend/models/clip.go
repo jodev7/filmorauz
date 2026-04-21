@@ -7,20 +7,37 @@ import (
 )
 
 type Clip struct {
-	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	MovieID     primitive.ObjectID `bson:"movie_id" json:"movie_id"`
-	MovieTitle  string             `bson:"movie_title" json:"movie_title"`
-	MovieSlug   string             `bson:"movie_slug" json:"movie_slug"`
-	MovieCode   string             `bson:"movie_code" json:"movie_code"`
-	Filename    string             `bson:"filename" json:"filename"`
-	Path        string             `bson:"path" json:"path"`
-	URL         string             `bson:"url" json:"url"`
-	Duration    int                `bson:"duration" json:"duration"`
-	Sequence    int                `bson:"sequence" json:"sequence"`
-	StorageType string             `bson:"storage_type" json:"storage_type"`
-	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
+	ID primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 
-	// Instagram upload tracking
+	// ContentKind is "movie" (default, also assumed when absent for legacy
+	// docs) or "series". It decides which set of linkage fields below is
+	// populated.
+	ContentKind string `bson:"content_kind,omitempty" json:"content_kind,omitempty"`
+
+	// Movie linkage (kind == "movie")
+	MovieID    primitive.ObjectID `bson:"movie_id,omitempty" json:"movie_id,omitempty"`
+	MovieTitle string             `bson:"movie_title,omitempty" json:"movie_title,omitempty"`
+	MovieSlug  string             `bson:"movie_slug,omitempty" json:"movie_slug,omitempty"`
+	MovieCode  string             `bson:"movie_code,omitempty" json:"movie_code,omitempty"`
+
+	// Series/episode linkage (kind == "series")
+	SeriesID      primitive.ObjectID `bson:"series_id,omitempty" json:"series_id,omitempty"`
+	SeriesTitle   string             `bson:"series_title,omitempty" json:"series_title,omitempty"`
+	SeriesSlug    string             `bson:"series_slug,omitempty" json:"series_slug,omitempty"`
+	SeasonNumber  int                `bson:"season_number,omitempty" json:"season_number,omitempty"`
+	EpisodeNumber int                `bson:"episode_number,omitempty" json:"episode_number,omitempty"`
+	EpisodeID     primitive.ObjectID `bson:"episode_id,omitempty" json:"episode_id,omitempty"`
+
+	Filename    string    `bson:"filename" json:"filename"`
+	Path        string    `bson:"path" json:"path"`
+	URL         string    `bson:"url" json:"url"`
+	Duration    int       `bson:"duration" json:"duration"`
+	Sequence    int       `bson:"sequence" json:"sequence"`
+	StorageType string    `bson:"storage_type" json:"storage_type"`
+	CreatedAt   time.Time `bson:"created_at" json:"created_at"`
+
+	// Instagram upload tracking (shared by movie and series clips — the
+	// existing per-clip upload flow works identically regardless of kind).
 	UploadedToInstagram       bool       `bson:"uploaded_to_instagram" json:"uploaded_to_instagram"`
 	InstagramUploadCount      int        `bson:"instagram_upload_count" json:"instagram_upload_count"`
 	LastInstagramUploadAt     *time.Time `bson:"last_instagram_upload_at,omitempty" json:"last_instagram_upload_at,omitempty"`

@@ -264,9 +264,10 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir, hlsFolderName
 
 // getApplicableRenditions returns the renditions that should be generated based on input resolution
 // Uses height-based smart selection - never upscale
-// Height >= 1080: generate [1080p, 720p, 480p]
-// Height >= 720:  generate [720p, 480p]
-// Height < 720:   generate [480p only]
+// Height >= 1080: generate [1080p, 720p, 480p, 360p]
+// Height >= 720:  generate [720p, 480p, 360p]
+// Height >= 480: generate [480p, 360p]
+// Height < 480:  generate [480p only]
 // Each rendition includes optimized bitrate settings for streaming
 func (p *Pipeline) getApplicableRenditions(inputWidth, inputHeight int) []RenditionConfig {
 	applicable := make([]RenditionConfig, 0)
@@ -274,8 +275,8 @@ func (p *Pipeline) getApplicableRenditions(inputWidth, inputHeight int) []Rendit
 	// Smart height-based selection - never upscale
 	// Bitrate strategy: target → maxrate=1.2x, bufsize=2x
 	if inputHeight >= 1080 {
-		// Source is 1080p or higher - generate all three
-		// 1080p: target 5000k, max 6000k, buf 10000k, CRF 20
+		// Source is 1080p or higher - generate all four renditions
+		// 1080p: target 5000k, max 6000k, buf 10000k, CRF 20 (keep original quality)
 		applicable = append(applicable, RenditionConfig{
 			Name: "1080p", Width: 1920, Height: 1080,
 			VideoBitrate: "5000k", MaxBitrate: "6000k", BufSize: "10000k",
@@ -293,9 +294,15 @@ func (p *Pipeline) getApplicableRenditions(inputWidth, inputHeight int) []Rendit
 			VideoBitrate: "1200k", MaxBitrate: "1440k", BufSize: "2400k",
 			AudioBitrate: "128k", Bandwidth: 1320000, CRF: 22,
 		})
-		log.Printf("[HLS] Source height >= 1080px: generating [1080p(5000k), 720p(2800k), 480p(1200k)]")
+		// 360p: target 800k, max 960k, buf 1600k, CRF 23
+		applicable = append(applicable, RenditionConfig{
+			Name: "360p", Width: 640, Height: 360,
+			VideoBitrate: "800k", MaxBitrate: "960k", BufSize: "1600k",
+			AudioBitrate: "96k", Bandwidth: 896000, CRF: 23,
+		})
+		log.Printf("[HLS] Source height >= 1080px: generating [1080p(5000k), 720p(2800k), 480p(1200k), 360p(800k)]")
 	} else if inputHeight >= 720 {
-		// Source is 720p - generate 720p and 480p
+		// Source is 720p - generate 720p, 480p, 360p
 		// 720p: target 3000k, max 3600k, buf 6000k, CRF 20
 		applicable = append(applicable, RenditionConfig{
 			Name: "720p", Width: 1280, Height: 720,
@@ -308,16 +315,37 @@ func (p *Pipeline) getApplicableRenditions(inputWidth, inputHeight int) []Rendit
 			VideoBitrate: "1200k", MaxBitrate: "1440k", BufSize: "2400k",
 			AudioBitrate: "128k", Bandwidth: 1320000, CRF: 22,
 		})
-		log.Printf("[HLS] Source height >= 720px and < 1080px: generating [720p(3000k), 480p(1200k)]")
-	} else {
-		// Source is below 720p - only generate 480p (no upscaling)
+		// 360p: target 800k, max 960k, buf 1600k, CRF 23
+		applicable = append(applicable, RenditionConfig{
+			Name: "360p", Width: 640, Height: 360,
+			VideoBitrate: "800k", MaxBitrate: "960k", BufSize: "1600k",
+			AudioBitrate: "96k", Bandwidth: 896000, CRF: 23,
+		})
+		log.Printf("[HLS] Source height >= 720px and < 1080px: generating [720p(3000k), 480p(1200k), 360p(800k)]")
+	} else if inputHeight >= 480 {
+		// Source is 480p - generate 480p and 360p
 		// 480p: target 1500k, max 1800k, buf 3000k, CRF 20 (higher quality for low-res source)
 		applicable = append(applicable, RenditionConfig{
 			Name: "480p", Width: 854, Height: 480,
 			VideoBitrate: "1500k", MaxBitrate: "1800k", BufSize: "3000k",
 			AudioBitrate: "128k", Bandwidth: 1620000, CRF: 20,
 		})
-		log.Printf("[HLS] Source height < 720px: generating [480p(1500k) only] - no upscaling")
+		// 360p: target 800k, max 960k, buf 1600k, CRF 23
+		applicable = append(applicable, RenditionConfig{
+			Name: "360p", Width: 640, Height: 360,
+			VideoBitrate: "800k", MaxBitrate: "960k", BufSize: "1600k",
+			AudioBitrate: "96k", Bandwidth: 896000, CRF: 23,
+		})
+		log.Printf("[HLS] Source height >= 480px and < 720px: generating [480p(1500k), 360p(800k)]")
+	} else {
+		// Source is below 480p - only generate 480p (no upscaling)
+		// 480p: target 1500k, max 1800k, buf 3000k, CRF 20 (higher quality for low-res source)
+		applicable = append(applicable, RenditionConfig{
+			Name: "480p", Width: 854, Height: 480,
+			VideoBitrate: "1500k", MaxBitrate: "1800k", BufSize: "3000k",
+			AudioBitrate: "128k", Bandwidth: 1620000, CRF: 20,
+		})
+		log.Printf("[HLS] Source height < 480px: generating [480p(1500k) only] - no upscaling")
 	}
 
 	// Defensive: if somehow nothing was added, add 480p as fallback
@@ -584,7 +612,7 @@ func (p *Pipeline) generateHLSRendition(jobID, baseVideoPath, outputDir string, 
 	// parser service running on the same VPS.
 	ffThreads := ffmpegThreadsFromEnv()
 	ffmpegArgs := []string{
-		"-y",                // Overwrite output
+		"-y", // Overwrite output
 		"-threads", ffThreads,
 		"-filter_threads", ffThreads,
 		"-i", baseVideoPath, // Input: base video with filters applied
@@ -755,9 +783,10 @@ func (p *Pipeline) createMasterPlaylist(masterPath string, renditions []Renditio
 // base_video.mp4) that live in the same local dir are excluded — they are
 // kept local for clip generation and deleted by the pipeline cleanup stage.
 // Final B2 layout:
-//   videos/<folder>/master.m3u8
-//   videos/<folder>/<quality>/index.m3u8
-//   videos/<folder>/<quality>/segment_*.ts   (uploaded by streaming uploader)
+//
+//	videos/<folder>/master.m3u8
+//	videos/<folder>/<quality>/index.m3u8
+//	videos/<folder>/<quality>/segment_*.ts   (uploaded by streaming uploader)
 func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir string, folderName string) (string, error) {
 	jobID := job.ID.Hex()
 	log.Printf("[HLS] Uploading adaptive HLS files for job %s from %s", jobID, hlsDir)

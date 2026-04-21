@@ -18,6 +18,7 @@ import { isMoviePremium, PremiumBadge } from "@/components/PremiumComponents";
 import { getMovie, getRecommendations, getRatingSummary } from "@/lib/api";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getTranslations } from "@/lib/i18n-server";
+import { formatDuration } from "@/lib/movie-utils";
 import {
 	getLocalizedTitle,
 	getLocalizedDescription,
@@ -238,7 +239,7 @@ export default async function MovieDetailPage({ params }: Props) {
                 {movie.duration > 0 && (
                   <span className="flex items-center gap-1">
                     <Clock size={14} />
-                    {movie.duration} {t("movie.min")}
+                    {formatDuration(movie.duration)}
                   </span>
                 )}
                 {localizedCountry && (

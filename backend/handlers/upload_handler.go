@@ -659,7 +659,78 @@ func (h *UploadHandler) UploadAdMedia(c *gin.Context) {
 	if h.config.IsDev {
 		savedURL, err = h.saveAdMediaLocal(file, filename, mediaType)
 	} else {
-		savedURL, err = h.saveToCDN(file, filename, "ads/"+mediaType+"s")
+		// Forward to worker for B2 upload
+		workerURL := h.config.WorkerUploadURL
+		if workerURL == "" {
+			log.Printf("[UPLOAD] Ad media Error: WORKER_UPLOAD_URL not configured")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload service not configured"})
+			return
+		}
+
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
+			return
+		}
+
+		var b bytes.Buffer
+		wr := multipart.NewWriter(&b)
+
+		formField := "file"
+		if mediaType == "image" {
+			formField = "image"
+		}
+
+		part, err := wr.CreateFormFile(formField, filename)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload form"})
+			return
+		}
+		written, err := io.Copy(part, file)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
+			return
+		}
+
+		if err := wr.WriteField("media_type", mediaType); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to add media_type"})
+			return
+		}
+		if err := wr.Close(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to finalize upload form"})
+			return
+		}
+
+		log.Printf("[UPLOAD_AD] forwarding to worker: media_type=%s endpoint=/upload-ad field=%q filename=%q bytes_attached=%d", mediaType, formField, filename, written)
+
+		resp, err := http.Post(workerURL+"/upload-ad", wr.FormDataContentType(), &b)
+		if err != nil {
+			log.Printf("[UPLOAD_AD] Error uploading to worker: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			log.Printf("[UPLOAD_AD] Worker returned status %d: %s", resp.StatusCode, body)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed"})
+			return
+		}
+
+		var result map[string]string
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			log.Printf("[UPLOAD_AD] Error decoding response: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid upload response"})
+			return
+		}
+
+		savedURL = result["url"]
+		if savedURL == "" {
+			log.Printf("[UPLOAD_AD] Worker response missing URL: %v", result)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid upload response - no URL"})
+			return
+		}
+		log.Printf("[UPLOAD_AD] Upload success: %s", savedURL)
 	}
 	if err != nil {
 		log.Printf("[UPLOAD] Ad media upload error: %v", err)

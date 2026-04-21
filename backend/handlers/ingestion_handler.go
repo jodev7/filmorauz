@@ -606,11 +606,20 @@ func (h *IngestionHandler) GetIngestionJob(c *gin.Context) {
 }
 
 // ListIngestionJobs lists all jobs with filters
-// GET /api/ingestion/jobs?status=pending&limit=20&skip=0
+// GET /api/ingestion/jobs?status=pending&limit=20&skip=0&light=true
 func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime)
+		if duration > 1*time.Second {
+			log.Printf("[API] ListIngestionJobs slow response: duration=%v", duration)
+		}
+	}()
+
 	status := c.Query("status")
 	limit := 20
 	skip := 0
+	light := c.Query("light") == "true"
 
 	if l := c.Query("limit"); l != "" {
 		fmt.Sscanf(l, "%d", &limit)
@@ -627,7 +636,14 @@ func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	jobs, err := h.jobRepo.List(ctx, filter, limit, skip)
+	var jobs []*models.IngestionJob
+	var err error
+
+	if light {
+		jobs, err = h.jobRepo.ListLight(ctx, filter, limit, skip)
+	} else {
+		jobs, err = h.jobRepo.List(ctx, filter, limit, skip)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list jobs"})
 		return

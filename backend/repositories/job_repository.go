@@ -50,6 +50,21 @@ func NewJobRepository(db *mongo.Database) *JobRepository {
 		Options: options.Index().SetUnique(true),
 	})
 
+	// Index on updated_at for sorting and stale detection queries
+	collection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "updated_at", Value: -1},
+		},
+	})
+
+	// Index on stage for filtering active jobs
+	collection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "status", Value: 1},
+			{Key: "stage", Value: 1},
+		},
+	})
+
 	return &JobRepository{
 		collection: collection,
 	}
@@ -540,10 +555,54 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 
 // List retrieves all jobs with optional filters
 func (r *JobRepository) List(ctx context.Context, filter bson.M, limit, skip int) ([]*models.IngestionJob, error) {
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime)
+		if duration > 500*time.Millisecond {
+			log.Printf("[JOB REPO] List slow query: filter=%v, limit=%d, duration=%v", filter, limit, duration)
+		}
+	}()
+
 	opts := options.Find().
 		SetSort(bson.D{{Key: "created_at", Value: -1}}).
 		SetLimit(int64(limit)).
 		SetSkip(int64(skip))
+
+	cursor, err := r.collection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var jobs []*models.IngestionJob
+	if err := cursor.All(ctx, &jobs); err != nil {
+		return nil, err
+	}
+
+	return jobs, nil
+}
+
+// ListLight retrieves jobs without logs and metadata (for polling)
+func (r *JobRepository) ListLight(ctx context.Context, filter bson.M, limit, skip int) ([]*models.IngestionJob, error) {
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime)
+		if duration > 200*time.Millisecond {
+			log.Printf("[JOB REPO] ListLight slow query: filter=%v, limit=%d, duration=%v", filter, limit, duration)
+		}
+	}()
+
+	projection := bson.D{
+		{Key: "logs", Value: 0},
+		{Key: "metadata", Value: 0},
+		{Key: "enriched_metadata", Value: 0},
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "created_at", Value: -1}}).
+		SetLimit(int64(limit)).
+		SetSkip(int64(skip)).
+		SetProjection(projection)
 
 	cursor, err := r.collection.Find(ctx, filter, opts)
 	if err != nil {

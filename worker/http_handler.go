@@ -91,6 +91,11 @@ func (h *ProcessHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodPost && r.URL.Path == "/upload-ad" {
+		h.handleUploadAd(w, r)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -519,6 +524,77 @@ func (h *ProcessHandler) handleUploadMovieImage(w http.ResponseWriter, r *http.R
 	}
 
 	log.Printf("[B2] Movie image upload success: %s", publicURL)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"url":      publicURL,
+		"file_key": mediaKey,
+	})
+}
+
+// handleUploadAd handles ad image/video uploads for advertising
+func (h *ProcessHandler) handleUploadAd(w http.ResponseWriter, r *http.Request) {
+	if h.b2Store == nil {
+		h.sendError(w, "B2 storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := r.ParseMultipartForm(32 << 20); err == nil && r.MultipartForm != nil {
+		for field, files := range r.MultipartForm.File {
+			log.Printf("[WORKER] ad upload incoming multipart field=%q file_count=%d", field, len(files))
+		}
+	}
+
+	mediaType := r.FormValue("media_type")
+	if mediaType == "" {
+		mediaType = "image"
+	}
+
+	var keyPrefix string
+	if mediaType == "video" {
+		keyPrefix = "ads/videos"
+	} else {
+		keyPrefix = "ads/images"
+	}
+
+	formField := "file"
+	if mediaType == "image" {
+		formField = "image"
+	}
+
+	file, header, err := r.FormFile(formField)
+	if err != nil {
+		h.sendError(w, fmt.Sprintf("no file provided: %v", err), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	log.Printf("[WORKER] ad upload file detected: field=%q name=%q size=%d media_type=%s", formField, header.Filename, header.Size, mediaType)
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		h.sendError(w, fmt.Sprintf("failed to read file: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	var ext string
+	if mediaType == "video" {
+		ext = ".mp4"
+	} else {
+		ext = ".jpg"
+	}
+	safeFilename, mediaKey := safeUploadKey(keyPrefix, "ad_"+mediaType, header.Filename, header.Header.Get("Content-Type"), ext)
+
+	log.Printf("[B2] ad upload names: original=%q safe=%q key=%q media_type=%s", header.Filename, safeFilename, mediaKey, mediaType)
+	log.Printf("[B2] Uploading ad %s: key=%s, size=%d", mediaType, mediaKey, len(data))
+
+	publicURL, err := h.b2Store.UploadData(mediaKey, data, header.Header.Get("Content-Type"))
+	if err != nil {
+		log.Printf("[B2] Ad upload failed: %v", err)
+		h.sendError(w, fmt.Sprintf("B2 upload failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[B2] Ad upload success: %s", publicURL)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{

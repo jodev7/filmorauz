@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/filmorauz/worker/models"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -23,16 +24,70 @@ const minClipSeconds = 30
 const maxClipSeconds = 90
 
 type ClipInfo struct {
-	MovieID     string `json:"movie_id"`
-	MovieTitle  string `json:"movie_title"`
-	MovieSlug   string `json:"movie_slug"`
-	MovieCode   string `json:"movie_code"`
+	// Kind discriminates between "movie" and "series" clips. Empty is treated
+	// as "movie" for backward compatibility with older flows.
+	Kind string `json:"kind,omitempty"`
+
+	// Movie linkage (populated when Kind == "movie")
+	MovieID    string `json:"movie_id,omitempty"`
+	MovieTitle string `json:"movie_title,omitempty"`
+	MovieSlug  string `json:"movie_slug,omitempty"`
+	MovieCode  string `json:"movie_code,omitempty"`
+
+	// Series/episode linkage (populated when Kind == "series")
+	SeriesID      string `json:"series_id,omitempty"`
+	SeriesTitle   string `json:"series_title,omitempty"`
+	SeriesSlug    string `json:"series_slug,omitempty"`
+	SeasonNumber  int    `json:"season_number,omitempty"`
+	EpisodeNumber int    `json:"episode_number,omitempty"`
+	EpisodeID     string `json:"episode_id,omitempty"`
+
+	// Per-clip output metadata (identical for both kinds)
 	Filename    string `json:"filename"`
 	Path        string `json:"path"`
 	URL         string `json:"url"`
 	Duration    int    `json:"duration"`
 	Sequence    int    `json:"sequence"`
 	StorageType string `json:"storage_type"`
+}
+
+// clipTarget is a unified descriptor for "what are we clipping, and where do
+// the resulting clips go?". Both movie and episode pipelines build one of
+// these and hand it to generateClipsForTarget so the heavy-lifting (ffprobe,
+// AI analysis, ffmpeg overlay, upload, DB save) lives in one place.
+type clipTarget struct {
+	Kind string // "movie" | "series"
+
+	// FilenameSlug is used as the first component of each clip's on-disk
+	// filename, e.g. "<slug>_<ts>_<idx>.mp4".
+	FilenameSlug string
+
+	// FolderSubpath is the subpath (relative to the clips root) under which
+	// clip files are stored. For movies this is the canonical per-movie
+	// folder; for episodes it is "serials/<slug>/season-N/episode-M".
+	FolderSubpath string
+
+	// DisplayLabel is used in human-readable [CLIP] log lines.
+	DisplayLabel string
+
+	// Drawtext overlay strings. Callers must already escape ffmpeg-sensitive
+	// characters (":", "\", etc.) before setting these.
+	TopText    string
+	BottomText string
+
+	// Movie fields — only populated when Kind == "movie".
+	MovieID    interface{}
+	MovieTitle string
+	MovieSlug  string
+	MovieCode  string
+
+	// Series/episode fields — only populated when Kind == "series".
+	SeriesID      primitive.ObjectID
+	SeriesTitle   string
+	SeriesSlug    string
+	SeasonNumber  int
+	EpisodeNumber int
+	EpisodeID     primitive.ObjectID
 }
 
 func sanitizeSlug(slug string) string {
@@ -856,11 +911,136 @@ func parseFloat(s string) float64 {
 	return f
 }
 
+// generateClips is the movie-flow entry point. It builds a "movie" clipTarget
+// and delegates the actual clip production to generateClipsForTarget so the
+// episode flow (see generateEpisodeClips) can share the same logic.
 func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string, movieCode string, movieResult *MovieCreationResult, processedMasterPath string, finalUploadsPath string) error {
+	if movieResult == nil {
+		return fmt.Errorf("movieResult is nil — cannot generate movie clips")
+	}
+	_ = finalUploadsPath // kept for call-site compatibility; not needed here
+
+	movieSlug := sanitizeSlug(movieResult.Slug)
+	if movieSlug == "" {
+		movieSlug = sanitizeSlug(movieResult.DisplayTitle)
+	}
+
+	target := clipTarget{
+		Kind:          "movie",
+		FilenameSlug:  movieSlug,
+		FolderSubpath: canonicalFolderName,
+		DisplayLabel:  fmt.Sprintf("Movie: %s (code: %s)", movieResult.DisplayTitle, movieCode),
+		TopText:       fmt.Sprintf("Kino kodi\\: %s", movieCode),
+		BottomText:    "Kinoni profildagi botdan toping\\!",
+		MovieID:       movieResult.MovieID,
+		MovieTitle:    movieResult.DisplayTitle,
+		MovieSlug:     movieResult.Slug,
+		MovieCode:     movieCode,
+	}
+	return p.generateClipsForTarget(ctx, target, processedMasterPath)
+}
+
+// generateEpisodeClips is the serial-episode entry point. It matches the
+// movie flow one-for-one: it runs AFTER the episode's HLS + DB metadata have
+// been finalised and BEFORE processed_master.mp4 is cleaned up in
+// processEpisodeJob. Every episode of every season of every serial goes
+// through here. Clip style (vertical 1080×1920, logo, CTA) is identical to
+// movie clips; only the top overlay label differs because serials have no
+// movie-code equivalent.
+func (p *Pipeline) generateEpisodeClips(ctx context.Context, job *models.IngestionJob, processedMasterPath string) error {
+	if job == nil {
+		return fmt.Errorf("episode clip generation: job is nil")
+	}
+	if job.SeriesSlug == "" {
+		return fmt.Errorf("episode clip generation: series_slug is empty")
+	}
+	if job.EpisodeID.IsZero() {
+		return fmt.Errorf("episode clip generation: episode_id is zero")
+	}
+
+	// Folder subpath intentionally mirrors the episode HLS layout so the
+	// clip tree stays discoverable:
+	//   videos/clips/serials/<slug>/season-N/episode-M/<file>.mp4
+	folderSubpath := filepath.Join(
+		"serials",
+		job.SeriesSlug,
+		fmt.Sprintf("season-%d", job.SeasonNumber),
+		fmt.Sprintf("episode-%d", job.EpisodeNumber),
+	)
+
+	// Pull the series document to show a human-readable title in the top
+	// overlay. Falls back to the slug if the lookup fails.
+	seriesTitle := job.SeriesSlug
+	if p.config.DB != nil && !job.SeriesID.IsZero() {
+		var seriesDoc bson.M
+		lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := p.config.DB.Collection("series").FindOne(lookupCtx, bson.M{"_id": job.SeriesID}).Decode(&seriesDoc)
+		cancel()
+		if err == nil {
+			if t, ok := seriesDoc["title"].(string); ok && strings.TrimSpace(t) != "" {
+				seriesTitle = strings.TrimSpace(t)
+			}
+		} else {
+			log.Printf("[CLIP-EPISODE] WARN: could not load series doc %s: %v", job.SeriesID.Hex(), err)
+		}
+	}
+
+	filenameSlug := sanitizeSlug(fmt.Sprintf("%s-s%d-e%d", job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber))
+	if filenameSlug == "" {
+		filenameSlug = "episode"
+	}
+
+	log.Printf("[CLIP-EPISODE] ===== CLIP GENERATION START =====")
+	log.Printf("[CLIP-EPISODE] series_slug=%s season=%d episode=%d", job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber)
+	log.Printf("[CLIP-EPISODE] series_title=%s episode_id=%s", seriesTitle, job.EpisodeID.Hex())
+
+	target := clipTarget{
+		Kind:          "series",
+		FilenameSlug:  filenameSlug,
+		FolderSubpath: folderSubpath,
+		DisplayLabel:  fmt.Sprintf("Series: %s S%02dE%02d", seriesTitle, job.SeasonNumber, job.EpisodeNumber),
+		TopText:       fmt.Sprintf("%s \\- S%d\\:E%d", ffmpegEscapeDrawtext(seriesTitle), job.SeasonNumber, job.EpisodeNumber),
+		BottomText:    "Kinoni profildagi botdan toping\\!",
+		SeriesID:      job.SeriesID,
+		SeriesTitle:   seriesTitle,
+		SeriesSlug:    job.SeriesSlug,
+		SeasonNumber:  job.SeasonNumber,
+		EpisodeNumber: job.EpisodeNumber,
+		EpisodeID:     job.EpisodeID,
+	}
+
+	err := p.generateClipsForTarget(ctx, target, processedMasterPath)
+	if err != nil {
+		log.Printf("[CLIP-EPISODE] FAILURE series_slug=%s S%02dE%02d: %v",
+			job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, err)
+		return err
+	}
+	log.Printf("[CLIP-EPISODE] SUCCESS series_slug=%s S%02dE%02d", job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber)
+	return nil
+}
+
+// ffmpegEscapeDrawtext escapes the bare minimum of characters that break
+// ffmpeg's drawtext filter syntax. The movie flow hard-codes its text, but
+// episode text comes from user-provided series titles, so dynamic escaping
+// is needed.
+func ffmpegEscapeDrawtext(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `'`, `\'`)
+	s = strings.ReplaceAll(s, `:`, `\:`)
+	return s
+}
+
+// generateClipsForTarget is the shared clip-production core used by both the
+// movie and serial-episode pipelines. It ffprobes the processed master,
+// runs AI + heuristic engagement scoring, generates ffmpeg overlay clips,
+// uploads them (prod) and persists metadata to MongoDB. Every per-target
+// specialisation flows through the clipTarget struct — this function has
+// no knowledge of whether it is processing a movie or a series episode.
+func (p *Pipeline) generateClipsForTarget(ctx context.Context, target clipTarget, processedMasterPath string) error {
 	log.Printf("[CLIP] ===== CLIP GENERATION START =====")
-	log.Printf("[CLIP] Movie code: %s", movieCode)
-	log.Printf("[CLIP] Movie title: %s", movieResult.DisplayTitle)
-	log.Printf("[CLIP] Canonical folder: %s", canonicalFolderName)
+	log.Printf("[CLIP] Target: %s", target.DisplayLabel)
+	log.Printf("[CLIP] Kind: %s", target.Kind)
+	log.Printf("[CLIP] Folder subpath: %s", target.FolderSubpath)
 	log.Printf("[CHECKPOINT] clip_input_path: %s", processedMasterPath)
 
 	// Fail clearly if the processed master is missing or was not passed
@@ -880,25 +1060,25 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 		return fmt.Errorf("getwd: %w", err)
 	}
 
-	movieSlug := sanitizeSlug(movieResult.Slug)
-	if movieSlug == "" {
-		movieSlug = sanitizeSlug(movieResult.DisplayTitle)
+	if target.FilenameSlug == "" {
+		return fmt.Errorf("clipTarget.FilenameSlug is empty")
 	}
+	if target.FolderSubpath == "" {
+		return fmt.Errorf("clipTarget.FolderSubpath is empty")
+	}
+	clipSlug := target.FilenameSlug
 
 	devMode := p.config.StorageConfig.Mode != "prod"
 	var baseURL string
 	var storagePath string
 	var outDir string
 
-	if devMode {
-		outDir = filepath.Join(baseDir, "uploads", "movies", "clips", canonicalFolderName)
-		baseURL = p.config.StorageConfig.BaseURL
-		storagePath = fmt.Sprintf("videos/clips/%s", canonicalFolderName)
-	} else {
-		outDir = filepath.Join(baseDir, "uploads", "movies", "clips", canonicalFolderName)
-		baseURL = p.config.StorageConfig.BaseURL
-		storagePath = fmt.Sprintf("videos/clips/%s", canonicalFolderName)
-	}
+	// Local output layout is identical for movies and series — the only thing
+	// that varies is the FolderSubpath under uploads/movies/clips/. Episodes
+	// naturally nest under serials/<slug>/season-N/episode-M/.
+	outDir = filepath.Join(baseDir, "uploads", "movies", "clips", target.FolderSubpath)
+	baseURL = p.config.StorageConfig.BaseURL
+	storagePath = fmt.Sprintf("videos/clips/%s", target.FolderSubpath)
 
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		log.Printf("[CLIP] ERROR: failed to create output dir: %v", err)
@@ -938,8 +1118,8 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 	}
 	log.Printf("[CLIP] Starting clip generation for %d selected moments...", len(moments))
 
-	topText := fmt.Sprintf("Kino kodi\\: %s", movieCode)
-	bottomText := "Kinoni profildagi botdan toping\\!"
+	topText := target.TopText
+	bottomText := target.BottomText
 
 	var generatedClips []ClipInfo
 	var failedClips []int
@@ -966,7 +1146,7 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 		}
 
 		timestamp := time.Now().UnixNano()
-		clipFilename := fmt.Sprintf("%s_%d_%d.mp4", movieSlug, timestamp, i+1)
+		clipFilename := fmt.Sprintf("%s_%d_%d.mp4", clipSlug, timestamp, i+1)
 		outPath := filepath.Join(outDir, clipFilename)
 
 		log.Printf("[CLIP] Generating clip %d/%d: start=%.1fs dur=%.1fs reason=%s -> %s",
@@ -1092,28 +1272,13 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 			// Backend serves worker/uploads/movies at /stream.
 			// Clips are stored at uploads/movies/clips/{folder}/{file}
 			// → URL must be /stream/clips/{folder}/{file}
-			clipURL = fmt.Sprintf("%s/stream/clips/%s/%s", baseURL, canonicalFolderName, clipFilename)
+			clipURL = fmt.Sprintf("%s/stream/clips/%s/%s", baseURL, target.FolderSubpath, clipFilename)
 		} else {
-			clipURL = fmt.Sprintf("%s/videos/clips/%s/%s", baseURL, canonicalFolderName, clipFilename)
+			clipURL = fmt.Sprintf("%s/videos/clips/%s/%s", baseURL, target.FolderSubpath, clipFilename)
 		}
-
-		var movieIDStr string
-		switch v := movieResult.MovieID.(type) {
-		case primitive.ObjectID:
-			movieIDStr = v.Hex()
-		case string:
-			movieIDStr = v
-		default:
-			log.Printf("[CLIP] WARNING: Unexpected MovieID type %T, using empty", movieResult.MovieID)
-			movieIDStr = ""
-		}
-		log.Printf("[CLIP] Using movie_id=%s for clips", movieIDStr)
 
 		clipInfo := ClipInfo{
-			MovieID:     movieIDStr,
-			MovieTitle:  movieResult.DisplayTitle,
-			MovieSlug:   movieResult.Slug,
-			MovieCode:   movieCode,
+			Kind:        target.Kind,
 			Filename:    clipFilename,
 			Path:        filepath.Join(storagePath, clipFilename),
 			URL:         clipURL,
@@ -1121,6 +1286,39 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 			Sequence:    i + 1,
 			StorageType: map[bool]string{true: "local", false: "b2"}[devMode],
 		}
+
+		switch target.Kind {
+		case "movie":
+			var movieIDStr string
+			switch v := target.MovieID.(type) {
+			case primitive.ObjectID:
+				movieIDStr = v.Hex()
+			case string:
+				movieIDStr = v
+			default:
+				log.Printf("[CLIP] WARNING: Unexpected MovieID type %T, using empty", target.MovieID)
+				movieIDStr = ""
+			}
+			log.Printf("[CLIP] Using movie_id=%s for clips", movieIDStr)
+
+			clipInfo.MovieID = movieIDStr
+			clipInfo.MovieTitle = target.MovieTitle
+			clipInfo.MovieSlug = target.MovieSlug
+			clipInfo.MovieCode = target.MovieCode
+		case "series":
+			log.Printf("[CLIP] Using series_id=%s season=%d episode=%d episode_id=%s for clips",
+				target.SeriesID.Hex(), target.SeasonNumber, target.EpisodeNumber, target.EpisodeID.Hex())
+
+			clipInfo.SeriesID = target.SeriesID.Hex()
+			clipInfo.SeriesTitle = target.SeriesTitle
+			clipInfo.SeriesSlug = target.SeriesSlug
+			clipInfo.SeasonNumber = target.SeasonNumber
+			clipInfo.EpisodeNumber = target.EpisodeNumber
+			clipInfo.EpisodeID = target.EpisodeID.Hex()
+		default:
+			return fmt.Errorf("unknown clipTarget.Kind %q", target.Kind)
+		}
+
 		generatedClips = append(generatedClips, clipInfo)
 
 		log.Printf("[CLIP] Clip %d saved successfully: %s (duration: %ds)", i+1, outPath, clipDuration)
@@ -1173,7 +1371,11 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 	log.Printf("[CLIP] ===== CLEANUP END =====")
 
 	log.Printf("[CLIP] ===== CLIP GENERATION COMPLETE =====")
-	log.Printf("[CLIP] Movie: %s (code: %s)", movieResult.DisplayTitle, movieCode)
+	log.Printf("[CLIP] Target: %s", target.DisplayLabel)
+	if target.Kind == "series" {
+		log.Printf("[CLIP-EPISODE] series_slug=%s season=%d episode=%d clips_generated=%d clips_failed=%d",
+			target.SeriesSlug, target.SeasonNumber, target.EpisodeNumber, len(generatedClips), len(failedClips))
+	}
 	log.Printf("[CLIP] Clips generated: %d/%d", len(generatedClips), clipCount)
 	log.Printf("[CLIP] Clips failed: %d", len(failedClips))
 	log.Printf("[CLIP] Output location: %s", outDir)
@@ -1196,52 +1398,97 @@ func (p *Pipeline) saveClipsToMongoDB(ctx context.Context, clips []ClipInfo) err
 
 	docs := make([]interface{}, 0, len(clips))
 	for _, clip := range clips {
-		var movieObjID primitive.ObjectID
-		var movieIDValid bool
+		// Default empty kind to "movie" to preserve behaviour for any legacy
+		// call paths that never set the field.
+		kind := clip.Kind
+		if kind == "" {
+			kind = "movie"
+		}
 
-		if oid, err := primitive.ObjectIDFromHex(clip.MovieID); err == nil {
-			movieObjID = oid
-			movieIDValid = true
-		} else {
-			log.Printf("[CLIP] WARNING: could not parse movie_id %q as ObjectID: %v, trying to find by movie_code", clip.MovieID, err)
-			if clip.MovieCode != "" {
-				var movieDoc bson.M
-				if err := movieCol.FindOne(ctx, bson.M{"code": clip.MovieCode}).Decode(&movieDoc); err == nil {
-					if oid, ok := movieDoc["_id"].(primitive.ObjectID); ok {
-						movieObjID = oid
-						movieIDValid = true
-						log.Printf("[CLIP] Found movie ObjectID %s for movie_code=%s", movieObjID.Hex(), clip.MovieCode)
+		now := time.Now()
+		switch kind {
+		case "movie":
+			var movieObjID primitive.ObjectID
+			var movieIDValid bool
+
+			if oid, err := primitive.ObjectIDFromHex(clip.MovieID); err == nil {
+				movieObjID = oid
+				movieIDValid = true
+			} else {
+				log.Printf("[CLIP] WARNING: could not parse movie_id %q as ObjectID: %v, trying to find by movie_code", clip.MovieID, err)
+				if clip.MovieCode != "" {
+					var movieDoc bson.M
+					if err := movieCol.FindOne(ctx, bson.M{"code": clip.MovieCode}).Decode(&movieDoc); err == nil {
+						if oid, ok := movieDoc["_id"].(primitive.ObjectID); ok {
+							movieObjID = oid
+							movieIDValid = true
+							log.Printf("[CLIP] Found movie ObjectID %s for movie_code=%s", movieObjID.Hex(), clip.MovieCode)
+						}
+					} else {
+						log.Printf("[CLIP] ERROR: could not find movie by code=%s: %v", clip.MovieCode, err)
 					}
-				} else {
-					log.Printf("[CLIP] ERROR: could not find movie by code=%s: %v", clip.MovieCode, err)
 				}
 			}
-		}
 
-		if !movieIDValid {
-			log.Printf("[CLIP] ERROR: skipping clip %s - invalid movie_id %q", clip.Filename, clip.MovieID)
+			if !movieIDValid {
+				log.Printf("[CLIP] ERROR: skipping clip %s - invalid movie_id %q", clip.Filename, clip.MovieID)
+				continue
+			}
+
+			docs = append(docs, bson.M{
+				"_id":          primitive.NewObjectID(),
+				"content_kind": "movie",
+				"movie_id":     movieObjID,
+				"movie_title":  clip.MovieTitle,
+				"movie_slug":   clip.MovieSlug,
+				"movie_code":   clip.MovieCode,
+				"filename":     clip.Filename,
+				"path":         clip.Path,
+				"url":          clip.URL,
+				"duration":     clip.Duration,
+				"sequence":     clip.Sequence,
+				"storage_type": clip.StorageType,
+				"created_at":   now,
+			})
+
+		case "series":
+			seriesObjID, errS := primitive.ObjectIDFromHex(clip.SeriesID)
+			if errS != nil || seriesObjID.IsZero() {
+				log.Printf("[CLIP] ERROR: skipping series clip %s - invalid series_id %q: %v", clip.Filename, clip.SeriesID, errS)
+				continue
+			}
+			episodeObjID, errE := primitive.ObjectIDFromHex(clip.EpisodeID)
+			if errE != nil || episodeObjID.IsZero() {
+				log.Printf("[CLIP] ERROR: skipping series clip %s - invalid episode_id %q: %v", clip.Filename, clip.EpisodeID, errE)
+				continue
+			}
+
+			docs = append(docs, bson.M{
+				"_id":            primitive.NewObjectID(),
+				"content_kind":   "series",
+				"series_id":      seriesObjID,
+				"series_title":   clip.SeriesTitle,
+				"series_slug":    clip.SeriesSlug,
+				"season_number":  clip.SeasonNumber,
+				"episode_number": clip.EpisodeNumber,
+				"episode_id":     episodeObjID,
+				"filename":       clip.Filename,
+				"path":           clip.Path,
+				"url":            clip.URL,
+				"duration":       clip.Duration,
+				"sequence":       clip.Sequence,
+				"storage_type":   clip.StorageType,
+				"created_at":     now,
+			})
+
+		default:
+			log.Printf("[CLIP] ERROR: skipping clip %s - unknown kind %q", clip.Filename, kind)
 			continue
 		}
-
-		doc := bson.M{
-			"_id":          primitive.NewObjectID(),
-			"movie_id":     movieObjID,
-			"movie_title":  clip.MovieTitle,
-			"movie_slug":   clip.MovieSlug,
-			"movie_code":   clip.MovieCode,
-			"filename":     clip.Filename,
-			"path":         clip.Path,
-			"url":          clip.URL,
-			"duration":     clip.Duration,
-			"sequence":     clip.Sequence,
-			"storage_type": clip.StorageType,
-			"created_at":   time.Now(),
-		}
-		docs = append(docs, doc)
 	}
 
 	if len(docs) == 0 {
-		return fmt.Errorf("no valid clips to save (all had invalid movie_id)")
+		return fmt.Errorf("no valid clips to save (all had invalid linkage)")
 	}
 
 	result, err := col.InsertMany(ctx, docs)

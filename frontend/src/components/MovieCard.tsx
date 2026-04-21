@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Play, Clock, Star } from "lucide-react";
 import { Movie } from "@/lib/api";
-import { getIsNew, formatRelativeAddedTime } from "@/lib/movie-utils";
+import { getIsNew, formatRelativeAddedTime, formatDuration } from "@/lib/movie-utils";
 import { isMoviePremium, PremiumBadge } from "./PremiumComponents";
 import { getLocalizedTitle, getLocalizedGenres } from "@/lib/localization";
 
@@ -31,7 +31,7 @@ export default function MovieCard({ movie }: Props) {
   return (
     <Link
       href={`/movies/${movie.slug}`}
-      className={`movie-card group relative bg-[#12121a] rounded-2xl overflow-hidden border border-[#1e1e2e] transition-all duration-300 hover:-translate-y-1 hover:shadow-lg block ${
+      className={`movie-card group relative bg-[#12121a] rounded-2xl overflow-hidden border border-[#1e1e2e] transition-all duration-300 hover:-translate-y-1 hover:shadow-lg block h-full flex flex-col ${
         premium 
           ? "hover:border-yellow-500/40 hover:shadow-yellow-500/10" 
           : "hover:border-orange-500/30 hover:shadow-orange-500/10"
@@ -39,7 +39,7 @@ export default function MovieCard({ movie }: Props) {
       data-movie-id={movie.id}
     >
       {/* Poster */}
-      <div className="relative aspect-[2/3] overflow-hidden bg-[#1a1a24]">
+      <div className="relative aspect-[2/3] overflow-hidden bg-[#1a1a24] shrink-0">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={movie.poster_url}
@@ -102,7 +102,7 @@ export default function MovieCard({ movie }: Props) {
       </div>
 
       {/* Info */}
-      <div className="p-3">
+      <div className="p-3 flex flex-col flex-1 min-h-[80px]">
         <h3 className={`font-semibold text-xs sm:text-sm leading-tight line-clamp-2 text-white group-hover:transition-colors ${
           premium ? "group-hover:text-yellow-400" : "group-hover:text-orange-500"
         }`}>
@@ -110,14 +110,14 @@ export default function MovieCard({ movie }: Props) {
         </h3>
         
         {/* Metadata row with rating and time */}
-        <div className="flex items-center gap-2 mt-1.5 text-xs text-zinc-500 flex-wrap">
+        <div className="flex items-center gap-2 mt-auto pt-1.5 text-xs text-zinc-500 flex-wrap">
           <span>{movie.year}</span>
           
           {(movie.duration || 0) > 0 && (
             <>
               <span>·</span>
               <Clock size={11} />
-              <span>{movie.duration} daq</span>
+              <span>{formatDuration(movie.duration)}</span>
             </>
           )}
           
@@ -137,19 +137,6 @@ export default function MovieCard({ movie }: Props) {
         {relativeTime && (
           <div className="text-xs text-zinc-600 mt-1.5">
             {relativeTime}
-          </div>
-        )}
-
-        {(localizedGenres?.length || 0) > 0 && (
-          <div className="flex flex-wrap gap-1 mt-2">
-            {(localizedGenres || []).slice(0, 2).map((g) => (
-              <span
-                key={g}
-                className="text-xs bg-[#1e1e2e] text-zinc-400 px-2 py-0.5 rounded-md"
-              >
-                {g}
-              </span>
-            ))}
           </div>
         )}
       </div>

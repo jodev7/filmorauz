@@ -138,3 +138,25 @@ export function formatRelativeAddedTime(createdAt: string | undefined | null | n
     ? `1 ${t.day} avval`
     : `${days} ${t.days} avval`;
 }
+
+/**
+ * Format duration from minutes to Uzbek human-readable format.
+ * - if under 60 min: "45 daqiqa"
+ * - if 60+ min: "1 soat" or "1 soat 26 daqiqa"
+ */
+export function formatDuration(minutes: number | undefined | null): string {
+  if (!minutes || minutes <= 0) return "";
+  
+  if (minutes < 60) {
+    return `${minutes} daqiqa`;
+  }
+  
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  
+  if (mins === 0) {
+    return `${hours} soat`;
+  }
+  
+  return `${hours} soat ${mins} daqiqa`;
+}

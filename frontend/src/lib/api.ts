@@ -1243,6 +1243,11 @@ export interface IngestionJob {
   temp_file_key?: string;
   quality?: string;
   is_premium?: boolean;
+  // Serial/episode identification
+  season_id?: string;
+  episode_id?: string;
+  season_number?: number;
+  episode_number?: number;
 }
 
 export interface SearchResult {

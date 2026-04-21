@@ -295,6 +295,8 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
               setError("Video fayli topilmadi (404).");
             } else if (respCode === 403) {
               setError("Video kirish taqiqlangan (403).");
+            } else if (data.details && (data.details as string).includes("CORS")) {
+              setError("Videoyuklanmadi (CORS xatolik). Site admin bilan bog'laning.");
             } else {
               setError("Video yuklanmadi (tarmoq xatosi).");
             }
@@ -435,11 +437,38 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
     if (videoRef.current) videoRef.current.muted = !videoRef.current.muted;
   };
 
+  const isMobile = typeof window !== "undefined" && /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
   const toggleFullscreen = () => {
-    const el = containerRef.current;
+    const el = containerRef.current as HTMLDivElement & { webkitRequestFullscreen?: () => Promise<void> };
     if (!el) return;
-    if (!document.fullscreenElement) el.requestFullscreen();
-    else document.exitFullscreen();
+    
+    if (!document.fullscreenElement) {
+      // Try standard API first, then webkit for iOS/Safari
+      if (el.requestFullscreen) {
+        el.requestFullscreen().catch(() => {});
+      } else if (el.webkitRequestFullscreen) {
+        el.webkitRequestFullscreen().catch(() => {});
+      }
+    } else {
+      const doc = document as Document & { webkitExitFullscreen?: () => Promise<void> };
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else if (doc.webkitExitFullscreen) {
+        doc.webkitExitFullscreen().catch(() => {});
+      }
+    }
+  };
+
+  // Check if fullscreen is active (handles webkit too)
+  const isFullscreenActive = () => {
+    const doc = document as Document & { webkitFullscreenElement?: Element; webkitIsFullscreen?: boolean };
+    return !!(
+      document.fullscreenElement ||
+      doc.webkitFullscreenElement ||
+      document.fullscreen ||
+      doc.webkitIsFullscreen
+    );
   };
 
   const qualityLabel = qualities.find((q) => q.index === selectedQuality)?.label ?? "Auto";
@@ -519,15 +548,18 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
               <button onClick={toggleMute} className="text-white hover:text-brand-red transition-colors">
                 {muted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
               </button>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={muted ? 0 : volume}
-                onChange={changeVolume}
-                className="w-16 h-1 accent-brand-red cursor-pointer"
-              />
+              {/* Hide volume slider on mobile - browsers don't support real volume control */}
+              {!isMobile && (
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={muted ? 0 : volume}
+                  onChange={changeVolume}
+                  className="w-16 h-1 accent-brand-red cursor-pointer hidden sm:block"
+                />
+              )}
             </div>
 
             {/* Time */}

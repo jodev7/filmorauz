@@ -43,6 +43,21 @@ func NewJobRepository(db *mongo.Database) *JobRepository {
 		Options: options.Index().SetUnique(true),
 	})
 
+	// Index on updated_at for stale job detection and sorting
+	collection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "updated_at", Value: -1},
+		},
+	})
+
+	// Index on stage for filtering active jobs
+	collection.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "status", Value: 1},
+			{Key: "stage", Value: 1},
+		},
+	})
+
 	return &JobRepository{
 		collection: collection,
 	}
@@ -208,14 +223,12 @@ func (r *JobRepository) CountPendingJobs(ctx context.Context) (int64, error) {
 	return total, nil
 }
 
-// ResetStaleJobs resets jobs stuck in "processing" state for over 1 hour
-// This handles cases where worker died mid-processing
 func (r *JobRepository) ResetStaleJobs(ctx context.Context) (int64, error) {
-	// Find jobs stuck in "processing" for over 1 hour
-	oneHourAgo := time.Now().Add(-1 * time.Hour)
+	staleThreshold := 15 * time.Minute
+	staleCutoff := time.Now().Add(-staleThreshold)
 	filter := bson.M{
-		"status":     models.IngestionStatusProcessing,
-		"updated_at": bson.M{"$lt": oneHourAgo},
+		"status":     bson.M{"$in": activeIngestionStatuses},
+		"updated_at": bson.M{"$lt": staleCutoff},
 	}
 
 	update := bson.M{
@@ -233,7 +246,7 @@ func (r *JobRepository) ResetStaleJobs(ctx context.Context) (int64, error) {
 	}
 
 	if result.ModifiedCount > 0 {
-		log.Printf("[REPO] ResetStaleJobs: reset %d stale jobs (stuck in processing for >1 hour)",
+		log.Printf("[REPO] ResetStaleJobs: reset %d stale jobs (no update for >15 minutes)",
 			result.ModifiedCount)
 	}
 	return result.ModifiedCount, nil
@@ -477,21 +490,25 @@ func (r *JobRepository) IncrementRetry(ctx context.Context, id string) error {
 	return err
 }
 
-// FailStaleProcessingJobs marks jobs stuck in "processing" for over 1 hour as failed.
-// These jobs are stuck due to worker crashes or hung uploads; leaving them in "processing"
-// forever is worse than failing them (admin can re-trigger manually).
+var activeIngestionStatuses = []interface{}{
+	models.IngestionStatusProcessing,
+	models.IngestionStatusDownloading,
+	models.IngestionStatusUploading,
+}
+
 func (r *JobRepository) FailStaleProcessingJobs(ctx context.Context) (int64, error) {
-	oneHourAgo := time.Now().Add(-1 * time.Hour)
+	staleThreshold := 15 * time.Minute
+	staleCutoff := time.Now().Add(-staleThreshold)
 	filter := bson.M{
-		"status":     models.IngestionStatusProcessing,
-		"updated_at": bson.M{"$lt": oneHourAgo},
+		"status":     bson.M{"$in": activeIngestionStatuses},
+		"updated_at": bson.M{"$lt": staleCutoff},
 	}
 
 	update := bson.M{
 		"$set": bson.M{
 			"status":       models.IngestionStatusFailed,
 			"stage":        "failed",
-			"error":        "Job stuck in processing for over 1 hour — marked as failed by stale-job protection",
+			"error":        "Job stuck with no update for over 15 minutes — marked as failed by stale-job protection",
 			"completed_at": time.Now(),
 			"updated_at":   time.Now(),
 		},
@@ -504,7 +521,7 @@ func (r *JobRepository) FailStaleProcessingJobs(ctx context.Context) (int64, err
 	}
 
 	if result.ModifiedCount > 0 {
-		log.Printf("[REPO] FailStaleProcessingJobs: failed %d stale jobs (stuck in processing for >1 hour)",
+		log.Printf("[REPO] FailStaleProcessingJobs: failed %d stale jobs (no update for >15 minutes)",
 			result.ModifiedCount)
 	}
 	return result.ModifiedCount, nil

@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronUp, Play, Clock } from "lucide-react";
 import { SeasonWithEpisodes, Episode, buildEpisodeUrl } from "@/lib/series-api";
+import { formatDuration } from "@/lib/movie-utils";
 
 interface SeasonListProps {
   seasons: SeasonWithEpisodes[];
@@ -143,7 +144,7 @@ export default function SeasonList({ seasons, currentEpisodeId }: SeasonListProp
                             <div className="absolute bottom-2 right-2">
                               <span className="bg-black/70 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
                                 <Clock size={10} />
-                                {episode.duration}m
+                                {formatDuration(episode.duration)}
                               </span>
                             </div>
                           )}

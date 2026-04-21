@@ -11,6 +11,7 @@ import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n";
 import { isMoviePremium, isUserPremium, PremiumLockOverlay, PremiumButton, PremiumBadge } from "@/components/PremiumComponents";
 import { getLocalizedTitle, getLocalizedDescription, getLocalizedGenres, getLocalizedCountry } from "@/lib/localization";
+import { formatDuration } from "@/lib/movie-utils";
 
 const PLAYER_AD_MANDATORY_SECS = 15;
 const PLAYER_AD_REPEAT_MS = 10 * 60 * 1000; // 10 minutes
@@ -354,8 +355,9 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
   };
 
   return (
-    <div className="pt-16">
+    <div className="pt-20 sm:pt-24 min-h-screen">
       {/* Minimal top bar */}
+      <div className="h-[env(safe-area-inset-top)]" />
       <div className="bg-brand-dark/95 backdrop-blur-sm border-b border-brand-border px-3 sm:px-4 py-2 sm:py-3 flex items-center gap-3 sm:gap-4">
         <Link
           href={`/movies/${movie.slug}`}
@@ -378,7 +380,7 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
           {movie.duration > 0 && (
             <span className="flex items-center gap-1">
               <Clock size={12} />
-              {movie.duration} min
+              {formatDuration(movie.duration)}
             </span>
           )}
           {movie.quality && (
@@ -478,7 +480,7 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
             {movie.duration > 0 && (
               <div>
                 <span className="text-gray-600 block text-xs uppercase tracking-wider mb-0.5">Davomiyligi</span>
-                <span className="text-gray-300">{movie.duration} min</span>
+                <span className="text-gray-300">{formatDuration(movie.duration)}</span>
               </div>
             )}
             {movie.quality && (

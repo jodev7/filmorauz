@@ -155,6 +155,24 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 		// Non-fatal: the HLS exists, admin can re-run or patch the row.
 	}
 
+	// === Clip generation ===
+	// Must run AFTER the episode's HLS is saved and the backend has been
+	// notified, but BEFORE processed_master.mp4 is cleaned up below —
+	// clip generation consumes processed_master as its source.
+	// This matches the movie pipeline's ordering (see pipeline.go where
+	// generateClips is invoked ahead of the processed-master cleanup).
+	log.Printf("[EPISODE] clip_generation start series_slug=%s season=%d episode=%d processed_master=%s",
+		job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, processedMaster)
+	if clipErr := p.generateEpisodeClips(ctx, job, processedMaster); clipErr != nil {
+		// Non-fatal: episode video is live; surface the failure in logs so
+		// an operator can re-run the clip stage if needed.
+		log.Printf("[EPISODE] WARNING: clip generation failed series_slug=%s S%02dE%02d: %v",
+			job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, clipErr)
+	} else {
+		log.Printf("[EPISODE] clip_generation end series_slug=%s season=%d episode=%d",
+			job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber)
+	}
+
 	// Source file is no longer needed.
 	p.cleanupFile(localPath)
 
