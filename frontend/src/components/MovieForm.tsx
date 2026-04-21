@@ -102,7 +102,7 @@ export default function MovieForm({
 }: Props) {
   const safeInitialData = initialData ? {
     ...initialData,
-    genre: Array.isArray(initialData.genre) ? initialData.genre : [],
+    genre: Array.isArray(initialData.genre) ? initialData.genre.map((g: string) => g.toLowerCase().replace(/\s+/g, "-")) : [],
   } : emptyForm;
 
   const [form, setForm] = useState<MovieInput>({ ...emptyForm, ...safeInitialData });
@@ -195,7 +195,7 @@ export default function MovieForm({
   };
 
   const addGenre = () => {
-    const g = genreInput.trim();
+    const g = genreInput.trim().toLowerCase().replace(/\s+/g, "-");
     if (g && !form.genre.includes(g)) {
       set("genre", [...form.genre, g]);
     }
@@ -207,10 +207,11 @@ export default function MovieForm({
   };
 
   const selectGenre = (g: string) => {
-    if (form.genre.includes(g)) {
-      removeGenre(g);
+    const slug = g.toLowerCase().replace(/\s+/g, "-");
+    if (form.genre.includes(slug)) {
+      removeGenre(slug);
     } else {
-      set("genre", [...form.genre, g]);
+      set("genre", [...form.genre, slug]);
     }
   };
 

@@ -292,8 +292,8 @@ func (h *MovieHandler) UpdateMovie(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[UpdateMovie] incoming id=%s title=%q poster=%q backdrop=%q video=%q embed=%q source_type=%q",
-		id, input.Title, input.PosterURL, input.BackdropURL, input.VideoURL, input.EmbedURL, input.SourceType)
+	log.Printf("[UpdateMovie] incoming id=%s title=%q poster=%q backdrop=%q video=%q embed=%q source_type=%q genres=%v",
+		id, input.Title, input.PosterURL, input.BackdropURL, input.VideoURL, input.EmbedURL, input.SourceType, input.Genre)
 
 	movie, err := h.movieService.UpdateMovie(id, &input)
 	if err != nil {
@@ -301,6 +301,8 @@ func (h *MovieHandler) UpdateMovie(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	log.Printf("[UpdateMovie] id=%s saved genres=%v (len=%d)", id, movie.Genre, len(movie.Genre))
 
 	log.Printf("[UpdateMovie] id=%s saved poster=%q backdrop=%q video=%q",
 		id, movie.PosterURL, movie.BackdropURL, movie.VideoURL)
@@ -576,6 +578,7 @@ func (h *MovieHandler) ApproveMovie(c *gin.Context) {
 				Slug:        movie.Slug,
 				MovieURL:    watchURL,
 			}
+			log.Printf("[TELEGRAM] movie=%s genres from DB: %v (len=%d)", movie.Title, movie.Genre, len(movie.Genre))
 			posted := h.telegramService.PostContentApproval(data, false)
 			log.Printf("[TELEGRAM APPROVE] movie id=%s result: posted_to=%v", id, posted)
 			if len(posted) == 0 {

@@ -188,8 +188,12 @@ interface QualityLevel {
 
 function formatTime(s: number): string {
   if (!isFinite(s)) return "0:00";
-  const m = Math.floor(s / 60);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
   const sec = Math.floor(s % 60);
+  if (h > 0) {
+    return `${h}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+  }
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
@@ -440,34 +444,49 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
   const isMobile = typeof window !== "undefined" && /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
   const toggleFullscreen = () => {
-    const el = containerRef.current as HTMLDivElement & { webkitRequestFullscreen?: () => Promise<void> };
-    if (!el) return;
+    const video = videoRef.current;
+    const container = containerRef.current;
+    if (!container && !video) return;
     
-    if (!document.fullscreenElement) {
-      // Try standard API first, then webkit for iOS/Safari
-      if (el.requestFullscreen) {
-        el.requestFullscreen().catch(() => {});
-      } else if (el.webkitRequestFullscreen) {
-        el.webkitRequestFullscreen().catch(() => {});
-      }
-    } else {
-      const doc = document as Document & { webkitExitFullscreen?: () => Promise<void> };
-      if (document.exitFullscreen) {
-        document.exitFullscreen().catch(() => {});
-      } else if (doc.webkitExitFullscreen) {
-        doc.webkitExitFullscreen().catch(() => {});
+    // iOS Safari: use video element's native fullscreen
+    if (video) {
+      const videoEl = video as HTMLVideoElement & {
+        webkitEnterFullscreen?: () => void;
+        webkitExitFullscreen?: () => void;
+      };
+      if (document.fullscreenElement || (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement) {
+        // Exit fullscreen
+        if (document.exitFullscreen) {
+          document.exitFullscreen().catch(() => {});
+        }
+      } else {
+        // Try video element's webkit fullscreen first (works on iOS Safari)
+        if (videoEl.webkitEnterFullscreen) {
+          videoEl.webkitEnterFullscreen();
+          return;
+        }
+        // Try container fullscreen
+        const el = container as HTMLDivElement & { webkitRequestFullscreen?: () => Promise<void> };
+        if (el.requestFullscreen) {
+          el.requestFullscreen().catch(() => {});
+        } else if (el.webkitRequestFullscreen) {
+          el.webkitRequestFullscreen().catch(() => {});
+        }
       }
     }
   };
 
-  // Check if fullscreen is active (handles webkit too)
+  // Check if fullscreen is active (handles webkit and iOS video fullscreen)
   const isFullscreenActive = () => {
+    const video = videoRef.current;
     const doc = document as Document & { webkitFullscreenElement?: Element; webkitIsFullscreen?: boolean };
+    const videoEl = video as HTMLVideoElement & { webkitDisplayingFullscreen?: boolean };
     return !!(
       document.fullscreenElement ||
       doc.webkitFullscreenElement ||
       document.fullscreen ||
-      doc.webkitIsFullscreen
+      doc.webkitIsFullscreen ||
+      videoEl?.webkitDisplayingFullscreen
     );
   };
 

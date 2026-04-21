@@ -647,9 +647,10 @@ func (s *TelegramService) NotifyMovieCreated(movie *TelegramMovieData) *Telegram
 // considered a genre channel if its identifier contains an underscore —
 // the suffix after the last underscore is matched (substring, case-
 // insensitive) against each of the movie's genres. Example:
-//   movie genres "Drama"  +  channel "@filmorauznet_drama"   → match
-//   movie genres "Anime"  +  channel "@filmorauznet_anime"   → match
-//   channel "@filmorauznet" (no underscore) → always sent as the main channel
+//
+//	movie genres "Drama"  +  channel "@filmorauznet_drama"   → match
+//	movie genres "Anime"  +  channel "@filmorauznet_anime"   → match
+//	channel "@filmorauznet" (no underscore) → always sent as the main channel
 func (s *TelegramService) PostContentApproval(data *TelegramMovieData, isSerial bool) []string {
 	if s.botToken == "" {
 		log.Printf("[TELEGRAM APPROVE] bot token not configured, skipping")
@@ -751,11 +752,64 @@ func (s *TelegramService) resolveMovieApprovalTargets(genres []string) []string 
 		add(s.channelUsername)
 	}
 
-	lowerGenres := make([]string, 0, len(genres))
-	for _, g := range genres {
-		lowerGenres = append(lowerGenres, strings.ToLower(strings.TrimSpace(g)))
+	// Genre alias mapping: normalize Uzbek/other labels to English slugs for matching
+	genreAlias := map[string]string{
+		"fantasy":       "fantasy",
+		"fantastik":     "fantasy",
+		"drama":         "drama",
+		"dram":          "drama",
+		"comedy":        "comedy",
+		"komediya":      "comedy",
+		"action":        "action",
+		"ekشن":          "action",
+		" Adventure ":   "adventure",
+		"sarguzasht":    "adventure",
+		"horror":        "horror",
+		"qoʻrqituvchi":  "horror",
+		"thriller":      "thriller",
+		"triller":       "thriller",
+		"romance":       "romance",
+		"romantika":     "romance",
+		"sci-fi":        "sci-fi",
+		"scifi":         "sci-fi",
+		"fanfantastika": "sci-fi",
+		"animation":     "animation",
+		"animatsiya":    "animation",
+		"anime":         "anime",
+		"serial":        "series",
+		"seriallar":     "series",
+		"qissa":         "series",
 	}
 
+	lowerGenres := make([]string, 0, len(genres))
+	for _, g := range genres {
+		normalized := strings.ToLower(strings.TrimSpace(g))
+		// Check if this genre has an alias
+		if alias, ok := genreAlias[normalized]; ok {
+			normalized = alias
+		}
+		lowerGenres = append(lowerGenres, normalized)
+	}
+	log.Printf("[TELEGRAM] resolve targets: input genres=%v normalized=%v extra_channels=%v", genres, lowerGenres, s.extraChannels)
+
+	// Debug: log each genre and channel match attempt
+	for _, g := range lowerGenres {
+		if g == "" {
+			continue
+		}
+		for _, raw := range s.extraChannels {
+			channelName := strings.TrimPrefix(raw, "@")
+			idx := strings.LastIndex(channelName, "_")
+			if idx == -1 {
+				continue // skip main channel
+			}
+			suffix := strings.ToLower(channelName[idx+1:])
+			matched := g == suffix || strings.Contains(g, suffix) || strings.Contains(suffix, g)
+			log.Printf("[TELEGRAM] matching genre=%q with channel suffix=%q (from %q): match=%v", g, suffix, raw, matched)
+		}
+	}
+
+	matchCount := 0
 	for _, raw := range s.extraChannels {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
@@ -773,12 +827,15 @@ func (s *TelegramService) resolveMovieApprovalTargets(genres []string) []string 
 			if g == "" {
 				continue
 			}
-			if strings.Contains(g, suffix) || strings.Contains(suffix, g) {
+			if g == suffix || strings.Contains(g, suffix) || strings.Contains(suffix, g) {
+				log.Printf("[TELEGRAM] genre=%q matches channel=%q (suffix=%q)", g, raw, suffix)
 				add(raw)
+				matchCount++
 				break
 			}
 		}
 	}
+	log.Printf("[TELEGRAM] resolved targets: %d genre channels matched, total targets=%d", matchCount, len(out))
 	return out
 }
 
