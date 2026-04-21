@@ -2998,7 +2998,10 @@ export interface Suggestion {
   title: string;
   message: string;
   source_url?: string;
-  attachment_url?: string;
+  image_url?: string;
+  image_storage_key?: string;
+  image_mime_type?: string;
+  image_size?: number;
   status: "pending" | "accepted" | "rejected";
   admin_message?: string;
   reviewed_by?: string;
@@ -3012,6 +3015,14 @@ export interface SuggestionInput {
   title: string;
   message: string;
   source_url?: string;
+}
+
+export interface SuggestionFormData {
+  type: "movie" | "series";
+  title: string;
+  message: string;
+  source_url?: string;
+  image?: File;
 }
 
 export interface SuggestionUpdateInput {
@@ -3028,12 +3039,25 @@ export interface SuggestionListResponse {
 
 export async function createSuggestion(
   token: string,
-  input: SuggestionInput
+  data: SuggestionFormData
 ): Promise<{ message: string; suggestion: Suggestion }> {
+  const formData = new FormData();
+  formData.append("type", data.type);
+  formData.append("title", data.title);
+  formData.append("message", data.message);
+  if (data.source_url) {
+    formData.append("source_url", data.source_url);
+  }
+  if (data.image) {
+    formData.append("image", data.image);
+  }
+
   const res = await fetch(`${API_URL}/suggestions`, {
     method: "POST",
-    headers: { ...authHeaders(token), "Content-Type": "application/json" },
-    body: JSON.stringify(input),
+    headers: {
+      "Authorization": `Bearer ${token}`,
+    },
+    body: formData,
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

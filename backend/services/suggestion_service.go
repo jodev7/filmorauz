@@ -30,16 +30,19 @@ func NewSuggestionService(
 	}
 }
 
-func (s *SuggestionService) CreateSuggestion(ctx context.Context, userID primitive.ObjectID, userName, userEmail string, input *models.SuggestionInput, attachmentURL string) (*models.Suggestion, error) {
+func (s *SuggestionService) CreateSuggestion(ctx context.Context, userID primitive.ObjectID, userName, userEmail string, input *models.SuggestionInput, imageURL, imageStorageKey, imageMimeType string, imageSize int64) (*models.Suggestion, error) {
 	suggestion := &models.Suggestion{
-		UserID:        userID,
-		UserName:      userName,
-		Type:          input.Type,
-		Title:         html.EscapeString(strings.TrimSpace(input.Title)),
-		Message:       html.EscapeString(strings.TrimSpace(input.Message)),
-		SourceURL:     strings.TrimSpace(input.SourceURL),
-		AttachmentURL: attachmentURL,
-		Status:        models.SuggestionStatusPending,
+		UserID:          userID,
+		UserName:        userName,
+		Type:            input.Type,
+		Title:           html.EscapeString(strings.TrimSpace(input.Title)),
+		Message:         html.EscapeString(strings.TrimSpace(input.Message)),
+		SourceURL:       strings.TrimSpace(input.SourceURL),
+		ImageURL:        imageURL,
+		ImageStorageKey: imageStorageKey,
+		ImageMimeType:   imageMimeType,
+		ImageSize:       imageSize,
+		Status:          models.SuggestionStatusPending,
 	}
 
 	if suggestion.SourceURL != "" && !isValidURL(suggestion.SourceURL) {

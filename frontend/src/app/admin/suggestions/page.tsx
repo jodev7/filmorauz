@@ -9,6 +9,7 @@ import {
   Loader2,
   ExternalLink,
   User,
+  Image,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -239,14 +240,14 @@ export default function AdminSuggestionsPage() {
                         Manba
                       </a>
                     )}
-                    {suggestion.attachment_url && (
+                    {suggestion.image_url && (
                       <a
-                        href={suggestion.attachment_url}
+                        href={suggestion.image_url}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-xs text-blue-400 hover:underline flex items-center gap-1 mt-1"
                       >
-                        <ExternalLink size={10} />
+                        <Image size={10} />
                         Rasm
                       </a>
                     )}

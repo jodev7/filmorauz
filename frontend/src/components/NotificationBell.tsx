@@ -153,9 +153,9 @@ export default function NotificationBell() {
 
       {/* Dropdown */}
       {showDropdown && (
-        <div className="absolute right-0 mt-2 w-80 bg-brand-card border border-brand-border rounded-xl shadow-2xl z-50">
+        <div className="absolute right-0 mt-2 w-[calc(100vw-2rem)] max-w-[20rem] sm:w-80 bg-brand-card border border-brand-border rounded-xl shadow-2xl z-[60] overflow-hidden">
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-brand-border">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-brand-border shrink-0">
             <h3 className="text-white font-medium">Bildirishnomalar</h3>
             {unreadNotificationCount > 0 && (
               <button
@@ -163,13 +163,13 @@ export default function NotificationBell() {
                 className="flex items-center gap-1 text-sm text-gray-400 hover:text-white transition-colors"
               >
                 <CheckCheck className="w-4 h-4" />
-                <span>Hammasini o'qilgan deb belgilash</span>
+                <span className="hidden sm:inline">Hammasini o'qilgan deb belgilash</span>
               </button>
             )}
           </div>
 
           {/* Notification List */}
-          <div className="max-h-96 overflow-y-auto">
+          <div className="max-h-[70vh] sm:max-h-96 overflow-y-auto">
             {loading ? (
               <div className="flex items-center justify-center py-8">
                 <div className="animate-spin w-6 h-6 border-2 border-brand-red border-t-transparent rounded-full" />

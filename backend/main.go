@@ -256,7 +256,7 @@ func main() {
 	// Suggestion repository, service, and handler
 	suggestionRepo := repositories.NewSuggestionRepository(db)
 	suggestionService := services.NewSuggestionService(suggestionRepo, userRepo, notificationService)
-	suggestionHandler := handlers.NewSuggestionHandler(suggestionService)
+	suggestionHandler := handlers.NewSuggestionHandlerWithConfig(suggestionService, cfg)
 
 	// Serve uploaded files in dev mode
 	if cfg.IsDev {

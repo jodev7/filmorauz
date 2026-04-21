@@ -200,7 +200,7 @@ export default function Navbar() {
 
             {/* Search dropdown */}
             {results.length > 0 && (
-              <div className="absolute top-full right-0 mt-2 w-72 bg-[#12121a] border border-[#1e1e2e] rounded-xl overflow-hidden shadow-2xl">
+              <div className="absolute top-full right-0 mt-2 w-[calc(100vw-2rem)] max-w-[18rem] sm:w-72 bg-[#12121a] border border-[#1e1e2e] rounded-xl overflow-hidden shadow-2xl">
                 {searching && (
                   <div className="px-4 py-2 text-xs text-zinc-500">
                     {t("common.loading")}
