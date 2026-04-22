@@ -99,6 +99,7 @@ export default function EditMoviePage() {
     duration: movie.duration,
     quality: movie.quality,
     is_premium: movie.is_premium ?? false,
+    slug: movie.slug,
   };
 
   return (

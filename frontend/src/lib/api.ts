@@ -66,6 +66,7 @@ export interface MovieInput {
   duration: number;
   quality: string;
   is_premium?: boolean;
+  slug?: string;
 }
 
 export interface ListResponse {
@@ -1268,6 +1269,7 @@ export interface IngestionJob {
   // Serial/episode identification
   season_id?: string;
   episode_id?: string;
+  series_slug?: string;
   season_number?: number;
   episode_number?: number;
 }

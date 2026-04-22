@@ -37,10 +37,37 @@ function groupJobsBySerial(jobs: IngestionJob[]): JobGroup[] {
     const isEpisode = !!job.episode_number || !!job.season_number;
     
     if (isEpisode) {
-      // Use metadata.title or source_id as series identifier
-      const seriesKey = job.metadata?.title || job.source_id || "";
+      // Primary grouping key: series_slug (most reliable from backend)
+      // Fallback: source_id with episode pattern stripped
+      // Last resort: metadata.title or synthetic key
+      let seriesKey = job.series_slug || "";
       
-      if (!seriesKey) continue; // Skip if no identifier
+      if (!seriesKey || seriesKey.length < 3) {
+        // Try to extract from source_id
+        let sourceIdKey = job.source_id || "";
+        const episodePatterns = [
+          /[-_\s]?s\d+e\d+$/i,
+          /[-_\s]?season\s*\d+[-_\s]?episode\s*\d+$/i,
+          /[-_\s]?ep\s*\d+$/i,
+          /[-_\s]?\d+\/\d+$/i,
+          /[-_\s]?\d+x\d+$/i,
+        ];
+        
+        for (const pattern of episodePatterns) {
+          const match = sourceIdKey.match(pattern);
+          if (match) {
+            sourceIdKey = sourceIdKey.substring(0, match.index).trim();
+            break;
+          }
+        }
+        
+        seriesKey = sourceIdKey.length >= 3 ? sourceIdKey : (job.metadata?.title || "");
+      }
+      
+      // Final fallback: create stable key from season/episode
+      if (!seriesKey || seriesKey.length < 3) {
+        seriesKey = `serial-s${job.season_number || 1}e${job.episode_number || 1}`;
+      }
       
       if (!seriesMap.has(seriesKey)) {
         seriesMap.set(seriesKey, new Map());

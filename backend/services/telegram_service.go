@@ -692,10 +692,10 @@ func (s *TelegramService) PostContentApproval(data *TelegramMovieData, isSerial 
 
 	targets := s.resolveMovieApprovalTargets(data.Genres)
 	if len(targets) == 0 {
-		log.Printf("[TELEGRAM APPROVE] no channels resolved for movie %q — check TG_CHANNEL_USERNAME / TELEGRAM_CHANNELS", data.Title)
+		log.Printf("[TELEGRAM APPROVE] movie id=%s movie=%q genres=%v NO_CHANNELS_RESOLVED - check TELEGRAM_CHANNELS config", data.Slug, data.Title, data.Genres)
 		return posted
 	}
-	log.Printf("[TELEGRAM APPROVE] movie=%q genres=%v targets=%v", data.Title, data.Genres, targets)
+	log.Printf("[TELEGRAM APPROVE] movie id=%s genres=%v RESOLVED_CHANNELS=%v", data.Slug, data.Genres, targets)
 	for _, t := range targets {
 		send(t)
 	}
@@ -734,6 +734,14 @@ func (s *TelegramService) sendApprovalToChannel(api *tgbotapi.BotAPI, target, ca
 // of the movie's genres. If TELEGRAM_CHANNELS has a bare entry (no
 // underscore), it's treated as an additional main channel.
 func (s *TelegramService) resolveMovieApprovalTargets(genres []string) []string {
+	// Debug: log input genres
+	log.Printf("[TELEGRAM] resolveMovieApprovalTargets: ===== START =====")
+	log.Printf("[TELEGRAM] resolveMovieApprovalTargets: raw input genres: %v", genres)
+
+	// Normalize genres: trim, lowercase, deduplicate
+	normalizedGenres := normalizeGenresForTelegram(genres)
+	log.Printf("[TELEGRAM] resolveMovieApprovalTargets: normalized genres: %v", normalizedGenres)
+
 	seen := make(map[string]struct{})
 	var out []string
 	add := func(raw string) {
@@ -746,97 +754,78 @@ func (s *TelegramService) resolveMovieApprovalTargets(genres []string) []string 
 		}
 		seen[t] = struct{}{}
 		out = append(out, t)
+		log.Printf("[TELEGRAM] resolveMovieApprovalTargets: ADDED channel: %s", t)
 	}
 
+	// Always add main channel first
 	if s.channelUsername != "" {
 		add(s.channelUsername)
+		log.Printf("[TELEGRAM] resolveMovieApprovalTargets: main channel: %s", s.channelUsername)
 	}
 
-	// Genre alias mapping: normalize Uzbek/other labels to English slugs for matching
-	genreAlias := map[string]string{
-		"fantasy":       "fantasy",
-		"fantastik":     "fantasy",
-		"drama":         "drama",
-		"dram":          "drama",
-		"comedy":        "comedy",
-		"komediya":      "comedy",
-		"action":        "action",
-		"ekشن":          "action",
-		" Adventure ":   "adventure",
-		"sarguzasht":    "adventure",
-		"horror":        "horror",
-		"qoʻrqituvchi":  "horror",
-		"thriller":      "thriller",
-		"triller":       "thriller",
-		"romance":       "romance",
-		"romantika":     "romance",
-		"sci-fi":        "sci-fi",
-		"scifi":         "sci-fi",
-		"fanfantastika": "sci-fi",
-		"animation":     "animation",
-		"animatsiya":    "animation",
-		"anime":         "anime",
-		"serial":        "series",
-		"seriallar":     "series",
-		"qissa":         "series",
+	// If no extra channels configured, just return main
+	if len(s.extraChannels) == 0 {
+		log.Printf("[TELEGRAM] resolveMovieApprovalTargets: NO extra channels configured, only main")
+		return out
 	}
 
-	lowerGenres := make([]string, 0, len(genres))
-	for _, g := range genres {
-		normalized := strings.ToLower(strings.TrimSpace(g))
-		// Check if this genre has an alias
-		if alias, ok := genreAlias[normalized]; ok {
-			normalized = alias
-		}
-		lowerGenres = append(lowerGenres, normalized)
-	}
-	log.Printf("[TELEGRAM] resolve targets: input genres=%v normalized=%v extra_channels=%v", genres, lowerGenres, s.extraChannels)
+	log.Printf("[TELEGRAM] resolveMovieApprovalTargets: genre channels config: %v", s.extraChannels)
 
-	// Debug: log each genre and channel match attempt
-	for _, g := range lowerGenres {
-		if g == "" {
-			continue
-		}
-		for _, raw := range s.extraChannels {
-			channelName := strings.TrimPrefix(raw, "@")
-			idx := strings.LastIndex(channelName, "_")
-			if idx == -1 {
-				continue // skip main channel
-			}
-			suffix := strings.ToLower(channelName[idx+1:])
-			matched := g == suffix || strings.Contains(g, suffix) || strings.Contains(suffix, g)
-			log.Printf("[TELEGRAM] matching genre=%q with channel suffix=%q (from %q): match=%v", g, suffix, raw, matched)
-		}
-	}
-
+	// Match each genre to channels
 	matchCount := 0
 	for _, raw := range s.extraChannels {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
 			continue
 		}
-		name := strings.TrimPrefix(raw, "@")
-		idx := strings.LastIndex(name, "_")
+		channelName := strings.TrimPrefix(raw, "@")
+		idx := strings.LastIndex(channelName, "_")
 		if idx == -1 {
-			// Bare channel (no underscore) — treat as a main channel.
-			add(raw)
+			// Bare channel (main) - already added above
 			continue
 		}
-		suffix := strings.ToLower(name[idx+1:])
-		for _, g := range lowerGenres {
-			if g == "" {
-				continue
+		suffix := strings.ToLower(channelName[idx+1:])
+
+		// Try to match this suffix against all normalized genres
+		for _, g := range normalizedGenres {
+			if g == "" || g == "main" {
+				continue // "main" only goes to main channel
 			}
-			if g == suffix || strings.Contains(g, suffix) || strings.Contains(suffix, g) {
-				log.Printf("[TELEGRAM] genre=%q matches channel=%q (suffix=%q)", g, raw, suffix)
+			// Exact match or partial match
+			matched := g == suffix || strings.Contains(g, suffix) || strings.Contains(suffix, g)
+			if matched {
+				log.Printf("[TELEGRAM] resolveMovieApprovalTargets: genre=%q MATCHED channel=%q (suffix=%q)", g, raw, suffix)
 				add(raw)
 				matchCount++
-				break
+				break // Only add once per channel
 			}
 		}
 	}
-	log.Printf("[TELEGRAM] resolved targets: %d genre channels matched, total targets=%d", matchCount, len(out))
+
+	log.Printf("[TELEGRAM] resolveMovieApprovalTargets: matched_channels=%d total_targets=%v", matchCount, out)
+	log.Printf("[TELEGRAM] resolveMovieApprovalTargets: ===== END =====")
 	return out
+}
+
+// normalizeGenresForTelegram normalizes genre array: trim, lowercase, dedupe
+func normalizeGenresForTelegram(genres []string) []string {
+	if len(genres) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]bool)
+	var result []string
+	for _, g := range genres {
+		trimmed := strings.TrimSpace(g)
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		if !seen[lower] {
+			seen[lower] = true
+			result = append(result, lower)
+		}
+	}
+	return result
 }
 
 func ensureAtPrefix(ch string) string {

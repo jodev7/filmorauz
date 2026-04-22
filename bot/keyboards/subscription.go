@@ -106,7 +106,7 @@ func BuildMovieFoundMessage(title string) string {
 
 // BuildMovieFoundKeyboard returns inline keyboard with URL button for movie
 func BuildMovieFoundKeyboard(url string) tgbotapi.InlineKeyboardMarkup {
-	button := tgbotapi.NewInlineKeyboardButtonURL("👉 Filmni tomosha qilish uchun bosing!", url)
+	button := tgbotapi.NewInlineKeyboardButtonURL("👉 Tomosha qilish!", url)
 	row := []tgbotapi.InlineKeyboardButton{button}
 	return tgbotapi.NewInlineKeyboardMarkup(row)
 }

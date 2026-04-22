@@ -78,6 +78,7 @@ const emptyForm: MovieInput = {
   duration: 0,
   quality: "1080p",
   is_premium: false,
+  slug: "",
 };
 
 function formatSpeed(speedMBps?: number) {
@@ -336,6 +337,7 @@ export default function MovieForm({
 
     console.log("[MovieForm] submitting:", {
       title: form.title,
+      genre: form.genre,
       poster_url: form.poster_url,
       backdrop_url: form.backdrop_url,
       video_url: form.video_url,
@@ -350,7 +352,14 @@ export default function MovieForm({
 
     setLoading(true);
     try {
-      await onSubmit(form);
+      // Normalize genres before submit: trim, lowercase, dedupe
+      const normalizedGenres = form.genre
+        .map((g: string) => g.trim().toLowerCase().replace(/\s+/g, "-"))
+        .filter((g: string, i: number, arr: string[]) => g && arr.indexOf(g) === i);
+      
+      const submitData = { ...form, genre: normalizedGenres };
+      console.log("[MovieForm] submitting with normalized genres:", submitData.genre);
+      await onSubmit(submitData);
     } catch (err: unknown) {
       console.error("[MovieForm] submit failed:", err);
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -419,6 +428,23 @@ export default function MovieForm({
           rows={4}
           className="field resize-none"
         />
+      </div>
+
+      {/* Slug */}
+      <div>
+        <label className="block text-sm text-gray-400 mb-1.5">
+          Slug <span className="text-gray-500">(URL-friendly, lowercase, hyphens)</span>
+        </label>
+        <input
+          type="text"
+          value={form.slug || ""}
+          onChange={(e) => set("slug", e.target.value.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, ""))}
+          placeholder="movie-slug"
+          className="field font-mono"
+        />
+        <p className="text-xs text-gray-500 mt-1">
+          Only lowercase letters, numbers, and hyphens allowed
+        </p>
       </div>
 
       {/* Poster Upload + Backdrop Upload */}

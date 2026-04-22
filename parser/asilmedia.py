@@ -61,8 +61,8 @@ class AsilmediaParser(BaseParser):
     # HTTP returns proper search results, HTTPS returns empty/invalid results
     BASE_URL = "http://asilmedia.org"
     
-    # DLE search endpoint
-    SEARCH_URL = BASE_URL + "/index.php?do=search"
+    # DLE search endpoint - use /?do=search (GET method now)
+    SEARCH_URL = BASE_URL + "/?do=search"
     
     # DLE form fields (extracted from search form)
     SEARCH_FORM_FIELDS = {
@@ -149,17 +149,17 @@ class AsilmediaParser(BaseParser):
         return self.BASE_URL
     
     def search(self, query: str) -> List[SearchResult]:
-        """Search for movies using DLE POST form with query relevance filtering"""
+        """Search for movies using DLE GET form with query relevance filtering"""
         
-        # Debug log: incoming query
-        logger.info(f"[ASILMEDIA] search query='{query}'")
+        # Debug log: incoming query and source info
+        logger.info(f"[ASILMEDIA] search - source=asilmedia, method=GET, query='{query}'")
         
-        # Try DLE POST search first
+        # Try DLE GET search first
         dle_results = self._dle_post_search(query)
         
         # Track if we got results from DLE search
         has_dle_results = len(dle_results) > 0
-        logger.info(f"[ASILMEDIA] DLE POST search returned {len(dle_results)} results")
+        logger.info(f"[ASILMEDIA] DLE GET search returned {len(dle_results)} result_count")
         
         # Use DLE results if available, otherwise fallback to category search
         if has_dle_results:
@@ -276,33 +276,36 @@ class AsilmediaParser(BaseParser):
     
     def _dle_post_search(self, query: str) -> List[SearchResult]:
         """
-        Perform DLE POST search with proper form fields.
-        DLE-specific behavior: POST form submission, may need session cookies.
+        Perform DLE GET search with proper form fields.
+        DLE-specific behavior: GET form submission (site uses GET method now).
         """
         results = []
 
         try:
-            form_data = self.SEARCH_FORM_FIELDS.copy()
-            form_data["story"] = query
+            # Build search URL with query params - site uses GET now
+            search_params = {
+                "do": "search",
+                "subaction": "search",
+                "story": query,
+            }
 
-            # Establish session cookies before posting
+            # Establish session cookies first
             self.session.get(self.BASE_URL, timeout=30)
 
-            logger.info(f"[ASILMEDIA] POST search url={self.SEARCH_URL} query='{query}'")
+            logger.info(f"[ASILMEDIA] GET search url={self.SEARCH_URL} query='{query}'")
 
-            response = self.session.post(
+            # Use GET request (site moved from POST to GET)
+            response = self.session.get(
                 self.SEARCH_URL,
-                data=form_data,
+                params=search_params,
                 timeout=30,
                 allow_redirects=True,
                 headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
                     "Referer": self.BASE_URL + "/",
-                    "Origin": self.BASE_URL,
                 }
             )
 
-            logger.info(f"[ASILMEDIA] POST response status={response.status_code} final_url={response.url}")
+            logger.info(f"[ASILMEDIA] GET response status={response.status_code} final_url={response.url}")
 
             soup = BeautifulSoup(response.text, "html.parser")
 
@@ -316,14 +319,14 @@ class AsilmediaParser(BaseParser):
                 return []
 
             results = self._extract_dle_results(soup, query)
-            logger.info(f"[ASILMEDIA] POST search extracted {len(results)} results")
+            logger.info(f"[ASILMEDIA] GET search extracted {len(results)} results")
             return results
 
         except requests.RequestException as e:
-            logger.warning(f"[ASILMEDIA] POST search request error: {e}")
+            logger.warning(f"[ASILMEDIA] GET search request error: {e}")
             return []
         except Exception as e:
-            logger.warning(f"[ASILMEDIA] POST search parse error: {e}")
+            logger.warning(f"[ASILMEDIA] GET search parse error: {e}")
             return []
     
     def _detect_dle_page_type(self, soup: BeautifulSoup, url: str) -> str:

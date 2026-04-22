@@ -87,6 +87,7 @@ type MovieInput struct {
 	Duration    int             `json:"duration"`
 	Quality     string          `json:"quality"`
 	IsPremium   bool            `json:"is_premium"`
+	Slug        string          `json:"slug"`
 
 	// HLS Streaming Support
 	MasterPlaylistURL  string   `json:"master_playlist_url"`

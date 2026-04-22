@@ -89,6 +89,7 @@ type SeriesInput struct {
 	Country     string   `json:"country"`
 	IsPremium   bool     `json:"is_premium"`
 	IsCompleted bool     `json:"is_completed"`
+	Slug        string   `json:"slug"`
 }
 
 // SeasonInput is used for create/update requests

@@ -24,6 +24,35 @@ const (
 	codeMaxLimit     = 999999 // Maximum allowed code
 )
 
+// Slug validation regex: lowercase letters, numbers, hyphens only
+var slugRegex = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+func isValidSlug(slug string) bool {
+	return slug != "" && slugRegex.MatchString(slug)
+}
+
+// normalizeMovieGenres normalizes genre array: trim, lowercase, dedupe
+func normalizeMovieGenres(genres []string) []string {
+	if len(genres) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]bool)
+	var result []string
+	for _, g := range genres {
+		trimmed := strings.TrimSpace(g)
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		if !seen[lower] {
+			seen[lower] = true
+			result = append(result, lower)
+		}
+	}
+	log.Printf("[MOVIE] normalizeMovieGenres: in=%v out=%v", genres, result)
+	return result
+}
+
 type MovieService struct {
 	repo            *repositories.MovieRepository
 	counterRepo     *repositories.CounterRepository
@@ -365,7 +394,7 @@ func (s *MovieService) CreateMovie(input *models.MovieInput) (*models.Movie, err
 		PosterURL:   input.PosterURL,
 		BackdropURL: input.BackdropURL,
 		Year:        input.Year,
-		Genre:       input.Genre,
+		Genre:       normalizeMovieGenres(input.Genre),
 		Country:     input.Country,
 		VideoURL:    input.VideoURL,
 		EmbedURL:    input.EmbedURL,
@@ -417,7 +446,21 @@ func (s *MovieService) UpdateMovie(id string, input *models.MovieInput) (*models
 		return nil, fmt.Errorf("movie not found")
 	}
 
-	// Update fields; keep the original slug and code.
+	// Validate and update slug if provided
+	if input.Slug != "" {
+		// Validate slug format: lowercase, alphanumeric, hyphen only
+		if !isValidSlug(input.Slug) {
+			return nil, fmt.Errorf("invalid slug: use only lowercase letters, numbers, and hyphens")
+		}
+		// Check uniqueness (exclude current movie)
+		existingSlug, err := s.repo.FindBySlug(input.Slug)
+		if err == nil && existingSlug != nil && existingSlug.ID != objID {
+			return nil, fmt.Errorf("slug already in use by another movie")
+		}
+		existing.Slug = input.Slug
+	}
+
+	// Update fields; keep the original code.
 	// For media URLs, empty input means "keep existing" so admins can do
 	// partial edits (e.g. change title) without re-uploading poster/backdrop/video.
 	existing.Title = input.Title
@@ -429,7 +472,8 @@ func (s *MovieService) UpdateMovie(id string, input *models.MovieInput) (*models
 		existing.BackdropURL = input.BackdropURL
 	}
 	existing.Year = input.Year
-	existing.Genre = input.Genre
+	// Normalize genres: trim, lowercase, dedupe before saving
+	existing.Genre = normalizeMovieGenres(input.Genre)
 	existing.Country = input.Country
 	if input.VideoURL != "" {
 		existing.VideoURL = input.VideoURL

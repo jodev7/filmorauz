@@ -353,12 +353,14 @@ export default function EditSeriesPage() {
 
             {/* Slug */}
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Slug</label>
+              <label className="block text-sm font-medium text-gray-300 mb-1">
+                Slug <span className="text-gray-500">(lowercase, hyphens)</span>
+              </label>
               <input
                 type="text"
                 value={form.slug}
-                onChange={(e) => setForm({ ...form, slug: e.target.value })}
-                className="w-full px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
+                onChange={(e) => setForm({ ...form, slug: e.target.value.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") })}
+                className="w-full px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white font-mono focus:outline-none focus:border-brand-red"
               />
             </div>
 

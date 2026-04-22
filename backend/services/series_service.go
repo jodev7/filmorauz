@@ -1,6 +1,8 @@
 package services
 
 import (
+	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -8,6 +10,13 @@ import (
 	"github.com/filmorauz/backend/repositories"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
+
+// Slug validation regex: lowercase letters, numbers, hyphens only
+var seriesSlugRegex = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+func isValidSeriesSlug(slug string) bool {
+	return slug != "" && seriesSlugRegex.MatchString(slug)
+}
 
 type SeriesService struct {
 	seriesRepo *repositories.SeriesRepository
@@ -114,6 +123,18 @@ func (s *SeriesService) UpdateSeries(id primitive.ObjectID, input *models.Series
 	series, err := s.seriesRepo.GetByID(id)
 	if err != nil {
 		return nil, err
+	}
+
+	// Validate and update slug if provided
+	if input.Slug != "" {
+		if !isValidSeriesSlug(input.Slug) {
+			return nil, fmt.Errorf("invalid slug: use only lowercase letters, numbers, and hyphens")
+		}
+		existingSlug, err := s.seriesRepo.GetBySlug(input.Slug)
+		if err == nil && existingSlug != nil && existingSlug.ID != id {
+			return nil, fmt.Errorf("slug already in use by another series")
+		}
+		series.Slug = input.Slug
 	}
 
 	series.Title = input.Title
