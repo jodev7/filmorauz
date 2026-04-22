@@ -29,6 +29,8 @@ type JobGroup =
 
 // Group jobs by serial - serials are identified by season_number or episode_number being set
 function groupJobsBySerial(jobs: IngestionJob[]): JobGroup[] {
+  console.log(`[groupJobsBySerial] INPUT: ${jobs.length} jobs`);
+  
   // Map: seriesKey -> Map: seasonNumber -> episodes[]
   const seriesMap = new Map<string, Map<number, IngestionJob[]>>();
   const singles: IngestionJob[] = [];
@@ -84,6 +86,11 @@ function groupJobsBySerial(jobs: IngestionJob[]): JobGroup[] {
     }
   }
   
+  console.log(`[groupJobsBySerial] SERIAL GROUPS: ${seriesMap.size}, SINGLE JOBS: ${singles.length}`);
+  seriesMap.forEach((_, key) => {
+    console.log(`[groupJobsBySerial] Serial key: "${key}"`);
+  });
+  
   // Convert to JobGroup array
   const groups: JobGroup[] = [];
   
@@ -117,6 +124,7 @@ function groupJobsBySerial(jobs: IngestionJob[]): JobGroup[] {
     groups.push({ type: "single", job });
   }
   
+  console.log(`[groupJobsBySerial] OUTPUT: ${groups.length} groups (${seriesMap.size} serial, ${singles.length} single)`);
   return groups;
 }
 
@@ -1100,15 +1108,21 @@ function JobsTab({
   const summary = getJobSummary(jobs, now);
   
   // Group jobs by serial
-  const jobGroups = useMemo(() => groupJobsBySerial(jobs), [jobs]);
+  const jobGroups = useMemo(() => {
+    const groups = groupJobsBySerial(jobs);
+    console.log(`[useMemo jobGroups] jobs=${jobs.length}, groups=${groups.length}`);
+    return groups;
+  }, [jobs]);
   const visibleGroups = useMemo(() => {
-    return jobGroups.filter(group => {
+    const filtered = jobGroups.filter(group => {
       if (group.type === "single") {
         return matchesJobFilter(group.job, filter, now);
       }
       // For serial groups, check if any job matches the filter
       return group.seasons.some(s => s.episodes.some(job => matchesJobFilter(job, filter, now)));
     });
+    console.log(`[useMemo visibleGroups] jobGroups=${jobGroups.length}, visible=${filtered.length}, filter=${filter}`);
+    return filtered;
   }, [jobGroups, filter, now]);
   
   const summaryCards = [
@@ -1697,7 +1711,7 @@ export default function IngestionPage() {
     setIsFetching(true);
     setLoadingJobs(true);
     try {
-      const result = await getIngestionJobs(token, { limit: 50 });
+      const result = await getIngestionJobs(token, { limit: 200 });
       const jobsData = Array.isArray(result.data) ? result.data : [];
 
       // Merge with previous state to prevent stale progress regressions
@@ -1708,6 +1722,7 @@ export default function IngestionPage() {
 
         // Build map of previous job state
         const prevMap = new Map(prevJobs.map(j => [j.id, j]));
+        const newIds = new Set(jobsData.map(j => j.id));
 
         // Merge: if job is downloading and new progress < old progress, keep old job state
         const merged = jobsData.map(newJob => {
@@ -1732,6 +1747,18 @@ export default function IngestionPage() {
           return newJob;
         });
 
+        // Also include active jobs from prevJobs that dropped out of the top N fetch
+        // This prevents jobs from disappearing when new serials are imported
+        for (const prevJob of prevJobs) {
+          if (newIds.has(prevJob.id)) continue;
+          const status = prevJob.status || "";
+          const isTerminal = status === "completed" || status === "failed" || status === "download_failed";
+          if (!isTerminal) {
+            merged.push(prevJob);
+          }
+        }
+
+        console.log(`[fetchJobs] merge: fetched=${jobsData.length}, prev=${prevJobs.length}, merged=${merged.length}, kept_from_prev=${merged.length - jobsData.length}`);
         return merged;
       });
 
@@ -1820,10 +1847,12 @@ export default function IngestionPage() {
   };
 
   const handleImportSuccess = () => {
-    // Refresh jobs list
+    // Refresh jobs list - use limit: 200 to match main fetch and avoid losing jobs
     if (token) {
-      getIngestionJobs(token, { limit: 50 }).then((result) => {
-        setJobs(Array.isArray(result.data) ? result.data : []);
+      getIngestionJobs(token, { limit: 200 }).then((result) => {
+        const jobsData = Array.isArray(result.data) ? result.data : [];
+        console.log(`[handleImportSuccess] Fetched ${jobsData.length} jobs after import`);
+        setJobs(jobsData);
       });
     }
     // Switch to jobs tab
