@@ -653,12 +653,13 @@ export default function MovieForm({
         {/* Quick-select chips */}
         <div className="flex flex-wrap gap-2 mb-3">
           {GENRE_OPTIONS.map((g) => {
-            const selected = form.genre.includes(g);
+            const genreKey = g.toLowerCase();
+            const selected = form.genre.includes(genreKey);
             return (
               <button
                 key={g}
                 type="button"
-                onClick={() => selectGenre(g)}
+                onClick={() => selectGenre(genreKey)}
                 className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
                   selected
                     ? "bg-brand-red border-brand-red text-white"
