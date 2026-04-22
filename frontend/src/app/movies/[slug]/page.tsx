@@ -109,7 +109,8 @@ export default async function MovieDetailPage({ params }: Props) {
     notFound();
   }
 
-  console.log("[MovieDetailPage] Movie found:", movie.id, "slug:", movie.slug);
+  console.log("[MovieDetailPage] Movie found:", movie.id, "slug:", movie.slug, "genre:", movie.genre);
+  console.log("[MovieDetailPage] movie.genre type:", typeof movie.genre, "isArray:", Array.isArray(movie.genre), "length:", movie.genre?.length);
   let recommendations: any[] = [];
 
   // Fetch recommendations

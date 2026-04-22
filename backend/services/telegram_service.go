@@ -763,46 +763,76 @@ func (s *TelegramService) resolveMovieApprovalTargets(genres []string) []string 
 		log.Printf("[TELEGRAM] resolveMovieApprovalTargets: main channel: %s", s.channelUsername)
 	}
 
-	// If no extra channels configured, just return main
-	if len(s.extraChannels) == 0 {
-		log.Printf("[TELEGRAM] resolveMovieApprovalTargets: NO extra channels configured, only main")
-		return out
-	}
-
-	log.Printf("[TELEGRAM] resolveMovieApprovalTargets: genre channels config: %v", s.extraChannels)
-
-	// Match each genre to channels
-	matchCount := 0
-	for _, raw := range s.extraChannels {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		channelName := strings.TrimPrefix(raw, "@")
-		idx := strings.LastIndex(channelName, "_")
-		if idx == -1 {
-			// Bare channel (main) - already added above
-			continue
-		}
-		suffix := strings.ToLower(channelName[idx+1:])
-
-		// Try to match this suffix against all normalized genres
-		for _, g := range normalizedGenres {
-			if g == "" || g == "main" {
-				continue // "main" only goes to main channel
+	// Try to resolve genre channels
+	if len(s.extraChannels) > 0 {
+		log.Printf("[TELEGRAM] resolveMovieApprovalTargets: genre channels config: %v", s.extraChannels)
+		// Match each genre to channels using configured extraChannels
+		matchCount := 0
+		for _, raw := range s.extraChannels {
+			raw = strings.TrimSpace(raw)
+			if raw == "" {
+				continue
 			}
-			// Exact match or partial match
-			matched := g == suffix || strings.Contains(g, suffix) || strings.Contains(suffix, g)
-			if matched {
-				log.Printf("[TELEGRAM] resolveMovieApprovalTargets: genre=%q MATCHED channel=%q (suffix=%q)", g, raw, suffix)
-				add(raw)
-				matchCount++
-				break // Only add once per channel
+			channelName := strings.TrimPrefix(raw, "@")
+			idx := strings.LastIndex(channelName, "_")
+			if idx == -1 {
+				// Bare channel (main) - already added above
+				continue
+			}
+			suffix := strings.ToLower(channelName[idx+1:])
+
+			// Try to match this suffix against all normalized genres
+			for _, g := range normalizedGenres {
+				if g == "" || g == "main" {
+					continue // "main" only goes to main channel
+				}
+				// Exact match or partial match
+				matched := g == suffix || strings.Contains(g, suffix) || strings.Contains(suffix, g)
+				if matched {
+					log.Printf("[TELEGRAM] resolveMovieApprovalTargets: genre=%q MATCHED channel=%q (suffix=%q)", g, raw, suffix)
+					add(raw)
+					matchCount++
+					break // Only add once per channel
+				}
 			}
 		}
+		log.Printf("[TELEGRAM] resolveMovieApprovalTargets: extraChannels matched=%d", matchCount)
+	} else {
+		// Fallback: if no extraChannels configured, try to infer genre channels from common patterns
+		// This provides a fallback when TELEGRAM_CHANNELS env is not fully configured
+		log.Printf("[TELEGRAM] resolveMovieApprovalTargets: no extraChannels configured, using fallback genre mapping")
+
+		// Map common genre names to expected channel suffixes
+		genreToSuffix := map[string]string{
+			"drama":    "drama",
+			"comedy":   "comedy",
+			"action":   "action",
+			"horror":   "horror",
+			"thriller": "thriller",
+			"fantasy":  "fantasy",
+			"anime":    "anime",
+			"serial":   "serial",
+			"series":   "serial",
+		}
+
+		// If channelUsername is @filmorauznet, try @filmorauznet_drama, etc.
+		if s.channelUsername != "" {
+			baseName := strings.TrimPrefix(s.channelUsername, "@")
+			for _, g := range normalizedGenres {
+				if g == "" || g == "main" {
+					continue
+				}
+				if suffix, ok := genreToSuffix[g]; ok {
+					// Try the genre-specific channel
+					genreChannel := fmt.Sprintf("@%s_%s", baseName, suffix)
+					log.Printf("[TELEGRAM] resolveMovieApprovalTargets: trying fallback channel: %s for genre: %s", genreChannel, g)
+					add(genreChannel)
+				}
+			}
+		}
 	}
 
-	log.Printf("[TELEGRAM] resolveMovieApprovalTargets: matched_channels=%d total_targets=%v", matchCount, out)
+	log.Printf("[TELEGRAM] resolveMovieApprovalTargets: FINAL total_targets=%v", out)
 	log.Printf("[TELEGRAM] resolveMovieApprovalTargets: ===== END =====")
 	return out
 }

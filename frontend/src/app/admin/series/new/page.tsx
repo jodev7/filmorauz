@@ -3,9 +3,16 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Save, Loader2, Film } from "lucide-react";
+import { ArrowLeft, Save, Loader2, Film, Plus, X } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { adminCreateSeries, CreateSeriesData } from "@/lib/api";
+
+// Genre options for series (lowercase, matching DB)
+const GENRE_OPTIONS = [
+  "action", "adventure", "animation", "comedy", "crime",
+  "documentary", "drama", "fantasy", "horror", "mystery",
+  "romance", "sci-fi", "thriller", "western",
+];
 
 export default function NewSeriesPage() {
   const { token } = useAuth();
@@ -31,6 +38,26 @@ export default function NewSeriesPage() {
 
   const [genreInput, setGenreInput] = useState("");
 
+  const addGenre = () => {
+    const g = genreInput.trim().toLowerCase().replace(/\s+/g, "-");
+    if (g && !(form.genre || []).includes(g)) {
+      setForm({ ...form, genre: [...(form.genre || []), g] });
+    }
+    setGenreInput("");
+  };
+
+  const removeGenre = (g: string) => {
+    setForm({ ...form, genre: (form.genre || []).filter((x) => x !== g) });
+  };
+
+  const toggleGenre = (g: string) => {
+    if ((form.genre || []).includes(g)) {
+      removeGenre(g);
+    } else {
+      setForm({ ...form, genre: [...(form.genre || []), g] });
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token) return;
@@ -46,15 +73,6 @@ export default function NewSeriesPage() {
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-|-$/g, "");
-    }
-
-    // Add genres
-    if (genreInput.trim()) {
-      const genres = genreInput
-        .split(",")
-        .map((g) => g.trim().toLowerCase())
-        .filter((g) => g);
-      form.genre = genres;
     }
 
     setSaving(true);
@@ -274,15 +292,74 @@ export default function NewSeriesPage() {
         {/* Genres */}
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-2">
-            Genres (comma separated)
+            Janrlar
           </label>
-          <input
-            type="text"
-            value={genreInput}
-            onChange={(e) => setGenreInput(e.target.value)}
-            className="w-full px-4 py-3 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
-            placeholder="Drama, Mystery, Comedy"
-          />
+
+          {/* Quick-select chips */}
+          <div className="flex flex-wrap gap-2 mb-3">
+            {GENRE_OPTIONS.map((g) => {
+              const selected = (form.genre || []).includes(g);
+              return (
+                <button
+                  key={g}
+                  type="button"
+                  onClick={() => toggleGenre(g)}
+                  className={`text-xs px-3 py-1.5 rounded-full border transition-colors capitalize ${
+                    selected
+                      ? "bg-brand-red border-brand-red text-white"
+                      : "border-brand-border text-gray-400 hover:border-gray-500 hover:text-white"
+                  }`}
+                >
+                  {g}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Custom genre input */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={genreInput}
+              onChange={(e) => setGenreInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addGenre();
+                }
+              }}
+              placeholder="Boshqa janr..."
+              className="w-full px-4 py-3 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
+            />
+            <button
+              type="button"
+              onClick={addGenre}
+              className="px-4 py-3 bg-brand-border hover:bg-gray-600 text-white rounded-lg transition-colors"
+            >
+              <Plus size={18} />
+            </button>
+          </div>
+
+          {/* Selected genres */}
+          {(form.genre || []).length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-2">
+              {(form.genre || []).map((g) => (
+                <span
+                  key={g}
+                  className="flex items-center gap-1.5 text-xs bg-brand-red/20 text-brand-red border border-brand-red/30 px-2.5 py-1 rounded-full capitalize"
+                >
+                  {g}
+                  <button
+                    type="button"
+                    onClick={() => removeGenre(g)}
+                    className="hover:text-white"
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Premium */}

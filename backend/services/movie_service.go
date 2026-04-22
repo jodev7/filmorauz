@@ -458,6 +458,13 @@ func (s *MovieService) UpdateMovie(id string, input *models.MovieInput) (*models
 			return nil, fmt.Errorf("slug already in use by another movie")
 		}
 		existing.Slug = input.Slug
+		// Recalculate WebsiteURL when slug changes
+		websiteBaseURL := os.Getenv("BASE_SITE_URL")
+		if websiteBaseURL == "" {
+			websiteBaseURL = "https://filmorauz.net"
+		}
+		existing.WebsiteURL = calculateWebsiteURL(input.Slug, websiteBaseURL)
+		log.Printf("[UpdateMovie] slug changed from=%q to=%q, recalculating website_url=%q", existing.Slug, input.Slug, existing.WebsiteURL)
 	}
 
 	// Update fields; keep the original code.

@@ -91,7 +91,7 @@ func (h *MovieHandler) GetMovieBySlug(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "movie not found"})
 		return
 	}
-	log.Printf("[GetMovieBySlug] Found movie: id=%v, slug=%s, title=%s, source_type=%s", movie.ID, movie.Slug, movie.Title, movie.SourceType)
+	log.Printf("[GetMovieBySlug] Found movie: id=%v, slug=%s, title=%s, source_type=%s, genre=%v", movie.ID, movie.Slug, movie.Title, movie.SourceType, movie.Genre)
 
 	// Block access to unpublished movies on public routes.
 	// normalizeMovieFromBSON sets IsPublished=true for legacy documents, so this only
