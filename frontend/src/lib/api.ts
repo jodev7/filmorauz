@@ -144,7 +144,7 @@ export interface TrendingMovie {
   slug: string;
   poster_url: string;
   year: number;
-  genres: string[];
+  genre: string[];
   views_in_period: number;
 }
 
@@ -157,7 +157,7 @@ function trendingToMovie(t: TrendingMovie): Movie {
     poster_url: t.poster_url,
     backdrop_url: t.poster_url,
     year: t.year,
-    genre: t.genres,
+    genre: t.genre,
     description: "",
     code: "",
     video_url: "",
@@ -181,7 +181,7 @@ export interface RecommendationMovie {
   slug: string;
   poster_url: string;
   year: number;
-  genres: string[];
+  genre: string[];
   score?: number;
 }
 
@@ -194,7 +194,7 @@ function recommendationToMovie(r: RecommendationMovie): Movie {
     poster_url: r.poster_url,
     backdrop_url: r.poster_url,
     year: r.year,
-    genre: r.genres,
+    genre: r.genre,
     description: "",
     code: "",
     video_url: "",

@@ -184,8 +184,11 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 	// Handle year - normalize to int (handles legacy numeric)
 	movie.Year = normalizeFieldToInt(doc["year"])
 
-	// Handle genre - may be array or single value
+	// Handle genre - may be array or single value OR stored as "genres"
+	genreFound := false
 	if genre, ok := doc["genre"]; ok && genre != nil {
+		genreFound = true
+		log.Printf("[DEBUG] normalizeMovieFromBSON: found 'genre' field, type=%T value=%v", genre, genre)
 		switch g := genre.(type) {
 		case []interface{}:
 			genres := make([]string, 0, len(g))
@@ -195,9 +198,47 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 				}
 			}
 			movie.Genre = genres
+			log.Printf("[DEBUG] normalizeMovieFromBSON: converted []interface{} to genres=%v", genres)
 		case []string:
 			movie.Genre = g
+			log.Printf("[DEBUG] normalizeMovieFromBSON: []string genres=%v", g)
+		default:
+			log.Printf("[DEBUG] normalizeMovieFromBSON: 'genre' unhandled type=%T", genre)
 		}
+	} else if genre, ok := doc["genres"]; ok && genre != nil {
+		// Fallback: check for "genres" field (some legacy data might use this)
+		genreFound = true
+		log.Printf("[DEBUG] normalizeMovieFromBSON: found 'genres' field (fallback), type=%T value=%v", genre, genre)
+		switch g := genre.(type) {
+		case []interface{}:
+			genres := make([]string, 0, len(g))
+			for _, item := range g {
+				if s, ok := item.(string); ok {
+					genres = append(genres, s)
+				}
+			}
+			movie.Genre = genres
+			log.Printf("[DEBUG] normalizeMovieFromBSON: converted genres []interface{} to genres=%v", genres)
+		case []string:
+			movie.Genre = g
+			log.Printf("[DEBUG] normalizeMovieFromBSON: genres []string=%v", g)
+		default:
+			log.Printf("[DEBUG] normalizeMovieFromBSON: 'genres' unhandled type=%T", genre)
+		}
+	}
+
+	if !genreFound {
+		// Log available keys for debugging
+		var keys []string
+		for k := range doc {
+			keys = append(keys, k)
+		}
+		log.Printf("[DEBUG] normalizeMovieFromBSON: neither 'genre' nor 'genres' found in doc, available keys: %v", keys)
+	}
+	// Always ensure Genre is non-nil empty slice, never null
+	if movie.Genre == nil {
+		movie.Genre = []string{}
+		log.Printf("[DEBUG] normalizeMovieFromBSON: Genre set to empty slice (was nil)")
 	}
 
 	// Handle country
@@ -485,6 +526,7 @@ func (r *MovieRepository) FindBySlug(slug string) (*models.Movie, error) {
 	}
 
 	log.Printf("[FindBySlug] RESULT: Found movie id=%v, slug=%q, title=%s", movie.ID, movie.Slug, movie.Title)
+	log.Printf("[FindBySlug] RESULT: genre=%v (len=%d)", movie.Genre, len(movie.Genre))
 	log.Printf("[FindBySlug] RESULT: source_type=%q, video_url=%q, embed_url=%q", movie.SourceType, movie.VideoURL, movie.EmbedURL)
 	log.Printf("[FindBySlug] RESULT: views=%d, is_premium=%v", movie.Views, movie.IsPremium)
 	log.Printf("[FindBySlug] === DEBUG END (found) ===")
@@ -511,7 +553,9 @@ func (r *MovieRepository) FindByID(id primitive.ObjectID) (*models.Movie, error)
 		return nil, fmt.Errorf("decode movie: %w", err)
 	}
 
-	return normalizeMovieFromBSON(doc)
+	movie, err := normalizeMovieFromBSON(doc)
+	log.Printf("[FindByID] RESULT: movie id=%v, genre=%v (len=%d)", movie.ID, movie.Genre, len(movie.Genre))
+	return movie, err
 }
 
 // IncrementViews atomically increments the view count for a movie
@@ -761,7 +805,7 @@ func (r *MovieRepository) Create(movie *models.Movie) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	log.Printf("[MOVIE REPO] Creating movie: title=%s, code=%s", movie.Title, movie.Code)
+	log.Printf("[MOVIE REPO] Creating movie: title=%s, code=%s, genre=%v", movie.Title, movie.Code, movie.Genre)
 
 	result, err := r.col.InsertOne(ctx, movie)
 	if err != nil {
@@ -769,8 +813,8 @@ func (r *MovieRepository) Create(movie *models.Movie) error {
 		return err
 	}
 
-	log.Printf("[MOVIE REPO] Movie created successfully: id=%s, title=%s, code=%s",
-		result.InsertedID, movie.Title, movie.Code)
+	log.Printf("[MOVIE REPO] Movie created successfully: id=%s, title=%s, code=%s, genre=%v",
+		result.InsertedID, movie.Title, movie.Code, movie.Genre)
 	return nil
 }
 
@@ -779,11 +823,18 @@ func (r *MovieRepository) Update(id primitive.ObjectID, movie *models.Movie) err
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	log.Printf("[MOVIE REPO] Updating movie id=%v, genre=%v", id, movie.Genre)
+
 	_, err := r.col.UpdateOne(
 		ctx,
 		bson.M{"_id": id},
 		bson.M{"$set": movie},
 	)
+	if err != nil {
+		log.Printf("[MOVIE REPO] Error updating movie: %v", err)
+	} else {
+		log.Printf("[MOVIE REPO] Movie updated successfully id=%v", id)
+	}
 	return err
 }
 

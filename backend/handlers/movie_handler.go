@@ -350,7 +350,7 @@ func (h *MovieHandler) GetTrendingMovies(c *gin.Context) {
 			"slug":            t.Movie.Slug,
 			"poster_url":      t.Movie.PosterURL,
 			"year":            t.Movie.Year,
-			"genres":          t.Movie.Genre,
+			"genre":           t.Movie.Genre,
 			"views_in_period": t.ViewsInPeriod,
 		}
 	}
