@@ -271,6 +271,10 @@ func (h *MovieHandler) CreateMovie(c *gin.Context) {
 
 	movie, err := h.movieService.CreateMovie(&input)
 	if err != nil {
+		if services.IsDuplicateMovieError(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": "movie already exists"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -544,6 +548,10 @@ func (h *MovieHandler) ApproveMovie(c *gin.Context) {
 	if err := h.movieService.SetMovieApprovalStatus(id, "approved", byUserID); err != nil {
 		if err.Error() == "movie not found" {
 			c.JSON(http.StatusNotFound, gin.H{"error": "movie not found"})
+			return
+		}
+		if services.IsDuplicateMovieError(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": "movie already exists"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

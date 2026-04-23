@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"runtime/debug"
@@ -614,7 +615,7 @@ func (h *IngestionHandler) GetIngestionJob(c *gin.Context) {
 }
 
 // ListIngestionJobs lists all jobs with filters
-// GET /api/ingestion/jobs?status=pending&limit=20&skip=0&light=true
+// GET /api/ingestion/jobs?status=pending&page=1&limit=30&skip=0&light=true
 func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
 	startTime := time.Now()
 	defer func() {
@@ -625,19 +626,79 @@ func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
 	}()
 
 	status := c.Query("status")
-	limit := 20
+	limit := 30
+	page := 1
 	skip := 0
 	light := c.Query("light") == "true"
 
 	if l := c.Query("limit"); l != "" {
 		fmt.Sscanf(l, "%d", &limit)
 	}
+	if p := c.Query("page"); p != "" {
+		fmt.Sscanf(p, "%d", &page)
+	}
 	if s := c.Query("skip"); s != "" {
 		fmt.Sscanf(s, "%d", &skip)
 	}
+	if limit <= 0 {
+		limit = 30
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if c.Query("page") != "" {
+		skip = (page - 1) * limit
+	}
+	if skip < 0 {
+		skip = 0
+	}
+	if c.Query("page") == "" {
+		page = (skip / limit) + 1
+	}
 
 	filter := bson.M{}
-	if status != "" {
+	switch status {
+	case "", "all":
+	case "active":
+		filter["status"] = bson.M{"$nin": bson.A{
+			models.IngestionStatusCompleted,
+			models.IngestionStatusFailed,
+			models.IngestionStatusDownloadFailed,
+		}}
+	case "pending":
+		filter["$or"] = bson.A{
+			bson.M{"status": models.IngestionStatusPending},
+			bson.M{"stage": "pending"},
+		}
+	case "processing":
+		filter["$or"] = bson.A{
+			bson.M{"status": bson.M{"$in": bson.A{
+				models.IngestionStatusProcessing,
+				models.IngestionStatusHLSProcessing,
+			}}},
+			bson.M{"stage": bson.M{"$in": bson.A{
+				"processing",
+				"hls_processing",
+			}}},
+		}
+	case "failed":
+		filter["status"] = bson.M{"$in": bson.A{
+			models.IngestionStatusFailed,
+			models.IngestionStatusDownloadFailed,
+		}}
+	case "completed":
+		filter["status"] = models.IngestionStatusCompleted
+	case "stuck":
+		filter["status"] = bson.M{"$nin": bson.A{
+			models.IngestionStatusCompleted,
+			models.IngestionStatusFailed,
+			models.IngestionStatusDownloadFailed,
+		}}
+		filter["updated_at"] = bson.M{"$lt": time.Now().Add(-30 * time.Minute)}
+	default:
 		filter["status"] = status
 	}
 
@@ -645,13 +706,16 @@ func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
 	defer cancel()
 
 	var jobs []*models.IngestionJob
+	var total int64
 	var err error
 
-	if light {
-		jobs, err = h.jobRepo.ListLight(ctx, filter, limit, skip)
-	} else {
-		jobs, err = h.jobRepo.List(ctx, filter, limit, skip)
+	total, err = h.jobRepo.CountTopLevelGroups(ctx, filter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to count jobs"})
+		return
 	}
+
+	jobs, err = h.jobRepo.ListByTopLevelGroups(ctx, filter, limit, skip, light)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list jobs"})
 		return
@@ -662,16 +726,14 @@ func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
 		jobs = []*models.IngestionJob{}
 	}
 
-	total, _ := h.jobRepo.Count(ctx, filter)
-
-	// Calculate total pages
 	totalPages := 0
-	if limit > 0 {
-		totalPages = (int(total) + limit - 1) / limit // Ceiling division
+	if total > 0 {
+		totalPages = int(math.Ceil(float64(total) / float64(limit)))
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"data":       jobs,
+		"page":       page,
 		"total":      total,
 		"totalPages": totalPages,
 		"limit":      limit,

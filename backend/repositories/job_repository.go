@@ -13,6 +13,26 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+var topLevelGroupKeyExpr = bson.M{
+	"$cond": bson.A{
+		bson.M{
+			"$or": bson.A{
+				bson.M{"$eq": bson.A{"$content_type", "episode"}},
+				bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$season_number", 0}}, 0}},
+				bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$episode_number", 0}}, 0}},
+			},
+		},
+		bson.M{
+			"$cond": bson.A{
+				bson.M{"$ne": bson.A{bson.M{"$ifNull": bson.A{"$series_slug", ""}}, ""}},
+				bson.M{"$concat": bson.A{"serial:", "$series_slug"}},
+				bson.M{"$concat": bson.A{"job:", bson.M{"$toString": "$_id"}}},
+			},
+		},
+		bson.M{"$concat": bson.A{"job:", bson.M{"$toString": "$_id"}}},
+	},
+}
+
 // JobRepository handles ingestion job persistence
 type JobRepository struct {
 	collection *mongo.Collection
@@ -621,6 +641,106 @@ func (r *JobRepository) ListLight(ctx context.Context, filter bson.M, limit, ski
 // Count counts jobs matching a filter
 func (r *JobRepository) Count(ctx context.Context, filter bson.M) (int64, error) {
 	return r.collection.CountDocuments(ctx, filter)
+}
+
+// CountTopLevelGroups counts the number of top-level items after serial jobs are
+// grouped together for the admin tree view.
+func (r *JobRepository) CountTopLevelGroups(ctx context.Context, filter bson.M) (int64, error) {
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: filter}},
+		{{Key: "$addFields", Value: bson.M{"top_level_group_key": topLevelGroupKeyExpr}}},
+		{{Key: "$group", Value: bson.M{"_id": "$top_level_group_key"}}},
+		{{Key: "$count", Value: "total"}},
+	}
+
+	cursor, err := r.collection.Aggregate(ctx, pipeline)
+	if err != nil {
+		return 0, err
+	}
+	defer cursor.Close(ctx)
+
+	var result []struct {
+		Total int64 `bson:"total"`
+	}
+	if err := cursor.All(ctx, &result); err != nil {
+		return 0, err
+	}
+	if len(result) == 0 {
+		return 0, nil
+	}
+
+	return result[0].Total, nil
+}
+
+// ListByTopLevelGroups returns all jobs that belong to the paginated top-level
+// groups used by the serial tree UI. Movies are single-item groups; episodes are
+// grouped by series_slug when available.
+func (r *JobRepository) ListByTopLevelGroups(ctx context.Context, filter bson.M, limit, skip int, light bool) ([]*models.IngestionJob, error) {
+	groupPipeline := mongo.Pipeline{
+		{{Key: "$match", Value: filter}},
+		{{Key: "$addFields", Value: bson.M{"top_level_group_key": topLevelGroupKeyExpr}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":               "$top_level_group_key",
+			"latest_created_at": bson.M{"$max": "$created_at"},
+		}}},
+		{{Key: "$sort", Value: bson.D{{Key: "latest_created_at", Value: -1}}}},
+		{{Key: "$skip", Value: skip}},
+		{{Key: "$limit", Value: limit}},
+	}
+
+	groupCursor, err := r.collection.Aggregate(ctx, groupPipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer groupCursor.Close(ctx)
+
+	var groups []struct {
+		ID string `bson:"_id"`
+	}
+	if err := groupCursor.All(ctx, &groups); err != nil {
+		return nil, err
+	}
+	if len(groups) == 0 {
+		return []*models.IngestionJob{}, nil
+	}
+
+	groupKeys := make([]string, 0, len(groups))
+	for _, group := range groups {
+		groupKeys = append(groupKeys, group.ID)
+	}
+
+	jobsPipeline := mongo.Pipeline{
+		{{Key: "$match", Value: filter}},
+		{{Key: "$addFields", Value: bson.M{"top_level_group_key": topLevelGroupKeyExpr}}},
+		{{Key: "$match", Value: bson.M{"top_level_group_key": bson.M{"$in": groupKeys}}}},
+		{{Key: "$sort", Value: bson.D{{Key: "created_at", Value: -1}}}},
+	}
+
+	if light {
+		jobsPipeline = append(jobsPipeline, bson.D{{Key: "$project", Value: bson.D{
+			{Key: "logs", Value: 0},
+			{Key: "metadata", Value: 0},
+			{Key: "enriched_metadata", Value: 0},
+			{Key: "top_level_group_key", Value: 0},
+		}}})
+	} else {
+		jobsPipeline = append(jobsPipeline, bson.D{{Key: "$project", Value: bson.D{
+			{Key: "top_level_group_key", Value: 0},
+		}}})
+	}
+
+	cursor, err := r.collection.Aggregate(ctx, jobsPipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var jobs []*models.IngestionJob
+	if err := cursor.All(ctx, &jobs); err != nil {
+		return nil, err
+	}
+
+	return jobs, nil
 }
 
 // UpdateQualityInfo updates source quality and generated renditions info

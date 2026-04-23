@@ -1,9 +1,10 @@
 "use client";
 
-import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, ReactNode, useRef, useMemo, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { shouldShowAds } from "@/lib/ads-utils";
 import { useAuth } from "@/lib/auth-context";
+import { Ad, getAdsBatch } from "@/lib/api";
 
 export type IntrusiveAdType = "popup" | "fixed_bottom" | "large_inline" | "player_popup" | "player_overlay";
 
@@ -13,14 +14,19 @@ interface AdSlotContextType {
   hideIntrusiveAd: (type: IntrusiveAdType) => void;
   isIntrusiveAdVisible: (type: IntrusiveAdType) => boolean;
   isPopupOrPlayerVisible: boolean;
+  adsByPlacement: Record<string, Ad[]>;
+  ensurePlacements: (placements: string[]) => Promise<void>;
+  getMergedAds: (placements: string[]) => Ad[];
 }
 
 const AdSlotContext = createContext<AdSlotContextType | null>(null);
 
 export function AdSlotProvider({ children }: { children: ReactNode }) {
   const [visibleIntrusiveAds, setVisibleIntrusiveAds] = useState<Set<IntrusiveAdType>>(new Set());
+  const [adsByPlacement, setAdsByPlacement] = useState<Record<string, Ad[]>>({});
   const pathname = usePathname();
   const { user } = useAuth();
+  const requestedPlacementsRef = useRef<Set<string>>(new Set());
 
   const showIntrusiveAd = useCallback((type: IntrusiveAdType): boolean => {
     if (!shouldShowAds(pathname, user)) return false;
@@ -63,8 +69,50 @@ export function AdSlotProvider({ children }: { children: ReactNode }) {
 
   const isPopupOrPlayerVisible = visibleIntrusiveAds.has("popup") || visibleIntrusiveAds.has("player_popup");
 
+  const ensurePlacements = useCallback(async (placements: string[]) => {
+    const uniquePlacements = Array.from(new Set(placements.filter(Boolean)));
+    const missing = uniquePlacements.filter((placement) => !requestedPlacementsRef.current.has(placement));
+    if (missing.length === 0) return;
+
+    missing.forEach((placement) => requestedPlacementsRef.current.add(placement));
+    const data = await getAdsBatch(missing);
+    setAdsByPlacement((prev) => ({ ...prev, ...(data.placements || {}) }));
+  }, []);
+
+  const getMergedAds = useCallback((placements: string[]) => {
+    const seen = new Set<string>();
+    const merged: Ad[] = [];
+
+    placements.forEach((placement) => {
+      (adsByPlacement[placement] || []).forEach((ad) => {
+        if (seen.has(ad.id)) return;
+        seen.add(ad.id);
+        merged.push(ad);
+      });
+    });
+
+    return merged;
+  }, [adsByPlacement]);
+
+  const homepagePrefetchPlacements = useMemo(() => {
+    if (pathname !== "/") return [];
+    return [
+      "homepage_top_banner",
+      "homepage_popup",
+      "website_fixed_bottom",
+      "website",
+      "global_banner",
+      "global_fixed_bottom",
+    ];
+  }, [pathname]);
+
+  useEffect(() => {
+    if (homepagePrefetchPlacements.length === 0) return;
+    ensurePlacements(homepagePrefetchPlacements).catch(() => {});
+  }, [ensurePlacements, homepagePrefetchPlacements]);
+
   return (
-    <AdSlotContext.Provider value={{ visibleIntrusiveAds, showIntrusiveAd, hideIntrusiveAd, isIntrusiveAdVisible, isPopupOrPlayerVisible }}>
+    <AdSlotContext.Provider value={{ visibleIntrusiveAds, showIntrusiveAd, hideIntrusiveAd, isIntrusiveAdVisible, isPopupOrPlayerVisible, adsByPlacement, ensurePlacements, getMergedAds }}>
       {children}
     </AdSlotContext.Provider>
   );
@@ -79,6 +127,9 @@ export function useAdSlot() {
       hideIntrusiveAd: () => {},
       isIntrusiveAdVisible: () => false,
       isPopupOrPlayerVisible: false,
+      adsByPlacement: {},
+      ensurePlacements: async () => {},
+      getMergedAds: () => [],
     };
   }
   return context;

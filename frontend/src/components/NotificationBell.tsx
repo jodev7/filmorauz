@@ -14,22 +14,18 @@ export default function NotificationBell() {
   const [loading, setLoading] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Fetch unread count on mount and periodically
+  // Initial unread count comes from auth bootstrap; keep a lightweight poll for changes.
   useEffect(() => {
     if (!token) return;
 
-    const fetchUnreadCount = async () => {
+    const interval = setInterval(async () => {
       try {
         const data = await getUnreadNotificationCount(token);
         setUnreadNotificationCount(data.count);
       } catch (error) {
         console.error("Failed to fetch unread count:", error);
       }
-    };
-
-    fetchUnreadCount();
-    // Poll every 30 seconds
-    const interval = setInterval(fetchUnreadCount, 30000);
+    }, 30000);
     return () => clearInterval(interval);
   }, [token, setUnreadNotificationCount]);
 

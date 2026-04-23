@@ -38,7 +38,12 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 		videoURL = job.Metadata.VideoURL
 	}
 	if videoURL == "" {
-		return fmt.Errorf("episode job %s missing video_url (parser should have pre-resolved it)", jobID)
+		reason := fmt.Sprintf("episode missing video_url for %s S%02dE%02d", job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber)
+		if err := p.markJobNeedsManual(jobID, reason); err != nil {
+			return fmt.Errorf("episode mark needs_manual: %w", err)
+		}
+		log.Printf("[EPISODE] needs_manual job=%s reason=%s", jobID, reason)
+		return nil
 	}
 
 	// Sanity: required linkage fields.

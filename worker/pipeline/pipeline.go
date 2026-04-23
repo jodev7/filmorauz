@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -35,6 +36,23 @@ func safeTruncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen]
+}
+
+func normalizeDuplicateTitle(title string) string {
+	trimmed := strings.TrimSpace(title)
+	re := regexp.MustCompile(`\s+`)
+	return strings.ToLower(re.ReplaceAllString(trimmed, " "))
+}
+
+type needsManualError struct {
+	Reason string
+}
+
+func (e *needsManualError) Error() string {
+	if e == nil || e.Reason == "" {
+		return "needs manual review"
+	}
+	return e.Reason
 }
 
 // Config holds pipeline configuration
@@ -228,6 +246,18 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		// In new parser flow, download_needed=true, so localPath should be empty
 		meta, _, parseErr := p.parseMovieDetails(job)
 		if parseErr != nil {
+			var manualErr *needsManualError
+			if errors.As(parseErr, &manualErr) {
+				reason := strings.TrimSpace(manualErr.Reason)
+				if reason == "" {
+					reason = "parser could not resolve video_url"
+				}
+				if markErr := p.markJobNeedsManual(jobID, reason); markErr != nil {
+					return fmt.Errorf("mark needs_manual: %w", markErr)
+				}
+				log.Printf("[PIPELINE] job %s moved to needs_manual: %s", jobID, reason)
+				return nil
+			}
 			return fmt.Errorf("parser error: %w", parseErr)
 		}
 		metadata = meta
@@ -562,12 +592,14 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	// ===== TELEGRAM NOTIFICATION =====
 	// Send Telegram notification after successful movie creation
 	// This is idempotent - if already notified, it will be skipped
-	if movieResult != nil {
+	if movieResult != nil && !movieResult.IsDuplicate {
 		if err := p.sendTelegramNotification(ctx, jobID, job, enrichedMetadata, streamingURL, finalPosterURL, movieResult); err != nil {
 			// Log error but don't fail the job - movie is already created
 			log.Printf("[PIPELINE] WARNING: Telegram notification failed: %v", err)
 			log.Printf("[PIPELINE] Movie is created successfully, Telegram failure is non-critical")
 		}
+	} else if movieResult != nil && movieResult.IsDuplicate {
+		log.Printf("[TELEGRAM] SKIP duplicate movie job=%s movie_id=%v", jobID, movieResult.MovieID)
 	}
 
 	// ===== ASSET VALIDATION =====
@@ -707,11 +739,6 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, "", fmt.Errorf("parser returned status %d: %s", resp.StatusCode, string(body))
-	}
-
 	var result struct {
 		models.ParsedMovieMetadata
 		// NEW: Add download response fields for file handoff
@@ -727,10 +754,31 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 		VideoURL          string `json:"video_url"` // Best source URL from /details
 		Error             string `json:"error"`
 		DownloadError     string `json:"download_error"`
+		ManualReason      string `json:"manual_reason"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read parser response: %w", err)
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		if resp.StatusCode != http.StatusOK {
+			return nil, "", fmt.Errorf("parser returned status %d: %s", resp.StatusCode, string(body))
+		}
 		return nil, "", fmt.Errorf("failed to decode parser response: %w", err)
+	}
+
+	if result.Error == "needs_manual" {
+		reason := strings.TrimSpace(result.ManualReason)
+		if reason == "" {
+			reason = "video_url_not_found"
+		}
+		return nil, "", &needsManualError{Reason: fmt.Sprintf("needs manual review: %s", reason)}
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("parser returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	// Check for parser-level errors
@@ -1467,7 +1515,7 @@ func (p *Pipeline) processDirectUploadJob(ctx context.Context, job *models.Inges
 		if fErr := p.failJobWithStatus(jobID, models.IngestionStatusDownloadFailed, errMsg); fErr != nil {
 			log.Printf("[DIRECT_UPLOAD] Failed to mark job as failed: %v", fErr)
 		}
-		return fmt.Errorf(errMsg)
+		return fmt.Errorf("%s", errMsg)
 	}
 	log.Printf("[DIRECT_UPLOAD] Downloaded temp file to: %s", localTempPath)
 
@@ -1485,7 +1533,7 @@ func (p *Pipeline) processDirectUploadJob(ctx context.Context, job *models.Inges
 		if fErr := p.failJobWithStatus(jobID, models.IngestionStatusFailed, errMsg); fErr != nil {
 			log.Printf("[DIRECT_UPLOAD] Failed to mark job as failed: %v", fErr)
 		}
-		return fmt.Errorf(errMsg)
+		return fmt.Errorf("%s", errMsg)
 	}
 	log.Printf("[DIRECT_UPLOAD] Processed video: hls_dir=%s, master=%s", hlsDir, masterPath)
 
@@ -1507,7 +1555,7 @@ func (p *Pipeline) processDirectUploadJob(ctx context.Context, job *models.Inges
 		if fErr := p.failJobWithStatus(jobID, models.IngestionStatusFailed, errMsg); fErr != nil {
 			log.Printf("[DIRECT_UPLOAD] Failed to mark job as failed: %v", fErr)
 		}
-		return fmt.Errorf(errMsg)
+		return fmt.Errorf("%s", errMsg)
 	}
 	if streamingURL == "" {
 		return fmt.Errorf("no master playlist found")
@@ -1536,7 +1584,7 @@ func (p *Pipeline) processDirectUploadJob(ctx context.Context, job *models.Inges
 		if fErr := p.failJobWithStatus(jobID, models.IngestionStatusFailed, errMsg); fErr != nil {
 			log.Printf("[DIRECT_UPLOAD] Failed to mark job as failed: %v", err)
 		}
-		return fmt.Errorf(errMsg)
+		return fmt.Errorf("%s", errMsg)
 	}
 
 	// Upload + DB save both succeeded — now safe to delete the local temp source.
@@ -1969,30 +2017,57 @@ func (p *Pipeline) createMovieInDatabase(job *models.IngestionJob, metadata *mod
 	}
 
 	displaySlug := createMovieSlug(displayTitle)
+	normalizedDisplayTitle := normalizeDuplicateTitle(displayTitle)
 	displayDescription := metadata.Description
 	if displayDescription == "" {
 		displayDescription = "No description available"
 	}
 
 	movieDoc := bson.M{
-		"code":           code,
-		"slug":           displaySlug,
-		"title":          displayTitle,
-		"original_title": metadata.Title,
-		"description":    displayDescription,
-		"year":           metadata.Year,
-		"genre":          metadata.Genres,
-		"country":        metadata.Country,
-		"duration":       metadata.Duration,
-		"poster_url":     metadata.Poster,
-		"backdrop_url":   metadata.Backdrop,
-		"video_url":      streamingURL,
-		"source_type":    "direct_hls",
-		"quality":        job.Quality,
-		"is_premium":     job.IsPremium,
-		"status":         "published",
-		"created_at":     time.Now(),
-		"updated_at":     time.Now(),
+		"code":             code,
+		"slug":             displaySlug,
+		"title":            displayTitle,
+		"normalized_title": normalizedDisplayTitle,
+		"original_title":   metadata.Title,
+		"description":      displayDescription,
+		"year":             metadata.Year,
+		"genre":            metadata.Genres,
+		"country":          metadata.Country,
+		"duration":         metadata.Duration,
+		"poster_url":       metadata.Poster,
+		"backdrop_url":     metadata.Backdrop,
+		"video_url":        streamingURL,
+		"source_type":      "direct_hls",
+		"source": bson.M{
+			"provider":   job.Source,
+			"source_url": job.DetailURL,
+			"source_id":  job.SourceID,
+		},
+		"quality":    job.Quality,
+		"is_premium": job.IsPremium,
+		"status":     "published",
+		"created_at": time.Now(),
+		"updated_at": time.Now(),
+	}
+
+	existingDoc, duplicateReason, err := p.findExistingMovieForImport(
+		context.Background(),
+		displaySlug,
+		job.Source,
+		job.DetailURL,
+		job.SourceID,
+		normalizedDisplayTitle,
+		metadata.Title,
+		metadata.Title,
+		"",
+		metadata.Year,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed duplicate check: %w", err)
+	}
+	if existingDoc != nil {
+		log.Printf("[DIRECT_UPLOAD] DUPLICATE BLOCKED: %s - existing movie reused", duplicateReason)
+		return existingDoc["_id"], nil
 	}
 
 	// Insert the movie
@@ -2015,6 +2090,7 @@ type MovieCreationResult struct {
 	Code         string
 	Slug         string
 	DisplayTitle string
+	IsDuplicate  bool
 }
 
 // Uses upsert to handle duplicate slugs - updates existing or inserts new
@@ -2065,6 +2141,7 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 
 	// Generate slug from display title (Uzbek) for consistency
 	displaySlug := createMovieSlug(displayTitle)
+	normalizedDisplayTitle := normalizeDuplicateTitle(displayTitle)
 
 	// For description, prefer Uzbek if available
 	displayDescription := enrichedMetadata.Description
@@ -2075,8 +2152,9 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 
 	movieDoc := bson.M{
 		"code":                  code,
-		"slug":                  displaySlug,                    // Use Uzbek slug for consistency
-		"title":                 displayTitle,                   // Uzbek title for user-facing display
+		"slug":                  displaySlug,  // Use Uzbek slug for consistency
+		"title":                 displayTitle, // Uzbek title for user-facing display
+		"normalized_title":      normalizedDisplayTitle,
 		"original_title":        enrichedMetadata.OriginalTitle, // Keep original English title
 		"original_description":  enrichedMetadata.Description,   // Keep original English description
 		"description":           displayDescription,             // Uzbek description for user-facing display
@@ -2128,22 +2206,26 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 	log.Printf("[PIPELINE] Countries: %v", enrichedMetadata.Countries)
 	log.Printf("[PIPELINE] Duration: %d minutes", enrichedMetadata.Duration)
 
-	// FIRST: Check if movie with this slug already exists
-	existingMovie := bson.M{"slug": displaySlug}
-	existingCount := int64(0)
-
-	countResult, countErr := p.movieCol.CountDocuments(ctx, existingMovie)
-	if countErr == nil {
-		existingCount = countResult
-		log.Printf("[PIPELINE] Existing movie check: slug=%s, found=%d", displaySlug, existingCount)
-	} else {
-		log.Printf("[PIPELINE] Existing movie check failed: %v", countErr)
+	existingDoc, duplicateReason, err := p.findExistingMovieForImport(
+		ctx,
+		displaySlug,
+		job.Source,
+		job.DetailURL,
+		job.SourceID,
+		normalizedDisplayTitle,
+		enrichedMetadata.OriginalTitle,
+		enrichedMetadata.Title,
+		enrichedMetadata.TitleUz,
+		enrichedMetadata.Year,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed duplicate check: %w", err)
+	}
+	if existingDoc != nil {
+		log.Printf("[PIPELINE] DUPLICATE BLOCKED: %s - reusing existing movie", duplicateReason)
+		return p.movieCreationResultFromDoc(existingDoc, displayTitle, true), nil
 	}
 
-	// Use upsert to handle duplicates - this is safer than raw InsertOne
-	// Upsert will INSERT new movie OR UPDATE existing movie with same slug.
-	// Approval fields use $setOnInsert so they are only written on NEW inserts;
-	// re-imports of an already-approved movie will not reset its approval status.
 	filter := bson.M{"slug": displaySlug}
 	update := bson.M{
 		"$set": movieDoc,
@@ -2152,24 +2234,11 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 			"is_published":    false,
 		},
 	}
-	upsert := true
 
-	result, err := p.movieCol.UpdateOne(ctx, filter, update, options.Update().SetUpsert(upsert))
+	result, err := p.movieCol.UpdateOne(ctx, filter, update, options.Update().SetUpsert(true))
 	if err != nil {
 		log.Printf("[PIPELINE] ERROR: DB operation failed: %v", err)
 		return nil, fmt.Errorf("failed to upsert movie: %w", err)
-	}
-
-	// DUPLICATE CHECK: Check by multiple criteria before creating/updating
-	duplicateFound, duplicateReason := p.checkMovieDuplicate(
-		displaySlug,
-		enrichedMetadata,
-		job.Source,
-		job.SourceID,
-	)
-	if duplicateFound {
-		log.Printf("[PIPELINE] DUPLICATE BLOCKED: %s - will not create movie", duplicateReason)
-		return nil, fmt.Errorf("duplicate movie: %s", duplicateReason)
 	}
 
 	// EXPLICIT LOGGING: Full result details
@@ -2182,7 +2251,7 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 	log.Printf("[PIPELINE] upsertedID: %v", result.UpsertedID)
 
 	// For description, prefer Uzbek if available
-	displayDescription := enrichedMetadata.Description
+	displayDescription = enrichedMetadata.Description
 	if enrichedMetadata.DescriptionUz != "" {
 		displayDescription = enrichedMetadata.DescriptionUz
 		log.Printf("[PIPELINE] Using Uzbek description (length: %d)", len(displayDescription))
@@ -2252,6 +2321,117 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 	}, nil
 }
 
+func (p *Pipeline) movieCreationResultFromDoc(doc bson.M, fallbackTitle string, isDuplicate bool) *MovieCreationResult {
+	var movieID interface{} = doc["_id"]
+	if oid, ok := doc["_id"].(primitive.ObjectID); ok {
+		movieID = oid
+	}
+
+	displayTitle := fallbackTitle
+	if title, ok := doc["title"].(string); ok && strings.TrimSpace(title) != "" {
+		displayTitle = title
+	}
+
+	return &MovieCreationResult{
+		MovieID:      movieID,
+		Code:         fmt.Sprintf("%v", doc["code"]),
+		Slug:         fmt.Sprintf("%v", doc["slug"]),
+		DisplayTitle: displayTitle,
+		IsDuplicate:  isDuplicate,
+	}
+}
+
+func (p *Pipeline) findExistingMovieForImport(
+	ctx context.Context,
+	displaySlug string,
+	sourceProvider string,
+	sourceURL string,
+	sourceID string,
+	normalizedTitle string,
+	originalTitle string,
+	title string,
+	titleUz string,
+	year int,
+) (bson.M, string, error) {
+	checks := []struct {
+		rule   string
+		filter bson.M
+	}{
+		{
+			rule: "source+source_url",
+			filter: bson.M{
+				"source.provider":   sourceProvider,
+				"source.source_url": sourceURL,
+			},
+		},
+		{
+			rule: "external_id",
+			filter: bson.M{
+				"source.provider":  sourceProvider,
+				"source.source_id": sourceID,
+			},
+		},
+		{
+			rule:   "slug",
+			filter: bson.M{"slug": displaySlug},
+		},
+	}
+
+	for _, check := range checks {
+		if hasEmptyDuplicateFilterValue(check.filter) {
+			continue
+		}
+		var existing bson.M
+		err := p.movieCol.FindOne(ctx, check.filter).Decode(&existing)
+		if err == nil {
+			return existing, check.rule, nil
+		}
+		if err != mongo.ErrNoDocuments {
+			return nil, "", err
+		}
+	}
+
+	if normalizedTitle == "" || year <= 0 {
+		return nil, "", nil
+	}
+
+	cursor, err := p.movieCol.Find(ctx, bson.M{"year": year})
+	if err != nil {
+		return nil, "", err
+	}
+	defer cursor.Close(ctx)
+
+	var docs []bson.M
+	if err := cursor.All(ctx, &docs); err != nil {
+		return nil, "", err
+	}
+
+	candidates := []string{normalizedTitle, normalizeDuplicateTitle(title), normalizeDuplicateTitle(titleUz), normalizeDuplicateTitle(originalTitle)}
+	for _, doc := range docs {
+		for _, field := range []string{"normalized_title", "title", "original_title", "title_uz"} {
+			if value, ok := doc[field].(string); ok {
+				docTitle := normalizeDuplicateTitle(value)
+				for _, candidate := range candidates {
+					if candidate != "" && docTitle == candidate {
+						return doc, "normalized_title+year", nil
+					}
+				}
+			}
+		}
+	}
+
+	return nil, "", nil
+}
+
+func hasEmptyDuplicateFilterValue(filter bson.M) bool {
+	for _, value := range filter {
+		if str, ok := value.(string); ok && strings.TrimSpace(str) == "" {
+			return true
+		}
+	}
+	return false
+}
+
 // updateStatus updates job status and progress
 func (p *Pipeline) updateStatus(jobID string, status models.IngestionStatus, progress int) error {
 	if err := p.jobRepo.UpdateStatus(context.Background(), jobID, status, progress); err != nil {
@@ -2282,6 +2462,18 @@ func (p *Pipeline) failJob(jobID, errorMsg string) {
 	p.jobRepo.SetError(context.Background(), jobID, errorMsg)
 	p.jobRepo.IncrementRetry(context.Background(), jobID)
 	log.Printf("Job %s failed: %s", jobID, errorMsg)
+}
+
+func (p *Pipeline) markJobNeedsManual(jobID, reason string) error {
+	if reason == "" {
+		reason = "needs manual review"
+	}
+	if err := p.jobRepo.MarkNeedsManual(context.Background(), jobID, reason); err != nil {
+		return err
+	}
+	p.log(jobID, fmt.Sprintf("Needs manual review: %s", reason), "warning")
+	log.Printf("[PIPELINE] needs_manual job=%s reason=%s", jobID, reason)
+	return nil
 }
 
 // failJobWithStatus marks a job as failed with a specific status

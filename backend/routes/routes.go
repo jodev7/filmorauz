@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler) {
+func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler) {
 	api := r.Group("/api")
 
 	// Health check
@@ -27,6 +27,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 
 	// Protected auth routes
 	api.GET("/auth/me", middleware.RequireAuthNoBan(authService), authHandler.CurrentUser)
+	api.GET("/auth/bootstrap", middleware.RequireAuthNoBan(authService), authHandler.Bootstrap)
 	api.PATCH("/auth/me", middleware.RequireAuth(authService), authHandler.UpdateProfile)
 	api.PATCH("/auth/me/language", middleware.RequireAuth(authService), authHandler.UpdateLanguageCode)
 	api.POST("/auth/upload/profile-image", middleware.RequireAuth(authService), uploadHandler.UploadProfileImage)
@@ -96,6 +97,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	api.GET("/users/:id", middleware.OptionalAuth(authService), userHandler.GetPublicProfile)
 
 	// Public movie routes
+	api.GET("/homepage", homepageHandler.GetHomepageData)
 	api.GET("/movies", movieHandler.ListMovies)
 	api.GET("/movies/trending", movieHandler.GetTrendingMovies)
 	// Movie by slug (must come before :id routes to avoid slug being treated as id)
@@ -391,6 +393,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 
 	// Public ad routes
 	api.GET("/ads", adHandler.GetAdsByPlacement)
+	api.GET("/ads/batch", adHandler.GetAdsBatch)
 	api.POST("/ads/:id/impression", adHandler.RecordImpression)
 	api.POST("/ads/:id/click", adHandler.RecordClick)
 }

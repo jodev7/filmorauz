@@ -209,6 +209,21 @@ func (r *AdRepository) FindByPlacement(placement string) ([]models.Ad, error) {
 	return ads, nil
 }
 
+func (r *AdRepository) FindByPlacements(placements []string) (map[string][]models.Ad, error) {
+	result := make(map[string][]models.Ad, len(placements))
+	for _, placement := range placements {
+		ads, err := r.FindByPlacement(placement)
+		if err != nil {
+			return nil, err
+		}
+		if ads == nil {
+			ads = []models.Ad{}
+		}
+		result[placement] = ads
+	}
+	return result, nil
+}
+
 // Update replaces an ad's editable fields
 func (r *AdRepository) Update(id primitive.ObjectID, update bson.M) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

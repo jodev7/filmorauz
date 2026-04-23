@@ -80,8 +80,36 @@ func (r *MovieRepository) EnsureIndexes() error {
 		Keys:    bson.D{{Key: "slug", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	}
+	normalizedTitleYearIndex := mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "normalized_title", Value: 1},
+			{Key: "year", Value: 1},
+		},
+	}
+	sourceURLIndex := mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "source.provider", Value: 1},
+			{Key: "source.source_url", Value: 1},
+		},
+	}
+	sourceIDIndex := mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "source.provider", Value: 1},
+			{Key: "source.source_id", Value: 1},
+		},
+	}
+	tmdbIndex := mongo.IndexModel{
+		Keys: bson.D{{Key: "tmdb_id", Value: 1}},
+	}
 
-	_, err := r.col.Indexes().CreateMany(ctx, []mongo.IndexModel{codeIndex, slugIndex})
+	_, err := r.col.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		codeIndex,
+		slugIndex,
+		normalizedTitleYearIndex,
+		sourceURLIndex,
+		sourceIDIndex,
+		tmdbIndex,
+	})
 	if err != nil {
 		return err
 	}
@@ -154,6 +182,16 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 	// Handle slug
 	if slug, ok := doc["slug"].(string); ok {
 		movie.Slug = slug
+	}
+	if normalizedTitle, ok := doc["normalized_title"].(string); ok {
+		movie.NormalizedTitle = normalizedTitle
+	}
+	if source, ok := doc["source"].(bson.M); ok {
+		movie.Source = &models.MovieSource{
+			Provider:  normalizeFieldToString(source["provider"]),
+			SourceURL: normalizeFieldToString(source["source_url"]),
+			SourceID:  normalizeFieldToString(source["source_id"]),
+		}
 	}
 
 	// Handle website_url
@@ -800,15 +838,34 @@ func (r *MovieRepository) Search(query string) ([]models.Movie, error) {
 	return movies, nil
 }
 
-// FindByTitleYear retrieves a movie by normalized title and year
-func (r *MovieRepository) FindByTitleYear(title string, year int) (*models.Movie, error) {
+// FindByNormalizedTitleYear retrieves a movie by normalized title and year.
+func (r *MovieRepository) FindByNormalizedTitleYear(normalizedTitle string, year int) (*models.Movie, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var movie models.Movie
 	filter := bson.M{
-		"title": title,
-		"year":  year,
+		"normalized_title": normalizedTitle,
+		"year":             year,
+	}
+	if err := r.col.FindOne(ctx, filter).Decode(&movie); err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &movie, nil
+}
+
+// FindBySourceURL retrieves a movie by source provider and source URL.
+func (r *MovieRepository) FindBySourceURL(provider, sourceURL string) (*models.Movie, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var movie models.Movie
+	filter := bson.M{
+		"source.provider":   provider,
+		"source.source_url": sourceURL,
 	}
 	if err := r.col.FindOne(ctx, filter).Decode(&movie); err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -820,13 +877,13 @@ func (r *MovieRepository) FindByTitleYear(title string, year int) (*models.Movie
 }
 
 // FindBySourceID retrieves a movie by source type and source ID
-func (r *MovieRepository) FindBySourceID(sourceType models.VideoSourceType, sourceID string) (*models.Movie, error) {
+func (r *MovieRepository) FindBySourceID(provider, sourceID string) (*models.Movie, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var movie models.Movie
 	filter := bson.M{
-		"source_type":      sourceType,
+		"source.provider":  provider,
 		"source.source_id": sourceID,
 	}
 	if err := r.col.FindOne(ctx, filter).Decode(&movie); err != nil {
@@ -854,6 +911,34 @@ func (r *MovieRepository) FindByTMDBID(tmdbID int) (*models.Movie, error) {
 		return nil, err
 	}
 	return &movie, nil
+}
+
+// FindByYear retrieves all movies for a specific year.
+func (r *MovieRepository) FindByYear(year int) ([]models.Movie, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cursor, err := r.col.Find(ctx, bson.M{"year": year})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var rawDocs []bson.M
+	if err := cursor.All(ctx, &rawDocs); err != nil {
+		return nil, err
+	}
+
+	movies := make([]models.Movie, 0, len(rawDocs))
+	for _, doc := range rawDocs {
+		movie, err := normalizeMovieFromBSON(doc)
+		if err != nil {
+			continue
+		}
+		movies = append(movies, *movie)
+	}
+
+	return movies, nil
 }
 
 // Create inserts a new movie

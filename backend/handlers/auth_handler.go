@@ -24,11 +24,12 @@ func sanitizeDisplayName(firstName, username string) string {
 }
 
 type AuthHandler struct {
-	authService *services.AuthService
+	authService         *services.AuthService
+	notificationService *services.NotificationService
 }
 
-func NewAuthHandler(authService *services.AuthService) *AuthHandler {
-	return &AuthHandler{authService: authService}
+func NewAuthHandler(authService *services.AuthService, notificationService *services.NotificationService) *AuthHandler {
+	return &AuthHandler{authService: authService, notificationService: notificationService}
 }
 
 // TelegramAuthStartRequest is the request for starting Telegram auth
@@ -201,72 +202,109 @@ func (h *AuthHandler) CurrentUser(c *gin.Context) {
 		return
 	}
 
-	// Prefer first_name; fall back to display_name (legacy), then username
+	c.JSON(http.StatusOK, gin.H{
+		"authenticated": true,
+		"user":          buildCurrentUserPayload(user),
+	})
+}
+
+// Bootstrap godoc
+// GET /api/auth/bootstrap
+// Returns user state + unread count for initial navbar/app bootstrap.
+func (h *AuthHandler) Bootstrap(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"authenticated": false})
+		return
+	}
+
+	user, err := h.authService.GetCurrentUser(userID.(string))
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"authenticated": false})
+		return
+	}
+
+	unreadCount := int64(0)
+	if h.notificationService != nil {
+		if count, countErr := h.notificationService.GetUnreadCount(c.Request.Context(), user.ID); countErr == nil {
+			unreadCount = count
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"authenticated": true,
+		"user":          buildCurrentUserPayload(user),
+		"unread_count":  unreadCount,
+		"flags": gin.H{
+			"is_premium":        user.IsPremium,
+			"is_premium_active": user.IsPremiumActive(),
+		},
+	})
+}
+
+func buildCurrentUserPayload(user *models.User) gin.H {
 	rawName := user.FirstName
 	if rawName == "" {
 		rawName = user.DisplayName
 	}
 	displayName := sanitizeDisplayName(rawName, user.TelegramUser)
 
-	c.JSON(http.StatusOK, gin.H{
-		"authenticated": true,
-		"user": gin.H{
-			"id":                user.ID.Hex(),
-			"telegram_id":       user.TelegramID,
-			"username":          user.TelegramUser,
-			"first_name":        displayName,
-			"last_name":         user.LastName,
-			"profile_image_url": user.ProfileImageURL,
-			"role":              user.Role,
-			"is_premium":        user.IsPremium,
-			"is_premium_active": user.IsPremiumActive(),
-			"wallet_balance":    user.WalletBalance,
-			"premium_started_at": func() *string {
-				if user.PremiumStartedAt != nil {
-					t := user.PremiumStartedAt.Format(time.RFC3339)
-					return &t
+	return gin.H{
+		"id":                user.ID.Hex(),
+		"telegram_id":       user.TelegramID,
+		"username":          user.TelegramUser,
+		"first_name":        displayName,
+		"last_name":         user.LastName,
+		"profile_image_url": user.ProfileImageURL,
+		"role":              user.Role,
+		"is_premium":        user.IsPremium,
+		"is_premium_active": user.IsPremiumActive(),
+		"wallet_balance":    user.WalletBalance,
+		"premium_started_at": func() *string {
+			if user.PremiumStartedAt != nil {
+				t := user.PremiumStartedAt.Format(time.RFC3339)
+				return &t
+			}
+			return nil
+		}(),
+		"premium_expires_at": func() *string {
+			if user.PremiumExpiresAt != nil {
+				t := user.PremiumExpiresAt.Format(time.RFC3339)
+				return &t
+			}
+			return nil
+		}(),
+		"profile_style": user.ProfileStyle,
+		"privacy":       user.Privacy,
+		"auth_provider": user.AuthProvider,
+		"created_at":    user.CreatedAt,
+		"last_login_at": user.LastLoginAt,
+		"ban": func() *gin.H {
+			if user.Ban != nil && user.Ban.IsBanned {
+				banInfo := gin.H{
+					"is_banned": user.Ban.IsBanned,
+					"reason":    user.Ban.Reason,
+					"banned_at": func() *string {
+						if user.Ban.BannedAt != nil {
+							t := user.Ban.BannedAt.Format(time.RFC3339)
+							return &t
+						}
+						return nil
+					}(),
+					"banned_until": func() *string {
+						if user.Ban.BannedUntil != nil {
+							t := user.Ban.BannedUntil.Format(time.RFC3339)
+							return &t
+						}
+						return nil
+					}(),
+					"banned_by_username": user.Ban.BannedByUsername,
 				}
-				return nil
-			}(),
-			"premium_expires_at": func() *string {
-				if user.PremiumExpiresAt != nil {
-					t := user.PremiumExpiresAt.Format(time.RFC3339)
-					return &t
-				}
-				return nil
-			}(),
-			"profile_style": user.ProfileStyle,
-			"privacy":       user.Privacy,
-			"auth_provider": user.AuthProvider,
-			"created_at":    user.CreatedAt,
-			"last_login_at": user.LastLoginAt,
-			"ban": func() *gin.H {
-				if user.Ban != nil && user.Ban.IsBanned {
-					banInfo := gin.H{
-						"is_banned": user.Ban.IsBanned,
-						"reason":    user.Ban.Reason,
-						"banned_at": func() *string {
-							if user.Ban.BannedAt != nil {
-								t := user.Ban.BannedAt.Format(time.RFC3339)
-								return &t
-							}
-							return nil
-						}(),
-						"banned_until": func() *string {
-							if user.Ban.BannedUntil != nil {
-								t := user.Ban.BannedUntil.Format(time.RFC3339)
-								return &t
-							}
-							return nil
-						}(),
-						"banned_by_username": user.Ban.BannedByUsername,
-					}
-					return &banInfo
-				}
-				return nil
-			}(),
-		},
-	})
+				return &banInfo
+			}
+			return nil
+		}(),
+	}
 }
 
 // UpdateProfile godoc

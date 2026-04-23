@@ -17,28 +17,30 @@ const (
 )
 
 type Movie struct {
-	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Code        string             `bson:"code" json:"code"`               // Unique alphanumeric code (6-8 chars), converted from legacy numeric
-	Slug        string             `bson:"slug" json:"slug"`               // URL-friendly slug
-	WebsiteURL  string             `bson:"website_url" json:"website_url"` // Full website link
-	Title       string             `bson:"title" json:"title"`
-	Description string             `bson:"description" json:"description"`
-	PosterURL   string             `bson:"poster_url" json:"poster_url"`
-	BackdropURL string             `bson:"backdrop_url" json:"backdrop_url"`
-	Year        int                `bson:"year" json:"year"`
-	Genre       []string           `bson:"genre" json:"genre"`
-	Country     string             `bson:"country" json:"country"`
-	VideoURL    string             `bson:"video_url" json:"video_url"`
-	EmbedURL    string             `bson:"embed_url" json:"embed_url"`
-	SourceType  VideoSourceType    `bson:"source_type" json:"source_type"`
-	Duration    int                `bson:"duration" json:"duration"`         // minutes
-	Quality     string             `bson:"quality" json:"quality"`           // "720p", "1080p", etc.
-	Views       int64              `bson:"views" json:"views"`               // View counter
-	RatingAvg   float64            `bson:"rating_avg" json:"rating_avg"`     // Average rating (1-5)
-	RatingCount int64              `bson:"rating_count" json:"rating_count"` // Number of ratings
-	IsPremium   bool               `bson:"is_premium" json:"is_premium"`     // Premium content flag
-	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt   time.Time          `bson:"updated_at" json:"updated_at"`
+	ID              primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Code            string             `bson:"code" json:"code"`               // Unique alphanumeric code (6-8 chars), converted from legacy numeric
+	Slug            string             `bson:"slug" json:"slug"`               // URL-friendly slug
+	WebsiteURL      string             `bson:"website_url" json:"website_url"` // Full website link
+	Source          *MovieSource       `bson:"source,omitempty" json:"source,omitempty"`
+	Title           string             `bson:"title" json:"title"`
+	NormalizedTitle string             `bson:"normalized_title,omitempty" json:"normalized_title,omitempty"`
+	Description     string             `bson:"description" json:"description"`
+	PosterURL       string             `bson:"poster_url" json:"poster_url"`
+	BackdropURL     string             `bson:"backdrop_url" json:"backdrop_url"`
+	Year            int                `bson:"year" json:"year"`
+	Genre           []string           `bson:"genre" json:"genre"`
+	Country         string             `bson:"country" json:"country"`
+	VideoURL        string             `bson:"video_url" json:"video_url"`
+	EmbedURL        string             `bson:"embed_url" json:"embed_url"`
+	SourceType      VideoSourceType    `bson:"source_type" json:"source_type"`
+	Duration        int                `bson:"duration" json:"duration"`         // minutes
+	Quality         string             `bson:"quality" json:"quality"`           // "720p", "1080p", etc.
+	Views           int64              `bson:"views" json:"views"`               // View counter
+	RatingAvg       float64            `bson:"rating_avg" json:"rating_avg"`     // Average rating (1-5)
+	RatingCount     int64              `bson:"rating_count" json:"rating_count"` // Number of ratings
+	IsPremium       bool               `bson:"is_premium" json:"is_premium"`     // Premium content flag
+	CreatedAt       time.Time          `bson:"created_at" json:"created_at"`
+	UpdatedAt       time.Time          `bson:"updated_at" json:"updated_at"`
 
 	// HLS Streaming Support
 	MasterPlaylistURL  string   `bson:"master_playlist_url,omitempty" json:"master_playlist_url,omitempty"` // CDN URL to master.m3u8
@@ -69,11 +71,18 @@ type Movie struct {
 	TelegramPostedOnApproval bool `bson:"telegram_posted_on_approval,omitempty" json:"telegram_posted_on_approval,omitempty"`
 }
 
+type MovieSource struct {
+	Provider  string `bson:"provider,omitempty" json:"provider,omitempty"`
+	SourceURL string `bson:"source_url,omitempty" json:"source_url,omitempty"`
+	SourceID  string `bson:"source_id,omitempty" json:"source_id,omitempty"`
+}
+
 // MovieInput is used for create/update requests.
 // Note: PosterURL is NOT marked required here so the same struct can be used
 // for partial updates (edit flow preserves existing poster when unchanged).
 // CreateMovie enforces PosterURL explicitly at the handler level.
 type MovieInput struct {
+	Source      *MovieSource    `json:"source,omitempty"`
 	Title       string          `json:"title" binding:"required"`
 	Description string          `json:"description" binding:"required"`
 	PosterURL   string          `json:"poster_url"`

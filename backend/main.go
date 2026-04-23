@@ -160,7 +160,7 @@ func main() {
 	parserURL := getParserURL()
 
 	// Initialize handlers
-	authHandler := handlers.NewAuthHandler(authService)
+	authHandler := handlers.NewAuthHandler(authService, notificationService)
 	movieHandler := handlers.NewMovieHandler(movieService, userRepo)
 	ingestionHandler := handlers.NewIngestionHandler(jobRepo, seriesRepo, parserURL, cfg.WorkerUploadURL)
 	uploadHandler := handlers.NewUploadHandler(userRepo, cfg)
@@ -221,6 +221,7 @@ func main() {
 	// seriesRepo already initialized above for rating service
 	seriesService := services.NewSeriesService(seriesRepo)
 	seriesHandler := handlers.NewSeriesHandler(seriesService)
+	homepageHandler := handlers.NewHomepageHandler(movieService, collectionService, seriesService)
 	if telegramService != nil {
 		seriesHandler.SetTelegramService(telegramService)
 	}
@@ -270,7 +271,7 @@ func main() {
 	}
 
 	// Register routes
-	routes.Setup(r, authHandler, movieHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler)
+	routes.Setup(r, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler)
 
 	// Start premium cleanup background job (runs every 10 minutes)
 	go startPremiumCleanupJob(userRepo, notificationService)

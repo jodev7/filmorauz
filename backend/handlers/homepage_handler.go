@@ -1,0 +1,129 @@
+package handlers
+
+import (
+	"net/http"
+
+	"github.com/filmorauz/backend/models"
+	"github.com/filmorauz/backend/services"
+	"github.com/gin-gonic/gin"
+)
+
+type HomepageHandler struct {
+	movieService      *services.MovieService
+	collectionService *services.CollectionService
+	seriesService     *services.SeriesService
+}
+
+func NewHomepageHandler(movieService *services.MovieService, collectionService *services.CollectionService, seriesService *services.SeriesService) *HomepageHandler {
+	return &HomepageHandler{
+		movieService:      movieService,
+		collectionService: collectionService,
+		seriesService:     seriesService,
+	}
+}
+
+func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
+	movies, _, err := h.movieService.ListMovies("", 1, 30)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch homepage movies"})
+		return
+	}
+
+	trending, err := h.movieService.GetTrendingMovies("24h", 12)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch homepage trending"})
+		return
+	}
+
+	featuredCollections, err := h.collectionService.GetFeatured(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch homepage collections"})
+		return
+	}
+
+	seriesList, err := h.seriesService.ListSeries(20, 0)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch homepage series"})
+		return
+	}
+
+	if movies == nil {
+		movies = []models.Movie{}
+	}
+	if featuredCollections == nil {
+		featuredCollections = []models.CollectionWithMovies{}
+	}
+	if seriesList == nil {
+		seriesList = []models.Series{}
+	}
+
+	genres := []gin.H{
+		{"label": "Jangari", "slug": "action"},
+		{"label": "Drama", "slug": "drama"},
+		{"label": "Komediya", "slug": "comedy"},
+		{"label": "Fantastika", "slug": "sci-fi"},
+		{"label": "Triller", "slug": "thriller"},
+		{"label": "Multfilm", "slug": "animation"},
+		{"label": "Romantika", "slug": "romance"},
+		{"label": "Dahshat", "slug": "horror"},
+		{"label": "Klassika", "slug": "classic"},
+	}
+
+	trendingResponse := make([]gin.H, len(trending))
+	for i, t := range trending {
+		trendingResponse[i] = gin.H{
+			"id":              t.Movie.ID.Hex(),
+			"title":           t.Movie.Title,
+			"slug":            t.Movie.Slug,
+			"poster_url":      t.Movie.PosterURL,
+			"year":            t.Movie.Year,
+			"genre":           t.Movie.Genre,
+			"views_in_period": t.ViewsInPeriod,
+		}
+	}
+
+	hero := movies
+	if len(hero) > 6 {
+		hero = hero[:6]
+	}
+
+	newMovies := movies
+	if len(newMovies) > 12 {
+		newMovies = newMovies[:12]
+	}
+
+	featuredMovies := []models.Movie{}
+	if len(movies) > 1 {
+		featuredSubset := append([]models.Movie(nil), movies[1:]...)
+		if len(featuredSubset) > 6 {
+			featuredSubset = featuredSubset[:6]
+		}
+		featuredMovies = featuredSubset
+	}
+
+	premiumMovies := make([]models.Movie, 0, 12)
+	for i := range movies {
+		if movies[i].IsPremium {
+			premiumMovies = append(premiumMovies, movies[i])
+			if len(premiumMovies) >= 12 {
+				break
+			}
+		}
+	}
+
+	seriesPreview := seriesList
+	if len(seriesPreview) > 10 {
+		seriesPreview = seriesPreview[:10]
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"hero":                 hero,
+		"genres":               genres,
+		"new_movies":           newMovies,
+		"trending":             trendingResponse,
+		"premium_movies":       premiumMovies,
+		"featured_movies":      featuredMovies,
+		"featured_collections": featuredCollections,
+		"series":               seriesPreview,
+	})
+}

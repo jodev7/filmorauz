@@ -12,7 +12,7 @@ import Cookies from "js-cookie";
 import {
   startTelegramLogin,
   getTelegramAuthStatus,
-  getCurrentUser,
+  getAuthBootstrap,
   logout as apiLogout,
   refreshAuthToken,
   CurrentUser,
@@ -91,7 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // More resilient: try token refresh on 401 before logging out
   useEffect(() => {
     if (token && !user) {
-      getCurrentUser(token)
+      getAuthBootstrap(token)
         .then((response) => {
           if (response.authenticated && response.user) {
             // Check if user is banned
@@ -105,6 +105,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               });
             }
             setUser(response.user);
+            setUnreadNotificationCount(response.unread_count || 0);
           } else {
             // Token invalid (not just expired), clear it
             Cookies.remove("auth_token");
@@ -127,9 +128,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 setTokenState(refreshResult.token);
                 
                 // Fetch user with new token
-                const userResponse = await getCurrentUser(refreshResult.token);
+                const userResponse = await getAuthBootstrap(refreshResult.token);
                 if (userResponse.authenticated && userResponse.user) {
                   setUser(userResponse.user);
+                  setUnreadNotificationCount(userResponse.unread_count || 0);
                 }
               }
             } catch {
@@ -170,10 +172,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!token || !user) return;
     
     const refreshInterval = setInterval(() => {
-      getCurrentUser(token)
+      getAuthBootstrap(token)
         .then((response) => {
           if (response.authenticated && response.user) {
             setUser(response.user);
+            setUnreadNotificationCount(response.unread_count || 0);
           }
         })
         .catch(() => {
@@ -205,9 +208,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         // Fetch full profile so we get the sanitized first_name, photo, etc.
         try {
-          const fullProfile = await getCurrentUser(status.token);
+          const fullProfile = await getAuthBootstrap(status.token);
           if (fullProfile.authenticated && fullProfile.user) {
             setUser(fullProfile.user);
+            setUnreadNotificationCount(fullProfile.unread_count || 0);
             if (fullProfile.user.ban?.is_banned) {
               setBanInfo({
                 is_banned: true,
@@ -253,7 +257,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshUser = useCallback(async () => {
     if (token) {
       try {
-        const response = await getCurrentUser(token);
+        const response = await getAuthBootstrap(token);
         if (response.authenticated && response.user) {
           // Check if user is banned
           if (response.user.ban?.is_banned) {
@@ -268,6 +272,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setBanInfo(null);
           }
           setUser(response.user);
+          setUnreadNotificationCount(response.unread_count || 0);
         }
       } catch (error) {
         console.error("Failed to refresh user:", error);

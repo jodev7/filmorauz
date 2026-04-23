@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -9,13 +9,15 @@ import {
   Loader2,
   PlusCircle,
   Trash2,
-  Film,
   Tv,
   Play,
   ChevronDown,
   ChevronUp,
   Plus,
   X,
+  Upload,
+  CheckCircle,
+  AlertCircle,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -25,7 +27,9 @@ import {
   adminCreateEpisode,
   adminDeleteEpisode,
   CreateSeriesData,
+  UploadProgressInfo,
 } from "@/lib/api";
+import { backendUploadMovieImage } from "@/lib/api";
 
 interface Season {
   id: string;
@@ -48,6 +52,31 @@ interface Episode {
   duration: number;
 }
 
+interface UploadState {
+  status: "idle" | "uploading" | "success" | "error";
+  message?: string;
+  tempKey?: string;
+  progress?: number;
+  uploadedMB?: number;
+  totalMB?: number;
+  speedMBps?: number;
+  etaSeconds?: number;
+}
+
+function formatSpeed(speedMBps?: number) {
+  if (!speedMBps || !Number.isFinite(speedMBps) || speedMBps <= 0) return "";
+  return `${speedMBps.toFixed(1)} MB/s`;
+}
+
+function formatETA(seconds?: number) {
+  if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return "";
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}m ${remainingSeconds}s`;
+}
+
+
 interface SeasonWithEpisodes {
   season: Season;
   episodes: Episode[];
@@ -62,7 +91,6 @@ const GENRE_OPTIONS = [
 
 export default function EditSeriesPage() {
   const { token } = useAuth();
-  const router = useRouter();
   const params = useParams();
   const id = params.id as string;
 
@@ -88,6 +116,15 @@ export default function EditSeriesPage() {
   });
 
   const [genreInput, setGenreInput] = useState("");
+
+  // Upload states for poster and backdrop
+  const [uploads, setUploads] = useState<{
+    poster: UploadState;
+    backdrop: UploadState;
+  }>({
+    poster: { status: "idle" },
+    backdrop: { status: "idle" },
+  });
 
   // Seasons and episodes
   const [seasons, setSeasons] = useState<SeasonWithEpisodes[]>([]);
@@ -199,6 +236,58 @@ export default function EditSeriesPage() {
     }
   };
 
+  const handleUpload = async (type: "poster" | "backdrop", file: File) => {
+    if (!token) {
+      setUploads(prev => ({
+        ...prev,
+        [type]: { status: "error", message: "No auth token available" }
+      }));
+      return;
+    }
+
+    setUploads(prev => ({
+      ...prev,
+      [type]: { status: "uploading", progress: 0 }
+    }));
+
+    const onUploadProgress = (uploadProgress: UploadProgressInfo) => {
+      setUploads(prev => ({
+        ...prev,
+        [type]: {
+          status: "uploading",
+          progress: uploadProgress.progress,
+          uploadedMB: uploadProgress.uploadedMB,
+          totalMB: uploadProgress.total ? uploadProgress.total / 1024 / 1024 : undefined,
+          speedMBps: uploadProgress.speedMBps,
+          etaSeconds: uploadProgress.etaSeconds,
+        }
+      }));
+    };
+
+    try {
+      const result = await backendUploadMovieImage(token, file, type, onUploadProgress);
+
+      setUploads(prev => ({
+        ...prev,
+        [type]: { status: "success", message: result.url, tempKey: result.file_key, progress: 100 }
+      }));
+
+      if (type === "poster") {
+        setForm(prev => ({ ...prev, poster_url: result.url }));
+      } else {
+        setForm(prev => ({ ...prev, backdrop_url: result.url }));
+      }
+    } catch (err) {
+      setUploads(prev => ({
+        ...prev,
+        [type]: {
+          status: "error",
+          message: err instanceof Error ? err.message : "Upload failed"
+        }
+      }));
+    }
+  };
+
   const addGenre = () => {
     const g = genreInput.trim().toLowerCase();
     if (g && !(form.genre || []).includes(g)) {
@@ -302,6 +391,37 @@ export default function EditSeriesPage() {
     });
   };
 
+  const renderUploadProgress = (state: UploadState, type: string) => {
+    const progress = state.progress ?? 0;
+    const speed = formatSpeed(state.speedMBps);
+    const eta = formatETA(state.etaSeconds);
+
+    return (
+      <div className="upload-progress">
+        <Loader2 size={20} className="animate-spin" />
+        <div className="progress-content">
+          <span>
+            {state.progress !== undefined
+              ? `Uploading ${type}: ${progress}%`
+              : `Uploading ${type}: ${(state.uploadedMB ?? 0).toFixed(1)} MB`}
+          </span>
+          {state.progress !== undefined && (
+            <div className="progress-bar">
+              <div className="progress-fill" style={{ width: `${progress}%` }} />
+            </div>
+          )}
+          <div className="progress-meta">
+            {speed && <span>Speed: {speed}</span>}
+            {eta && <span>ETA: {eta}</span>}
+            {state.progress === undefined && state.uploadedMB !== undefined && (
+              <span>Uploaded: {state.uploadedMB.toFixed(1)} MB</span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -375,25 +495,100 @@ export default function EditSeriesPage() {
               />
             </div>
 
-            {/* Poster & Backdrop */}
-            <div className="grid grid-cols-2 gap-4">
+            {/* Poster & Backdrop - Movie-Style Uploads */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">Poster URL</label>
-                <input
-                  type="url"
-                  value={form.poster_url}
-                  onChange={(e) => setForm({ ...form, poster_url: e.target.value })}
-                  className="w-full px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
-                />
+                <label className="block text-sm font-medium text-gray-300 mb-2">Poster</label>
+                <div className="upload-box">
+                  {uploads.poster.status === "uploading" && (
+                    renderUploadProgress(uploads.poster, "poster")
+                  )}
+                  {uploads.poster.status === "success" && (
+                    <div className="upload-status success">
+                      <CheckCircle size={20} />
+                      <span>Uploaded successfully</span>
+                    </div>
+                  )}
+                  {uploads.poster.status === "error" && (
+                    <div className="upload-status error">
+                      <AlertCircle size={20} />
+                      <span>{uploads.poster.message}</span>
+                    </div>
+                  )}
+                  {uploads.poster.status !== "uploading" && (
+                    <>
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleUpload("poster", file);
+                        }}
+                        className="hidden"
+                        id="series-poster-upload"
+                      />
+                      <label htmlFor="series-poster-upload" className="upload-label">
+                        <Upload size={20} />
+                        <span>Choose poster image (jpg, png, webp)</span>
+                      </label>
+                    </>
+                  )}
+                </div>
+                {form.poster_url && (
+                  <img
+                    src={form.poster_url}
+                    alt="Poster preview"
+                    className="mt-2 h-24 rounded object-cover border border-brand-border"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                  />
+                )}
               </div>
+
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">Backdrop URL</label>
-                <input
-                  type="url"
-                  value={form.backdrop_url}
-                  onChange={(e) => setForm({ ...form, backdrop_url: e.target.value })}
-                  className="w-full px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
-                />
+                <label className="block text-sm font-medium text-gray-300 mb-2">Backdrop</label>
+                <div className="upload-box">
+                  {uploads.backdrop.status === "uploading" && (
+                    renderUploadProgress(uploads.backdrop, "backdrop")
+                  )}
+                  {uploads.backdrop.status === "success" && (
+                    <div className="upload-status success">
+                      <CheckCircle size={20} />
+                      <span>Uploaded successfully</span>
+                    </div>
+                  )}
+                  {uploads.backdrop.status === "error" && (
+                    <div className="upload-status error">
+                      <AlertCircle size={20} />
+                      <span>{uploads.backdrop.message}</span>
+                    </div>
+                  )}
+                  {uploads.backdrop.status !== "uploading" && (
+                    <>
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleUpload("backdrop", file);
+                        }}
+                        className="hidden"
+                        id="series-backdrop-upload"
+                      />
+                      <label htmlFor="series-backdrop-upload" className="upload-label">
+                        <Upload size={20} />
+                        <span>Choose backdrop image (jpg, png, webp)</span>
+                      </label>
+                    </>
+                  )}
+                </div>
+                {form.backdrop_url && (
+                  <img
+                    src={form.backdrop_url}
+                    alt="Backdrop preview"
+                    className="mt-2 h-24 rounded object-cover border border-brand-border w-full"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                  />
+                )}
               </div>
             </div>
 
@@ -759,6 +954,81 @@ export default function EditSeriesPage() {
           </div>
         </div>
       )}
+
+      <style jsx global>{`
+        .upload-box {
+          border: 2px dashed #1e1e2e;
+          border-radius: 0.5rem;
+          padding: 1rem;
+          text-align: center;
+          background: #0a0a0f;
+          min-height: 80px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .upload-box:hover {
+          border-color: #e63946;
+        }
+        .upload-label {
+          cursor: pointer;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 0.5rem;
+          color: #9ca3af;
+          font-size: 0.875rem;
+        }
+        .upload-label:hover {
+          color: white;
+        }
+        .upload-status {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          color: #9ca3af;
+          font-size: 0.875rem;
+        }
+        .upload-status.success {
+          color: #10b981;
+        }
+        .upload-status.error {
+          color: #ef4444;
+        }
+        .upload-progress {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          color: #9ca3af;
+          font-size: 0.875rem;
+          width: 100%;
+        }
+        .progress-content {
+          flex: 1;
+          text-align: left;
+        }
+        .progress-bar {
+          width: 100%;
+          height: 0.5rem;
+          background: #111827;
+          border-radius: 9999px;
+          overflow: hidden;
+          margin-top: 0.5rem;
+        }
+        .progress-fill {
+          height: 100%;
+          background: #e63946;
+          transition: width 0.2s ease;
+        }
+        .progress-meta {
+          display: flex;
+          gap: 0.75rem;
+          flex-wrap: wrap;
+          font-size: 0.75rem;
+          color: #6b7280;
+          margin-top: 0.5rem;
+        }
+      `}</style>
     </div>
   );
 }

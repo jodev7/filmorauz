@@ -2,9 +2,10 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { usePathname } from "next/navigation";
-import { Ad, getAdsForWebsite, recordAdImpression, recordAdClick } from "@/lib/api";
+import { Ad, recordAdImpression, recordAdClick } from "@/lib/api";
 import { pickWeightedRandomAd, isUserPremium } from "@/lib/ads-utils";
 import { useAuth } from "@/lib/auth-context";
+import { useAdSlot } from "@/components/ads/AdSlotContext";
 
 interface FixedBottomAdProps {
   placement?: string;
@@ -19,6 +20,7 @@ export default function FixedBottomAd({
 }: FixedBottomAdProps) {
   const pathname = usePathname();
   const { user, isLoading: authLoading } = useAuth();
+  const { ensurePlacements, getMergedAds } = useAdSlot();
   const [ads, setAds] = useState<Ad[]>([]);
   const [current, setCurrent] = useState(0);
   const [dismissed, setDismissed] = useState(false);
@@ -33,7 +35,9 @@ export default function FixedBottomAd({
     if (fetchedRef.current) return;
     fetchedRef.current = true;
     try {
-      const data = await getAdsForWebsite(placement);
+      const placements = [placement, "website", "global_fixed_bottom"];
+      await ensurePlacements(placements);
+      const data = getMergedAds(placements);
       const valid = data.filter(
         (a) => a.fixed_bottom_media_url || a.banner_media_url || a.image_url
       );
@@ -46,7 +50,7 @@ export default function FixedBottomAd({
     } catch {
       fetchedRef.current = false;
     }
-  }, [placement]);
+  }, [ensurePlacements, getMergedAds, placement]);
 
   useEffect(() => {
     fetchAds();

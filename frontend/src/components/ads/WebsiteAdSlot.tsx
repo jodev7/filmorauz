@@ -3,15 +3,17 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import { X } from "lucide-react";
-import { Ad, getAdsForWebsite, recordAdImpression, recordAdClick } from "@/lib/api";
+import { Ad, recordAdImpression, recordAdClick } from "@/lib/api";
 import { pickWeightedRandomAd, isUserPremium } from "@/lib/ads-utils";
 import { useAuth } from "@/lib/auth-context";
+import { useAdSlot } from "@/components/ads/AdSlotContext";
 
 interface WebsiteAdSlotProps {
   placement: string;
   className?: string;
   popup?: boolean;
   variant?: "banner" | "inline" | "card";
+  lazy?: boolean;
 }
 
 const SLOT_HEIGHT: Record<string, string> = {
@@ -25,9 +27,11 @@ export default function WebsiteAdSlot({
   className = "",
   popup = false,
   variant = "inline",
+  lazy = false,
 }: WebsiteAdSlotProps) {
   const pathname = usePathname();
   const { user, isLoading: authLoading } = useAuth();
+  const { ensurePlacements, getMergedAds } = useAdSlot();
   const [ads, setAds] = useState<Ad[]>([]);
   const [dismissed, setDismissed] = useState(false);
   const [current, setCurrent] = useState(0);
@@ -37,12 +41,16 @@ export default function WebsiteAdSlot({
   const fetchedRef = useRef(false);
   const impressedRef = useRef<Set<string>>(new Set());
   const lastImpressionRef = useRef<string>("");
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [shouldLoad, setShouldLoad] = useState(!lazy);
 
   const fetchAds = useCallback(async () => {
     if (fetchedRef.current) return;
     fetchedRef.current = true;
     try {
-      const data = await getAdsForWebsite(placement);
+      const placements = getSlotPlacements(placement, variant, popup);
+      await ensurePlacements(placements);
+      const data = getMergedAds(placements);
       setAds(data);
       adsRef.current = data;
       setCurrent(0);
@@ -52,14 +60,33 @@ export default function WebsiteAdSlot({
     } catch {
       fetchedRef.current = false;
     }
-  }, [placement]);
+  }, [ensurePlacements, getMergedAds, placement, popup, variant]);
 
   useEffect(() => {
+    if (!lazy) return;
+    const node = containerRef.current;
+    if (!node) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setShouldLoad(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "300px 0px" }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [lazy]);
+
+  useEffect(() => {
+    if (!shouldLoad) return;
     fetchAds();
     return () => {
       fetchedRef.current = false;
     };
-  }, [fetchAds]);
+  }, [fetchAds, shouldLoad]);
 
   useEffect(() => {
     if (ads.length <= 1 || !isReady) return;
@@ -83,9 +110,10 @@ export default function WebsiteAdSlot({
     recordAdImpression(ad.id).catch(() => {});
   }, [ads, current, isReady, placement]);
 
-  if (pathname.startsWith("/premium")) return null;
+  if (pathname.startsWith("/premium")) return <div ref={containerRef} />;
   if (authLoading || isUserPremium(user)) return null;
-  if (ads.length === 0 || dismissed) return null;
+  if (!shouldLoad) return <div ref={containerRef} className={`w-full ${className}`} />;
+  if (ads.length === 0 || dismissed) return <div ref={containerRef} className={`w-full ${className}`} />;
 
   const ad = ads[current % ads.length];
 
@@ -127,7 +155,7 @@ export default function WebsiteAdSlot({
   const media = resolveMedia(ad, variant);
 
   return (
-    <div className={`w-full ${className}`}>
+    <div ref={containerRef} className={`w-full ${className}`}>
       <div
         className="relative w-full rounded-lg overflow-hidden border border-brand-border cursor-pointer hover:border-brand-red/50 transition-colors"
         onClick={handleClick}
@@ -141,6 +169,25 @@ export default function WebsiteAdSlot({
       </div>
     </div>
   );
+}
+
+function getSlotPlacements(
+  placement: string,
+  variant: "banner" | "inline" | "card",
+  popup: boolean,
+): string[] {
+  if (popup) {
+    return [placement, "website"];
+  }
+
+  const shared = ["website"];
+  if (variant === "banner") {
+    shared.push("global_banner");
+  } else {
+    shared.push("global_inline");
+  }
+
+  return [placement, ...shared];
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

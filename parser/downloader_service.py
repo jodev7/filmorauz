@@ -899,6 +899,20 @@ class DownloaderService:
                 bufsize=1,
                 env=env
             )
+
+            stderr_lines = []
+
+            def consume_stderr():
+                for raw_line in process.stderr:
+                    line = raw_line.rstrip()
+                    stderr_lines.append(line)
+                    if "Error" in line or "Failed" in line:
+                        logger.warning(f"[DOWNLOAD] FFmpeg stderr: {line}")
+                    elif line:
+                        logger.info(f"[DOWNLOAD] FFmpeg stderr: {line}")
+
+            stderr_thread = threading.Thread(target=consume_stderr, daemon=True)
+            stderr_thread.start()
             
             # Track progress by parsing ffmpeg output
             total_size = 0
@@ -906,10 +920,10 @@ class DownloaderService:
             last_update_time = time.time()
             min_time_for_update = 1.0  # Update progress every second
             
-            # Parse ffmpeg progress output
+            # Parse ffmpeg progress output from stdout (-progress pipe:1)
             progress_pattern = re.compile(r'out_time_ms=(\d+)')
             
-            for line in process.stderr:
+            for line in process.stdout:
                 line = line.strip()
                 
                 # Parse progress
@@ -925,19 +939,6 @@ class DownloaderService:
                                 pass
                     except:
                         pass
-                
-                # Parse duration info
-                if "Duration:" in line:
-                    # Extract duration from line like: "Duration: 01:23:45.67, start: 0.000000, bitrate: 5000 kb/s"
-                    duration_match = re.search(r'Duration: (\d+):(\d+):(\d+)\.(\d+)', line)
-                    if duration_match:
-                        hours, mins, secs, _ = duration_match.groups()
-                        total_seconds = int(hours) * 3600 + int(mins) * 60 + int(secs)
-                        logger.info(f"[DOWNLOAD] HLS duration: {total_seconds} seconds")
-                
-                # Check for errors
-                if "Error" in line or "Failed" in line:
-                    logger.warning(f"[DOWNLOAD] FFmpeg warning: {line}")
                 
                 # Calculate elapsed time and progress
                 elapsed = time.time() - download_start_time
@@ -975,14 +976,16 @@ class DownloaderService:
             
             # Wait for process to complete
             return_code = process.wait()
+            stderr_thread.join(timeout=2)
             
             download_duration = time.time() - download_start_time
             logger.info(f"[DOWNLOAD] FFmpeg exited with code {return_code} after {download_duration:.1f}s")
             
+            stderr_output = "\n".join(stderr_lines).strip()
             if return_code != 0:
-                stderr_output = process.stderr.read()
-                logger.error(f"[DOWNLOAD] FFmpeg stderr: {stderr_output[:500]}")
-                raise DownloadError(f"FFmpeg failed with exit code {return_code}")
+                logger.error(f"[DOWNLOAD] FFmpeg stderr (full):\n{stderr_output or '(empty)'}")
+                stderr_tail = stderr_output[-1000:] if stderr_output else "no stderr captured"
+                raise DownloadError(f"FFmpeg failed with exit code {return_code}: {stderr_tail}")
             
             # CRITICAL: Verify file exists
             if not os.path.exists(output_path):
@@ -1363,8 +1366,41 @@ class DownloaderService:
             except:
                 pass
         
+        strategy_builders = []
+        if stream_type == "mp4":
+            if DDdownloaderIntegration is not None and USE_DDOWNLOADER:
+                strategy_builders.append(("direct", lambda attempt_job_id: self._download_mp4_with_aria2c(
+                    url, output_path,
+                    job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
+                )))
+            strategy_builders.append(("direct_fallback", lambda attempt_job_id: self._download_mp4(
+                url, output_path,
+                job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
+            )))
+            strategy_builders.append(("alternative_manifest", lambda attempt_job_id: self._download_manifest(
+                url, output_path,
+                job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
+            )))
+        elif stream_type in ("hls", "dash", "ism"):
+            if DDdownloaderIntegration is not None and USE_DDOWNLOADER:
+                strategy_builders.append(("m3u8_primary", lambda attempt_job_id: self._download_manifest_with_ddownloader(
+                    url, output_path, stream_type,
+                    job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
+                )))
+            strategy_builders.append(("m3u8_ffmpeg", lambda attempt_job_id: self._download_manifest(
+                url, output_path,
+                job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
+            )))
+            strategy_builders.append(("alternative_direct", lambda attempt_job_id: self._download_mp4(
+                url, output_path,
+                job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
+            )))
+        else:
+            strategy_builders.append(("unknown", lambda attempt_job_id: (_ for _ in ()).throw(DownloadError(f"Unknown stream type: {url}"))))
+
         # Retry loop with exponential backoff
         last_error = None
+        strategy_errors = []
         for attempt in range(1, max_retries + 1):
             attempt_job_id = f"{job_id}_attempt{attempt}" if job_id else None
             
@@ -1383,31 +1419,30 @@ class DownloaderService:
             
             try:
                 logger.info(f"[DOWNLOADER] Download attempt {attempt}/{max_retries}")
-                
-                if stream_type == "mp4":
-                    # Try aria2c via DDownloader first for MP4 (faster with parallel connections)
-                    if DDdownloaderIntegration is not None and USE_DDOWNLOADER:
-                        logger.info(f"[DOWNLOADER] Using _download_mp4_with_aria2c()")
-                        path = self._download_mp4_with_aria2c(
-                            url, output_path,
-                            job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer
-                        )
-                    else:
-                        logger.info(f"[DOWNLOADER] Using _download_mp4() (fallback to Python parallel download)")
-                        path = self._download_mp4(url, output_path, job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer)
-                elif stream_type in ("hls", "dash", "ism"):
-                    # Try DDownloader first for manifest streams (more robust)
-                    if DDdownloaderIntegration is not None and USE_DDOWNLOADER:
-                        logger.info(f"[DOWNLOADER] Using _download_manifest_with_ddownloader()")
-                        path = self._download_manifest_with_ddownloader(
-                            url, output_path, stream_type,
-                            job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer
-                        )
-                    else:
-                        logger.info(f"[DOWNLOADER] Using _download_manifest() (fallback to ffmpeg)")
-                        path = self._download_manifest(url, output_path, job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer)
-                else:
-                    raise DownloadError(f"Unknown stream type: {url}")
+                path = None
+                per_attempt_errors = []
+                for strategy_name, strategy in strategy_builders:
+                    try:
+                        logger.info(f"[DOWNLOADER] Attempt {attempt}/{max_retries} using strategy={strategy_name}")
+                        if backend_job_id:
+                            report_progress_to_backend(backend_job_id, {
+                                "stage": "download",
+                                "status": "downloading",
+                                "progress": 0,
+                                "message": f"Download attempt {attempt}/{max_retries} via {strategy_name}...",
+                            })
+                        path = strategy(attempt_job_id)
+                        logger.info(f"[DOWNLOADER] Strategy {strategy_name} succeeded on attempt {attempt}")
+                        break
+                    except DownloadError as strategy_err:
+                        per_attempt_errors.append(f"{strategy_name}: {strategy_err}")
+                        logger.error(f"[DOWNLOADER] Strategy {strategy_name} failed on attempt {attempt}: {strategy_err}")
+                    except Exception as strategy_err:
+                        per_attempt_errors.append(f"{strategy_name}: unexpected error: {strategy_err}")
+                        logger.error(f"[DOWNLOADER] Strategy {strategy_name} unexpected failure on attempt {attempt}: {strategy_err}")
+
+                if not path:
+                    raise DownloadError("; ".join(per_attempt_errors) or "all download strategies failed")
                 
                 # CRITICAL: Validate downloaded file
                 if not os.path.exists(path):
@@ -1435,6 +1470,7 @@ class DownloaderService:
                 
             except DownloadError as e:
                 last_error = e
+                strategy_errors.append(f"attempt {attempt}: {e}")
                 logger.error(f"[DOWNLOADER] Download attempt {attempt} failed: {e}")
                 
                 # Clean up partial download on failure
@@ -1451,6 +1487,7 @@ class DownloaderService:
                     
             except Exception as e:
                 last_error = DownloadError(f"Unexpected error: {e}")
+                strategy_errors.append(f"attempt {attempt}: unexpected error: {e}")
                 logger.error(f"[DOWNLOADER] Download attempt {attempt} unexpected error: {e}")
                 
                 if os.path.exists(output_path):
@@ -1463,7 +1500,10 @@ class DownloaderService:
                     break
         
         # All retries exhausted
+        strategy_summary = " | ".join(strategy_errors[-6:])
         error_msg = f"Download failed after {max_retries} attempts. Last error: {last_error}"
+        if strategy_summary:
+            error_msg = f"{error_msg}. Strategies: {strategy_summary}"
         logger.error(f"[DOWNLOADER] {error_msg}")
         
         if backend_job_id:

@@ -922,10 +922,11 @@ class ParserHandler(BaseHTTPRequestHandler):
                     # Detect likely blocked/anti-bot responses
                     if player_url_found and ('://' in player_url_found and 
                         any(bad in player_url_found.lower() for bad in ['blocked', 'captcha', 'cloudflare', '403', 'denied'])):
-                        error_type = "site_blocked"
+                        manual_reason = "site_blocked"
                         logger.error(f"[PARSER] DETECTED: Site likely blocked (player_url={player_url_found})")
                     else:
-                        error_type = "video_url_not_found"
+                        manual_reason = "video_url_not_found"
+                    error_type = "needs_manual"
                     # Return explicit error - NEVER return empty video_url silently
                     page_url = detail_url if detail_url else source_id
                     
@@ -940,6 +941,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                     )
                     response_payload["success"] = False
                     response_payload["error"] = error_type
+                    response_payload["manual_reason"] = manual_reason
                     response_payload["video_found"] = False
                     response_payload["download_needed"] = False
                     self._send_json(response_payload, 422)
@@ -2588,7 +2590,6 @@ if __name__ == "__main__":
     logger.info(f"[STARTUP] Binding to   = {args.host}:{args.port}")
 
     run_server(args.host, args.port)
-
 
 
 

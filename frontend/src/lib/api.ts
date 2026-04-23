@@ -78,6 +78,67 @@ export interface ListResponse {
   limit: number;
 }
 
+export interface GenreChip {
+  label: string;
+  slug: string;
+}
+
+export interface SeriesPreview {
+  id: string;
+  slug: string;
+  title: string;
+  description: string;
+  poster_url: string;
+  backdrop_url: string;
+  year: number;
+  genre: string[];
+  country: string;
+  views: number;
+  rating_avg: number;
+  rating_count: number;
+  is_premium: boolean;
+  is_completed: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HomepageResponse {
+  hero: Movie[];
+  genres: GenreChip[];
+  new_movies: Movie[];
+  trending: Movie[];
+  premium_movies: Movie[];
+  featured_movies: Movie[];
+  featured_collections: Collection[];
+  series: SeriesPreview[];
+}
+
+type BrowserCacheEntry<T> = {
+  expiresAt: number;
+  promise: Promise<T>;
+};
+
+const browserRequestCache = new Map<string, BrowserCacheEntry<any>>();
+
+function dedupeBrowserRequest<T>(key: string, ttlMs: number, fetcher: () => Promise<T>): Promise<T> {
+  if (typeof window === "undefined") {
+    return fetcher();
+  }
+
+  const now = Date.now();
+  const cached = browserRequestCache.get(key) as BrowserCacheEntry<T> | undefined;
+  if (cached && cached.expiresAt > now) {
+    return cached.promise;
+  }
+
+  const promise = fetcher().catch((error) => {
+    browserRequestCache.delete(key);
+    throw error;
+  });
+  browserRequestCache.set(key, { expiresAt: now + ttlMs, promise });
+  return promise;
+}
+
 // ── Public API ────────────────────────────────────────────────
 
 export async function getMovies(params?: {
@@ -95,6 +156,45 @@ export async function getMovies(params?: {
   });
   if (!res.ok) throw new Error("Failed to fetch movies");
   return res.json();
+}
+
+export async function getHomepageData(): Promise<HomepageResponse> {
+  const res = await fetch(`${API_URL}/homepage`, {
+    next: { revalidate: 60 },
+  });
+  if (!res.ok) throw new Error("Failed to fetch homepage data");
+  const json = await res.json();
+  return {
+    hero: json.hero || [],
+    genres: json.genres || [],
+    new_movies: json.new_movies || [],
+    trending: (json.trending || []).map((item: any) => ({
+      id: item.id,
+      title: item.title,
+      slug: item.slug,
+      poster_url: item.poster_url,
+      backdrop_url: item.poster_url,
+      year: item.year,
+      genre: item.genre || [],
+      description: "",
+      code: "",
+      video_url: "",
+      embed_url: "",
+      source_type: "iframe_embed",
+      duration: 0,
+      quality: "",
+      country: "",
+      views: item.views_in_period || 0,
+      rating_avg: 0,
+      rating_count: 0,
+      created_at: "",
+      updated_at: "",
+    })),
+    premium_movies: json.premium_movies || [],
+    featured_movies: json.featured_movies || [],
+    featured_collections: json.featured_collections || [],
+    series: json.series || [],
+  };
 }
 
 export async function getMovie(slug: string): Promise<Movie> {
@@ -336,6 +436,14 @@ export interface AuthMeResponse {
   user?: CurrentUser;
 }
 
+export interface AuthBootstrapResponse extends AuthMeResponse {
+  unread_count?: number;
+  flags?: {
+    is_premium?: boolean;
+    is_premium_active?: boolean;
+  };
+}
+
 // Start Telegram login flow
 export async function startTelegramLogin(): Promise<TelegramAuthStartResponse> {
   const res = await fetch(`${API_URL}/auth/telegram/start`, {
@@ -374,6 +482,22 @@ export async function getCurrentUser(token: string): Promise<AuthMeResponse> {
     throw new Error("Failed to get user");
   }
   return res.json();
+}
+
+export async function getAuthBootstrap(token: string): Promise<AuthBootstrapResponse> {
+  return dedupeBrowserRequest(`auth-bootstrap:${token}`, 5000, async () => {
+    const res = await fetch(`${API_URL}/auth/bootstrap`, {
+      headers: authHeaders(token),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      if (res.status === 401) {
+        return { authenticated: false };
+      }
+      throw new Error("Failed to get auth bootstrap");
+    }
+    return res.json();
+  });
 }
 
 // Logout
@@ -1383,10 +1507,11 @@ export async function createDirectUploadJob(
 // Get all ingestion jobs
 export async function getIngestionJobs(
   token: string,
-  params?: { status?: string; limit?: number; skip?: number }
-): Promise<{ data: IngestionJob[]; total: number; totalPages: number; limit: number; skip: number }> {
+  params?: { status?: string; page?: number; limit?: number; skip?: number }
+): Promise<{ data: IngestionJob[]; page: number; total: number; totalPages: number; limit: number; skip: number }> {
   const qs = new URLSearchParams();
   if (params?.status) qs.set("status", params.status);
+  if (params?.page) qs.set("page", String(params.page));
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.skip) qs.set("skip", String(params.skip));
 
@@ -2541,6 +2666,10 @@ export interface Notification {
   read_at?: string;
 }
 
+export interface AdsBatchResponse {
+  placements: Record<string, Ad[]>;
+}
+
 // Get notifications
 export async function getNotifications(
   token: string,
@@ -2817,46 +2946,38 @@ export async function getAdsByPlacement(placement: string): Promise<Ad[]> {
   return json.ads || [];
 }
 
-const WEBSITE_PLACEMENTS = [
-  "website",
-  "homepage_top_banner",
-  "homepage_inline_block_1",
-  "homepage_inline_block_2",
-  "homepage_fixed_bottom",
-  "movie_page_top_banner",
-  "movie_page_inline_block",
-  "movie_page_fixed_bottom",
-  "movie_detail_banner",
-  "watch_page_top_banner",
-  "watch_page_inline_block",
-  "watch_page_fixed_bottom",
-  "profile_page_top_banner",
-  "profile_page_inline_block",
-  "profile_page_fixed_bottom",
-  "list_page_banner",
-  "series_page_banner",
-  "series_detail_page_banner",
-  "collections_page_banner",
-  "collection_detail_page_banner",
-  "user_profile_page_banner",
-  "global_banner",
-  "global_inline",
-  "global_fixed_bottom",
-];
+export async function getAdsBatch(placements: string[]): Promise<AdsBatchResponse> {
+  const uniquePlacements = Array.from(new Set(placements.filter(Boolean))).sort();
+  if (uniquePlacements.length === 0) {
+    return { placements: {} };
+  }
+
+  return dedupeBrowserRequest(`ads-batch:${uniquePlacements.join(",")}`, 30000, async () => {
+    const qs = new URLSearchParams({ placements: uniquePlacements.join(",") });
+    const res = await fetch(`${API_URL}/ads/batch?${qs.toString()}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      return { placements: {} };
+    }
+    const json = await res.json();
+    return { placements: json.placements || {} };
+  });
+}
 
 export async function getAdsForWebsite(placement: string): Promise<Ad[]> {
-  const placementsToFetch = [placement, ...WEBSITE_PLACEMENTS];
-  const uniquePlacements = Array.from(new Set(placementsToFetch));
-  const results = await Promise.all(
-    uniquePlacements.map(p => getAdsByPlacement(p))
-  );
-  const allAds = results.flat();
+  const placements = [placement, "website"];
+  const data = await getAdsBatch(placements);
   const seen = new Set<string>();
-  return allAds.filter(ad => {
-    if (seen.has(ad.id)) return false;
-    seen.add(ad.id);
-    return true;
+  const merged: Ad[] = [];
+  placements.forEach((key) => {
+    (data.placements[key] || []).forEach((ad) => {
+      if (seen.has(ad.id)) return;
+      seen.add(ad.id);
+      merged.push(ad);
+    });
   });
+  return merged;
 }
 
 export async function recordAdImpression(id: string): Promise<void> {

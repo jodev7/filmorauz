@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/filmorauz/backend/models"
@@ -312,6 +313,43 @@ func (h *AdHandler) GetAdsByPlacement(c *gin.Context) {
 		ads = []models.Ad{}
 	}
 	c.JSON(http.StatusOK, gin.H{"ads": ads})
+}
+
+// GetAdsBatch GET /api/ads/batch?placements=a,b,c
+// Returns ads grouped by placement so the frontend can batch homepage ad loads.
+func (h *AdHandler) GetAdsBatch(c *gin.Context) {
+	rawPlacements := strings.TrimSpace(c.Query("placements"))
+	if rawPlacements == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "placements query param required"})
+		return
+	}
+
+	seen := make(map[string]struct{})
+	placements := make([]string, 0, 8)
+	for _, placement := range strings.Split(rawPlacements, ",") {
+		placement = strings.TrimSpace(placement)
+		if placement == "" {
+			continue
+		}
+		if _, exists := seen[placement]; exists {
+			continue
+		}
+		seen[placement] = struct{}{}
+		placements = append(placements, placement)
+	}
+
+	if len(placements) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "at least one placement is required"})
+		return
+	}
+
+	adsByPlacement, err := h.adRepo.FindByPlacements(placements)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"placements": adsByPlacement})
 }
 
 // RecordImpression POST /api/ads/:id/impression

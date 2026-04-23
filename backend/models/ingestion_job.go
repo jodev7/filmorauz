@@ -20,6 +20,7 @@ const (
 	IngestionStatusParsing     IngestionStatus = "parsing"
 	IngestionStatusDownloading IngestionStatus = "downloading"
 	IngestionStatusUploading   IngestionStatus = "uploading"
+	IngestionStatusNeedsManual IngestionStatus = "needs_manual"
 
 	// NEW: Detailed pipeline statuses
 	IngestionStatusDownloadFailed      IngestionStatus = "download_failed"

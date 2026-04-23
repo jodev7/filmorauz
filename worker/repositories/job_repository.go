@@ -268,7 +268,7 @@ func (r *JobRepository) UpdateStatus(ctx context.Context, id string, status mode
 		},
 	}
 
-	if status == models.IngestionStatusCompleted || status == models.IngestionStatusFailed {
+	if status == models.IngestionStatusCompleted || status == models.IngestionStatusFailed || status == models.IngestionStatusNeedsManual {
 		completedAt := time.Now()
 		update["$set"].(bson.M)["completed_at"] = completedAt
 	}
@@ -464,6 +464,27 @@ func (r *JobRepository) SetError(ctx context.Context, id string, errMsg string) 
 		},
 	})
 
+	return err
+}
+
+func (r *JobRepository) MarkNeedsManual(ctx context.Context, id string, errMsg string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid id")
+	}
+
+	now := time.Now()
+	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
+		"$set": bson.M{
+			"error":        errMsg,
+			"message":      errMsg,
+			"status":       models.IngestionStatusNeedsManual,
+			"stage":        string(models.IngestionStatusNeedsManual),
+			"progress":     0,
+			"completed_at": now,
+			"updated_at":   now,
+		},
+	})
 	return err
 }
 

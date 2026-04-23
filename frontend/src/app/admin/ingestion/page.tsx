@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { 
   Search, Play, RefreshCw, CheckCircle, XCircle,
@@ -1085,13 +1084,30 @@ function ManualTab({
   );
 }
 
-// Jobs Tab Component (reused from original)
+function getSerialSummary(jobs: IngestionJob[]) {
+  const completed = jobs.filter((job) => job.status === "completed").length;
+  const failed = jobs.filter((job) => job.status === "failed" || job.status === "download_failed").length;
+  const processing = jobs.length - completed - failed;
+  const overallProgress = jobs.length === 0
+    ? 0
+    : Math.round(jobs.reduce((sum, job) => sum + (typeof job.progress === "number" ? job.progress : 0), 0) / jobs.length);
+
+  return {
+    completed,
+    failed,
+    processing,
+    overallProgress,
+    totalEpisodes: jobs.length,
+    totalSeasons: new Set(jobs.map((job) => job.season_number || 1)).size,
+  };
+}
+
+// Jobs Tab Component
 function JobsTab({
   jobs,
   loadingJobs,
   retryingStage,
   handleRetry,
-  activeJobCount,
   currentFilter,
   handleFilterChange,
   currentPage,
@@ -1103,7 +1119,6 @@ function JobsTab({
   loadingJobs: boolean;
   retryingStage: {jobId: string; stage: string} | null;
   handleRetry: (jobId: string, stage: "download" | "process" | "upload") => void;
-  activeJobCount: number;
   currentFilter: JobFilter;
   handleFilterChange: (filter: JobFilter) => void;
   currentPage: number;
@@ -1112,441 +1127,339 @@ function JobsTab({
   handlePageChange: (page: number) => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
-  // Filter state is now managed as currentFilter
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
   const [expandedSerials, setExpandedSerials] = useState<Set<string>>(new Set());
   const [expandedSeasons, setExpandedSeasons] = useState<Set<string>>(new Set());
   const hasRunningJobs = jobs.some((job) => !isTerminalJobStatus(job.status));
   const summary = getJobSummary(jobs, now);
-  
-  // Group jobs by serial
-  const jobGroups = useMemo(() => {
-    const groups = groupJobsBySerial(jobs);
-    console.log(`[useMemo jobGroups] jobs=${jobs.length}, groups=${groups.length}`);
-    return groups;
-  }, [jobs]);
-  const visibleGroups = useMemo(() => {
-    // With pagination, filtering is done on the backend, so we show all returned jobs
-    console.log(`[useMemo visibleGroups] jobGroups=${jobGroups.length}`);
-    return jobGroups;
-  }, [jobGroups]);
 
-  // Handle page changes
-  const handlePageChange = useCallback((page: number) => {
-    setCurrentPage(page);
-    if (fetchJobsRef.current) fetchJobsRef.current(page, currentFilter);
-  }, [currentFilter]);
+  useEffect(() => {
+    if (!hasRunningJobs) return;
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [hasRunningJobs]);
 
-  // Handle filter changes
-  const handleFilterChange = useCallback((filter: JobFilter) => {
-    setCurrentFilter(filter);
-    setCurrentPage(1); // Reset to first page when filter changes
-    if (fetchJobsRef.current) fetchJobsRef.current(1, filter);
+  const toggleLogs = useCallback((jobId: string) => {
+    setExpandedLogs((prev) => {
+      const next = new Set(prev);
+      if (next.has(jobId)) next.delete(jobId);
+      else next.add(jobId);
+      return next;
+    });
   }, []);
 
-  return (
+  const toggleSerial = useCallback((serialId: string) => {
+    setExpandedSerials((prev) => {
+      const next = new Set(prev);
+      if (next.has(serialId)) next.delete(serialId);
+      else next.add(serialId);
+      return next;
+    });
+  }, []);
+
+  const toggleSeason = useCallback((seasonKey: string) => {
+    setExpandedSeasons((prev) => {
+      const next = new Set(prev);
+      if (next.has(seasonKey)) next.delete(seasonKey);
+      else next.add(seasonKey);
+      return next;
+    });
+  }, []);
+
+  const jobGroups = useMemo(() => groupJobsBySerial(jobs), [jobs]);
+
+  const renderJobCard = useCallback((job: IngestionJob, compact = false) => {
+    if (!job.id) return null;
+
+    const safeJob = {
+      id: job.id || "",
+      status: job.status || "unknown",
+      stage: job.stage,
+      progress: typeof job.progress === "number" ? job.progress : 0,
+      source: job.source || "unknown",
+      source_id: job.source_id || "",
+      metadata: job.metadata,
+      downloaded_bytes: typeof job.downloaded_bytes === "number" ? job.downloaded_bytes : 0,
+      total_bytes: typeof job.total_bytes === "number" ? job.total_bytes : 0,
+      speed_mbps: typeof job.speed_mbps === "number" ? job.speed_mbps : 0,
+      eta_seconds: typeof job.eta_seconds === "number" ? job.eta_seconds : 0,
+      output_path: job.output_path,
+      playlist_path: job.playlist_path,
+      local_path: job.local_path,
+      source_file_deleted: job.source_file_deleted,
+      retry_count: typeof job.retry_count === "number" ? job.retry_count : 0,
+      error: job.error,
+      message: job.message,
+      logs: Array.isArray(job.logs) ? job.logs : [],
+      created_at: job.created_at || new Date().toISOString(),
+      updated_at: job.updated_at,
+      completed_at: job.completed_at,
+      episode_number: job.episode_number,
+    };
+
+    const elapsedTime = formatElapsedTime(job, now);
+    const lastUpdateAge = getLastUpdateAgeMs(job, now);
+    const lastUpdateText = formatDurationShort(lastUpdateAge);
+    const stuck = isStuckJob(job, now);
+    const logsExpanded = expandedLogs.has(safeJob.id);
+    const activeStage = safeJob.stage || safeJob.status;
+    const badgeStatus = STAGE_STATUS_MAP[activeStage] || safeJob.status;
+    const displayStatus = safeJob.stage ? STAGE_STATUS_MAP[safeJob.stage] || safeJob.status : badgeStatus;
+    const statusConfig = getStatusMeta(displayStatus);
+    const StatusIcon = statusConfig.icon;
+    const episodeInfo = safeJob.episode_number ? ` • E${safeJob.episode_number}` : "";
+    const isFailed = safeJob.status === "failed" || safeJob.status === "download_failed";
+    const isCompleted = safeJob.status === "completed";
+    const bytePercent =
+      !isFailed && safeJob.total_bytes > 0 && safeJob.downloaded_bytes > 0
+        ? Math.min((safeJob.downloaded_bytes / safeJob.total_bytes) * 100, 100)
+        : null;
+    let displayProgress = bytePercent !== null ? bytePercent : safeJob.progress;
+    if (isFailed && !isCompleted) {
+      displayProgress = Math.min(safeJob.progress || 0, 99);
+    }
+
+    if (compact) {
+      return (
+        <div
+          key={safeJob.id}
+          className="bg-brand-card border border-brand-border rounded-lg p-3 ml-6"
+        >
+          <div className="flex items-center gap-3">
+            <div className={`p-1.5 rounded-full ${statusConfig.color} bg-opacity-20`}>
+              <StatusIcon className={`w-4 h-4 ${activeStage === "parsing" || activeStage === "downloading" || activeStage === "download" ? "animate-spin" : ""}`} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <h4 className="font-medium text-white text-sm truncate">
+                  {safeJob.metadata?.title || safeJob.source_id}{episodeInfo}
+                </h4>
+                <span className={`px-1.5 py-0.5 rounded text-xs ${statusConfig.color} text-white shrink-0`}>
+                  {statusConfig.label}
+                </span>
+              </div>
+              <p className="text-xs text-gray-500">
+                {safeJob.message || safeJob.source} • {new Date(safeJob.created_at).toLocaleString()}
+              </p>
+            </div>
+            <div className="w-32">
+              <div className="flex justify-between text-xs text-gray-400 mb-1">
+                <span className="capitalize truncate">{activeStage}</span>
+                <span>{displayProgress.toFixed(0)}%</span>
+              </div>
+              <div className="h-1.5 bg-brand-border rounded-full overflow-hidden">
+                <div
+                  className={`h-full ${statusConfig.color} transition-all duration-300`}
+                  style={{ width: `${Math.min(displayProgress, 100)}%` }}
+                />
+              </div>
+            </div>
+            <div className="flex gap-1">
+              <button
+                onClick={() => handleRetry(safeJob.id, "download")}
+                disabled={retryingStage?.jobId === safeJob.id}
+                className="p-1.5 bg-brand-dark hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
+                title="Retry Download"
+              >
+                {retryingStage?.jobId === safeJob.id && retryingStage?.stage === "download" ? (
+                  <Loader2 className="w-3 h-3 text-yellow-400 animate-spin" />
+                ) : (
+                  <Download className="w-3 h-3 text-yellow-400" />
+                )}
+              </button>
+              <button
+                onClick={() => handleRetry(safeJob.id, "process")}
+                disabled={retryingStage?.jobId === safeJob.id}
+                className="p-1.5 bg-brand-dark hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
+                title="Retry Processing"
+              >
+                {retryingStage?.jobId === safeJob.id && retryingStage?.stage === "process" ? (
+                  <Loader2 className="w-3 h-3 text-purple-400 animate-spin" />
+                ) : (
+                  <Settings className="w-3 h-3 text-purple-400" />
+                )}
+              </button>
+            </div>
+          </div>
+          {safeJob.error && safeJob.status !== "downloading" && activeStage !== "downloading" && (
+            <div className="mt-2 flex items-start gap-2 text-red-400 text-xs">
+              <AlertTriangle className="w-3 h-3 mt-0.5" />
+              {safeJob.error}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return (
       <div
         key={safeJob.id}
-        className="bg-brand-card border border-brand-border rounded-lg p-3 ml-6"
+        className="bg-brand-card border border-brand-border rounded-lg p-4"
       >
-        <div className="flex items-center gap-3">
-          <div className={`p-1.5 rounded-full ${statusConfig.color} bg-opacity-20`}>
-            <StatusIcon className={`w-4 h-4 ${activeStage === "parsing" || activeStage === "downloading" || activeStage === "download" ? "animate-spin" : ""}`} />
+        <div className="flex items-center gap-4">
+          <div className={`p-2 rounded-full ${statusConfig.color} bg-opacity-20`}>
+            <StatusIcon className={`w-5 h-5 ${activeStage === "parsing" || activeStage === "downloading" || activeStage === "download" ? "animate-spin" : ""}`} />
           </div>
-          <div className="flex-1 min-w-0">
+          <div className="flex-1">
             <div className="flex items-center gap-2">
-              <h4 className="font-medium text-white text-sm truncate">
-                {safeJob.metadata?.title || safeJob.source_id}{episodeInfo}
-              </h4>
-              <span className={`px-1.5 py-0.5 rounded text-xs ${statusConfig.color} text-white shrink-0`}>
+              <h3 className="font-semibold text-white">
+                {safeJob.metadata?.title || safeJob.source_id}
+              </h3>
+              <span className={`px-2 py-0.5 rounded text-xs ${statusConfig.color} text-white`}>
                 {statusConfig.label}
               </span>
             </div>
-            <p className="text-xs text-gray-500">
+            <p className="text-sm text-gray-400">
               {safeJob.message || safeJob.source} • {new Date(safeJob.created_at).toLocaleString()}
             </p>
+            <p className="text-xs text-gray-500">
+              Elapsed: {elapsedTime} • Last update: {lastUpdateText} ago • Retry: {safeJob.retry_count}
+            </p>
+            {stuck && (
+              <p className="mt-1 flex items-center gap-1 text-xs text-orange-400">
+                <AlertTriangle className="w-3 h-3" />
+                No update for {lastUpdateText}
+              </p>
+            )}
           </div>
-          <div className="w-32">
+          <div className="w-64">
             <div className="flex justify-between text-xs text-gray-400 mb-1">
-              <span className="capitalize truncate">{activeStage}</span>
-              <span>{safeJob.progress.toFixed(0)}%</span>
+              <span className="capitalize">{activeStage}</span>
+              <span>{displayProgress.toFixed(displayProgress < 10 ? 1 : 0)}%</span>
             </div>
-            <div className="h-1.5 bg-brand-border rounded-full overflow-hidden">
+            <div className="h-2 bg-brand-border rounded-full overflow-hidden">
               <div
                 className={`h-full ${statusConfig.color} transition-all duration-300`}
-                style={{ width: `${Math.min(safeJob.progress, 100)}%` }}
+                style={{ width: `${displayProgress}%` }}
               />
             </div>
+            {(activeStage === "downloading" || activeStage === "processing" || safeJob.progress > 0) && safeJob.downloaded_bytes > 0 && (
+              <div className="mt-1 text-xs text-gray-500 flex flex-wrap gap-x-2">
+                <span>{formatBytes(safeJob.downloaded_bytes)} / {formatBytes(safeJob.total_bytes)}</span>
+                {safeJob.speed_mbps > 0 && (
+                  <>
+                    <span>•</span>
+                    <span>{formatSpeed(safeJob.speed_mbps)}</span>
+                  </>
+                )}
+                <span>•</span>
+                <span>{formatEta(safeJob.eta_seconds)}</span>
+              </div>
+            )}
+            {safeJob.message && safeJob.status !== "completed" && (
+              <div className="mt-1 text-xs text-gray-500 truncate">
+                {safeJob.message}
+              </div>
+            )}
+            {(safeJob.output_path || safeJob.playlist_path) && (
+              <div className="mt-2 flex items-center gap-2">
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-900 text-purple-200">
+                  HLS Ready
+                </span>
+                <span className="text-xs text-gray-400 truncate" title={safeJob.playlist_path || safeJob.output_path}>
+                  📁 {safeJob.playlist_path || safeJob.output_path}
+                </span>
+              </div>
+            )}
+            {safeJob.local_path && !safeJob.source_file_deleted && (
+              <div className="mt-2 flex items-center gap-2">
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-900 text-green-200">
+                  Downloaded
+                </span>
+                <span className="text-xs text-gray-400 truncate" title={safeJob.local_path}>
+                  📁 {safeJob.local_path}
+                </span>
+              </div>
+            )}
           </div>
           <div className="flex gap-1">
             <button
               onClick={() => handleRetry(safeJob.id, "download")}
               disabled={retryingStage?.jobId === safeJob.id}
-              className="p-1.5 bg-brand-dark hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
+              className="p-2 bg-brand-card hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
               title="Retry Download"
             >
               {retryingStage?.jobId === safeJob.id && retryingStage?.stage === "download" ? (
-                <Loader2 className="w-3 h-3 text-yellow-400 animate-spin" />
+                <Loader2 className="w-4 h-4 text-yellow-400 animate-spin" />
               ) : (
-                <Download className="w-3 h-3 text-yellow-400" />
+                <Download className="w-4 h-4 text-yellow-400" />
               )}
             </button>
             <button
               onClick={() => handleRetry(safeJob.id, "process")}
               disabled={retryingStage?.jobId === safeJob.id}
-              className="p-1.5 bg-brand-dark hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
+              className="p-2 bg-brand-card hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
               title="Retry Processing"
             >
               {retryingStage?.jobId === safeJob.id && retryingStage?.stage === "process" ? (
-                <Loader2 className="w-3 h-3 text-purple-400 animate-spin" />
+                <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
               ) : (
-                <Settings className="w-3 h-3 text-purple-400" />
+                <Settings className="w-4 h-4 text-purple-400" />
+              )}
+            </button>
+            <button
+              onClick={() => handleRetry(safeJob.id, "upload")}
+              disabled={retryingStage?.jobId === safeJob.id}
+              className="p-2 bg-brand-card hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
+              title="Retry Upload"
+            >
+              {retryingStage?.jobId === safeJob.id && retryingStage?.stage === "upload" ? (
+                <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
+              ) : (
+                <Upload className="w-4 h-4 text-indigo-400" />
               )}
             </button>
           </div>
         </div>
-        {safeJob.error && safeJob.status !== 'downloading' && activeStage !== 'downloading' && (
-          <div className="mt-2 flex items-start gap-2 text-red-400 text-xs">
-            <AlertTriangle className="w-3 h-3 mt-0.5" />
+        {safeJob.error && safeJob.status !== "downloading" && activeStage !== "downloading" && (
+          <div className="mt-3 flex items-start gap-2 text-red-400 text-sm">
+            <AlertTriangle className="w-4 h-4 mt-0.5" />
             {safeJob.error}
+          </div>
+        )}
+        {safeJob.logs.length > 0 && safeJob.status !== "completed" && (
+          <div className="mt-3 text-xs text-gray-500 font-mono">
+            <div className="flex items-center justify-between mb-1">
+              <span>Logs ({safeJob.logs.length})</span>
+              <button
+                onClick={() => toggleLogs(safeJob.id)}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                {logsExpanded ? "Hide logs" : "Show logs"}
+              </button>
+            </div>
+            {(logsExpanded ? safeJob.logs : safeJob.logs.slice(-3)).map((log, i) => {
+              const relativeTime = formatLogTime(log.timestamp, now);
+              return (
+                <div key={`${log.timestamp || "log"}-${i}`} className="truncate">
+                  <span className="text-gray-600">{relativeTime}</span>
+                  {relativeTime && <span> • </span>}
+                  <span>{log.message}</span>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
     );
-  };
+  }, [expandedLogs, handleRetry, now, retryingStage, toggleLogs]);
 
-      {loadingJobs && jobs.length === 0 ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="w-8 h-8 animate-spin text-brand-red" />
-          <span className="ml-3 text-gray-400">Loading jobs...</span>
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="text-sm text-gray-400">
+          Page {currentPage} of {Math.max(totalPages, 1)} • {totalJobs} top-level item{totalJobs === 1 ? "" : "s"}
         </div>
-      ) : !Array.isArray(jobs) || jobs.length === 0 ? (
-        <div className="text-center text-gray-500 py-12">
-          No ingestion jobs yet. Import movies from sources above to get started.
+        <div className="flex flex-wrap gap-2 text-xs text-gray-500">
+          <span className="rounded-md border border-brand-border bg-brand-card px-2 py-1">Active: {summary.active}</span>
+          <span className="rounded-md border border-brand-border bg-brand-card px-2 py-1">Pending: {summary.pending}</span>
+          <span className="rounded-md border border-brand-border bg-brand-card px-2 py-1">Processing: {summary.processing}</span>
+          <span className="rounded-md border border-brand-border bg-brand-card px-2 py-1">Failed: {summary.failed}</span>
+          <span className="rounded-md border border-brand-border bg-brand-card px-2 py-1">Stuck: {summary.stuck}</span>
         </div>
-      ) : visibleGroups.length === 0 ? (
-        <div className="text-center text-gray-500 py-12">
-          No jobs match this filter.
-        </div>
-      ) : (
-        visibleGroups.map((group) => {
-          if (group.type === "single") {
-            // Render single movie job (original render code)
-            const job = group.job;
-            if (!job.id) return null;
-            
-            const safeJob = {
-              id: job.id || "",
-              status: job.status || "unknown",
-              stage: job.stage,
-              progress: typeof job.progress === "number" ? job.progress : 0,
-              source: job.source || "unknown",
-              source_id: job.source_id || "",
-              metadata: job.metadata,
-              downloaded_bytes: typeof job.downloaded_bytes === "number" ? job.downloaded_bytes : 0,
-              total_bytes: typeof job.total_bytes === "number" ? job.total_bytes : 0,
-              speed_mbps: typeof job.speed_mbps === "number" ? job.speed_mbps : 0,
-              eta_seconds: typeof job.eta_seconds === "number" ? job.eta_seconds : 0,
-              output_path: job.output_path,
-              playlist_path: job.playlist_path,
-              local_path: job.local_path,
-              source_file_deleted: job.source_file_deleted,
-              retry_count: typeof job.retry_count === "number" ? job.retry_count : 0,
-              error: job.error,
-              message: job.message,
-              logs: Array.isArray(job.logs) ? job.logs : [],
-              created_at: job.created_at || new Date().toISOString(),
-              updated_at: job.updated_at,
-              completed_at: job.completed_at,
-            };
-            const elapsedTime = formatElapsedTime(job, now);
-            const lastUpdateAge = getLastUpdateAgeMs(job, now);
-            const lastUpdateText = formatDurationShort(lastUpdateAge);
-            const stuck = isStuckJob(job, now);
-            const logsExpanded = expandedLogs.has(safeJob.id);
-            
-            const activeStage = safeJob.stage || safeJob.status;
-            const badgeStatus = STAGE_STATUS_MAP[activeStage] || safeJob.status;
-            const displayStatus = safeJob.stage ? STAGE_STATUS_MAP[safeJob.stage] || safeJob.status : badgeStatus;
-            const statusConfig = getStatusMeta(displayStatus);
-            const StatusIcon = statusConfig.icon;
-            
-            return (
-              <div
-                key={safeJob.id}
-                className="bg-brand-card border border-brand-border rounded-lg p-4"
-              >
-                <div className="flex items-center gap-4">
-                  <div className={`p-2 rounded-full ${statusConfig.color} bg-opacity-20`}>
-                    <StatusIcon className={`w-5 h-5 ${activeStage === "parsing" || activeStage === "downloading" || activeStage === "download" ? "animate-spin" : ""}`} />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-semibold text-white">
-                        {safeJob.metadata?.title || safeJob.source_id}
-                      </h3>
-                      <span className={`px-2 py-0.5 rounded text-xs ${statusConfig.color} text-white`}>
-                        {statusConfig.label}
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-400">
-                      {safeJob.message || safeJob.source} • {new Date(safeJob.created_at).toLocaleString()}
-                    </p>
-                    <p className="text-xs text-gray-500">
-                      Elapsed: {elapsedTime} • Last update: {lastUpdateText} ago • Retry: {safeJob.retry_count}
-                    </p>
-                    {stuck && (
-                      <p className="mt-1 flex items-center gap-1 text-xs text-orange-400">
-                        <AlertTriangle className="w-3 h-3" />
-                        No update for {lastUpdateText}
-                      </p>
-                    )}
-                  </div>
-                  <div className="w-64">
-                    {(() => {
-                      const isFailed = safeJob.status === 'failed' || safeJob.status === 'download_failed';
-                      const isCompleted = safeJob.status === 'completed';
-                      const bytePercent =
-                        !isFailed && safeJob.total_bytes > 0 && safeJob.downloaded_bytes > 0
-                          ? Math.min((safeJob.downloaded_bytes / safeJob.total_bytes) * 100, 100)
-                          : null;
-                      let displayProgress = bytePercent !== null ? bytePercent : safeJob.progress;
-                      if (isFailed && !isCompleted) {
-                        displayProgress = Math.min(safeJob.progress || 0, 99);
-                      }
-                      return (
-                        <>
-                          <div className="flex justify-between text-xs text-gray-400 mb-1">
-                            <span className="capitalize">{activeStage}</span>
-                            <span>{displayProgress.toFixed(displayProgress < 10 ? 1 : 0)}%</span>
-                          </div>
-                          <div className="h-2 bg-brand-border rounded-full overflow-hidden">
-                            <div
-                              className={`h-full ${statusConfig.color} transition-all duration-300`}
-                              style={{ width: `${displayProgress}%` }}
-                            />
-                          </div>
-                        </>
-                      );
-                    })()}
-                    {(activeStage === 'downloading' || activeStage === 'processing' || safeJob.progress > 0) && safeJob.downloaded_bytes > 0 && (
-                      <div className="mt-1 text-xs text-gray-500 flex flex-wrap gap-x-2">
-                        <span>{formatBytes(safeJob.downloaded_bytes)} / {formatBytes(safeJob.total_bytes)}</span>
-                        {safeJob.speed_mbps > 0 && (
-                          <>
-                            <span>•</span>
-                            <span>{formatSpeed(safeJob.speed_mbps)}</span>
-                          </>
-                        )}
-                        <span>•</span>
-                        <span>{formatEta(safeJob.eta_seconds)}</span>
-                      </div>
-                    )}
-                    {safeJob.message && safeJob.status !== 'completed' && (
-                      <div className="mt-1 text-xs text-gray-500 truncate">
-                        {safeJob.message}
-                      </div>
-                    )}
-                    {(safeJob.output_path || safeJob.playlist_path) && (
-                      <div className="mt-2 flex items-center gap-2">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-900 text-purple-200">
-                          HLS Ready
-                        </span>
-                        <span className="text-xs text-gray-400 truncate" title={safeJob.playlist_path || safeJob.output_path}>
-                          📁 {safeJob.playlist_path || safeJob.output_path}
-                        </span>
-                      </div>
-                    )}
-                    {safeJob.local_path && !safeJob.source_file_deleted && (
-                      <div className="mt-2 flex items-center gap-2">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-900 text-green-200">
-                          Downloaded
-                        </span>
-                        <span className="text-xs text-gray-400 truncate" title={safeJob.local_path}>
-                          📁 {safeJob.local_path}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => handleRetry(safeJob.id, "download")}
-                      disabled={retryingStage?.jobId === safeJob.id}
-                      className="p-2 bg-brand-card hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
-                      title="Retry Download"
-                    >
-                      {retryingStage?.jobId === safeJob.id && retryingStage?.stage === "download" ? (
-                        <Loader2 className="w-4 h-4 text-yellow-400 animate-spin" />
-                      ) : (
-                        <Download className="w-4 h-4 text-yellow-400" />
-                      )}
-                    </button>
-                    <button
-                      onClick={() => handleRetry(safeJob.id, "process")}
-                      disabled={retryingStage?.jobId === safeJob.id}
-                      className="p-2 bg-brand-card hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
-                      title="Retry Processing"
-                    >
-                      {retryingStage?.jobId === safeJob.id && retryingStage?.stage === "process" ? (
-                        <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
-                      ) : (
-                        <Settings className="w-4 h-4 text-purple-400" />
-                      )}
-                    </button>
-                    <button
-                      onClick={() => handleRetry(safeJob.id, "upload")}
-                      disabled={retryingStage?.jobId === safeJob.id}
-                      className="p-2 bg-brand-card hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
-                      title="Retry Upload"
-                    >
-                      {retryingStage?.jobId === safeJob.id && retryingStage?.stage === "upload" ? (
-                        <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
-                      ) : (
-                        <Upload className="w-4 h-4 text-indigo-400" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-                {safeJob.error && safeJob.status !== 'downloading' && activeStage !== 'downloading' && (
-                  <div className="mt-3 flex items-start gap-2 text-red-400 text-sm">
-                    <AlertTriangle className="w-4 h-4 mt-0.5" />
-                    {safeJob.error}
-                  </div>
-                )}
-                {safeJob.logs.length > 0 && safeJob.status !== "completed" && (
-                  <div className="mt-3 text-xs text-gray-500 font-mono">
-                    <div className="flex items-center justify-between mb-1">
-                      <span>Logs ({safeJob.logs.length})</span>
-                      <button
-                        onClick={() => toggleLogs(safeJob.id)}
-                        className="text-gray-400 hover:text-white transition-colors"
-                      >
-                        {logsExpanded ? "Hide logs" : "Show logs"}
-                      </button>
-                    </div>
-                    {(logsExpanded ? safeJob.logs : safeJob.logs.slice(-3)).map((log, i) => (
-                      <div key={`${log.timestamp || "log"}-${i}`} className="truncate">
-                        <span className="text-gray-600">
-                          {formatLogTime(log.timestamp, now)}
-                        </span>
-                        {formatLogTime(log.timestamp, now) && <span> • </span>}
-                        <span>{log.message}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          } else {
-            // Render serial group as tree structure
-            const serial = group;
-            const isExpanded = expandedSerials.has(serial.id);
-            
-            // Collect all episodes from all seasons for summary
-            const allEpisodes = serial.seasons.flatMap(s => s.episodes);
-            const summary = getSerialSummary(allEpisodes);
-            
-            // Get overall status for serial
-            const hasActive = allEpisodes.some(j => !isTerminalJobStatus(j.status));
-            const hasFailed = allEpisodes.some(j => j.status === "failed" || j.status === "download_failed");
-            const statusColor = hasFailed ? "bg-red-500" : hasActive ? "bg-yellow-500" : "bg-green-500";
-            const statusLabel = hasFailed ? "Failed" : hasActive ? "Processing" : "Completed";
-            
-            return (
-              <div key={serial.id} className="bg-brand-card border border-brand-border rounded-lg overflow-hidden">
-                {/* Serial header - always visible */}
-                <div 
-                  className="p-4 flex items-center gap-4 cursor-pointer hover:bg-brand-dark/50 transition-colors"
-                  onClick={() => toggleSerial(serial.id)}
-                >
-                  <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
-                  <div className={`p-2 rounded-full ${statusColor} bg-opacity-20`}>
-                    <Tv className="w-5 h-5" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-semibold text-white">{serial.title}</h3>
-                      <span className={`px-2 py-0.5 rounded text-xs text-white ${statusColor}`}>
-                        {statusLabel}
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-400">
-                      {summary.totalSeasons} season{summary.totalSeasons !== 1 ? 's' : ''} • {summary.totalEpisodes} episode{summary.totalEpisodes !== 1 ? 's' : ''}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-4 text-xs text-gray-500">
-                    <span className="flex items-center gap-1">
-                      <CheckCircle className="w-3 h-3 text-green-400" />
-                      {summary.completed}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Loader2 className="w-3 h-3 text-yellow-400" />
-                      {summary.processing}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <XCircle className="w-3 h-3 text-red-400" />
-                      {summary.failed}
-                    </span>
-                  </div>
-                  <div className="w-32">
-                    <div className="flex justify-between text-xs text-gray-400 mb-1">
-                      <span>Progress</span>
-                      <span>{summary.overallProgress}%</span>
-                    </div>
-                    <div className="h-2 bg-brand-border rounded-full overflow-hidden">
-                      <div
-                        className={`h-full ${statusColor} transition-all duration-300`}
-                        style={{ width: `${summary.overallProgress}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-                
-                {/* Seasons and episodes - collapsible */}
-                {isExpanded && (
-                  <div className="border-t border-brand-border bg-brand-dark/30">
-                    {serial.seasons.map(season => {
-                      const seasonName = `S${season.season_number}`;
-                      const seasonExpanded = expandedSeasons.has(`${serial.id}-${seasonName}`);
-                      const seasonCompleted = season.episodes.filter(j => j.status === "completed").length;
-                      
-                      return (
-                        <div key={seasonName} className="border-b border-brand-border last:border-b-0">
-                          {/* Season header */}
-                          <div 
-                            className="p-3 ml-6 flex items-center gap-3 cursor-pointer hover:bg-brand-dark/50 transition-colors"
-                            onClick={() => toggleSeason(`${serial.id}-${seasonName}`)}
-                          >
-                            <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${seasonExpanded ? '' : '-rotate-90'}`} />
-                            <Tv className="w-4 h-4 text-blue-400" />
-                            <span className="font-medium text-white text-sm">{seasonName}</span>
-                            <span className="text-xs text-gray-500">
-                              {season.episodes.length} episode{season.episodes.length !== 1 ? 's' : ''}
-                            </span>
-                            <span className="text-xs text-gray-500 ml-auto">
-                              {seasonCompleted}/{season.episodes.length} done
-                            </span>
-                          </div>
-                          
-                          {/* Episodes */}
-                          {seasonExpanded && (
-                            <div className="pb-2">
-                              {season.episodes.map(job => renderJobCard(job))}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          }
-        })
-      )}
+      </div>
 
-      {/* Filter Buttons */}
-      <div className="flex flex-wrap gap-2 mt-4">
+      <div className="flex flex-wrap gap-2">
         {JOB_FILTERS.map((item) => (
           <button
             key={item.id}
@@ -1562,11 +1475,124 @@ function JobsTab({
         ))}
       </div>
 
-      {/* Pagination */}
+      {loadingJobs && jobs.length === 0 ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="w-8 h-8 animate-spin text-brand-red" />
+          <span className="ml-3 text-gray-400">Loading jobs...</span>
+        </div>
+      ) : jobGroups.length === 0 ? (
+        <div className="text-center text-gray-500 py-12">
+          {totalJobs === 0 ? "No ingestion jobs yet. Import movies from sources above to get started." : "No jobs match this filter."}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {jobGroups.map((group) => {
+            if (group.type === "single") {
+              return renderJobCard(group.job);
+            }
+
+            const serial = group;
+            const isExpanded = expandedSerials.has(serial.id);
+            const allEpisodes = serial.seasons.flatMap((season) => season.episodes);
+            const serialSummary = getSerialSummary(allEpisodes);
+            const hasActive = allEpisodes.some((job) => !isTerminalJobStatus(job.status));
+            const hasFailed = allEpisodes.some((job) => job.status === "failed" || job.status === "download_failed");
+            const statusColor = hasFailed ? "bg-red-500" : hasActive ? "bg-yellow-500" : "bg-green-500";
+            const statusLabel = hasFailed ? "Failed" : hasActive ? "Processing" : "Completed";
+
+            return (
+              <div key={serial.id} className="bg-brand-card border border-brand-border rounded-lg overflow-hidden">
+                <div
+                  className="p-4 flex items-center gap-4 cursor-pointer hover:bg-brand-dark/50 transition-colors"
+                  onClick={() => toggleSerial(serial.id)}
+                >
+                  <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform ${isExpanded ? "" : "-rotate-90"}`} />
+                  <div className={`p-2 rounded-full ${statusColor} bg-opacity-20`}>
+                    <Tv className="w-5 h-5" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-semibold text-white">{serial.title}</h3>
+                      <span className={`px-2 py-0.5 rounded text-xs text-white ${statusColor}`}>
+                        {statusLabel}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-400">
+                      {serialSummary.totalSeasons} season{serialSummary.totalSeasons !== 1 ? "s" : ""} • {serialSummary.totalEpisodes} episode{serialSummary.totalEpisodes !== 1 ? "s" : ""}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-4 text-xs text-gray-500">
+                    <span className="flex items-center gap-1">
+                      <CheckCircle className="w-3 h-3 text-green-400" />
+                      {serialSummary.completed}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 text-yellow-400" />
+                      {serialSummary.processing}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <XCircle className="w-3 h-3 text-red-400" />
+                      {serialSummary.failed}
+                    </span>
+                  </div>
+                  <div className="w-32">
+                    <div className="flex justify-between text-xs text-gray-400 mb-1">
+                      <span>Progress</span>
+                      <span>{serialSummary.overallProgress}%</span>
+                    </div>
+                    <div className="h-2 bg-brand-border rounded-full overflow-hidden">
+                      <div
+                        className={`h-full ${statusColor} transition-all duration-300`}
+                        style={{ width: `${serialSummary.overallProgress}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {isExpanded && (
+                  <div className="border-t border-brand-border bg-brand-dark/30">
+                    {serial.seasons.map((season) => {
+                      const seasonName = `S${season.season_number}`;
+                      const seasonKey = `${serial.id}-${seasonName}`;
+                      const seasonExpanded = expandedSeasons.has(seasonKey);
+                      const seasonCompleted = season.episodes.filter((job) => job.status === "completed").length;
+
+                      return (
+                        <div key={seasonName} className="border-b border-brand-border last:border-b-0">
+                          <div
+                            className="p-3 ml-6 flex items-center gap-3 cursor-pointer hover:bg-brand-dark/50 transition-colors"
+                            onClick={() => toggleSeason(seasonKey)}
+                          >
+                            <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${seasonExpanded ? "" : "-rotate-90"}`} />
+                            <Tv className="w-4 h-4 text-blue-400" />
+                            <span className="font-medium text-white text-sm">{seasonName}</span>
+                            <span className="text-xs text-gray-500">
+                              {season.episodes.length} episode{season.episodes.length !== 1 ? "s" : ""}
+                            </span>
+                            <span className="text-xs text-gray-500 ml-auto">
+                              {seasonCompleted}/{season.episodes.length} done
+                            </span>
+                          </div>
+                          {seasonExpanded && (
+                            <div className="pb-2">
+                              {season.episodes.map((job) => renderJobCard(job, true))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {totalPages > 1 && (
         <div className="flex items-center justify-between mt-6">
           <div className="text-sm text-gray-400">
-            Showing {jobs.length} of {totalJobs} jobs (Page {currentPage} of {totalPages})
+            Showing {jobGroups.length} item{jobGroups.length === 1 ? "" : "s"} on this page
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -1578,7 +1604,6 @@ function JobsTab({
               Previous
             </button>
 
-            {/* Page numbers */}
             {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
               const pageNum = Math.max(1, Math.min(totalPages - 4, currentPage - 2)) + i;
               if (pageNum > totalPages) return null;
@@ -1614,8 +1639,7 @@ function JobsTab({
 
 // Main Page Component
 export default function IngestionPage() {
-  const router = useRouter();
-  const { token, isAuthenticated } = useAuth();
+  const { token } = useAuth();
   const [activeTab, setActiveTab] = useState<string>("uzmovi");
   const [jobs, setJobs] = useState<IngestionJob[]>([]);
   const [loadingJobs, setLoadingJobs] = useState(false);
@@ -1630,8 +1654,6 @@ export default function IngestionPage() {
   const [isFetching, setIsFetching] = useState<boolean>(false);
   const [hasInitialized, setHasInitialized] = useState<boolean>(false);
   const isMounted = useRef(true);
-  const hadSavedPreference = useRef<boolean>(false);
-  const userToggledDuringInit = useRef<boolean>(false);
 
   // Keep ref to latest fetchJobs to avoid stale closures in effects
   const fetchJobsRef = useRef<any>(null);
@@ -1649,27 +1671,23 @@ export default function IngestionPage() {
     if (fetchJobsRef.current) fetchJobsRef.current(1, filter);
   }, []);
 
-  const fetchJobs = useCallback(async (page: number = 1, status?: string) => {
+  const fetchJobs = useCallback(async (page: number = currentPage, status: JobFilter = currentFilter) => {
     if (!token || !isMounted.current || isFetching) return;
 
     setIsFetching(true);
     setLoadingJobs(true);
     try {
-      const skip = (page - 1) * pageSize;
       const result = await getIngestionJobs(token, {
+        page,
         limit: pageSize,
-        skip,
-        status: status === "all" ? undefined : status
+        status,
       });
 
       const jobsData = Array.isArray(result.data) ? result.data : [];
       setTotalJobs(result.total || 0);
       setTotalPages(result.totalPages || 0);
-      setCurrentPage(page);
-
-      // For pagination, we show jobs from the current page only
+      setCurrentPage(result.page || page);
       setJobs(jobsData);
-
     } catch (err) {
       console.error("Failed to fetch jobs:", err);
       setJobs((prev) => (Array.isArray(prev) ? prev : []));
@@ -1679,7 +1697,7 @@ export default function IngestionPage() {
         setLoadingJobs(false);
       }
     }
-  }, [token, isFetching, pageSize]);
+  }, [currentFilter, currentPage, token, isFetching, pageSize]);
 
   // Update fetchJobsRef
   useEffect(() => {
@@ -1690,11 +1708,9 @@ export default function IngestionPage() {
   useEffect(() => {
     const saved = localStorage.getItem("ingestion-sync-enabled");
     if (saved !== null) {
-      hadSavedPreference.current = true;
       setSyncEnabled(saved === "true");
       setHasInitialized(true);
     } else {
-      hadSavedPreference.current = false;
       setHasInitialized(false);
     }
   }, []);
@@ -1743,16 +1759,12 @@ export default function IngestionPage() {
   };
 
   const handleImportSuccess = () => {
-    // Refresh jobs list - use limit: 200 to match main fetch and avoid losing jobs
-    if (token) {
-      getIngestionJobs(token, { limit: 200 }).then((result) => {
-        const jobsData = Array.isArray(result.data) ? result.data : [];
-        console.log(`[handleImportSuccess] Fetched ${jobsData.length} jobs after import`);
-        setJobs(jobsData);
-      });
-    }
-    // Switch to jobs tab
+    setCurrentFilter("all");
+    setCurrentPage(1);
     setActiveTab("jobs");
+    if (fetchJobsRef.current) {
+      fetchJobsRef.current(1, "all");
+    }
   };
 
   if (!token) {
@@ -1762,19 +1774,6 @@ export default function IngestionPage() {
       </div>
     );
   }
-
-  // Handle page changes
-  const handlePageChange = useCallback((page: number) => {
-    setCurrentPage(page);
-    if (fetchJobsRef.current) fetchJobsRef.current(page, currentFilter);
-  }, [currentFilter]);
-
-  // Handle filter changes
-  const handleFilterChange = useCallback((filter: JobFilter) => {
-    setCurrentFilter(filter);
-    setCurrentPage(1); // Reset to first page when filter changes
-    if (fetchJobsRef.current) fetchJobsRef.current(1, filter);
-  }, []);
 
   const activeJobCount = Array.isArray(jobs) ? jobs.filter(j => !isTerminalJobStatus(j.status)).length : 0;
 
@@ -1826,7 +1825,6 @@ export default function IngestionPage() {
           {activeTab === "jobs" && (
             <button
               onClick={() => {
-                userToggledDuringInit.current = true;
                 const newState = !syncEnabled;
                 setSyncEnabled(newState);
                 localStorage.setItem("ingestion-sync-enabled", String(newState));
@@ -1878,7 +1876,6 @@ export default function IngestionPage() {
             loadingJobs={loadingJobs}
             retryingStage={retryingStage}
             handleRetry={handleRetry}
-            activeJobCount={activeJobCount}
             currentFilter={currentFilter}
             handleFilterChange={handleFilterChange}
             currentPage={currentPage}

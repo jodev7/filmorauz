@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 const movieCodeSequenceKey = "movie_code"
@@ -65,6 +67,21 @@ func normalizeTitle(title string) string {
 // NormalizeTitleForDuplicate normalizes title for duplicate checking
 func NormalizeTitleForDuplicate(title string, year int) string {
 	return fmt.Sprintf("%s %d", normalizeTitle(title), year)
+}
+
+type DuplicateMovieError struct {
+	Message string
+	Rule    string
+	MovieID primitive.ObjectID
+}
+
+func (e *DuplicateMovieError) Error() string {
+	return e.Message
+}
+
+func IsDuplicateMovieError(err error) bool {
+	var duplicateErr *DuplicateMovieError
+	return errors.As(err, &duplicateErr)
 }
 
 type MovieService struct {
@@ -383,39 +400,22 @@ func (s *MovieService) SearchMovies(query string) ([]models.Movie, error) {
 }
 
 func (s *MovieService) CreateMovie(input *models.MovieInput) (*models.Movie, error) {
-	// DUPLICATE CHECK: Check for existing movies by:
-	// 1. Normalized title + year
-	// 2. Slug (will be checked by repo too)
-	// 3. Source + source_id (external id)
-	// 4. External TMDB ID if available
+	normalizedTitle := normalizeTitle(input.Title)
+	desiredSlug := strings.TrimSpace(input.Slug)
+	if desiredSlug == "" {
+		desiredSlug = generateSlug(input.Title, input.Year)
+	}
 
-	// 1. Check by normalized title + year
-	normalizedTitleKey := NormalizeTitleForDuplicate(input.Title, input.Year)
-	existingByTitle, err := s.repo.FindByTitleYear(input.Title, input.Year)
+	existing, rule, err := s.findDuplicateMovie(input, desiredSlug, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check duplicate by title+year: %w", err)
+		return nil, err
 	}
-	if existingByTitle != nil {
-		return nil, fmt.Errorf("movie already exists: title=%q year=%d (normalized key: %q)", input.Title, input.Year, normalizedTitleKey)
-	}
-
-	// 2. Check by source + source_id
-	existingBySource, err := s.repo.FindBySourceID(input.SourceType, input.Source.SourceID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check duplicate by source: %w", err)
-	}
-	if existingBySource != nil {
-		return nil, fmt.Errorf("movie already exists: source=%s source_id=%s", input.SourceType, input.Source.SourceID)
-	}
-
-	// 3. Check by external TMDB ID if available
-	if input.TMDBID > 0 {
-		existingByTMDB, err := s.repo.FindByTMDBID(input.TMDBID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to check duplicate by TMDB ID: %w", err)
-		}
-		if existingByTMDB != nil {
-			return nil, fmt.Errorf("movie already exists: tmdb_id=%d", input.TMDBID)
+	if existing != nil {
+		log.Printf("[MOVIE DUPLICATE BLOCKED] create rule=%s existing_id=%s title=%q", rule, existing.ID.Hex(), existing.Title)
+		return nil, &DuplicateMovieError{
+			Message: "movie already exists",
+			Rule:    rule,
+			MovieID: existing.ID,
 		}
 	}
 
@@ -424,125 +424,59 @@ func (s *MovieService) CreateMovie(input *models.MovieInput) (*models.Movie, err
 		return nil, err
 	}
 
-	// Generate unique alphanumeric code
 	code, err := s.generateUniqueCode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate movie code: %w", err)
 	}
 
-	// Get website base URL from environment
 	websiteBaseURL := os.Getenv("BASE_SITE_URL")
 	if websiteBaseURL == "" {
 		websiteBaseURL = "https://filmorauz.net"
 	}
 
+	now := time.Now()
 	movie := &models.Movie{
-		ID:          primitive.NewObjectID(),
-		Code:        code,
-		Title:       input.Title,
-		Description: input.Description,
-		PosterURL:   input.PosterURL,
-		BackdropURL: input.BackdropURL,
-		Year:        input.Year,
-		Genre:       normalizeMovieGenres(input.Genre),
-		Country:     input.Country,
-		VideoURL:    input.VideoURL,
-		EmbedURL:    input.EmbedURL,
-		SourceType:  input.SourceType,
-		Duration:    input.Duration,
-		Quality:     input.Quality,
-		Slug:        slug,
-		WebsiteURL:  calculateWebsiteURL(slug, websiteBaseURL),
-		RatingAvg:   0,
-		RatingCount: 0,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-
-		// LOCALIZATION: Uzbek display fields
-		TitleUz:        input.TitleUz,
-		DescriptionUz:  input.DescriptionUz,
-		GenresUz:       input.GenresUz,
-		CountriesUz:    input.CountriesUz,
-		OriginalTitle:  input.OriginalTitle,
-		TMDBID:         input.TMDBID,
-		MetadataSource: input.MetadataSource,
-
-		// Approval workflow: new imports start as pending/unpublished
-		ApprovalStatus: "pending",
-		IsPublished:    false,
+		ID:              primitive.NewObjectID(),
+		Code:            code,
+		Slug:            slug,
+		WebsiteURL:      calculateWebsiteURL(slug, websiteBaseURL),
+		Source:          sanitizeMovieSource(input.Source),
+		Title:           input.Title,
+		NormalizedTitle: normalizedTitle,
+		Description:     input.Description,
+		PosterURL:       input.PosterURL,
+		BackdropURL:     input.BackdropURL,
+		Year:            input.Year,
+		Genre:           normalizeMovieGenres(input.Genre),
+		Country:         input.Country,
+		VideoURL:        input.VideoURL,
+		EmbedURL:        input.EmbedURL,
+		SourceType:      input.SourceType,
+		Duration:        input.Duration,
+		Quality:         input.Quality,
+		RatingAvg:       0,
+		RatingCount:     0,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		TitleUz:         input.TitleUz,
+		DescriptionUz:   input.DescriptionUz,
+		GenresUz:        input.GenresUz,
+		CountriesUz:     input.CountriesUz,
+		OriginalTitle:   input.OriginalTitle,
+		TMDBID:          input.TMDBID,
+		MetadataSource:  input.MetadataSource,
+		ApprovalStatus:  "pending",
+		IsPublished:     false,
 	}
 
 	if err := s.repo.Create(movie); err != nil {
-		// Check if it's a duplicate slug error (race condition)
-		if err == mongo.ErrTimeout || (err != nil && strings.Contains(err.Error(), "duplicate key")) {
-			return nil, fmt.Errorf("movie already exists (possible duplicate slug)")
+		if strings.Contains(err.Error(), "duplicate key") {
+			log.Printf("[MOVIE DUPLICATE BLOCKED] create race slug=%s title=%q", slug, input.Title)
+			return nil, &DuplicateMovieError{Message: "movie already exists", Rule: "slug"}
 		}
 		return nil, fmt.Errorf("failed to create movie: %w", err)
 	}
 
-	// Send notification asynchronously (non-blocking)
-	// This won't affect the movie creation success
-	if s.notificationSvc != nil {
-		s.notificationSvc.SendMovieNotificationAsync(movie)
-	}
-
-	return movie, nil
-}
-
-	// Generate unique alphanumeric code
-	code, err := s.generateUniqueCode()
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate movie code: %w", err)
-	}
-
-	// Get website base URL from environment
-	websiteBaseURL := os.Getenv("BASE_SITE_URL")
-	if websiteBaseURL == "" {
-		websiteBaseURL = "https://filmorauz.net"
-	}
-
-	movie := &models.Movie{
-		ID:          primitive.NewObjectID(),
-		Code:        code,
-		Title:       input.Title,
-		Description: input.Description,
-		PosterURL:   input.PosterURL,
-		BackdropURL: input.BackdropURL,
-		Year:        input.Year,
-		Genre:       normalizeMovieGenres(input.Genre),
-		Country:     input.Country,
-		VideoURL:    input.VideoURL,
-		EmbedURL:    input.EmbedURL,
-		SourceType:  input.SourceType,
-		Duration:    input.Duration,
-		Quality:     input.Quality,
-		Slug:        slug,
-		WebsiteURL:  calculateWebsiteURL(slug, websiteBaseURL),
-		RatingAvg:   0,
-		RatingCount: 0,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-
-		// LOCALIZATION: Uzbek display fields
-		TitleUz:        input.TitleUz,
-		DescriptionUz:  input.DescriptionUz,
-		GenresUz:       input.GenresUz,
-		CountriesUz:    input.CountriesUz,
-		OriginalTitle:  input.OriginalTitle,
-		TMDBID:         input.TMDBID,
-		MetadataSource: input.MetadataSource,
-
-		// Approval workflow: new content starts hidden pending admin review
-		ApprovalStatus: "pending",
-		IsPublished:    false,
-	}
-
-	if err := s.repo.Create(movie); err != nil {
-		return nil, fmt.Errorf("failed to create movie: %w", err)
-	}
-
-	// Send notification asynchronously (non-blocking)
-	// This won't affect the movie creation success
 	if s.notificationSvc != nil {
 		s.notificationSvc.SendMovieNotificationAsync(movie)
 	}
@@ -586,6 +520,7 @@ func (s *MovieService) UpdateMovie(id string, input *models.MovieInput) (*models
 	// For media URLs, empty input means "keep existing" so admins can do
 	// partial edits (e.g. change title) without re-uploading poster/backdrop/video.
 	existing.Title = input.Title
+	existing.NormalizedTitle = normalizeTitle(input.Title)
 	existing.Description = input.Description
 	if input.PosterURL != "" {
 		existing.PosterURL = input.PosterURL
@@ -605,6 +540,9 @@ func (s *MovieService) UpdateMovie(id string, input *models.MovieInput) (*models
 	}
 	if input.SourceType != "" {
 		existing.SourceType = input.SourceType
+	}
+	if input.Source != nil {
+		existing.Source = sanitizeMovieSource(input.Source)
 	}
 	existing.Duration = input.Duration
 	existing.Quality = input.Quality
@@ -886,7 +824,141 @@ func (s *MovieService) ListAllMoviesAdmin(page, limit int) ([]models.Movie, int6
 
 // SetMovieApprovalStatus approves or rejects a movie.
 func (s *MovieService) SetMovieApprovalStatus(id, status, byUserID string) error {
+	if status == "approved" {
+		current, err := s.GetMovieByID(id)
+		if err != nil {
+			return err
+		}
+		existing, rule, err := s.findDuplicateMovie(&models.MovieInput{
+			Source:     current.Source,
+			Title:      current.Title,
+			Year:       current.Year,
+			Slug:       current.Slug,
+			TMDBID:     current.TMDBID,
+			SourceType: current.SourceType,
+		}, current.Slug, &current.ID)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			log.Printf("[MOVIE DUPLICATE BLOCKED] approve movie_id=%s rule=%s existing_id=%s", current.ID.Hex(), rule, existing.ID.Hex())
+			return &DuplicateMovieError{
+				Message: "movie already exists",
+				Rule:    rule,
+				MovieID: existing.ID,
+			}
+		}
+	}
 	return s.repo.SetApprovalStatus(id, status, byUserID)
+}
+
+func sanitizeMovieSource(source *models.MovieSource) *models.MovieSource {
+	if source == nil {
+		return nil
+	}
+	provider := strings.TrimSpace(source.Provider)
+	sourceURL := strings.TrimSpace(source.SourceURL)
+	sourceID := strings.TrimSpace(source.SourceID)
+	if provider == "" && sourceURL == "" && sourceID == "" {
+		return nil
+	}
+	return &models.MovieSource{
+		Provider:  provider,
+		SourceURL: sourceURL,
+		SourceID:  sourceID,
+	}
+}
+
+func matchesDuplicateCandidate(movie *models.Movie, normalizedTitle string, year int) bool {
+	if movie == nil || year <= 0 || movie.Year != year {
+		return false
+	}
+	for _, candidate := range []string{movie.Title, movie.TitleUz, movie.OriginalTitle} {
+		if candidate != "" && normalizeTitle(candidate) == normalizedTitle {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *MovieService) findDuplicateMovie(input *models.MovieInput, desiredSlug string, excludeID *primitive.ObjectID) (*models.Movie, string, error) {
+	if input == nil {
+		return nil, "", nil
+	}
+
+	sameMovie := func(movie *models.Movie) bool {
+		return movie != nil && excludeID != nil && movie.ID == *excludeID
+	}
+
+	source := sanitizeMovieSource(input.Source)
+	if source != nil && source.Provider != "" && source.SourceURL != "" {
+		movie, err := s.repo.FindBySourceURL(source.Provider, source.SourceURL)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed duplicate check by source+source_url: %w", err)
+		}
+		if movie != nil && !sameMovie(movie) {
+			return movie, "source+source_url", nil
+		}
+	}
+
+	if source != nil && source.Provider != "" && source.SourceID != "" {
+		movie, err := s.repo.FindBySourceID(source.Provider, source.SourceID)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed duplicate check by source+external_id: %w", err)
+		}
+		if movie != nil && !sameMovie(movie) {
+			return movie, "external_id", nil
+		}
+	}
+
+	if desiredSlug != "" {
+		movie, err := s.repo.FindBySlug(desiredSlug)
+		if err == nil && movie != nil && !sameMovie(movie) {
+			return movie, "slug", nil
+		}
+		if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, "", fmt.Errorf("failed duplicate check by slug: %w", err)
+		}
+	}
+
+	normalizedTitle := normalizeTitle(input.Title)
+	if normalizedTitle != "" && input.Year > 0 {
+		movie, err := s.repo.FindByNormalizedTitleYear(normalizedTitle, input.Year)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed duplicate check by normalized title+year: %w", err)
+		}
+		if movie != nil && !sameMovie(movie) {
+			return movie, "normalized_title+year", nil
+		}
+	}
+
+	if input.TMDBID > 0 {
+		movie, err := s.repo.FindByTMDBID(input.TMDBID)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed duplicate check by external id: %w", err)
+		}
+		if movie != nil && !sameMovie(movie) {
+			return movie, "external_id", nil
+		}
+	}
+
+	if normalizedTitle != "" && input.Year > 0 {
+		candidates, err := s.repo.FindByYear(input.Year)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed duplicate fallback check: %w", err)
+		}
+		for i := range candidates {
+			candidate := candidates[i]
+			if excludeID != nil && candidate.ID == *excludeID {
+				continue
+			}
+			if matchesDuplicateCandidate(&candidate, normalizedTitle, input.Year) {
+				return &candidate, "normalized_title+year", nil
+			}
+		}
+	}
+
+	return nil, "", nil
 }
 
 // GetRecommendationsAdvanced returns recommendations using hybrid scoring (content + popularity + user personalization)
