@@ -36,34 +36,6 @@ interface Props {
   params: { slug: string };
 }
 
-function normalizeMovieGenres(input: unknown): string[] {
-  const normalizeValue = (value: string): string => {
-    const trimmed = value.trim().toLowerCase();
-    if (!trimmed) return "";
-    const normalized = trimmed.replace(/[_\s]+/g, "-").replace(/-+/g, "-");
-    if (normalized === "science-fiction" || normalized === "sciencefiction" || normalized === "scifi") {
-      return "sci-fi";
-    }
-    return normalized;
-  };
-
-  if (Array.isArray(input)) {
-    return input
-      .map((value) => (typeof value === "string" ? normalizeValue(value) : ""))
-      .filter(Boolean);
-  }
-
-  if (typeof input === "string") {
-    const trimmed = input.trim();
-    if (!trimmed) return [];
-    return trimmed.includes(",")
-      ? trimmed.split(",").map((value) => normalizeValue(value)).filter(Boolean)
-      : [normalizeValue(trimmed)].filter(Boolean);
-  }
-
-  return [];
-}
-
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = params;
   const canonicalUrl = `${SITE_URL}/movies/${slug}`;
@@ -156,12 +128,7 @@ export default async function MovieDetailPage({ params }: Props) {
   const localizedDescription = getLocalizedDescription(movie);
   const localizedGenres = getLocalizedGenres(movie);
   const localizedCountry = getLocalizedCountry(movie);
-  const rawGenres =
-    normalizeMovieGenres((movie as any).genre).length > 0
-      ? normalizeMovieGenres((movie as any).genre)
-      : normalizeMovieGenres((movie as any).genres).length > 0
-        ? normalizeMovieGenres((movie as any).genres)
-        : normalizeMovieGenres((movie as any).movie_genre);
+  const movieGenres = Array.isArray(movie.genre) ? movie.genre : [];
 
   // JSON-LD structured data for SEO - Breadcrumbs
   const breadcrumbJsonLd = {
@@ -298,9 +265,9 @@ export default async function MovieDetailPage({ params }: Props) {
                 )}
               </div>
 
-              {rawGenres.length > 0 && (
+              {movieGenres.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-5">
-                  {rawGenres.map((g) => (
+                  {movieGenres.map((g) => (
                     <Link
                       key={g}
                       href={`/movies?genre=${encodeURIComponent(g.toLowerCase())}`}

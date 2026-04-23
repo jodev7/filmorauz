@@ -101,7 +101,9 @@ export default function EditMoviePage() {
     poster_url: movie.poster_url,
     backdrop_url: movie.backdrop_url,
     year: movie.year,
-    genre: Array.isArray(movie.genre) ? movie.genre.map((g) => normalizeGenreValue(g)).filter(Boolean) : [],
+    genre: Array.isArray(movie.genre)
+      ? movie.genre.map((g) => normalizeGenreValue(g)).filter(Boolean)
+      : [],
     country: movie.country,
     video_url: movie.video_url,
     embed_url: movie.embed_url,
