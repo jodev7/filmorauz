@@ -189,6 +189,31 @@ func normalizeFieldToInt(value interface{}) int {
 	}
 }
 
+func normalizeGenreFieldValue(value interface{}) []string {
+	switch g := value.(type) {
+	case []interface{}:
+		genres := make([]string, 0, len(g))
+		for _, item := range g {
+			switch v := item.(type) {
+			case string:
+				genres = append(genres, v)
+			case fmt.Stringer:
+				genres = append(genres, v.String())
+			}
+		}
+		return genres
+	case []string:
+		return g
+	case string:
+		if strings.Contains(g, ",") {
+			return strings.Split(g, ",")
+		}
+		return []string{g}
+	default:
+		return nil
+	}
+}
+
 // normalizeMovieFromBSON converts a bson.M document to models.Movie, handling legacy types
 func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 	movie := &models.Movie{}
@@ -255,42 +280,20 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 	if genre, ok := doc["genre"]; ok && genre != nil {
 		genreFound = true
 		log.Printf("[DEBUG] normalizeMovieFromBSON: found 'genre' field, type=%T value=%v", genre, genre)
-		switch g := genre.(type) {
-		case []interface{}:
-			genres := make([]string, 0, len(g))
-			for _, item := range g {
-				if s, ok := item.(string); ok {
-					genres = append(genres, s)
-				}
-			}
-			movie.Genre = genres
-			log.Printf("[DEBUG] normalizeMovieFromBSON: converted []interface{} to genres=%v", genres)
-		case []string:
-			movie.Genre = g
-			log.Printf("[DEBUG] normalizeMovieFromBSON: []string genres=%v", g)
-		default:
-			log.Printf("[DEBUG] normalizeMovieFromBSON: 'genre' unhandled type=%T", genre)
-		}
+		movie.Genre = normalizeGenreFieldValue(genre)
+		log.Printf("[DEBUG] normalizeMovieFromBSON: normalized 'genre' -> %v", movie.Genre)
 	} else if genre, ok := doc["genres"]; ok && genre != nil {
 		// Fallback: check for "genres" field (some legacy data might use this)
 		genreFound = true
 		log.Printf("[DEBUG] normalizeMovieFromBSON: found 'genres' field (fallback), type=%T value=%v", genre, genre)
-		switch g := genre.(type) {
-		case []interface{}:
-			genres := make([]string, 0, len(g))
-			for _, item := range g {
-				if s, ok := item.(string); ok {
-					genres = append(genres, s)
-				}
-			}
-			movie.Genre = genres
-			log.Printf("[DEBUG] normalizeMovieFromBSON: converted genres []interface{} to genres=%v", genres)
-		case []string:
-			movie.Genre = g
-			log.Printf("[DEBUG] normalizeMovieFromBSON: genres []string=%v", g)
-		default:
-			log.Printf("[DEBUG] normalizeMovieFromBSON: 'genres' unhandled type=%T", genre)
-		}
+		movie.Genre = normalizeGenreFieldValue(genre)
+		log.Printf("[DEBUG] normalizeMovieFromBSON: normalized 'genres' -> %v", movie.Genre)
+	} else if genre, ok := doc["movie_genre"]; ok && genre != nil {
+		// Fallback: some legacy/imported docs may use "movie_genre"
+		genreFound = true
+		log.Printf("[DEBUG] normalizeMovieFromBSON: found 'movie_genre' field (fallback), type=%T value=%v", genre, genre)
+		movie.Genre = normalizeGenreFieldValue(genre)
+		log.Printf("[DEBUG] normalizeMovieFromBSON: normalized 'movie_genre' -> %v", movie.Genre)
 	}
 
 	if !genreFound {

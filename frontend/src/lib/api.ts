@@ -1030,7 +1030,7 @@ export async function adminGetMovies(token: string): Promise<Movie[]> {
   });
   if (!res.ok) throw new Error("Failed to fetch");
   const json = await res.json();
-  return json.data;
+  return (json.data || []).map((item: any) => normalizeMovieResponse(item));
 }
 
 export async function approveMovie(token: string, id: string): Promise<void> {
