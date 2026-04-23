@@ -71,7 +71,7 @@ export default function SeriesCarousel({ series }: SeriesCarouselProps) {
         className="flex gap-4 overflow-x-auto scrollbar-hide pb-2 px-2"
         style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
-        {series.map((s) => (
+        {series.map((s, index) => (
           <Link
             key={s.id}
             href={`/series/${s.slug}`}
@@ -79,12 +79,13 @@ export default function SeriesCarousel({ series }: SeriesCarouselProps) {
           >
             {/* Poster */}
             <div className="relative aspect-[2/3] overflow-hidden bg-brand-border">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={s.poster_url || "/placeholder-poster.jpg"}
                 alt={s.title}
                 className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                loading="lazy"
+                loading={index < 2 ? "eager" : "lazy"}
+                fetchPriority={index < 2 ? "high" : "auto"}
+                decoding="async"
                 onError={(e) => {
                   (e.target as HTMLImageElement).src = "/placeholder-poster.jpg";
                 }}

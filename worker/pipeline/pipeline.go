@@ -2160,6 +2160,18 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 		return nil, fmt.Errorf("failed to upsert movie: %w", err)
 	}
 
+	// DUPLICATE CHECK: Check by multiple criteria before creating/updating
+	duplicateFound, duplicateReason := p.checkMovieDuplicate(
+		displaySlug,
+		enrichedMetadata,
+		job.Source,
+		job.SourceID,
+	)
+	if duplicateFound {
+		log.Printf("[PIPELINE] DUPLICATE BLOCKED: %s - will not create movie", duplicateReason)
+		return nil, fmt.Errorf("duplicate movie: %s", duplicateReason)
+	}
+
 	// EXPLICIT LOGGING: Full result details
 	log.Printf("[PIPELINE] ===== DB OPERATION RESULT =====")
 	log.Printf("[PIPELINE] Operation: UpdateOne with upsert=true")
@@ -2168,6 +2180,13 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 	log.Printf("[PIPELINE] modifiedCount: %d (movies modified)", result.ModifiedCount)
 	log.Printf("[PIPELINE] upsertedCount: %d (movies inserted)", result.UpsertedCount)
 	log.Printf("[PIPELINE] upsertedID: %v", result.UpsertedID)
+
+	// For description, prefer Uzbek if available
+	displayDescription := enrichedMetadata.Description
+	if enrichedMetadata.DescriptionUz != "" {
+		displayDescription = enrichedMetadata.DescriptionUz
+		log.Printf("[PIPELINE] Using Uzbek description (length: %d)", len(displayDescription))
+	}
 
 	// Determine the final movie ID and action taken
 	var finalMovieID interface{}

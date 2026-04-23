@@ -224,7 +224,7 @@ func (r *JobRepository) CountPendingJobs(ctx context.Context) (int64, error) {
 }
 
 func (r *JobRepository) ResetStaleJobs(ctx context.Context) (int64, error) {
-	staleThreshold := 90 * time.Minute
+	staleThreshold := 180 * time.Minute
 	staleCutoff := time.Now().Add(-staleThreshold)
 	filter := bson.M{
 		"status":     bson.M{"$in": activeIngestionStatuses},
@@ -246,7 +246,7 @@ func (r *JobRepository) ResetStaleJobs(ctx context.Context) (int64, error) {
 	}
 
 	if result.ModifiedCount > 0 {
-		log.Printf("[REPO] ResetStaleJobs: reset %d stale jobs (no update for >90 minutes)",
+		log.Printf("[REPO] ResetStaleJobs: reset %d stale jobs (no update for >180 minutes)",
 			result.ModifiedCount)
 	}
 	return result.ModifiedCount, nil
@@ -513,7 +513,7 @@ var activeIngestionStatuses = []interface{}{
 }
 
 func (r *JobRepository) FailStaleProcessingJobs(ctx context.Context) (int64, error) {
-	staleThreshold := 90 * time.Minute
+	staleThreshold := 180 * time.Minute
 	staleCutoff := time.Now().Add(-staleThreshold)
 	filter := bson.M{
 		"status":     bson.M{"$in": activeIngestionStatuses},
@@ -524,7 +524,7 @@ func (r *JobRepository) FailStaleProcessingJobs(ctx context.Context) (int64, err
 		"$set": bson.M{
 			"status":       models.IngestionStatusFailed,
 			"stage":        "failed",
-			"error":        "Job stuck with no update for over 90 minutes — marked as failed by stale-job protection",
+			"error":        "Job stuck with no update for over 180 minutes — marked as failed by stale-job protection",
 			"completed_at": time.Now(),
 			"updated_at":   time.Now(),
 		},
@@ -537,7 +537,7 @@ func (r *JobRepository) FailStaleProcessingJobs(ctx context.Context) (int64, err
 	}
 
 	if result.ModifiedCount > 0 {
-		log.Printf("[REPO] FailStaleProcessingJobs: failed %d stale jobs (no update for >90 minutes)",
+		log.Printf("[REPO] FailStaleProcessingJobs: failed %d stale jobs (no update for >180 minutes)",
 			result.ModifiedCount)
 	}
 	return result.ModifiedCount, nil

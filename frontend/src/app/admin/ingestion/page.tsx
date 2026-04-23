@@ -1086,21 +1086,33 @@ function ManualTab({
 }
 
 // Jobs Tab Component (reused from original)
-function JobsTab({ 
-  jobs, 
-  loadingJobs, 
-  retryingStage, 
+function JobsTab({
+  jobs,
+  loadingJobs,
+  retryingStage,
   handleRetry,
-  activeJobCount 
-}: { 
+  activeJobCount,
+  currentFilter,
+  handleFilterChange,
+  currentPage,
+  totalPages,
+  totalJobs,
+  handlePageChange
+}: {
   jobs: IngestionJob[];
   loadingJobs: boolean;
   retryingStage: {jobId: string; stage: string} | null;
   handleRetry: (jobId: string, stage: "download" | "process" | "upload") => void;
   activeJobCount: number;
+  currentFilter: JobFilter;
+  handleFilterChange: (filter: JobFilter) => void;
+  currentPage: number;
+  totalPages: number;
+  totalJobs: number;
+  handlePageChange: (page: number) => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
-  const [filter, setFilter] = useState<JobFilter>("all");
+  // Filter state is now managed as currentFilter
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
   const [expandedSerials, setExpandedSerials] = useState<Set<string>>(new Set());
   const [expandedSeasons, setExpandedSeasons] = useState<Set<string>>(new Set());
@@ -1114,152 +1126,25 @@ function JobsTab({
     return groups;
   }, [jobs]);
   const visibleGroups = useMemo(() => {
-    const filtered = jobGroups.filter(group => {
-      if (group.type === "single") {
-        return matchesJobFilter(group.job, filter, now);
-      }
-      // For serial groups, check if any job matches the filter
-      return group.seasons.some(s => s.episodes.some(job => matchesJobFilter(job, filter, now)));
-    });
-    console.log(`[useMemo visibleGroups] jobGroups=${jobGroups.length}, visible=${filtered.length}, filter=${filter}`);
-    return filtered;
-  }, [jobGroups, filter, now]);
-  
-  const summaryCards = [
-    { label: "Active", value: activeJobCount, color: "text-yellow-400" },
-    { label: "Pending", value: summary.pending, color: "text-gray-300" },
-    { label: "Processing", value: summary.processing, color: "text-purple-400" },
-    { label: "Uploading", value: summary.uploading, color: "text-indigo-400" },
-    { label: "Failed", value: summary.failed, color: "text-red-400" },
-    { label: "Stuck", value: summary.stuck, color: summary.stuck > 0 ? "text-orange-400" : "text-gray-400" },
-  ];
+    // With pagination, filtering is done on the backend, so we show all returned jobs
+    console.log(`[useMemo visibleGroups] jobGroups=${jobGroups.length}`);
+    return jobGroups;
+  }, [jobGroups]);
 
-  useEffect(() => {
-    if (!hasRunningJobs) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [hasRunningJobs]);
+  // Handle page changes
+  const handlePageChange = useCallback((page: number) => {
+    setCurrentPage(page);
+    if (fetchJobsRef.current) fetchJobsRef.current(page, currentFilter);
+  }, [currentFilter]);
 
-  const toggleLogs = (jobId: string) => {
-    setExpandedLogs((prev) => {
-      const next = new Set(prev);
-      if (next.has(jobId)) {
-        next.delete(jobId);
-      } else {
-        next.add(jobId);
-      }
-      return next;
-    });
-  };
+  // Handle filter changes
+  const handleFilterChange = useCallback((filter: JobFilter) => {
+    setCurrentFilter(filter);
+    setCurrentPage(1); // Reset to first page when filter changes
+    if (fetchJobsRef.current) fetchJobsRef.current(1, filter);
+  }, []);
 
-  const toggleSerial = (serialId: string) => {
-    setExpandedSerials(prev => {
-      const next = new Set(prev);
-      if (next.has(serialId)) {
-        next.delete(serialId);
-      } else {
-        next.add(serialId);
-      }
-      return next;
-    });
-  };
-
-  const toggleSeason = (seasonId: string) => {
-    setExpandedSeasons(prev => {
-      const next = new Set(prev);
-      if (next.has(seasonId)) {
-        next.delete(seasonId);
-      } else {
-        next.add(seasonId);
-      }
-      return next;
-    });
-  };
-
-  // Group jobs by season within a serial
-  const groupJobsBySeason = (jobs: IngestionJob[]): Map<string, IngestionJob[]> => {
-    const seasonMap = new Map<string, IngestionJob[]>();
-    for (const job of jobs) {
-      const seasonKey = `S${job.season_number || 1}`;
-      if (!seasonMap.has(seasonKey)) {
-        seasonMap.set(seasonKey, []);
-      }
-      seasonMap.get(seasonKey)?.push(job);
-    }
-    // Sort episodes within each season
-    const sortedMap = new Map<string, IngestionJob[]>();
-    for (const [season, epJobs] of Array.from(seasonMap.entries())) {
-      sortedMap.set(season, epJobs.sort((a, b) => (a.episode_number || 0) - (b.episode_number || 0)));
-    }
-    return sortedMap;
-  };
-
-  // Get serial summary stats
-  const getSerialSummary = (jobs: IngestionJob[]) => {
-    const seasons = groupJobsBySeason(jobs);
-    const totalEpisodes = jobs.length;
-    const totalSeasons = seasons.size;
-    let completed = 0, processing = 0, failed = 0;
-    for (const job of jobs) {
-      if (isTerminalJobStatus(job.status)) {
-        if (job.status === "completed") completed++;
-        else failed++;
-      } else {
-        processing++;
-      }
-    }
-    const overallProgress = totalEpisodes > 0 
-      ? Math.round(jobs.reduce((sum, j) => sum + (j.progress || 0), 0) / totalEpisodes)
-      : 0;
-    return { totalSeasons, totalEpisodes, completed, processing, failed, overallProgress };
-  };
-
-  // Render single job card
-  const renderJobCard = (job: IngestionJob) => {
-    if (!job.id) return null;
-    
-    const safeJob = {
-      id: job.id || "",
-      status: job.status || "unknown",
-      stage: job.stage,
-      progress: typeof job.progress === "number" ? job.progress : 0,
-      source: job.source || "unknown",
-      source_id: job.source_id || "",
-      metadata: job.metadata,
-      downloaded_bytes: typeof job.downloaded_bytes === "number" ? job.downloaded_bytes : 0,
-      total_bytes: typeof job.total_bytes === "number" ? job.total_bytes : 0,
-      speed_mbps: typeof job.speed_mbps === "number" ? job.speed_mbps : 0,
-      eta_seconds: typeof job.eta_seconds === "number" ? job.eta_seconds : 0,
-      output_path: job.output_path,
-      playlist_path: job.playlist_path,
-      local_path: job.local_path,
-      source_file_deleted: job.source_file_deleted,
-      retry_count: typeof job.retry_count === "number" ? job.retry_count : 0,
-      error: job.error,
-      message: job.message,
-      logs: Array.isArray(job.logs) ? job.logs : [],
-      created_at: job.created_at || new Date().toISOString(),
-      updated_at: job.updated_at,
-      completed_at: job.completed_at,
-      season_number: job.season_number,
-      episode_number: job.episode_number,
-    };
-    const elapsedTime = formatElapsedTime(job, now);
-    const lastUpdateAge = getLastUpdateAgeMs(job, now);
-    const lastUpdateText = formatDurationShort(lastUpdateAge);
-    const stuck = isStuckJob(job, now);
-    const logsExpanded = expandedLogs.has(safeJob.id);
-    
-    const activeStage = safeJob.stage || safeJob.status;
-    const badgeStatus = STAGE_STATUS_MAP[activeStage] || safeJob.status;
-    const displayStatus = safeJob.stage ? STAGE_STATUS_MAP[safeJob.stage] || safeJob.status : badgeStatus;
-    const statusConfig = getStatusMeta(displayStatus);
-    const StatusIcon = statusConfig.icon;
-
-    // Show episode info if present
-    const episodeInfo = safeJob.season_number ? ` • S${safeJob.season_number}:E${safeJob.episode_number || 1}` : '';
-    
-    return (
+  return (
       <div
         key={safeJob.id}
         className="bg-brand-card border border-brand-border rounded-lg p-3 ml-6"
@@ -1329,33 +1214,6 @@ function JobsTab({
       </div>
     );
   };
-
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        {summaryCards.map((card) => (
-          <div key={card.label} className="bg-brand-card border border-brand-border rounded-lg p-3">
-            <p className="text-xs text-gray-500">{card.label}</p>
-            <p className={`text-2xl font-semibold ${card.color}`}>{card.value}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        {JOB_FILTERS.map((item) => (
-          <button
-            key={item.id}
-            onClick={() => setFilter(item.id)}
-            className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
-              filter === item.id
-                ? "bg-brand-red text-white border-brand-red"
-                : "bg-brand-card text-gray-400 border-brand-border hover:text-white"
-            }`}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
 
       {loadingJobs && jobs.length === 0 ? (
         <div className="flex items-center justify-center py-12">
@@ -1686,6 +1544,70 @@ function JobsTab({
           }
         })
       )}
+
+      {/* Filter Buttons */}
+      <div className="flex flex-wrap gap-2 mt-4">
+        {JOB_FILTERS.map((item) => (
+          <button
+            key={item.id}
+            onClick={() => handleFilterChange(item.id)}
+            className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+              currentFilter === item.id
+                ? "bg-brand-red text-white border-brand-red"
+                : "bg-brand-card text-gray-400 border-brand-border hover:text-white"
+            }`}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between mt-6">
+          <div className="text-sm text-gray-400">
+            Showing {jobs.length} of {totalJobs} jobs (Page {currentPage} of {totalPages})
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handlePageChange(currentPage - 1)}
+              disabled={currentPage <= 1}
+              className="px-3 py-1.5 rounded-lg text-sm border border-brand-border bg-brand-card text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              Previous
+            </button>
+
+            {/* Page numbers */}
+            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+              const pageNum = Math.max(1, Math.min(totalPages - 4, currentPage - 2)) + i;
+              if (pageNum > totalPages) return null;
+              return (
+                <button
+                  key={pageNum}
+                  onClick={() => handlePageChange(pageNum)}
+                  className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                    pageNum === currentPage
+                      ? "bg-brand-red text-white border-brand-red"
+                      : "border-brand-border bg-brand-card text-gray-400 hover:text-white"
+                  }`}
+                >
+                  {pageNum}
+                </button>
+              );
+            })}
+
+            <button
+              onClick={() => handlePageChange(currentPage + 1)}
+              disabled={currentPage >= totalPages}
+              className="px-3 py-1.5 rounded-lg text-sm border border-brand-border bg-brand-card text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+            >
+              Next
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1697,6 +1619,12 @@ export default function IngestionPage() {
   const [activeTab, setActiveTab] = useState<string>("uzmovi");
   const [jobs, setJobs] = useState<IngestionJob[]>([]);
   const [loadingJobs, setLoadingJobs] = useState(false);
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [totalPages, setTotalPages] = useState<number>(0);
+  const [totalJobs, setTotalJobs] = useState<number>(0);
+  const [pageSize] = useState<number>(30); // Default page size
+  const [currentFilter, setCurrentFilter] = useState<JobFilter>("all");
   const [retryingStage, setRetryingStage] = useState<{jobId: string; stage: string} | null>(null);
   const [syncEnabled, setSyncEnabled] = useState<boolean>(false);
   const [isFetching, setIsFetching] = useState<boolean>(false);
@@ -1705,74 +1633,43 @@ export default function IngestionPage() {
   const hadSavedPreference = useRef<boolean>(false);
   const userToggledDuringInit = useRef<boolean>(false);
 
-  const fetchJobs = useCallback(async () => {
+  // Keep ref to latest fetchJobs to avoid stale closures in effects
+  const fetchJobsRef = useRef<any>(null);
+
+  // Handle page changes
+  const handlePageChange = useCallback((page: number) => {
+    setCurrentPage(page);
+    if (fetchJobsRef.current) fetchJobsRef.current(page, currentFilter);
+  }, [currentFilter]);
+
+  // Handle filter changes
+  const handleFilterChange = useCallback((filter: JobFilter) => {
+    setCurrentFilter(filter);
+    setCurrentPage(1); // Reset to first page when filter changes
+    if (fetchJobsRef.current) fetchJobsRef.current(1, filter);
+  }, []);
+
+  const fetchJobs = useCallback(async (page: number = 1, status?: string) => {
     if (!token || !isMounted.current || isFetching) return;
 
     setIsFetching(true);
     setLoadingJobs(true);
     try {
-      const result = await getIngestionJobs(token, { limit: 200 });
-      const jobsData = Array.isArray(result.data) ? result.data : [];
-
-      // Merge with previous state to prevent stale progress regressions
-      setJobs(prevJobs => {
-        if (!Array.isArray(prevJobs) || prevJobs.length === 0) {
-          return jobsData;
-        }
-
-        // Build map of previous job state
-        const prevMap = new Map(prevJobs.map(j => [j.id, j]));
-        const newIds = new Set(jobsData.map(j => j.id));
-
-        // Merge: if job is downloading and new progress < old progress, keep old job state
-        const merged = jobsData.map(newJob => {
-          const prevJob = prevMap.get(newJob.id);
-          if (!prevJob) return newJob;
-
-          // Only apply protection for active downloads
-          const isDownloading = newJob.status === "downloading" || newJob.stage === "downloading" || newJob.stage === "download";
-          const prevProgress = prevJob.progress ?? 0;
-          const newProgress = newJob.progress ?? 0;
-
-          // Detect regression: new progress lower than previous, and bytes didn't increase
-          const prevBytes = prevJob.downloaded_bytes ?? 0;
-          const newBytes = newJob.downloaded_bytes ?? 0;
-          const bytesRegressed = newBytes < prevBytes;
-
-          if (isDownloading && newProgress < prevProgress && bytesRegressed) {
-            console.log(`[UI] Stale job data blocked: job ${newJob.id} progress ${newProgress} < ${prevProgress}, bytes ${newBytes} < ${prevBytes} — preserving previous state`);
-            return prevJob;
-          }
-
-          return newJob;
-        });
-
-        // Also include active jobs from prevJobs that dropped out of the top N fetch
-        // This prevents jobs from disappearing when new serials are imported
-        for (const prevJob of prevJobs) {
-          if (newIds.has(prevJob.id)) continue;
-          const status = prevJob.status || "";
-          const isTerminal = status === "completed" || status === "failed" || status === "download_failed";
-          if (!isTerminal) {
-            merged.push(prevJob);
-          }
-        }
-
-        console.log(`[fetchJobs] merge: fetched=${jobsData.length}, prev=${prevJobs.length}, merged=${merged.length}, kept_from_prev=${merged.length - jobsData.length}`);
-        return merged;
+      const skip = (page - 1) * pageSize;
+      const result = await getIngestionJobs(token, {
+        limit: pageSize,
+        skip,
+        status: status === "all" ? undefined : status
       });
 
-      // On first fetch, determine default sync state if no saved preference
-      if (!hasInitialized && isMounted.current) {
-        if (!hadSavedPreference.current && !userToggledDuringInit.current) {
-          const terminalStatuses = ["completed", "failed", "download_failed"];
-          const hasActiveJobs = jobsData.some(j => !terminalStatuses.includes(j.status || ""));
-          setSyncEnabled(hasActiveJobs);
-          // Persist the auto-determined default
-          localStorage.setItem("ingestion-sync-enabled", String(hasActiveJobs));
-        }
-        setHasInitialized(true);
-      }
+      const jobsData = Array.isArray(result.data) ? result.data : [];
+      setTotalJobs(result.total || 0);
+      setTotalPages(result.totalPages || 0);
+      setCurrentPage(page);
+
+      // For pagination, we show jobs from the current page only
+      setJobs(jobsData);
+
     } catch (err) {
       console.error("Failed to fetch jobs:", err);
       setJobs((prev) => (Array.isArray(prev) ? prev : []));
@@ -1782,10 +1679,9 @@ export default function IngestionPage() {
         setLoadingJobs(false);
       }
     }
-  }, [token, isFetching, hasInitialized]);
+  }, [token, isFetching, pageSize]);
 
-  // Keep ref to latest fetchJobs to avoid stale closures in effects
-  const fetchJobsRef = useRef(fetchJobs);
+  // Update fetchJobsRef
   useEffect(() => {
     fetchJobsRef.current = fetchJobs;
   }, [fetchJobs]);
@@ -1866,6 +1762,19 @@ export default function IngestionPage() {
       </div>
     );
   }
+
+  // Handle page changes
+  const handlePageChange = useCallback((page: number) => {
+    setCurrentPage(page);
+    if (fetchJobsRef.current) fetchJobsRef.current(page, currentFilter);
+  }, [currentFilter]);
+
+  // Handle filter changes
+  const handleFilterChange = useCallback((filter: JobFilter) => {
+    setCurrentFilter(filter);
+    setCurrentPage(1); // Reset to first page when filter changes
+    if (fetchJobsRef.current) fetchJobsRef.current(1, filter);
+  }, []);
 
   const activeJobCount = Array.isArray(jobs) ? jobs.filter(j => !isTerminalJobStatus(j.status)).length : 0;
 
@@ -1964,12 +1873,18 @@ export default function IngestionPage() {
           />
         )}
         {activeTab === "jobs" && (
-          <JobsTab 
+          <JobsTab
             jobs={jobs}
             loadingJobs={loadingJobs}
             retryingStage={retryingStage}
             handleRetry={handleRetry}
             activeJobCount={activeJobCount}
+            currentFilter={currentFilter}
+            handleFilterChange={handleFilterChange}
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalJobs={totalJobs}
+            handlePageChange={handlePageChange}
           />
         )}
       </div>

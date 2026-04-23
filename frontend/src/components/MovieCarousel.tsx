@@ -73,12 +73,16 @@ export default function MovieCarousel({ movies }: MovieCarouselProps) {
           msOverflowStyle: "none",
         }}
       >
-{movies.map((movie) => (
+ {movies.map((movie, index) => (
             <div
               key={movie.id}
               className="shrink-0 w-[120px] sm:w-[140px] md:w-[160px] lg:w-[180px] snap-start isolate"
             >
-              <MovieCard movie={movie} />
+              <MovieCard
+                movie={movie}
+                priority={index < 3} // Priority load first 3 cards
+                showSkeleton={true}
+              />
             </div>
           ))}
       </div>

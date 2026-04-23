@@ -800,6 +800,62 @@ func (r *MovieRepository) Search(query string) ([]models.Movie, error) {
 	return movies, nil
 }
 
+// FindByTitleYear retrieves a movie by normalized title and year
+func (r *MovieRepository) FindByTitleYear(title string, year int) (*models.Movie, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var movie models.Movie
+	filter := bson.M{
+		"title": title,
+		"year":  year,
+	}
+	if err := r.col.FindOne(ctx, filter).Decode(&movie); err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &movie, nil
+}
+
+// FindBySourceID retrieves a movie by source type and source ID
+func (r *MovieRepository) FindBySourceID(sourceType models.VideoSourceType, sourceID string) (*models.Movie, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var movie models.Movie
+	filter := bson.M{
+		"source_type":      sourceType,
+		"source.source_id": sourceID,
+	}
+	if err := r.col.FindOne(ctx, filter).Decode(&movie); err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &movie, nil
+}
+
+// FindByTMDBID retrieves a movie by TMDB ID
+func (r *MovieRepository) FindByTMDBID(tmdbID int) (*models.Movie, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var movie models.Movie
+	filter := bson.M{
+		"tmdb_id": tmdbID,
+	}
+	if err := r.col.FindOne(ctx, filter).Decode(&movie); err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &movie, nil
+}
+
 // Create inserts a new movie
 func (r *MovieRepository) Create(movie *models.Movie) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -29,6 +29,8 @@ export interface Movie {
   title: string;
   description: string;
   poster_url: string;
+  poster_thumb_url?: string; // Thumbnail for cards
+  poster_medium_url?: string; // Medium size for detail pages
   backdrop_url: string;
   year: number;
   genre: string[];
@@ -1382,7 +1384,7 @@ export async function createDirectUploadJob(
 export async function getIngestionJobs(
   token: string,
   params?: { status?: string; limit?: number; skip?: number }
-): Promise<{ data: IngestionJob[]; total: number }> {
+): Promise<{ data: IngestionJob[]; total: number; totalPages: number; limit: number; skip: number }> {
   const qs = new URLSearchParams();
   if (params?.status) qs.set("status", params.status);
   if (params?.limit) qs.set("limit", String(params.limit));

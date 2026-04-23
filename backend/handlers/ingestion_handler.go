@@ -664,11 +664,18 @@ func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
 
 	total, _ := h.jobRepo.Count(ctx, filter)
 
+	// Calculate total pages
+	totalPages := 0
+	if limit > 0 {
+		totalPages = (int(total) + limit - 1) / limit // Ceiling division
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"data":  jobs,
-		"total": total,
-		"limit": limit,
-		"skip":  skip,
+		"data":       jobs,
+		"total":      total,
+		"totalPages": totalPages,
+		"limit":      limit,
+		"skip":       skip,
 	})
 }
 

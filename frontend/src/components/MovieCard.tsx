@@ -6,12 +6,15 @@ import { Movie } from "@/lib/api";
 import { getIsNew, formatRelativeAddedTime, formatDuration } from "@/lib/movie-utils";
 import { isMoviePremium, PremiumBadge } from "./PremiumComponents";
 import { getLocalizedTitle, getLocalizedGenres } from "@/lib/localization";
+import OptimizedImage from "./OptimizedImage";
 
 interface Props {
   movie: Partial<Movie> & { id: string; title: string; poster_url: string; slug: string };
+  priority?: boolean; // For above-the-fold cards
+  showSkeleton?: boolean; // Allow disabling skeleton if needed
 }
 
-export default function MovieCard({ movie }: Props) {
+export default function MovieCard({ movie, priority = false, showSkeleton = true }: Props) {
   // Get localized metadata based on locale
   const localizedTitle = getLocalizedTitle(movie);
   const localizedGenres = getLocalizedGenres(movie);
@@ -40,12 +43,13 @@ export default function MovieCard({ movie }: Props) {
     >
       {/* Poster */}
       <div className="relative aspect-[2/3] overflow-hidden bg-[#1a1a24] shrink-0">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={movie.poster_url}
+        <OptimizedImage
+          src={movie.poster_thumb_url || movie.poster_url}
           alt={localizedTitle}
-          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-          loading="lazy"
+          className="transition-transform duration-500 group-hover:scale-105"
+          priority={priority}
+          showSkeleton={showSkeleton}
+          aspectRatio="2/3"
           onError={(e) => {
             (e.target as HTMLImageElement).src = "/placeholder-poster.jpg";
           }}

@@ -791,6 +791,11 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 	jobID := job.ID.Hex()
 	log.Printf("[HLS] Uploading adaptive HLS files for job %s from %s", jobID, hlsDir)
 
+	// Update progress to show uploading is in progress
+	if err := p.updateStatus(jobID, models.IngestionStatusUploading, 75); err != nil {
+		log.Printf("[HLS] WARNING: Failed to update status to uploading: %v", err)
+	}
+
 	var streamingURL string
 
 	// Check MODE from storage config
@@ -901,6 +906,11 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 
 		log.Printf("[HLS] Final CDN master playlist URL: %s", streamingURL)
 
+		// Update progress to show uploading is complete
+		if err := p.updateStatus(jobID, models.IngestionStatusUploading, 85); err != nil {
+			log.Printf("[HLS] WARNING: Failed to update status to uploading complete: %v", err)
+		}
+
 	} else {
 		// DEVELOPMENT: Save locally
 		log.Printf("[HLS] Development mode: copying files locally...")
@@ -973,6 +983,11 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 		}
 
 		log.Printf("[HLS] Files copied to: %s", targetDir)
+
+		// Update progress to show uploading is complete
+		if err := p.updateStatus(jobID, models.IngestionStatusUploading, 85); err != nil {
+			log.Printf("[HLS] WARNING: Failed to update status to uploading complete: %v", err)
+		}
 	}
 
 	return streamingURL, nil

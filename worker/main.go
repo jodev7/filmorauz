@@ -179,7 +179,7 @@ func main() {
 		workerCancel()
 	}()
 
-	// Stale-job protection - marks jobs stuck with no update for >90 minutes as failed.
+	// Stale-job protection - marks jobs stuck with no update for >180 minutes as failed.
 	// This prevents jobs from being stuck forever if the worker crashes mid-upload
 	// or if a non-retryable pipeline error leaves the status field in a bad state.
 	// Note: FFmpeg processing can take 30-60+ minutes, so we use a longer threshold.
@@ -189,7 +189,7 @@ func main() {
 
 		// Run once at startup so restarting the worker cleans up leftover stuck jobs
 		if n, err := jobRepo.FailStaleProcessingJobs(workerCtx); err == nil && n > 0 {
-			log.Printf("[WORKER] Startup stale-job sweep: failed %d jobs with no update for >90 minutes", n)
+			log.Printf("[WORKER] Startup stale-job sweep: failed %d jobs with no update for >180 minutes", n)
 		}
 
 		for {
