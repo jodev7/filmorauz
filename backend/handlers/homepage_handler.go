@@ -23,7 +23,7 @@ func NewHomepageHandler(movieService *services.MovieService, collectionService *
 }
 
 func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
-	movies, _, err := h.movieService.ListMovies("", 1, 30)
+	movies, _, err := h.movieService.ListMovies("", 1, 20)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch homepage movies"})
 		return
@@ -41,7 +41,7 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 		return
 	}
 
-	seriesList, err := h.seriesService.ListSeries(20, 0, "")
+	seriesList, err := h.seriesService.ListSeries(10, 0, "")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch homepage series"})
 		return
@@ -116,14 +116,66 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 		seriesPreview = seriesPreview[:10]
 	}
 
+	heroResponse := make([]gin.H, len(hero))
+	for i, movie := range hero {
+		heroResponse[i] = gin.H{
+			"id":           movie.ID.Hex(),
+			"title":        movie.Title,
+			"description":  movie.Description,
+			"poster_url":   movie.PosterURL,
+			"backdrop_url": movie.BackdropURL,
+			"year":         movie.Year,
+			"genre":        movie.Genre,
+			"slug":         movie.Slug,
+			"duration":     movie.Duration,
+			"quality":      movie.Quality,
+		}
+	}
+
+	toMovieCardResponse := func(list []models.Movie) []gin.H {
+		out := make([]gin.H, len(list))
+		for i, movie := range list {
+			out[i] = gin.H{
+				"id":         movie.ID.Hex(),
+				"code":       movie.Code,
+				"title":      movie.Title,
+				"poster_url": movie.PosterURL,
+				"slug":       movie.Slug,
+				"year":       movie.Year,
+				"genre":      movie.Genre,
+				"duration":   movie.Duration,
+				"quality":    movie.Quality,
+				"is_premium": movie.IsPremium,
+				"rating_avg": movie.RatingAvg,
+				"created_at": movie.CreatedAt,
+			}
+		}
+		return out
+	}
+
+	seriesResponse := make([]gin.H, len(seriesPreview))
+	for i, series := range seriesPreview {
+		seriesResponse[i] = gin.H{
+			"id":           series.ID.Hex(),
+			"slug":         series.Slug,
+			"title":        series.Title,
+			"poster_url":   series.PosterURL,
+			"year":         series.Year,
+			"genre":        series.Genre,
+			"rating_avg":   series.RatingAvg,
+			"is_premium":   series.IsPremium,
+			"is_completed": series.IsCompleted,
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"hero":                 hero,
+		"hero":                 heroResponse,
 		"genres":               genres,
-		"new_movies":           newMovies,
+		"new_movies":           toMovieCardResponse(newMovies),
 		"trending":             trendingResponse,
-		"premium_movies":       premiumMovies,
-		"featured_movies":      featuredMovies,
+		"premium_movies":       toMovieCardResponse(premiumMovies),
+		"featured_movies":      toMovieCardResponse(featuredMovies),
 		"featured_collections": featuredCollections,
-		"series":               seriesPreview,
+		"series":               seriesResponse,
 	})
 }

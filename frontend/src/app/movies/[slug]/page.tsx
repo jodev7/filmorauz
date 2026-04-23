@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 export const dynamic = "force-dynamic";
+import dynamicImport from "next/dynamic";
+import Image from "next/image";
 import { notFound } from "next/navigation";
 import Script from "next/script";
 import Link from "next/link";
@@ -8,17 +10,13 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MoviePoster from "@/components/MoviePoster";
 import MovieCode from "@/components/MovieCode";
-import MovieActions from "@/components/MovieActions";
 import MovieCarousel from "@/components/MovieCarousel";
-import StarRating from "@/components/StarRating";
-import Comments from "@/components/Comments";
 import WatchButton from "@/components/WatchButton";
-import ShareButton from "@/components/ShareButton";
 import { isMoviePremium, PremiumBadge } from "@/components/PremiumComponents";
-import { getMovie, getRecommendations, getRatingSummary } from "@/lib/api";
-import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
+import { getMovie, getRecommendations } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
 import { formatDuration } from "@/lib/movie-utils";
+import { normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 import {
 	getLocalizedTitle,
 	getLocalizedDescription,
@@ -28,6 +26,11 @@ import {
 } from "@/lib/localization";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
+const MovieActions = dynamicImport(() => import("@/components/MovieActions"));
+const StarRating = dynamicImport(() => import("@/components/StarRating"));
+const Comments = dynamicImport(() => import("@/components/Comments"));
+const ShareButton = dynamicImport(() => import("@/components/ShareButton"));
+const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
 
 interface Props {
   params: { slug: string };
@@ -190,10 +193,15 @@ export default async function MovieDetailPage({ params }: Props) {
         {/* Backdrop hero */}
         <div className="relative h-[50vh] sm:h-[55vh] min-h-[300px] sm:min-h-[380px]">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={movie.backdrop_url || movie.poster_url}
+          <Image
+            src={normalizeImageSrc(movie.backdrop_url || movie.poster_url)}
             alt={movie.title}
-            className="w-full h-full object-cover"
+            fill
+            priority
+            placeholder="blur"
+            blurDataURL={SHIMMER_BLUR_DATA_URL}
+            sizes="100vw"
+            className="object-cover"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-brand-dark via-brand-dark/50 to-black/30" />
         </div>

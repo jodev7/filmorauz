@@ -1,11 +1,13 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Play } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { ContinueWatchingItem, getContinueWatching } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { DEFAULT_POSTER_PLACEHOLDER, normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
 export default function ContinueWatchingSection() {
   const { t } = useI18n();
@@ -56,14 +58,14 @@ export default function ContinueWatchingSection() {
             className="shrink-0 w-[160px] sm:w-[180px] group"
           >
             <div className="relative aspect-[2/3] overflow-hidden rounded-lg bg-brand-border">
-              <img
-                src={item.poster_url}
+              <Image
+                src={normalizeImageSrc(item.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
                 alt={item.title}
-                width={240}
-                height={360}
-                loading="lazy"
-                decoding="async"
-                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                fill
+                sizes="(max-width: 640px) 160px, 180px"
+                placeholder="blur"
+                blurDataURL={SHIMMER_BLUR_DATA_URL}
+                className="object-cover group-hover:scale-105 transition-transform duration-300"
               />
               {/* Play overlay */}
               <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">

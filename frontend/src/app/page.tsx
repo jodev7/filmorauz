@@ -1,16 +1,18 @@
 import type { Metadata } from "next";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { ChevronRight, Flame, Clapperboard, Sparkles, Film } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MovieCarousel from "@/components/MovieCarousel";
 import SeriesCarousel from "@/components/SeriesCarousel";
-import ContinueWatchingSection from "@/components/home/ContinueWatchingSection";
-import FeaturedCollectionsSection from "@/components/home/FeaturedCollectionsSection";
 import HeroCarousel from "@/components/home/HeroCarousel";
-import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getHomepageData } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
+
+const ContinueWatchingSection = dynamic(() => import("@/components/home/ContinueWatchingSection"));
+const FeaturedCollectionsSection = dynamic(() => import("@/components/home/FeaturedCollectionsSection"));
+const WebsiteAdSlot = dynamic(() => import("@/components/ads/WebsiteAdSlot"));
 
 // ISR: regenerate the homepage shell every 60s. User-specific sections
 // (ContinueWatchingSection, ads) are client components and still fetch
@@ -54,7 +56,6 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function HomePage() {
   const { t } = getTranslations("uz");
   const homepage = await getHomepageData();
-  const movies = homepage.new_movies || [];
   const featured = homepage.featured_movies || [];
   const recent = homepage.new_movies || [];
   const latestMovies = homepage.hero || [];
@@ -191,7 +192,7 @@ export default async function HomePage() {
         )}
 
         {/* Empty state */}
-        {movies.length === 0 && (
+        {recent.length === 0 && (
           <section className="max-w-7xl mx-auto px-4 py-24 text-center">
             <p className="text-gray-400 text-lg">
               Hali kinolar yo'q.{" "}

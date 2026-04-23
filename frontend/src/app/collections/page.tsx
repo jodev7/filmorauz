@@ -1,13 +1,16 @@
 import type { Metadata } from "next";
 export const dynamic = "force-dynamic";
+import dynamicImport from "next/dynamic";
+import Image from "next/image";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MovieCard from "@/components/MovieCard";
-import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getCollections, Collection } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
+import { DEFAULT_POSTER_PLACEHOLDER, normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
+const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
 
 export async function generateMetadata(): Promise<Metadata> {
   return {
@@ -50,11 +53,17 @@ export default async function CollectionsPage() {
                 <section key={collection.id} className="pb-8">
                   <div className="flex items-center gap-4 mb-6">
                     {collection.poster_url && (
-                      <img
-                        src={collection.poster_url}
-                        alt={collection.title}
-                        className="w-16 h-24 object-cover rounded-lg"
-                      />
+                      <div className="relative w-16 h-24 rounded-lg overflow-hidden">
+                        <Image
+                          src={normalizeImageSrc(collection.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
+                          alt={collection.title}
+                          fill
+                          sizes="64px"
+                          placeholder="blur"
+                          blurDataURL={SHIMMER_BLUR_DATA_URL}
+                          className="object-cover"
+                        />
+                      </div>
                     )}
                     <div>
                       <h2 className="font-display text-2xl text-white">{collection.title}</h2>

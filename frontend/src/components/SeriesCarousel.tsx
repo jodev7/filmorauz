@@ -1,10 +1,12 @@
 "use client";
 
+import Image from "next/image";
 import { useRef, useState, useEffect } from "react";
 import { ChevronRight, ChevronLeft, Play, Star, Tv } from "lucide-react";
 import { Series } from "@/lib/series-api";
 import Link from "next/link";
 import { localizeSingleGenre } from "@/lib/localization";
+import { DEFAULT_POSTER_PLACEHOLDER, normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
 interface SeriesCarouselProps {
   series: Series[];
@@ -79,17 +81,14 @@ export default function SeriesCarousel({ series }: SeriesCarouselProps) {
           >
             {/* Poster */}
             <div className="relative aspect-[2/3] overflow-hidden bg-brand-border">
-              <img
-                src={s.poster_url || "/placeholder-poster.jpg"}
+              <Image
+                src={normalizeImageSrc(s.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
                 alt={s.title}
-                width={240}
-                height={360}
-                className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                loading="lazy"
-                decoding="async"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src = "/placeholder-poster.jpg";
-                }}
+                fill
+                sizes="(max-width: 640px) 140px, 160px"
+                placeholder="blur"
+                blurDataURL={SHIMMER_BLUR_DATA_URL}
+                className="object-cover transition-transform duration-500 group-hover:scale-105"
               />
 
               {/* Premium overlay */}

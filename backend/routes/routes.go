@@ -360,6 +360,8 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	// Admin season/episode management
 	adminSeasons := admin.Group("/seasons")
 	{
+		adminSeasons.PUT("/:id", seriesHandler.UpdateSeason)
+		adminSeasons.DELETE("/:id", seriesHandler.DeleteSeason)
 		adminSeasons.POST("/:id/episodes", seriesHandler.CreateEpisode)
 		adminSeasons.POST("/:id/episodes/reorder", seriesHandler.ReorderEpisodes)
 		adminSeasons.PUT("/:id/episodes", seriesHandler.UpdateSeasonEpisodes)

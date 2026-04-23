@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import Image from "next/image";
+import { useEffect, useState } from "react";
+import { DEFAULT_POSTER_PLACEHOLDER, normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
 interface OptimizedImageProps {
   src: string;
@@ -13,6 +15,7 @@ interface OptimizedImageProps {
   height?: number;
   sizes?: string;
   onError?: (e: React.SyntheticEvent<HTMLImageElement, Event>) => void;
+  fallbackSrc?: string;
 }
 
 // Default dimensions for a 2/3 poster card. Used as width/height attrs so the
@@ -32,23 +35,35 @@ export default function OptimizedImage({
   height,
   sizes,
   onError,
+  fallbackSrc = DEFAULT_POSTER_PLACEHOLDER,
 }: OptimizedImageProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  const [currentSrc, setCurrentSrc] = useState(() => normalizeImageSrc(src, fallbackSrc));
 
   // Reset loading state when src changes
   useEffect(() => {
     setIsLoading(true);
     setHasError(false);
-  }, [src]);
+    setCurrentSrc(normalizeImageSrc(src, fallbackSrc));
+  }, [src, fallbackSrc]);
 
   const handleLoad = () => {
     setIsLoading(false);
   };
 
   const handleError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
-    setIsLoading(false);
-    setHasError(true);
+    const nextSrc = normalizeImageSrc(fallbackSrc, DEFAULT_POSTER_PLACEHOLDER);
+    const target = e.target as HTMLImageElement;
+    if (currentSrc !== nextSrc) {
+      setCurrentSrc(nextSrc);
+      setHasError(false);
+      setIsLoading(true);
+    } else {
+      setIsLoading(false);
+      setHasError(true);
+    }
+    target.src = nextSrc;
     onError?.(e);
   };
 
@@ -65,47 +80,20 @@ export default function OptimizedImage({
       )}
 
       {/* Image */}
-      <img
-        src={src}
+      <Image
+        src={currentSrc}
         alt={alt}
-        width={w}
-        height={h}
-        sizes={sizes}
-        className={`w-full h-full object-cover transition-opacity duration-300 ${
+        fill
+        sizes={sizes || "(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 240px"}
+        priority={priority}
+        placeholder="blur"
+        blurDataURL={SHIMMER_BLUR_DATA_URL}
+        className={`object-cover transition-opacity duration-300 ${
           isLoading ? "opacity-0" : "opacity-100"
         }`}
-        loading={priority ? "eager" : "lazy"}
-        fetchPriority={priority ? "high" : "auto"}
-        decoding="async"
         onLoad={handleLoad}
         onError={handleError}
       />
     </div>
   );
-}
-
-// Shimmer animation for loading state
-const shimmerStyles = `
-  @keyframes shimmer {
-    0% {
-      transform: translateX(-100%);
-    }
-    100% {
-      transform: translateX(100%);
-    }
-  }
-  .animate-shimmer {
-    animation: shimmer 1.5s infinite;
-  }
-`;
-
-// Inject shimmer styles on component mount
-if (typeof document !== "undefined") {
-  const styleId = "optimized-image-styles";
-  if (!document.getElementById(styleId)) {
-    const style = document.createElement("style");
-    style.id = styleId;
-    style.textContent = shimmerStyles;
-    document.head.appendChild(style);
-  }
 }

@@ -1,11 +1,13 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useState, useRef, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { Ad, recordAdImpression, recordAdClick } from "@/lib/api";
 import { pickWeightedRandomAd, isUserPremium } from "@/lib/ads-utils";
 import { useAuth } from "@/lib/auth-context";
 import { useAdSlot } from "@/components/ads/AdSlotContext";
+import { normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
 interface FixedBottomAdProps {
   placement?: string;
@@ -95,7 +97,7 @@ export default function FixedBottomAd({
 
   return (
     <div
-      className="fixed left-0 right-0 z-50 overflow-hidden cursor-pointer"
+      className="fixed left-0 right-0 z-50 overflow-hidden cursor-pointer relative"
       style={{ bottom: bottomOffset, height: "180px" }}
       onClick={handleAdClick}
       role="link"
@@ -112,13 +114,15 @@ export default function FixedBottomAd({
           preload="metadata"
         />
       ) : (
-        <img
-          src={mediaUrl}
+        <Image
+          src={normalizeImageSrc(mediaUrl, "/og-image.jpg")}
           alt=""
           aria-hidden="true"
-          className="w-full h-full object-cover"
-          loading="lazy"
-          decoding="async"
+          fill
+          sizes="100vw"
+          placeholder="blur"
+          blurDataURL={SHIMMER_BLUR_DATA_URL}
+          className="object-cover"
         />
       )}
     </div>

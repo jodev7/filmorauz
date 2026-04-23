@@ -194,6 +194,7 @@ func (r *SeriesRepository) Update(series *models.Series) error {
 	filter := bson.M{"_id": series.ID}
 	update := bson.M{
 		"$set": bson.M{
+			"slug":         series.Slug,
 			"title":        series.Title,
 			"description":  series.Description,
 			"poster_url":   series.PosterURL,

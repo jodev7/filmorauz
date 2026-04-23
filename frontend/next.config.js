@@ -13,12 +13,14 @@ const nextConfig = {
 
   images: {
     remotePatterns: [
+      { protocol: "http", hostname: "localhost" },
+      { protocol: "http", hostname: "127.0.0.1" },
       { protocol: "https", hostname: "**" },
     ],
     // Long cache for the Next/Image optimizer output (used where we switch to
     // next/image). Poster/backdrop CDN URLs are served via plain <img> and
     // caching is controlled by the origin/CDN, not this value.
-    minimumCacheTTL: 60 * 60 * 24 * 30, // 30 days
+    minimumCacheTTL: 60 * 60 * 24 * 365,
     formats: ["image/avif", "image/webp"],
     deviceSizes: [360, 480, 640, 750, 828, 1080, 1200, 1536, 1920],
     imageSizes: [64, 96, 128, 180, 240, 320, 384],
@@ -41,7 +43,7 @@ const nextConfig = {
       {
         source: "/_next/image:path*",
         headers: [
-          { key: "Cache-Control", value: "public, max-age=2592000, stale-while-revalidate=604800" },
+          { key: "Cache-Control", value: oneYear },
         ],
       },
     ];

@@ -1,6 +1,7 @@
 "use client";
 
 import OptimizedImage from "./OptimizedImage";
+import { DEFAULT_POSTER_PLACEHOLDER } from "@/lib/image-utils";
 
 interface Props {
   src: string;
@@ -27,9 +28,7 @@ export default function MoviePoster({
       priority={priority}
       showSkeleton={showSkeleton}
       aspectRatio={aspectRatio}
-      onError={(e) => {
-        (e.target as HTMLImageElement).src = "/placeholder-poster.jpg";
-      }}
+      fallbackSrc={DEFAULT_POSTER_PLACEHOLDER}
     />
   );
 }

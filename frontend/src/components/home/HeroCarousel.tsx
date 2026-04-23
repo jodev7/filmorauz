@@ -1,11 +1,13 @@
 "use client";
 
+import Image from "next/image";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { Play } from "lucide-react";
 import { Movie } from "@/lib/api";
 import { localizeSingleGenre } from "@/lib/localization";
 import { formatDuration } from "@/lib/movie-utils";
+import { normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
 interface HeroCarouselProps {
   movies: Movie[];
@@ -89,14 +91,14 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
               <div className="absolute inset-0 overflow-hidden">
                 {shouldRender && (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={movie.backdrop_url || movie.poster_url}
+                  <Image
+                    src={normalizeImageSrc(movie.backdrop_url || movie.poster_url)}
                     alt={movie.title}
-                    loading={index === 0 ? "eager" : "lazy"}
-                    fetchPriority={index === 0 ? "high" : "auto"}
-                    decoding="async"
-                    width={1920}
-                    height={1080}
+                    fill
+                    priority={index === 0}
+                    placeholder="blur"
+                    blurDataURL={SHIMMER_BLUR_DATA_URL}
+                    sizes="100vw"
                     className={`w-full h-full object-cover transition-transform duration-700 ease-in-out ${
                       isActive ? "scale-105" : "scale-100"
                     }`}

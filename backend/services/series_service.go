@@ -79,8 +79,17 @@ func (s *SeriesService) GenerateSlug(title string) string {
 
 // CreateSeries creates a new series
 func (s *SeriesService) CreateSeries(input *models.SeriesInput) (*models.Series, error) {
+	slug := strings.TrimSpace(input.Slug)
+	if slug == "" {
+		slug = s.GenerateSlug(input.Title)
+	} else {
+		if !isValidSeriesSlug(slug) {
+			return nil, fmt.Errorf("invalid slug: use only lowercase letters, numbers, and hyphens")
+		}
+	}
+
 	series := &models.Series{
-		Slug:        s.GenerateSlug(input.Title),
+		Slug:        slug,
 		Title:       input.Title,
 		Description: input.Description,
 		PosterURL:   input.PosterURL,
@@ -96,9 +105,12 @@ func (s *SeriesService) CreateSeries(input *models.SeriesInput) (*models.Series,
 		IsPublished:    false,
 	}
 
-	// Check if slug already exists, append timestamp if needed
+	// Check if slug already exists, append timestamp if it was auto-generated.
 	existing, _ := s.seriesRepo.GetBySlug(series.Slug)
 	if existing != nil {
+		if strings.TrimSpace(input.Slug) != "" {
+			return nil, fmt.Errorf("slug already in use by another series")
+		}
 		series.Slug = series.Slug + "-" + time.Now().Format("20060102")
 	}
 
@@ -156,8 +168,12 @@ func (s *SeriesService) UpdateSeries(id primitive.ObjectID, input *models.Series
 
 	series.Title = input.Title
 	series.Description = input.Description
-	series.PosterURL = input.PosterURL
-	series.BackdropURL = input.BackdropURL
+	if input.PosterURL != "" {
+		series.PosterURL = input.PosterURL
+	}
+	if input.BackdropURL != "" {
+		series.BackdropURL = input.BackdropURL
+	}
 	series.Year = input.Year
 	series.Genre = normalizeGenres(input.Genre)
 	series.Country = input.Country
@@ -199,6 +215,50 @@ func (s *SeriesService) CreateSeason(seriesID primitive.ObjectID, seasonNumber i
 // GetSeasonsBySeriesID gets all seasons for a series
 func (s *SeriesService) GetSeasonsBySeriesID(seriesID primitive.ObjectID) ([]models.Season, error) {
 	return s.seriesRepo.GetSeasonsBySeriesID(seriesID)
+}
+
+// GetSeasonByID gets a season by ID
+func (s *SeriesService) GetSeasonByID(id primitive.ObjectID) (*models.Season, error) {
+	return s.seriesRepo.GetSeasonByID(id)
+}
+
+// UpdateSeason updates season metadata such as title
+func (s *SeriesService) UpdateSeason(id primitive.ObjectID, input *models.SeasonInput) (*models.Season, error) {
+	season, err := s.seriesRepo.GetSeasonByID(id)
+	if err != nil {
+		return nil, err
+	}
+
+	if input.Title != "" {
+		season.Title = input.Title
+	}
+	if input.PosterURL != "" {
+		season.PosterURL = input.PosterURL
+	}
+	if input.Description != "" {
+		season.Description = input.Description
+	}
+	if !input.ReleaseDate.IsZero() {
+		season.ReleaseDate = input.ReleaseDate
+	}
+
+	if err := s.seriesRepo.UpdateSeason(season); err != nil {
+		return nil, err
+	}
+
+	return season, nil
+}
+
+// DeleteSeason deletes a season only if it has no episodes
+func (s *SeriesService) DeleteSeason(id primitive.ObjectID) error {
+	episodes, err := s.seriesRepo.GetEpisodesBySeasonID(id)
+	if err != nil {
+		return err
+	}
+	if len(episodes) > 0 {
+		return fmt.Errorf("cannot delete season with episodes; move or delete episodes first")
+	}
+	return s.seriesRepo.DeleteSeason(id)
 }
 
 // CreateEpisode creates a new episode
@@ -285,6 +345,13 @@ func (s *SeriesService) ReorderEpisodesInSeason(seasonID primitive.ObjectID, epi
 
 // MoveEpisodeToSeason moves an episode to a different season with a new episode number
 func (s *SeriesService) MoveEpisodeToSeason(episodeID, newSeasonID primitive.ObjectID, newEpisodeNumber int) error {
+	season, err := s.seriesRepo.GetSeasonByID(newSeasonID)
+	if err != nil {
+		return err
+	}
+	if season == nil {
+		return fmt.Errorf("season not found")
+	}
 	return s.seriesRepo.MoveEpisodeToSeason(episodeID, newSeasonID, newEpisodeNumber)
 }
 

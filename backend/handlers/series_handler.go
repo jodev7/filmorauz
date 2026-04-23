@@ -267,6 +267,67 @@ func (h *SeriesHandler) CreateSeason(c *gin.Context) {
 	c.JSON(http.StatusCreated, season)
 }
 
+// PUT /api/admin/seasons/:id - Update season (admin)
+func (h *SeriesHandler) UpdateSeason(c *gin.Context) {
+	idStr := c.Param("id")
+	seasonID, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid season id"})
+		return
+	}
+
+	var input struct {
+		Title       string `json:"title"`
+		PosterURL   string `json:"poster_url"`
+		Description string `json:"description"`
+		ReleaseDate string `json:"release_date"`
+	}
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	seasonInput := &models.SeasonInput{
+		Title:       input.Title,
+		PosterURL:   input.PosterURL,
+		Description: input.Description,
+	}
+	if input.ReleaseDate != "" {
+		releaseDate, _ := time.Parse("2006-01-02", input.ReleaseDate)
+		seasonInput.ReleaseDate = releaseDate
+	}
+
+	season, err := h.seriesService.UpdateSeason(seasonID, seasonInput)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, season)
+}
+
+// DELETE /api/admin/seasons/:id - Delete season (admin)
+func (h *SeriesHandler) DeleteSeason(c *gin.Context) {
+	idStr := c.Param("id")
+	seasonID, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid season id"})
+		return
+	}
+
+	if err := h.seriesService.DeleteSeason(seasonID); err != nil {
+		if strings.Contains(err.Error(), "cannot delete season with episodes") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "season deleted"})
+}
+
 // POST /api/admin/seasons/:id/episodes - Create episode (admin)
 func (h *SeriesHandler) CreateEpisode(c *gin.Context) {
 	idStr := c.Param("id")

@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 export const dynamic = "force-dynamic";
+import dynamicImport from "next/dynamic";
+import Image from "next/image";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft, Calendar, Globe, Play } from "lucide-react";
@@ -7,11 +9,12 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import SeasonList from "@/components/SeasonList";
 import SeriesCarousel from "@/components/SeriesCarousel";
-import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getSeriesBySlug, getSeries } from "@/lib/series-api";
 import { localizeSingleGenre } from "@/lib/localization";
+import { DEFAULT_POSTER_PLACEHOLDER, normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
+const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
 
 interface Props {
   params: { slug: string };
@@ -66,10 +69,15 @@ export default async function SeriesDetailPage({ params }: Props) {
           {series.backdrop_url && (
             <>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={series.backdrop_url}
+              <Image
+                src={normalizeImageSrc(series.backdrop_url)}
                 alt={series.title}
-                className="w-full h-full object-cover"
+                fill
+                priority
+                placeholder="blur"
+                blurDataURL={SHIMMER_BLUR_DATA_URL}
+                sizes="100vw"
+                className="object-cover"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-brand-dark via-brand-dark/50 to-black/30" />
             </>
@@ -82,11 +90,17 @@ export default async function SeriesDetailPage({ params }: Props) {
             {/* Poster */}
             <div className="shrink-0">
               {series.poster_url && (
-                <img
-                  src={series.poster_url}
-                  alt={series.title}
-                  className="w-36 sm:w-44 md:w-48 lg:w-56 rounded-xl shadow-2xl border border-brand-border"
-                />
+                <div className="relative w-36 sm:w-44 md:w-48 lg:w-56 aspect-[2/3] rounded-xl shadow-2xl border border-brand-border overflow-hidden">
+                  <Image
+                    src={normalizeImageSrc(series.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
+                    alt={series.title}
+                    fill
+                    sizes="(max-width: 640px) 144px, (max-width: 768px) 176px, (max-width: 1024px) 192px, 224px"
+                    placeholder="blur"
+                    blurDataURL={SHIMMER_BLUR_DATA_URL}
+                    className="object-cover"
+                  />
+                </div>
               )}
             </div>
 

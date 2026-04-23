@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useState, useRef, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { X } from "lucide-react";
@@ -7,6 +8,7 @@ import { Ad, recordAdImpression, recordAdClick } from "@/lib/api";
 import { pickWeightedRandomAd, isUserPremium } from "@/lib/ads-utils";
 import { useAuth } from "@/lib/auth-context";
 import { useAdSlot } from "@/components/ads/AdSlotContext";
+import { normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
 interface WebsiteAdSlotProps {
   placement: string;
@@ -226,13 +228,15 @@ function AdMedia({ url, type }: { url: string; type: "image" | "video" }) {
   }
 
   return (
-    <img
-      src={url}
+    <Image
+      src={normalizeImageSrc(url, "/og-image.jpg")}
       alt=""
       aria-hidden="true"
-      className="absolute inset-0 w-full h-full object-cover object-center"
-      loading="lazy"
-      decoding="async"
+      fill
+      sizes="100vw"
+      placeholder="blur"
+      blurDataURL={SHIMMER_BLUR_DATA_URL}
+      className="object-cover object-center"
     />
   );
 }

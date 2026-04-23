@@ -119,6 +119,12 @@ func main() {
 
 	// Setup Gin
 	r := gin.Default()
+	r.Use(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/uploads/") || strings.HasPrefix(c.Request.URL.Path, "/stream/") {
+			c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		}
+		c.Next()
+	})
 	// Allow multipart forms up to 32 MB in memory (excess spills to disk).
 	// This must be set before any route handler that calls c.Request.FormFile().
 	r.MaxMultipartMemory = 32 << 20 // 32 MB

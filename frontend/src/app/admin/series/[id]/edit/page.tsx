@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { ChangeEvent, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -25,6 +25,8 @@ import {
   adminGetSeries,
   adminUpdateSeries,
   adminCreateSeason,
+  adminUpdateSeason,
+  adminDeleteSeason,
   adminCreateEpisode,
   adminDeleteEpisode,
   adminUpdateEpisode,
@@ -42,6 +44,7 @@ import {
   useSensor,
   useSensors,
   DragEndEvent,
+  useDroppable,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -166,6 +169,27 @@ function SortableEpisodeItem({
   );
 }
 
+function SeasonDropZone({
+  seasonId,
+  children,
+}: {
+  seasonId: string;
+  children: React.ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `season-drop-${seasonId}`,
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`${isOver ? "bg-brand-red/5" : ""}`}
+    >
+      {children}
+    </div>
+  );
+}
+
 
 interface SeasonWithEpisodes {
   season: Season;
@@ -251,6 +275,9 @@ export default function EditSeriesPage() {
 
   const [addingSeason, setAddingSeason] = useState(false);
   const [addingEpisode, setAddingEpisode] = useState(false);
+  const isUploadingMedia = uploads.poster.status === "uploading" || uploads.backdrop.status === "uploading";
+  const [savingSeasonId, setSavingSeasonId] = useState<string | null>(null);
+  const [deletingSeasonId, setDeletingSeasonId] = useState<string | null>(null);
 
   // Drag-and-drop state
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
@@ -320,6 +347,18 @@ export default function EditSeriesPage() {
       setError("Title is required");
       return;
     }
+    if (isUploadingMedia) {
+      setError("Iltimos, rasm yuklanib bo'lishini kuting.");
+      return;
+    }
+    if (uploads.poster.status === "error") {
+      setError(`Poster upload failed: ${uploads.poster.message || "please retry"}`);
+      return;
+    }
+    if (uploads.backdrop.status === "error") {
+      setError(`Backdrop upload failed: ${uploads.backdrop.message || "please retry"}`);
+      return;
+    }
 
     setSaving(true);
     setError("");
@@ -338,6 +377,14 @@ export default function EditSeriesPage() {
   };
 
   const handleUpload = async (type: "poster" | "backdrop", file: File) => {
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setUploads(prev => ({
+        ...prev,
+        [type]: { status: "error", message: "Invalid file type. Allowed: jpg, png, webp" }
+      }));
+      return;
+    }
+
     if (!token) {
       setUploads(prev => ({
         ...prev,
@@ -386,6 +433,14 @@ export default function EditSeriesPage() {
           message: err instanceof Error ? err.message : "Upload failed"
         }
       }));
+    }
+  };
+
+  const handleImageFileChange = (type: "poster" | "backdrop") => (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) {
+      void handleUpload(type, file);
     }
   };
 
@@ -480,6 +535,72 @@ export default function EditSeriesPage() {
     }
   };
 
+  const renumberEpisodes = (episodes: Episode[], seasonId?: string): Episode[] =>
+    episodes.map((ep, index) => ({
+      ...ep,
+      season_id: seasonId ?? ep.season_id,
+      episode_number: index + 1,
+    }));
+
+  const handleSaveSeason = async (seasonId: string) => {
+    if (!token) return;
+
+    const seasonState = seasons.find((s) => s.season.id === seasonId);
+    if (!seasonState) return;
+
+    setSavingSeasonId(seasonId);
+    try {
+      const updatedSeason = await adminUpdateSeason(token, seasonId, {
+        title: seasonState.season.title,
+        poster_url: seasonState.season.poster_url,
+        description: seasonState.season.description,
+      });
+      setSeasons((prev) =>
+        prev.map((s) =>
+          s.season.id === seasonId ? { ...s, season: updatedSeason } : s
+        )
+      );
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to update season");
+    } finally {
+      setSavingSeasonId(null);
+    }
+  };
+
+  const handleDeleteSeason = async (seasonId: string) => {
+    if (!token) return;
+
+    const seasonState = seasons.find((s) => s.season.id === seasonId);
+    if (!seasonState) return;
+
+    if (seasonState.episodes.length > 0) {
+      alert("Bu season ichida epizodlar bor. Avval epizodlarni ko'chiring yoki o'chiring.");
+      return;
+    }
+
+    if (!confirm(`"${seasonState.season.title || `Season ${seasonState.season.season_number}`}" seasonini o'chirmoqchimisiz?`)) {
+      return;
+    }
+
+    setDeletingSeasonId(seasonId);
+    try {
+      await adminDeleteSeason(token, seasonId);
+      setSeasons((prev) => prev.filter((s) => s.season.id !== seasonId));
+      setExpandedSeasons((prev) => {
+        const next = new Set(prev);
+        next.delete(seasonId);
+        return next;
+      });
+      if (activeSeasonId === seasonId) {
+        setActiveSeasonId(null);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to delete season");
+    } finally {
+      setDeletingSeasonId(null);
+    }
+  };
+
   // Drag-and-drop handlers
   const handleDragStart = (event: any) => {
     setActiveDragId(event.active.id);
@@ -507,7 +628,7 @@ export default function EditSeriesPage() {
         sourceSeasonIndex = i;
         activeEpisode = seasons[i].episodes[epIndex];
       }
-      if (seasons[i].episodes.some((ep) => ep.id === overId)) {
+      if (seasons[i].episodes.some((ep) => ep.id === overId) || overId === `season-drop-${seasons[i].season.id}`) {
         targetSeasonIndex = i;
       }
     }
@@ -524,7 +645,7 @@ export default function EditSeriesPage() {
 
       if (oldIndex === newIndex) return;
 
-      const newEpisodes = arrayMove(sourceSeason.episodes, oldIndex, newIndex);
+      const newEpisodes = renumberEpisodes(arrayMove(sourceSeason.episodes, oldIndex, newIndex));
 
       // Optimistically update UI
       setSeasons((prev) =>
@@ -545,28 +666,41 @@ export default function EditSeriesPage() {
     }
 
     // Moving between seasons
-    const newEpisodeNumber = targetSeason.episodes.length + 1;
+    const sourceEpisodesWithoutActive = sourceSeason.episodes.filter((ep) => ep.id !== activeId);
+    const targetInsertIndex =
+      overId === `season-drop-${targetSeason.season.id}`
+        ? targetSeason.episodes.length
+        : Math.max(0, targetSeason.episodes.findIndex((ep) => ep.id === overId));
+    const targetEpisodesWithMoved = [...targetSeason.episodes];
+    targetEpisodesWithMoved.splice(targetInsertIndex, 0, {
+      ...activeEpisode,
+      season_id: targetSeason.season.id,
+    });
+
+    const updatedSourceEpisodes = renumberEpisodes(sourceEpisodesWithoutActive, sourceSeason.season.id);
+    const updatedTargetEpisodes = renumberEpisodes(targetEpisodesWithMoved, targetSeason.season.id);
+    const movedEpisode = updatedTargetEpisodes.find((ep) => ep.id === activeId);
+    if (!movedEpisode) return;
 
     // Optimistically update UI
     setSeasons((prev) => {
       const newSeasons = [...prev];
-      // Remove from source
       newSeasons[sourceSeasonIndex] = {
         ...newSeasons[sourceSeasonIndex],
-        episodes: newSeasons[sourceSeasonIndex].episodes.filter((ep) => ep.id !== activeId),
+        episodes: updatedSourceEpisodes,
       };
-      // Add to target
-      const updatedEpisode = { ...activeEpisode!, season_id: targetSeason.season.id, episode_number: newEpisodeNumber };
       newSeasons[targetSeasonIndex] = {
         ...newSeasons[targetSeasonIndex],
-        episodes: [...newSeasons[targetSeasonIndex].episodes, updatedEpisode],
+        episodes: updatedTargetEpisodes,
       };
       return newSeasons;
     });
 
-    // Send move request
+    // Persist move + both season orderings
     try {
-      await adminMoveEpisodeToSeason(token, activeId, targetSeason.season.id, newEpisodeNumber);
+      await adminMoveEpisodeToSeason(token, activeId, targetSeason.season.id, movedEpisode.episode_number);
+      await adminReorderEpisodes(token, targetSeason.season.id, updatedTargetEpisodes.map((ep) => ep.id));
+      await adminReorderEpisodes(token, sourceSeason.season.id, updatedSourceEpisodes.map((ep) => ep.id));
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to move episode");
       // Reload data on error
@@ -714,11 +848,8 @@ export default function EditSeriesPage() {
                     <>
                       <input
                         type="file"
-                        accept="image/jpeg,image/png,image/webp"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) handleUpload("poster", file);
-                        }}
+                        accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                        onChange={handleImageFileChange("poster")}
                         className="hidden"
                         id="series-poster-upload"
                       />
@@ -761,11 +892,8 @@ export default function EditSeriesPage() {
                     <>
                       <input
                         type="file"
-                        accept="image/jpeg,image/png,image/webp"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) handleUpload("backdrop", file);
-                        }}
+                        accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                        onChange={handleImageFileChange("backdrop")}
                         className="hidden"
                         id="series-backdrop-upload"
                       />
@@ -895,7 +1023,7 @@ export default function EditSeriesPage() {
             {/* Save Button */}
             <button
               type="submit"
-              disabled={saving}
+              disabled={saving || isUploadingMedia}
               className="w-full flex items-center justify-center gap-2 bg-brand-red hover:bg-orange-700 text-white px-6 py-3 rounded-lg font-medium transition-colors disabled:opacity-50"
             >
               {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
@@ -986,13 +1114,61 @@ export default function EditSeriesPage() {
                         </div>
                       )}
                       <div>
-                        <h3 className="font-medium text-white">
-                          {s.season.title || `Season ${s.season.season_number}`}
-                        </h3>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={s.season.title}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) =>
+                              setSeasons((prev) =>
+                                prev.map((seasonState) =>
+                                  seasonState.season.id === s.season.id
+                                    ? {
+                                        ...seasonState,
+                                        season: { ...seasonState.season, title: e.target.value },
+                                      }
+                                    : seasonState
+                                )
+                              )
+                            }
+                            className="bg-transparent border border-brand-border rounded px-2 py-1 text-sm font-medium text-white focus:outline-none focus:border-brand-red"
+                            placeholder={`Season ${s.season.season_number}`}
+                          />
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleSaveSeason(s.season.id);
+                            }}
+                            disabled={savingSeasonId === s.season.id}
+                            className="p-1.5 text-brand-red hover:text-orange-400 disabled:opacity-50"
+                            title="Seasonni saqlash"
+                          >
+                            {savingSeasonId === s.season.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Save className="w-4 h-4" />
+                            )}
+                          </button>
+                        </div>
                         <p className="text-sm text-gray-400">{s.episodes.length} epizod</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleDeleteSeason(s.season.id);
+                        }}
+                        disabled={deletingSeasonId === s.season.id}
+                        className="p-2 text-gray-400 hover:text-red-400 disabled:opacity-50"
+                        title={s.episodes.length > 0 ? "Avval season ichidagi epizodlarni ko'chiring yoki o'chiring" : "Seasonni o'chirish"}
+                      >
+                        {deletingSeasonId === s.season.id ? (
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-5 h-5" />
+                        )}
+                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1012,6 +1188,7 @@ export default function EditSeriesPage() {
 
                   {/* Episodes List */}
                   {expandedSeasons.has(s.season.id) && (
+                    <SeasonDropZone seasonId={s.season.id}>
                     <div className="border-t border-brand-border">
                       {/* Add Episode Form */}
                       {activeSeasonId === s.season.id && (
@@ -1079,9 +1256,9 @@ export default function EditSeriesPage() {
                           items={s.episodes.map((ep) => ep.id)}
                           strategy={verticalListSortingStrategy}
                         >
-                          <div className="max-h-64 overflow-y-auto">
+                          <div className="max-h-64 overflow-y-auto min-h-16">
                             {s.episodes.length === 0 ? (
-                              <p className="text-gray-500 text-center py-4 text-sm">Epizodlar yo'q</p>
+                              <p className="text-gray-500 text-center py-4 text-sm">Epizodlar yo'q. Epizodni bu yerga tashlash mumkin.</p>
                             ) : (
                               s.episodes.map((ep) => (
                                 <SortableEpisodeItem
@@ -1095,6 +1272,7 @@ export default function EditSeriesPage() {
                         </SortableContext>
                       </DndContext>
                     </div>
+                    </SeasonDropZone>
                   )}
                 </div>
               ))

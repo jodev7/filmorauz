@@ -113,6 +113,46 @@ export interface HomepageResponse {
   series: SeriesPreview[];
 }
 
+function normalizeGenreList(input: unknown): string[] {
+  if (Array.isArray(input)) {
+    return input
+      .map((value) => (typeof value === "string" ? value.trim() : ""))
+      .filter(Boolean);
+  }
+
+  if (typeof input === "string") {
+    const trimmed = input.trim();
+    if (!trimmed) return [];
+
+    if (trimmed.includes(",")) {
+      return trimmed
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+    }
+
+    return [trimmed];
+  }
+
+  return [];
+}
+
+function normalizeMovieResponse(data: any): Movie {
+  const primaryGenre = normalizeGenreList(data?.genre);
+  const legacyGenres = normalizeGenreList(data?.genres);
+  const movieGenre = normalizeGenreList(data?.movie_genre);
+  const genre = primaryGenre.length > 0
+    ? primaryGenre
+    : legacyGenres.length > 0
+      ? legacyGenres
+      : movieGenre;
+
+  return {
+    ...data,
+    genre,
+  };
+}
+
 type BrowserCacheEntry<T> = {
   expiresAt: number;
   promise: Promise<T>;
@@ -164,10 +204,35 @@ export async function getHomepageData(): Promise<HomepageResponse> {
   });
   if (!res.ok) throw new Error("Failed to fetch homepage data");
   const json = await res.json();
+  const mapHomepageMovie = (item: any): Movie => ({
+    id: item.id,
+    code: item.code || "",
+    title: item.title || "",
+    description: item.description || "",
+    poster_url: item.poster_thumb_url || item.poster_url || "",
+    poster_thumb_url: item.poster_thumb_url || item.poster_url || "",
+    backdrop_url: item.backdrop_url || item.poster_url || "",
+    year: item.year || 0,
+    genre: item.genre || [],
+    country: item.country || "",
+    video_url: item.video_url || "",
+    embed_url: item.embed_url || "",
+    source_type: item.source_type || "iframe_embed",
+    duration: item.duration || 0,
+    quality: item.quality || "",
+    slug: item.slug || "",
+    views: item.views || 0,
+    rating_avg: item.rating_avg || 0,
+    rating_count: item.rating_count || 0,
+    is_premium: item.is_premium || false,
+    created_at: item.created_at || "",
+    updated_at: item.updated_at || "",
+  });
+
   return {
-    hero: json.hero || [],
+    hero: (json.hero || []).map(mapHomepageMovie),
     genres: json.genres || [],
-    new_movies: json.new_movies || [],
+    new_movies: (json.new_movies || []).map(mapHomepageMovie),
     trending: (json.trending || []).map((item: any) => ({
       id: item.id,
       title: item.title,
@@ -190,10 +255,27 @@ export async function getHomepageData(): Promise<HomepageResponse> {
       created_at: "",
       updated_at: "",
     })),
-    premium_movies: json.premium_movies || [],
-    featured_movies: json.featured_movies || [],
+    premium_movies: (json.premium_movies || []).map(mapHomepageMovie),
+    featured_movies: (json.featured_movies || []).map(mapHomepageMovie),
     featured_collections: json.featured_collections || [],
-    series: json.series || [],
+    series: (json.series || []).map((item: any) => ({
+      id: item.id,
+      slug: item.slug || "",
+      title: item.title || "",
+      description: item.description || "",
+      poster_url: item.poster_url || "",
+      backdrop_url: item.backdrop_url || item.poster_url || "",
+      year: item.year || 0,
+      genre: item.genre || [],
+      country: item.country || "",
+      views: item.views || 0,
+      rating_avg: item.rating_avg || 0,
+      rating_count: item.rating_count || 0,
+      is_premium: item.is_premium || false,
+      is_completed: item.is_completed || false,
+      created_at: item.created_at || "",
+      updated_at: item.updated_at || "",
+    })),
   };
 }
 
@@ -208,7 +290,7 @@ export async function getMovie(slug: string): Promise<Movie> {
   const json = await res.json();
   if (!json.data) throw new Error(`Movie not found: ${slug} (null data)`);
   console.log("[getMovie] Found movie:", json.data.id, "slug:", json.data.slug);
-  return json.data;
+  return normalizeMovieResponse(json.data);
 }
 
 // Get movie by ID
@@ -223,7 +305,7 @@ export async function getMovieById(id: string): Promise<Movie> {
   
   // Ensure views is explicitly set
   const movieWithViews = {
-    ...data,
+    ...normalizeMovieResponse(data),
     views: data?.views ?? 0,
   };
   
@@ -2363,6 +2445,13 @@ export interface CreateSeasonData {
   release_date?: string;
 }
 
+export interface UpdateSeasonData {
+  title?: string;
+  poster_url?: string;
+  description?: string;
+  release_date?: string;
+}
+
 export async function adminCreateSeason(
   token: string,
   seriesId: string,
@@ -2380,6 +2469,39 @@ export async function adminCreateSeason(
     throw new Error(err.error || "Failed to create season");
   }
   return res.json();
+}
+
+export async function adminUpdateSeason(
+  token: string,
+  seasonId: string,
+  season: UpdateSeasonData
+): Promise<any> {
+  const headers = authHeaders(token);
+  headers["Content-Type"] = "application/json";
+  const res = await fetch(`${API_URL}/admin/seasons/${seasonId}`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify(season),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to update season");
+  }
+  return res.json();
+}
+
+export async function adminDeleteSeason(
+  token: string,
+  seasonId: string
+): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/seasons/${seasonId}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to delete season");
+  }
 }
 
 // Admin: Create episode
