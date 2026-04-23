@@ -36,6 +36,24 @@ interface Props {
   params: { slug: string };
 }
 
+function normalizeMovieGenres(input: unknown): string[] {
+  if (Array.isArray(input)) {
+    return input
+      .map((value) => (typeof value === "string" ? value.trim() : ""))
+      .filter(Boolean);
+  }
+
+  if (typeof input === "string") {
+    const trimmed = input.trim();
+    if (!trimmed) return [];
+    return trimmed.includes(",")
+      ? trimmed.split(",").map((value) => value.trim()).filter(Boolean)
+      : [trimmed];
+  }
+
+  return [];
+}
+
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = params;
   const canonicalUrl = `${SITE_URL}/movies/${slug}`;
@@ -128,6 +146,12 @@ export default async function MovieDetailPage({ params }: Props) {
   const localizedDescription = getLocalizedDescription(movie);
   const localizedGenres = getLocalizedGenres(movie);
   const localizedCountry = getLocalizedCountry(movie);
+  const rawGenres =
+    normalizeMovieGenres((movie as any).genre).length > 0
+      ? normalizeMovieGenres((movie as any).genre)
+      : normalizeMovieGenres((movie as any).genres).length > 0
+        ? normalizeMovieGenres((movie as any).genres)
+        : normalizeMovieGenres((movie as any).movie_genre);
 
   // JSON-LD structured data for SEO - Breadcrumbs
   const breadcrumbJsonLd = {
@@ -264,9 +288,9 @@ export default async function MovieDetailPage({ params }: Props) {
                 )}
               </div>
 
-              {(movie.genre?.length || 0) > 0 && (
+              {rawGenres.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-5">
-                  {(movie.genre || []).map((g) => (
+                  {rawGenres.map((g) => (
                     <Link
                       key={g}
                       href={`/movies?genre=${encodeURIComponent(g.toLowerCase())}`}

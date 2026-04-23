@@ -29,12 +29,10 @@ import {
   adminDeleteSeason,
   adminCreateEpisode,
   adminDeleteEpisode,
-  adminUpdateEpisode,
   adminReorderEpisodes,
   adminMoveEpisodeToSeason,
   CreateSeriesData,
   UploadProgressInfo,
-  UpdateEpisodeData,
 } from "@/lib/api";
 import { backendUploadMovieImage } from "@/lib/api";
 import {
@@ -641,9 +639,12 @@ export default function EditSeriesPage() {
     // If moving within the same season
     if (sourceSeasonIndex === targetSeasonIndex) {
       const oldIndex = sourceSeason.episodes.findIndex((ep) => ep.id === activeId);
-      const newIndex = sourceSeason.episodes.findIndex((ep) => ep.id === overId);
+      const newIndex =
+        overId === `season-drop-${sourceSeason.season.id}`
+          ? sourceSeason.episodes.length - 1
+          : sourceSeason.episodes.findIndex((ep) => ep.id === overId);
 
-      if (oldIndex === newIndex) return;
+      if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return;
 
       const newEpisodes = renumberEpisodes(arrayMove(sourceSeason.episodes, oldIndex, newIndex));
 
@@ -1094,6 +1095,12 @@ export default function EditSeriesPage() {
           )}
 
           {/* Seasons List */}
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+          >
           <div className="space-y-3">
             {seasons.length === 0 ? (
               <p className="text-gray-500 text-center py-8">Hozircha seasonlar yo'q</p>
@@ -1246,31 +1253,24 @@ export default function EditSeriesPage() {
                       )}
 
                       {/* Episodes */}
-                      <DndContext
-                        sensors={sensors}
-                        collisionDetection={closestCenter}
-                        onDragStart={handleDragStart}
-                        onDragEnd={handleDragEnd}
+                      <SortableContext
+                        items={s.episodes.map((ep) => ep.id)}
+                        strategy={verticalListSortingStrategy}
                       >
-                        <SortableContext
-                          items={s.episodes.map((ep) => ep.id)}
-                          strategy={verticalListSortingStrategy}
-                        >
-                          <div className="max-h-64 overflow-y-auto min-h-16">
-                            {s.episodes.length === 0 ? (
-                              <p className="text-gray-500 text-center py-4 text-sm">Epizodlar yo'q. Epizodni bu yerga tashlash mumkin.</p>
-                            ) : (
-                              s.episodes.map((ep) => (
-                                <SortableEpisodeItem
-                                  key={ep.id}
-                                  episode={ep}
-                                  onDelete={(episodeId, episodeTitle) => setDeleteModal({ show: true, episodeId, episodeTitle })}
-                                />
-                              ))
-                            )}
-                          </div>
-                        </SortableContext>
-                      </DndContext>
+                        <div className="max-h-64 overflow-y-auto min-h-16">
+                          {s.episodes.length === 0 ? (
+                            <p className="text-gray-500 text-center py-4 text-sm">Epizodlar yo'q. Epizodni bu yerga tashlash mumkin.</p>
+                          ) : (
+                            s.episodes.map((ep) => (
+                              <SortableEpisodeItem
+                                key={ep.id}
+                                episode={ep}
+                                onDelete={(episodeId, episodeTitle) => setDeleteModal({ show: true, episodeId, episodeTitle })}
+                              />
+                            ))
+                          )}
+                        </div>
+                      </SortableContext>
                     </div>
                     </SeasonDropZone>
                   )}
@@ -1278,6 +1278,7 @@ export default function EditSeriesPage() {
               ))
             )}
           </div>
+          </DndContext>
         </div>
       </div>
 
