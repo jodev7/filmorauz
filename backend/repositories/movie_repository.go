@@ -201,16 +201,16 @@ func normalizeGenreFieldValue(value interface{}) []string {
 				genres = append(genres, v.String())
 			}
 		}
-		return genres
+		return normalizeGenreValues(genres)
 	case []string:
-		return g
+		return normalizeGenreValues(g)
 	case string:
 		if strings.Contains(g, ",") {
-			return strings.Split(g, ",")
+			return normalizeGenreValues(strings.Split(g, ","))
 		}
-		return []string{g}
+		return normalizeGenreValues([]string{g})
 	default:
-		return nil
+		return []string{}
 	}
 }
 
@@ -983,6 +983,10 @@ func (r *MovieRepository) Create(movie *models.Movie) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	movie.Genre = normalizeGenreValues(movie.Genre)
+	if movie.Genre == nil {
+		movie.Genre = []string{}
+	}
 	log.Printf("[MOVIE REPO] Creating movie: title=%s, code=%s, genre=%v", movie.Title, movie.Code, movie.Genre)
 
 	result, err := r.col.InsertOne(ctx, movie)
@@ -1001,12 +1005,62 @@ func (r *MovieRepository) Update(id primitive.ObjectID, movie *models.Movie) err
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	movie.Genre = normalizeGenreValues(movie.Genre)
+	if movie.Genre == nil {
+		movie.Genre = []string{}
+	}
 	log.Printf("[MOVIE REPO] Updating movie id=%v, genre=%v", id, movie.Genre)
 
 	_, err := r.col.UpdateOne(
 		ctx,
 		bson.M{"_id": id},
-		bson.M{"$set": movie},
+		bson.M{
+			"$set": bson.M{
+				"code":                        movie.Code,
+				"slug":                        movie.Slug,
+				"website_url":                 movie.WebsiteURL,
+				"source":                      movie.Source,
+				"title":                       movie.Title,
+				"normalized_title":            movie.NormalizedTitle,
+				"description":                 movie.Description,
+				"poster_url":                  movie.PosterURL,
+				"backdrop_url":                movie.BackdropURL,
+				"year":                        movie.Year,
+				"genre":                       movie.Genre,
+				"country":                     movie.Country,
+				"video_url":                   movie.VideoURL,
+				"embed_url":                   movie.EmbedURL,
+				"source_type":                 movie.SourceType,
+				"duration":                    movie.Duration,
+				"quality":                     movie.Quality,
+				"views":                       movie.Views,
+				"rating_avg":                  movie.RatingAvg,
+				"rating_count":                movie.RatingCount,
+				"is_premium":                  movie.IsPremium,
+				"created_at":                  movie.CreatedAt,
+				"updated_at":                  movie.UpdatedAt,
+				"master_playlist_url":         movie.MasterPlaylistURL,
+				"generated_qualities":         movie.GeneratedQualities,
+				"default_quality":             movie.DefaultQuality,
+				"source_resolution":           movie.SourceResolution,
+				"title_uz":                    movie.TitleUz,
+				"description_uz":              movie.DescriptionUz,
+				"genres_uz":                   movie.GenresUz,
+				"countries_uz":                movie.CountriesUz,
+				"original_title":              movie.OriginalTitle,
+				"tmdb_id":                     movie.TMDBID,
+				"metadata_source":             movie.MetadataSource,
+				"approval_status":             movie.ApprovalStatus,
+				"is_published":                movie.IsPublished,
+				"approved_at":                 movie.ApprovedAt,
+				"approved_by":                 movie.ApprovedBy,
+				"telegram_posted_on_approval": movie.TelegramPostedOnApproval,
+			},
+			"$unset": bson.M{
+				"genres":      "",
+				"movie_genre": "",
+			},
+		},
 	)
 	if err != nil {
 		log.Printf("[MOVIE REPO] Error updating movie: %v", err)

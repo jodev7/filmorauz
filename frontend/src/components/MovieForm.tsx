@@ -81,6 +81,16 @@ const emptyForm: MovieInput = {
   slug: "",
 };
 
+function normalizeGenreValue(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return "";
+  const normalized = trimmed.replace(/[_\s]+/g, "-").replace(/-+/g, "-");
+  if (normalized === "science-fiction" || normalized === "sciencefiction" || normalized === "scifi") {
+    return "sci-fi";
+  }
+  return normalized;
+}
+
 function formatSpeed(speedMBps?: number) {
   if (!speedMBps || !Number.isFinite(speedMBps) || speedMBps <= 0) return "";
   return `${speedMBps.toFixed(1)} MB/s`;
@@ -103,7 +113,7 @@ export default function MovieForm({
 }: Props) {
   const safeInitialData = initialData ? {
     ...initialData,
-    genre: Array.isArray(initialData.genre) ? initialData.genre.map((g: string) => g.toLowerCase().replace(/\s+/g, "-")) : [],
+    genre: Array.isArray(initialData.genre) ? initialData.genre.map((g: string) => normalizeGenreValue(g)).filter(Boolean) : [],
   } : emptyForm;
 
   const [form, setForm] = useState<MovieInput>({ ...emptyForm, ...safeInitialData });
@@ -196,7 +206,7 @@ export default function MovieForm({
   };
 
   const addGenre = () => {
-    const g = genreInput.trim().toLowerCase().replace(/\s+/g, "-");
+    const g = normalizeGenreValue(genreInput);
     if (g && !form.genre.includes(g)) {
       set("genre", [...form.genre, g]);
     }
@@ -208,7 +218,7 @@ export default function MovieForm({
   };
 
   const selectGenre = (g: string) => {
-    const slug = g.toLowerCase().replace(/\s+/g, "-");
+    const slug = normalizeGenreValue(g);
     if (form.genre.includes(slug)) {
       removeGenre(slug);
     } else {
@@ -354,7 +364,7 @@ export default function MovieForm({
     try {
       // Normalize genres before submit: trim, lowercase, dedupe
       const normalizedGenres = form.genre
-        .map((g: string) => g.trim().toLowerCase().replace(/\s+/g, "-"))
+        .map((g: string) => normalizeGenreValue(g))
         .filter((g: string, i: number, arr: string[]) => g && arr.indexOf(g) === i);
       
       const submitData = { ...form, genre: normalizedGenres };

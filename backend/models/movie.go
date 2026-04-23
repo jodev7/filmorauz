@@ -1,6 +1,8 @@
 package models
 
 import (
+	"encoding/json"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -112,4 +114,118 @@ type MovieInput struct {
 	OriginalTitle  string   `json:"original_title"`
 	TMDBID         int      `json:"tmdb_id"`
 	MetadataSource string   `json:"metadata_source"`
+}
+
+func normalizeMovieInputGenres(values ...interface{}) []string {
+	for _, value := range values {
+		switch v := value.(type) {
+		case []string:
+			if len(v) > 0 {
+				return append([]string(nil), v...)
+			}
+		case []interface{}:
+			out := make([]string, 0, len(v))
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					s = strings.TrimSpace(s)
+					if s != "" {
+						out = append(out, s)
+					}
+				}
+			}
+			if len(out) > 0 {
+				return out
+			}
+		case string:
+			trimmed := strings.TrimSpace(v)
+			if trimmed == "" {
+				continue
+			}
+			if strings.Contains(trimmed, ",") {
+				parts := strings.Split(trimmed, ",")
+				out := make([]string, 0, len(parts))
+				for _, part := range parts {
+					part = strings.TrimSpace(part)
+					if part != "" {
+						out = append(out, part)
+					}
+				}
+				if len(out) > 0 {
+					return out
+				}
+				continue
+			}
+			return []string{trimmed}
+		}
+	}
+	return []string{}
+}
+
+func (m *MovieInput) UnmarshalJSON(data []byte) error {
+	type movieInputAlias struct {
+		Source             *MovieSource    `json:"source,omitempty"`
+		Title              string          `json:"title"`
+		Description        string          `json:"description"`
+		PosterURL          string          `json:"poster_url"`
+		BackdropURL        string          `json:"backdrop_url"`
+		Year               int             `json:"year"`
+		Genre              interface{}     `json:"genre"`
+		Genres             interface{}     `json:"genres"`
+		MovieGenre         interface{}     `json:"movie_genre"`
+		Country            string          `json:"country"`
+		VideoURL           string          `json:"video_url"`
+		EmbedURL           string          `json:"embed_url"`
+		SourceType         VideoSourceType `json:"source_type"`
+		Duration           int             `json:"duration"`
+		Quality            string          `json:"quality"`
+		IsPremium          bool            `json:"is_premium"`
+		Slug               string          `json:"slug"`
+		MasterPlaylistURL  string          `json:"master_playlist_url"`
+		GeneratedQualities []string        `json:"generated_qualities"`
+		DefaultQuality     string          `json:"default_quality"`
+		SourceResolution   string          `json:"source_resolution"`
+		TitleUz            string          `json:"title_uz"`
+		DescriptionUz      string          `json:"description_uz"`
+		GenresUz           []string        `json:"genres_uz"`
+		CountriesUz        []string        `json:"countries_uz"`
+		OriginalTitle      string          `json:"original_title"`
+		TMDBID             int             `json:"tmdb_id"`
+		MetadataSource     string          `json:"metadata_source"`
+	}
+
+	var aux movieInputAlias
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	*m = MovieInput{
+		Source:             aux.Source,
+		Title:              aux.Title,
+		Description:        aux.Description,
+		PosterURL:          aux.PosterURL,
+		BackdropURL:        aux.BackdropURL,
+		Year:               aux.Year,
+		Genre:              normalizeMovieInputGenres(aux.Genre, aux.Genres, aux.MovieGenre),
+		Country:            aux.Country,
+		VideoURL:           aux.VideoURL,
+		EmbedURL:           aux.EmbedURL,
+		SourceType:         aux.SourceType,
+		Duration:           aux.Duration,
+		Quality:            aux.Quality,
+		IsPremium:          aux.IsPremium,
+		Slug:               aux.Slug,
+		MasterPlaylistURL:  aux.MasterPlaylistURL,
+		GeneratedQualities: aux.GeneratedQualities,
+		DefaultQuality:     aux.DefaultQuality,
+		SourceResolution:   aux.SourceResolution,
+		TitleUz:            aux.TitleUz,
+		DescriptionUz:      aux.DescriptionUz,
+		GenresUz:           aux.GenresUz,
+		CountriesUz:        aux.CountriesUz,
+		OriginalTitle:      aux.OriginalTitle,
+		TMDBID:             aux.TMDBID,
+		MetadataSource:     aux.MetadataSource,
+	}
+
+	return nil
 }

@@ -114,10 +114,33 @@ export interface HomepageResponse {
 }
 
 function normalizeGenreList(input: unknown): string[] {
+  const seen = new Set<string>();
+  const normalizeValue = (value: string): string => {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return "";
+    const hyphenated = trimmed.replace(/[_\s]+/g, "-").replace(/-+/g, "-");
+    if (hyphenated === "science-fiction" || hyphenated === "sciencefiction" || hyphenated === "scifi") {
+      return "sci-fi";
+    }
+    return hyphenated;
+  };
+  const pushUnique = (values: string[]): string[] => {
+    const out: string[] = [];
+    for (const value of values) {
+      const normalized = normalizeValue(value);
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      out.push(normalized);
+    }
+    return out;
+  };
+
   if (Array.isArray(input)) {
-    return input
-      .map((value) => (typeof value === "string" ? value.trim() : ""))
-      .filter(Boolean);
+    return pushUnique(
+      input
+        .map((value) => (typeof value === "string" ? value : ""))
+        .filter(Boolean)
+    );
   }
 
   if (typeof input === "string") {
@@ -125,13 +148,12 @@ function normalizeGenreList(input: unknown): string[] {
     if (!trimmed) return [];
 
     if (trimmed.includes(",")) {
-      return trimmed
+      return pushUnique(trimmed
         .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean);
+        .map((value) => value));
     }
 
-    return [trimmed];
+    return pushUnique([trimmed]);
   }
 
   return [];
@@ -195,7 +217,11 @@ export async function getMovies(params?: {
     next: { revalidate: 60 }, // ISR: revalidate every 60s
   });
   if (!res.ok) throw new Error("Failed to fetch movies");
-  return res.json();
+  const json = await res.json();
+  return {
+    ...json,
+    data: (json.data || []).map((item: any) => normalizeMovieResponse(item)),
+  };
 }
 
 export async function getHomepageData(): Promise<HomepageResponse> {

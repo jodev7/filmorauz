@@ -37,9 +37,19 @@ interface Props {
 }
 
 function normalizeMovieGenres(input: unknown): string[] {
+  const normalizeValue = (value: string): string => {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return "";
+    const normalized = trimmed.replace(/[_\s]+/g, "-").replace(/-+/g, "-");
+    if (normalized === "science-fiction" || normalized === "sciencefiction" || normalized === "scifi") {
+      return "sci-fi";
+    }
+    return normalized;
+  };
+
   if (Array.isArray(input)) {
     return input
-      .map((value) => (typeof value === "string" ? value.trim() : ""))
+      .map((value) => (typeof value === "string" ? normalizeValue(value) : ""))
       .filter(Boolean);
   }
 
@@ -47,8 +57,8 @@ function normalizeMovieGenres(input: unknown): string[] {
     const trimmed = input.trim();
     if (!trimmed) return [];
     return trimmed.includes(",")
-      ? trimmed.split(",").map((value) => value.trim()).filter(Boolean)
-      : [trimmed];
+      ? trimmed.split(",").map((value) => normalizeValue(value)).filter(Boolean)
+      : [normalizeValue(trimmed)].filter(Boolean);
   }
 
   return [];

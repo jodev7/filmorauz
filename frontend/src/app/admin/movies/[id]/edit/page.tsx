@@ -8,6 +8,16 @@ import MovieForm from "@/components/MovieForm";
 import { useAuth } from "@/lib/auth-context";
 import { adminUpdateMovie, adminGetMovies, Movie, MovieInput } from "@/lib/api";
 
+function normalizeGenreValue(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return "";
+  const normalized = trimmed.replace(/[_\s]+/g, "-").replace(/-+/g, "-");
+  if (normalized === "science-fiction" || normalized === "sciencefiction" || normalized === "scifi") {
+    return "sci-fi";
+  }
+  return normalized;
+}
+
 export default function EditMoviePage() {
   const { token } = useAuth();
   const router = useRouter();
@@ -91,7 +101,7 @@ export default function EditMoviePage() {
     poster_url: movie.poster_url,
     backdrop_url: movie.backdrop_url,
     year: movie.year,
-    genre: Array.isArray(movie.genre) ? movie.genre : [],
+    genre: Array.isArray(movie.genre) ? movie.genre.map((g) => normalizeGenreValue(g)).filter(Boolean) : [],
     country: movie.country,
     video_url: movie.video_url,
     embed_url: movie.embed_url,
