@@ -359,6 +359,7 @@ func (h *IngestionHandler) CompleteEpisode(c *gin.Context) {
 		return
 	}
 	episode.VideoURL = body.VideoURL
+	episode.SourceType = models.VideoSourceDirectHLS
 	if body.EmbedURL != "" {
 		episode.EmbedURL = body.EmbedURL
 	}

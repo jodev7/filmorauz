@@ -682,20 +682,25 @@ func (s *TelegramService) PostContentApproval(data *TelegramMovieData, isSerial 
 	}
 
 	if isSerial {
-		if s.serialsChannelUsername != "" {
-			send(ensureAtPrefix(s.serialsChannelUsername))
-		} else {
-			log.Printf("[TELEGRAM APPROVE] TELEGRAM_SERIALS_CHANNEL not configured, skipping serial post")
+		if s.serialsChannelUsername == "" {
+			log.Printf("[TELEGRAM APPROVE] TELEGRAM_SERIALS_CHANNEL not configured, serial post will rely on main/genre channels only")
 		}
-		return posted
 	}
 
-	targets := s.resolveMovieApprovalTargets(data.Genres)
+	targets := s.resolveApprovalTargets(data.Genres, isSerial)
 	if len(targets) == 0 {
-		log.Printf("[TELEGRAM APPROVE] movie id=%s movie=%q genres=%v NO_CHANNELS_RESOLVED - check TELEGRAM_CHANNELS config", data.Slug, data.Title, data.Genres)
+		contentType := "movie"
+		if isSerial {
+			contentType = "series"
+		}
+		log.Printf("[TELEGRAM APPROVE] %s id=%s title=%q genres=%v NO_CHANNELS_RESOLVED - check TELEGRAM_CHANNELS config", contentType, data.Slug, data.Title, data.Genres)
 		return posted
 	}
-	log.Printf("[TELEGRAM APPROVE] movie id=%s genres=%v RESOLVED_CHANNELS=%v", data.Slug, data.Genres, targets)
+	contentType := "movie"
+	if isSerial {
+		contentType = "series"
+	}
+	log.Printf("[TELEGRAM APPROVE] %s id=%s genres=%v RESOLVED_CHANNELS=%v", contentType, data.Slug, data.Genres, targets)
 	for _, t := range targets {
 		send(t)
 	}
@@ -733,7 +738,7 @@ func (s *TelegramService) sendApprovalToChannel(api *tgbotapi.BotAPI, target, ca
 // plus any TELEGRAM_CHANNELS entry whose trailing genre token matches one
 // of the movie's genres. If TELEGRAM_CHANNELS has a bare entry (no
 // underscore), it's treated as an additional main channel.
-func (s *TelegramService) resolveMovieApprovalTargets(genres []string) []string {
+func (s *TelegramService) resolveApprovalTargets(genres []string, includeSerialsChannel bool) []string {
 	// Debug: log input genres
 	log.Printf("[TELEGRAM] resolveMovieApprovalTargets: ===== START =====")
 	log.Printf("[TELEGRAM] resolveMovieApprovalTargets: raw input genres: %v", genres)
@@ -762,6 +767,10 @@ func (s *TelegramService) resolveMovieApprovalTargets(genres []string) []string 
 		add(s.channelUsername)
 		log.Printf("[TELEGRAM] resolveMovieApprovalTargets: main channel: %s", s.channelUsername)
 	}
+	if includeSerialsChannel && s.serialsChannelUsername != "" {
+		add(s.serialsChannelUsername)
+		log.Printf("[TELEGRAM] resolveMovieApprovalTargets: serials channel: %s", s.serialsChannelUsername)
+	}
 
 	// Try to resolve genre channels
 	if len(s.extraChannels) > 0 {
@@ -776,10 +785,15 @@ func (s *TelegramService) resolveMovieApprovalTargets(genres []string) []string 
 			channelName := strings.TrimPrefix(raw, "@")
 			idx := strings.LastIndex(channelName, "_")
 			if idx == -1 {
-				// Bare channel (main) - already added above
+				// Bare channel (main/additional default)
+				add(raw)
 				continue
 			}
-			suffix := strings.ToLower(channelName[idx+1:])
+			suffix := normalizeTelegramGenreKey(channelName[idx+1:])
+			if includeSerialsChannel && isSerialChannelSuffix(suffix) {
+				add(raw)
+				continue
+			}
 
 			// Try to match this suffix against all normalized genres
 			for _, g := range normalizedGenres {
@@ -818,6 +832,9 @@ func (s *TelegramService) resolveMovieApprovalTargets(genres []string) []string 
 		// If channelUsername is @filmorauznet, try @filmorauznet_drama, etc.
 		if s.channelUsername != "" {
 			baseName := strings.TrimPrefix(s.channelUsername, "@")
+			if includeSerialsChannel {
+				add(fmt.Sprintf("@%s_seriallar", baseName))
+			}
 			for _, g := range normalizedGenres {
 				if g == "" || g == "main" {
 					continue
@@ -845,17 +862,42 @@ func normalizeGenresForTelegram(genres []string) []string {
 	seen := make(map[string]bool)
 	var result []string
 	for _, g := range genres {
-		trimmed := strings.TrimSpace(g)
-		if trimmed == "" {
+		normalized := normalizeTelegramGenreKey(g)
+		if normalized == "" {
 			continue
 		}
-		lower := strings.ToLower(trimmed)
-		if !seen[lower] {
-			seen[lower] = true
-			result = append(result, lower)
+		if !seen[normalized] {
+			seen[normalized] = true
+			result = append(result, normalized)
 		}
 	}
 	return result
+}
+
+func normalizeTelegramGenreKey(raw string) string {
+	g := strings.ToLower(strings.TrimSpace(raw))
+	if g == "" {
+		return ""
+	}
+	g = strings.ReplaceAll(g, "_", "-")
+	g = strings.Join(strings.FieldsFunc(g, func(r rune) bool {
+		return r == ' ' || r == '-'
+	}), "-")
+	switch g {
+	case "science-fiction", "sciencefiction", "scifi":
+		return "sci-fi"
+	default:
+		return g
+	}
+}
+
+func isSerialChannelSuffix(suffix string) bool {
+	switch suffix {
+	case "serial", "serials", "seriallar", "series":
+		return true
+	default:
+		return false
+	}
 }
 
 func ensureAtPrefix(ch string) string {

@@ -41,7 +41,7 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 		return
 	}
 
-	seriesList, err := h.seriesService.ListSeries(20, 0)
+	seriesList, err := h.seriesService.ListSeries(20, 0, "")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch homepage series"})
 		return

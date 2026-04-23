@@ -67,6 +67,7 @@ func (h *MovieHandler) ListMovies(c *gin.Context) {
 	if mappedCount > 0 {
 		log.Printf("[ListMovies] Total mapped: %d/%d movies", mappedCount, len(movies))
 	}
+	log.Printf("[MOVIE API] ListMovies genre_filter=%q response_genres=%v", genre, extractMovieGenres(movies))
 
 	c.JSON(http.StatusOK, gin.H{
 		"data":  movies,
@@ -126,6 +127,7 @@ func (h *MovieHandler) GetMovieBySlug(c *gin.Context) {
 
 	// Get access info
 	access := models.GetMovieAccessInfo(user, movie)
+	log.Printf("[MOVIE API] GetMovieBySlug slug=%s db_genres=%v response_genres=%v", slug, movie.Genre, movie.Genre)
 
 	c.JSON(http.StatusOK, gin.H{
 		"data":   movie,
@@ -177,6 +179,7 @@ func (h *MovieHandler) GetMovieByID(c *gin.Context) {
 
 	// Get access info
 	access := models.GetMovieAccessInfo(user, movie)
+	log.Printf("[MOVIE API] GetMovieByID id=%s db_genres=%v response_genres=%v", id, movie.Genre, movie.Genre)
 
 	c.JSON(http.StatusOK, gin.H{
 		"data":   movie,
@@ -619,4 +622,12 @@ func (h *MovieHandler) RejectMovie(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "approval_status": "rejected"})
+}
+
+func extractMovieGenres(movies []models.Movie) [][]string {
+	out := make([][]string, 0, len(movies))
+	for _, m := range movies {
+		out = append(out, m.Genre)
+	}
+	return out
 }

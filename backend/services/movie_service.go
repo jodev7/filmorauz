@@ -41,18 +41,34 @@ func normalizeMovieGenres(genres []string) []string {
 	seen := make(map[string]bool)
 	var result []string
 	for _, g := range genres {
-		trimmed := strings.TrimSpace(g)
-		if trimmed == "" {
+		normalized := normalizeMovieGenreKey(g)
+		if normalized == "" {
 			continue
 		}
-		lower := strings.ToLower(trimmed)
-		if !seen[lower] {
-			seen[lower] = true
-			result = append(result, lower)
+		if !seen[normalized] {
+			seen[normalized] = true
+			result = append(result, normalized)
 		}
 	}
 	log.Printf("[MOVIE] normalizeMovieGenres: in=%v out=%v", genres, result)
 	return result
+}
+
+func normalizeMovieGenreKey(raw string) string {
+	g := strings.ToLower(strings.TrimSpace(raw))
+	if g == "" {
+		return ""
+	}
+	g = strings.ReplaceAll(g, "_", "-")
+	g = strings.Join(strings.FieldsFunc(g, func(r rune) bool {
+		return r == ' ' || r == '-'
+	}), "-")
+	switch g {
+	case "science-fiction", "sciencefiction", "scifi":
+		return "sci-fi"
+	default:
+		return g
+	}
 }
 
 // normalizeTitle normalizes a movie title: lowercase, trim, collapse spaces

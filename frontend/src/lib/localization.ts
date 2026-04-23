@@ -241,7 +241,12 @@ export function getLocalizedCountry(movie: LocalizedMovie | null, _locale: Local
 export function localizeSingleGenre(genre: string): string {
 	if (!genre) return "";
 	const trimmed = genre.trim();
-	const uz = UZBEK_GENRE_LOOKUP[trimmed.toLowerCase()];
+	const normalized = (trimmed
+		.toLowerCase()
+		.replace(/[_-]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim());
+	const uz = UZBEK_GENRE_LOOKUP[normalized];
 	if (uz) return uz;
 	return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }

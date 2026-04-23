@@ -56,6 +56,7 @@ type Episode struct {
 	ThumbnailURL  string             `bson:"thumbnail_url" json:"thumbnail_url"`
 	VideoURL      string             `bson:"video_url" json:"video_url"`
 	EmbedURL      string             `bson:"embed_url" json:"embed_url"`
+	SourceType    VideoSourceType    `bson:"source_type,omitempty" json:"source_type,omitempty"`
 	Duration      int                `bson:"duration" json:"duration"` // minutes
 	Views         int64              `bson:"views" json:"views"`       // View counter
 	AirDate       time.Time          `bson:"air_date" json:"air_date"`
@@ -107,6 +108,7 @@ type EpisodeInput struct {
 	ThumbnailURL string `json:"thumbnail_url"`
 	VideoURL     string `json:"video_url"`
 	EmbedURL     string `json:"embed_url"`
+	SourceType   VideoSourceType `json:"source_type"`
 	Duration     int    `json:"duration"`
 	AirDate      string `json:"air_date"`
 }

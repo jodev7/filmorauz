@@ -183,9 +183,10 @@ export default function Navbar() {
                     setQuery("");
                     setResults([]);
                   }}
-                  className="ml-2 text-zinc-400 hover:text-white"
+                  className="ml-2 text-zinc-300 hover:text-white"
+                  aria-label="Qidiruvni yopish"
                 >
-                  <X size={18} />
+                  <X size={18} aria-hidden="true" />
                 </button>
               </form>
             ) : (

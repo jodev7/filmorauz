@@ -39,13 +39,25 @@ export default async function EpisodePage({ params }: PageProps) {
     console.error("Failed to fetch episode:", error);
   }
 
-  const videoUrl = episode?.video_url;
   const movieData = episode ? {
     id: episode.id,
     title: episode.title,
     description: episode.description || "",
+    video_url: episode.video_url || "",
+    embed_url: episode.embed_url || "",
+    source_type: episode.source_type || "iframe_embed",
     poster_url: series?.series.poster_url || "",
+    backdrop_url: series?.series.backdrop_url || series?.series.poster_url || "",
     slug: episode.id.toString(),
+    genre: [],
+    country: "",
+    duration: episode.duration || 0,
+    quality: "",
+    views: 0,
+    rating_avg: 0,
+    rating_count: 0,
+    created_at: "",
+    updated_at: "",
     type: "episode" as const,
     series_title: series?.series.title,
     episode_number: episode.episode_number,

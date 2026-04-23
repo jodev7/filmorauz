@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/filmorauz/backend/models"
@@ -28,6 +29,7 @@ func (h *SeriesHandler) SetTelegramService(svc *services.TelegramService) {
 
 // GET /api/series - List all series
 func (h *SeriesHandler) ListSeries(c *gin.Context) {
+	genre := c.Query("genre")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 
@@ -40,11 +42,12 @@ func (h *SeriesHandler) ListSeries(c *gin.Context) {
 
 	skip := (page - 1) * limit
 
-	seriesList, err := h.seriesService.ListSeries(limit, skip)
+	seriesList, err := h.seriesService.ListSeries(limit, skip, genre)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list series"})
 		return
 	}
+	log.Printf("[SERIES API] ListSeries genre_filter=%q response_genres=%v", genre, extractSeriesGenres(seriesList))
 
 	c.JSON(http.StatusOK, gin.H{
 		"data":  seriesList,
@@ -73,6 +76,7 @@ func (h *SeriesHandler) GetSeriesBySlug(c *gin.Context) {
 
 	// Increment views
 	h.seriesService.IncrementSeriesViews(series.Series.ID)
+	log.Printf("[SERIES API] GetSeriesBySlug slug=%s db_genres=%v response_genres=%v", slug, series.Series.Genre, series.Series.Genre)
 
 	c.JSON(http.StatusOK, series)
 }
@@ -149,6 +153,7 @@ func (h *SeriesHandler) GetEpisode(c *gin.Context) {
 		"thumbnail_url":  episode.ThumbnailURL,
 		"video_url":      episode.VideoURL,
 		"embed_url":      episode.EmbedURL,
+		"source_type":    resolveEpisodeSourceType(episode),
 		"duration":       episode.Duration,
 		"views":          episode.Views,
 		"air_date":       episode.AirDate,
@@ -285,6 +290,7 @@ func (h *SeriesHandler) CreateEpisode(c *gin.Context) {
 		ThumbnailURL  string `json:"thumbnail_url"`
 		VideoURL      string `json:"video_url"`
 		EmbedURL      string `json:"embed_url"`
+		SourceType    string `json:"source_type"`
 		Duration      int    `json:"duration"`
 		AirDate       string `json:"air_date"`
 	}
@@ -299,6 +305,7 @@ func (h *SeriesHandler) CreateEpisode(c *gin.Context) {
 		ThumbnailURL: input.ThumbnailURL,
 		VideoURL:     input.VideoURL,
 		EmbedURL:     input.EmbedURL,
+		SourceType:   models.VideoSourceType(input.SourceType),
 		Duration:     input.Duration,
 		AirDate:      input.AirDate,
 	}
@@ -356,6 +363,7 @@ func (h *SeriesHandler) UpdateEpisode(c *gin.Context) {
 		ThumbnailURL  string `json:"thumbnail_url"`
 		VideoURL      string `json:"video_url"`
 		EmbedURL      string `json:"embed_url"`
+		SourceType    string `json:"source_type"`
 		Duration      int    `json:"duration"`
 		AirDate       string `json:"air_date"`
 	}
@@ -386,6 +394,9 @@ func (h *SeriesHandler) UpdateEpisode(c *gin.Context) {
 	if input.EmbedURL != "" {
 		episode.EmbedURL = input.EmbedURL
 	}
+	if input.SourceType != "" {
+		episode.SourceType = models.VideoSourceType(input.SourceType)
+	}
 	if input.Duration > 0 {
 		episode.Duration = input.Duration
 	}
@@ -412,6 +423,28 @@ func (h *SeriesHandler) UpdateEpisode(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, episode)
+}
+
+func resolveEpisodeSourceType(episode *models.Episode) models.VideoSourceType {
+	if episode == nil {
+		return models.VideoSourceIframeEmbed
+	}
+	if episode.SourceType != "" {
+		return episode.SourceType
+	}
+	videoURL := strings.ToLower(episode.VideoURL)
+	switch {
+	case episode.EmbedURL != "":
+		return models.VideoSourceIframeEmbed
+	case strings.Contains(videoURL, ".m3u8"), strings.Contains(videoURL, "/master.m3u8"):
+		return models.VideoSourceDirectHLS
+	case strings.Contains(videoURL, ".mp4"):
+		return models.VideoSourceDirectMP4
+	case videoURL != "":
+		return models.VideoSourceDirectMP4
+	default:
+		return models.VideoSourceIframeEmbed
+	}
 }
 
 // POST /api/admin/seasons/:id/episodes/reorder - Reorder episodes in a season (admin)
@@ -584,6 +617,7 @@ func (h *SeriesHandler) ApproveSeries(c *gin.Context) {
 				log.Printf("[TELEGRAM APPROVE] could not fetch series %s: %v", id, err)
 				return
 			}
+			log.Printf("[TELEGRAM] series=%s genres from DB: %v (len=%d)", series.Title, series.Genre, len(series.Genre))
 			watchURL := h.telegramService.GetBaseSiteURL() + "/series/" + series.Slug
 			data := &services.TelegramMovieData{
 				Title:       series.Title,
@@ -595,11 +629,20 @@ func (h *SeriesHandler) ApproveSeries(c *gin.Context) {
 				Slug:        series.Slug,
 				MovieURL:    watchURL,
 			}
-			h.telegramService.PostContentApproval(data, true)
+			posted := h.telegramService.PostContentApproval(data, true)
+			log.Printf("[TELEGRAM APPROVE] series id=%s result: posted_to=%v", id, posted)
 		}()
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "approval_status": "approved"})
+}
+
+func extractSeriesGenres(seriesList []models.Series) [][]string {
+	out := make([][]string, 0, len(seriesList))
+	for _, s := range seriesList {
+		out = append(out, s.Genre)
+	}
+	return out
 }
 
 // RejectSeries PATCH /api/admin/series/:id/reject

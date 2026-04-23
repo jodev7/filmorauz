@@ -5,6 +5,7 @@ import Footer from "@/components/Footer";
 import SeriesCarousel from "@/components/SeriesCarousel";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getSeries } from "@/lib/series-api";
+import { localizeSingleGenre } from "@/lib/localization";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 
@@ -18,11 +19,16 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-export default async function SeriesPage() {
+interface SeriesPageProps {
+  searchParams?: { genre?: string };
+}
+
+export default async function SeriesPage({ searchParams }: SeriesPageProps) {
   let seriesData: any[] = [];
+  const genre = searchParams?.genre || "";
   
   try {
-    const res = await getSeries(1, 50);
+    const res = await getSeries(1, 50, genre);
     seriesData = res.data || [];
   } catch {
     // Silently handle
@@ -35,7 +41,7 @@ export default async function SeriesPage() {
         <div className="max-w-7xl mx-auto px-4">
           <div className="mb-6 sm:mb-8">
             <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-white tracking-wide mb-2">
-              SERIALLAR
+              {genre ? `${localizeSingleGenre(genre).toUpperCase()} SERIALLAR` : "SERIALLAR"}
             </h1>
             <p className="text-gray-500 text-sm">
               {seriesData.length} ta serial topildi

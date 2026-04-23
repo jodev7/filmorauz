@@ -88,6 +88,10 @@ type PosterResult struct {
 	OriginalPosterURL  string // URL of original poster found
 	GeneratedPosterURL string // URL of AI-generated poster (if successful)
 	PosterGenerated    bool   // Whether AI poster was generated
+	// Multiple sizes for optimized loading
+	PosterThumbURL    string // ~300px width poster thumbnail
+	PosterMediumURL   string // ~600px width poster medium
+	PosterOriginalURL string // Original size poster
 }
 
 // BackdropResult contains the result of backdrop generation
@@ -95,6 +99,10 @@ type BackdropResult struct {
 	OriginalBackdropURL  string // URL of original backdrop found
 	GeneratedBackdropURL string // URL of AI-generated backdrop (if successful)
 	BackdropGenerated    bool   // Whether AI backdrop was generated
+	// Multiple sizes for optimized loading
+	BackdropThumbURL    string // ~640px width backdrop thumbnail
+	BackdropMediumURL   string // ~1280px width backdrop medium
+	BackdropOriginalURL string // Original size backdrop
 }
 
 // GeneratePoster generates an Uzbek-localized poster or finds original

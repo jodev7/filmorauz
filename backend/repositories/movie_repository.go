@@ -19,6 +19,34 @@ type MovieRepository struct {
 	col *mongo.Collection
 }
 
+func normalizeGenreValues(genres []string) []string {
+	if len(genres) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]struct{}, len(genres))
+	out := make([]string, 0, len(genres))
+	for _, g := range genres {
+		g = strings.ToLower(strings.TrimSpace(g))
+		if g == "" {
+			continue
+		}
+		g = strings.ReplaceAll(g, "_", "-")
+		g = strings.Join(strings.FieldsFunc(g, func(r rune) bool {
+			return r == ' ' || r == '-'
+		}), "-")
+		switch g {
+		case "science-fiction", "sciencefiction", "scifi":
+			g = "sci-fi"
+		}
+		if _, ok := seen[g]; ok {
+			continue
+		}
+		seen[g] = struct{}{}
+		out = append(out, g)
+	}
+	return out
+}
+
 // Collection returns the underlying mongo collection for admin operations
 func (r *MovieRepository) Collection() *mongo.Collection {
 	return r.col
@@ -274,6 +302,7 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 		log.Printf("[DEBUG] normalizeMovieFromBSON: neither 'genre' nor 'genres' found in doc, available keys: %v", keys)
 	}
 	// Always ensure Genre is non-nil empty slice, never null
+	movie.Genre = normalizeGenreValues(movie.Genre)
 	if movie.Genre == nil {
 		movie.Genre = []string{}
 		log.Printf("[DEBUG] normalizeMovieFromBSON: Genre set to empty slice (was nil)")
@@ -471,6 +500,11 @@ func (r *MovieRepository) List(genre string, page, limit int) ([]models.Movie, i
 
 	log.Printf("[ListMovies] === DEBUG START ===")
 	log.Printf("[ListMovies] Request: genre=%q, page=%d, limit=%d", genre, page, limit)
+	if normalized := normalizeGenreValues([]string{genre}); len(normalized) > 0 {
+		genre = normalized[0]
+	} else {
+		genre = ""
+	}
 
 	// Only show published movies publicly; legacy docs without is_published are also shown
 	filter := bson.M{

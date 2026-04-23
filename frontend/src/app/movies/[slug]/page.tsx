@@ -261,7 +261,7 @@ export default async function MovieDetailPage({ params }: Props) {
                   {(movie.genre || []).map((g) => (
                     <Link
                       key={g}
-                      href={`/movies?genre=${g.toLowerCase()}`}
+                      href={`/movies?genre=${encodeURIComponent(g.toLowerCase())}`}
                       className="text-xs sm:text-sm bg-brand-card border border-brand-border text-gray-300 px-3 py-1 rounded-full hover:border-brand-red hover:text-brand-red transition-colors"
                     >
                       {localizeSingleGenre(g)}

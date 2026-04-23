@@ -51,6 +51,8 @@ export default function FeaturedCollectionsSection({
                     src={collection.poster_url}
                     alt={collection.title}
                     fill
+                    sizes="64px"
+                    loading="lazy"
                     className="object-cover"
                   />
                 </div>

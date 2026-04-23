@@ -280,7 +280,7 @@ export default function EditSeriesPage() {
             poster_url: series.poster_url,
             backdrop_url: series.backdrop_url,
             year: series.year,
-            genre: (series.genre || []).map((g) => g.toLowerCase()),
+            genre: (series.genre || []).map((g) => g.toLowerCase().replace(/[_\s]+/g, "-")),
             country: series.country,
             is_premium: series.is_premium,
           });
@@ -325,7 +325,10 @@ export default function EditSeriesPage() {
     setError("");
 
     try {
-      await adminUpdateSeries(token, id, form);
+      const normalizedGenres = Array.from(
+        new Set((form.genre || []).map((g) => g.trim().toLowerCase().replace(/[_\s]+/g, "-")).filter(Boolean))
+      );
+      await adminUpdateSeries(token, id, { ...form, genre: normalizedGenres });
       alert("Series saved!");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Xatolik yuz berdi");
@@ -387,7 +390,7 @@ export default function EditSeriesPage() {
   };
 
   const addGenre = () => {
-    const g = genreInput.trim().toLowerCase();
+    const g = genreInput.trim().toLowerCase().replace(/\s+/g, "-");
     if (g && !(form.genre || []).includes(g)) {
       setForm({ ...form, genre: [...(form.genre || []), g] });
     }

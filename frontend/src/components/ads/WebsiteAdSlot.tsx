@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { X } from "lucide-react";
 import { Ad, recordAdImpression, recordAdClick } from "@/lib/api";
@@ -32,36 +32,24 @@ export default function WebsiteAdSlot({
   const pathname = usePathname();
   const { user, isLoading: authLoading } = useAuth();
   const { ensurePlacements, getMergedAds } = useAdSlot();
-  const [ads, setAds] = useState<Ad[]>([]);
   const [dismissed, setDismissed] = useState(false);
   const [current, setCurrent] = useState(0);
-  const [isReady, setIsReady] = useState(false);
-  const adsRef = useRef<Ad[]>([]);
-  const currentRef = useRef(0);
-  const fetchedRef = useRef(false);
   const impressedRef = useRef<Set<string>>(new Set());
   const lastImpressionRef = useRef<string>("");
   const containerRef = useRef<HTMLDivElement>(null);
   const [shouldLoad, setShouldLoad] = useState(!lazy);
 
-  const fetchAds = useCallback(async () => {
-    if (fetchedRef.current) return;
-    fetchedRef.current = true;
-    try {
-      const placements = getSlotPlacements(placement, variant, popup);
-      await ensurePlacements(placements);
-      const data = getMergedAds(placements);
-      setAds(data);
-      adsRef.current = data;
-      setCurrent(0);
-      currentRef.current = 0;
-      impressedRef.current = new Set();
-      setIsReady(true);
-    } catch {
-      fetchedRef.current = false;
-    }
-  }, [ensurePlacements, getMergedAds, placement, popup, variant]);
+  const placements = useMemo(
+    () => getSlotPlacements(placement, variant, popup),
+    [placement, variant, popup],
+  );
 
+  // Ads always derive from the shared context — no local state, no stale
+  // empty-array bug, no duplicate fetch loops.
+  const ads = useMemo(() => getMergedAds(placements), [getMergedAds, placements]);
+  const isReady = ads.length > 0;
+
+  // Viewport lazy-load trigger
   useEffect(() => {
     if (!lazy) return;
     const node = containerRef.current;
@@ -74,7 +62,7 @@ export default function WebsiteAdSlot({
           observer.disconnect();
         }
       },
-      { rootMargin: "300px 0px" }
+      { rootMargin: "300px 0px" },
     );
     observer.observe(node);
     return () => observer.disconnect();
@@ -82,27 +70,26 @@ export default function WebsiteAdSlot({
 
   useEffect(() => {
     if (!shouldLoad) return;
-    fetchAds();
-    return () => {
-      fetchedRef.current = false;
-    };
-  }, [fetchAds, shouldLoad]);
+    ensurePlacements(placements).catch(() => {});
+  }, [ensurePlacements, placements, shouldLoad]);
 
+  // Rotate with weighted random every 5s when multiple ads exist.
   useEffect(() => {
     if (ads.length <= 1 || !isReady) return;
     const interval = setInterval(() => {
-      const currentAdId = adsRef.current[currentRef.current]?.id;
-      const picked = pickWeightedRandomAd(adsRef.current, currentAdId);
-      const idx = adsRef.current.indexOf(picked);
-      currentRef.current = idx;
-      setCurrent(idx);
+      setCurrent((cur) => {
+        const currentAdId = ads[cur % ads.length]?.id;
+        const picked = pickWeightedRandomAd(ads, currentAdId);
+        return ads.indexOf(picked);
+      });
     }, 5000);
     return () => clearInterval(interval);
-  }, [ads.length, isReady]);
+  }, [ads, isReady]);
 
   useEffect(() => {
     if (ads.length === 0 || !isReady) return;
     const ad = ads[current % ads.length];
+    if (!ad) return;
     const impressionKey = `${placement}:${ad.id}:${current}`;
     if (impressedRef.current.has(ad.id) || lastImpressionRef.current === impressionKey) return;
     lastImpressionRef.current = impressionKey;
@@ -130,6 +117,9 @@ export default function WebsiteAdSlot({
       <div
         className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
         onClick={(e) => { if (e.target === e.currentTarget) setDismissed(true); }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Reklama"
       >
         <div
           className="relative w-full max-w-sm rounded-xl overflow-hidden shadow-2xl border border-brand-border"
@@ -138,9 +128,9 @@ export default function WebsiteAdSlot({
           <button
             onClick={() => setDismissed(true)}
             className="absolute top-2 right-2 z-10 p-1.5 rounded-full bg-black/50 text-white hover:bg-black/80 transition"
-            aria-label="Close ad"
+            aria-label="Reklamani yopish"
           >
-            <X size={14} />
+            <X size={14} aria-hidden="true" />
           </button>
           <div className="relative w-full h-[500px] overflow-hidden cursor-pointer" onClick={handleClick}>
             <AdMedia url={media.url} type={media.type} />
@@ -159,11 +149,13 @@ export default function WebsiteAdSlot({
       <div
         className="relative w-full rounded-lg overflow-hidden border border-brand-border cursor-pointer hover:border-brand-red/50 transition-colors"
         onClick={handleClick}
+        role="link"
+        aria-label="Reklamani ochish"
       >
         <div className={`relative w-full ${mediaHeight} overflow-hidden`}>
           <AdMedia url={media.url} type={media.type} />
         </div>
-        <span className="absolute top-1.5 right-1.5 text-[9px] text-gray-500 bg-black/60 px-1 py-0.5 rounded pointer-events-none uppercase tracking-wide">
+        <span className="absolute top-1.5 right-1.5 text-[9px] text-gray-300 bg-black/70 px-1 py-0.5 rounded pointer-events-none uppercase tracking-wide">
           Ad
         </span>
       </div>
@@ -196,7 +188,6 @@ function resolveMedia(
   ad: Ad,
   variant: "banner" | "inline" | "card" | "popup",
 ): { url: string; type: "image" | "video" } {
-  // Priority chain per variant → final fallback: image_url
   let url: string | undefined;
   let type: "image" | "video" | undefined;
 
@@ -237,9 +228,11 @@ function AdMedia({ url, type }: { url: string; type: "image" | "video" }) {
   return (
     <img
       src={url}
-      alt="Ad"
+      alt=""
+      aria-hidden="true"
       className="absolute inset-0 w-full h-full object-cover object-center"
       loading="lazy"
+      decoding="async"
     />
   );
 }

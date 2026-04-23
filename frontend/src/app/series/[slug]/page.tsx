@@ -120,12 +120,13 @@ export default async function SeriesDetailPage({ params }: Props) {
               {series.genre && series.genre.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-5">
                   {series.genre.map((g: string) => (
-                    <span
+                    <Link
                       key={g}
-                      className="text-xs sm:text-sm bg-brand-card border border-brand-border text-gray-300 px-3 py-1 rounded-full"
+                      href={`/series?genre=${encodeURIComponent(g.toLowerCase())}`}
+                      className="text-xs sm:text-sm bg-brand-card border border-brand-border text-gray-300 px-3 py-1 rounded-full hover:border-brand-red hover:text-brand-red transition-colors"
                     >
                       {localizeSingleGenre(g)}
-                    </span>
+                    </Link>
                   ))}
                 </div>
               )}
@@ -146,7 +147,11 @@ export default async function SeriesDetailPage({ params }: Props) {
               <h2 className="font-display text-2xl sm:text-3xl tracking-wide text-white mb-6">
                 FASLLAR
               </h2>
-              <SeasonList seasons={seasons} />
+              <SeasonList
+                seasons={seasons}
+                seriesBackdropUrl={series.backdrop_url}
+                seriesPosterUrl={series.poster_url}
+              />
             </section>
           )}
 

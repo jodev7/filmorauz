@@ -25,7 +25,7 @@ export default function SeriesCarousel({ series }: SeriesCarouselProps) {
   useEffect(() => {
     const scrollElement = scrollRef.current;
     if (scrollElement) {
-      scrollElement.addEventListener("scroll", checkScroll);
+      scrollElement.addEventListener("scroll", checkScroll, { passive: true });
       checkScroll();
       return () => scrollElement.removeEventListener("scroll", checkScroll);
     }
@@ -50,9 +50,9 @@ export default function SeriesCarousel({ series }: SeriesCarouselProps) {
         className={`absolute left-0 top-1/2 -translate-y-1/2 z-10 w-10 h-10 bg-brand-dark/80 hover:bg-brand-red rounded-full flex items-center justify-center transition-all duration-300 opacity-100 hover:scale-110 shadow-lg ${
           canScrollLeft ? "ml-2" : "-ml-12"
         }`}
-        aria-label="Scroll left"
+        aria-label="Chapga surish"
       >
-        <ChevronLeft size={20} className="text-white" />
+        <ChevronLeft size={20} className="text-white" aria-hidden="true" />
       </button>
 
       <button
@@ -60,9 +60,9 @@ export default function SeriesCarousel({ series }: SeriesCarouselProps) {
         className={`absolute right-0 top-1/2 -translate-y-1/2 z-10 w-10 h-10 bg-brand-dark/80 hover:bg-brand-red rounded-full flex items-center justify-center transition-all duration-300 opacity-100 hover:scale-110 shadow-lg ${
           canScrollRight ? "mr-2" : "-mr-12"
         }`}
-        aria-label="Scroll right"
+        aria-label="O'ngga surish"
       >
-        <ChevronRight size={20} className="text-white" />
+        <ChevronRight size={20} className="text-white" aria-hidden="true" />
       </button>
 
       {/* Cards Container */}
@@ -71,7 +71,7 @@ export default function SeriesCarousel({ series }: SeriesCarouselProps) {
         className="flex gap-4 overflow-x-auto scrollbar-hide pb-2 px-2"
         style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
-        {series.map((s, index) => (
+        {series.map((s) => (
           <Link
             key={s.id}
             href={`/series/${s.slug}`}
@@ -82,9 +82,10 @@ export default function SeriesCarousel({ series }: SeriesCarouselProps) {
               <img
                 src={s.poster_url || "/placeholder-poster.jpg"}
                 alt={s.title}
+                width={240}
+                height={360}
                 className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                loading={index < 2 ? "eager" : "lazy"}
-                fetchPriority={index < 2 ? "high" : "auto"}
+                loading="lazy"
                 decoding="async"
                 onError={(e) => {
                   (e.target as HTMLImageElement).src = "/placeholder-poster.jpg";

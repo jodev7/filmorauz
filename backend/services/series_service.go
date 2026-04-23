@@ -32,7 +32,7 @@ func normalizeGenres(in []string) []string {
 	seen := make(map[string]struct{}, len(in))
 	out := make([]string, 0, len(in))
 	for _, g := range in {
-		g = strings.ToLower(strings.TrimSpace(g))
+		g = normalizeSeriesGenreKey(g)
 		if g == "" {
 			continue
 		}
@@ -43,6 +43,23 @@ func normalizeGenres(in []string) []string {
 		out = append(out, g)
 	}
 	return out
+}
+
+func normalizeSeriesGenreKey(raw string) string {
+	g := strings.ToLower(strings.TrimSpace(raw))
+	if g == "" {
+		return ""
+	}
+	g = strings.ReplaceAll(g, "_", "-")
+	g = strings.Join(strings.FieldsFunc(g, func(r rune) bool {
+		return r == ' ' || r == '-'
+	}), "-")
+	switch g {
+	case "science-fiction", "sciencefiction", "scifi":
+		return "sci-fi"
+	default:
+		return g
+	}
 }
 
 // GenerateSlug creates a URL-friendly slug from title
@@ -114,8 +131,8 @@ func (s *SeriesService) GetSeriesWithSeasons(slug string) (*models.SeriesWithSea
 }
 
 // ListSeries lists all series
-func (s *SeriesService) ListSeries(limit, skip int) ([]models.Series, error) {
-	return s.seriesRepo.List(limit, skip)
+func (s *SeriesService) ListSeries(limit, skip int, genre string) ([]models.Series, error) {
+	return s.seriesRepo.List(limit, skip, genre)
 }
 
 // UpdateSeries updates a series
@@ -197,6 +214,7 @@ func (s *SeriesService) CreateEpisode(seriesID, seasonID primitive.ObjectID, epi
 		ThumbnailURL:  input.ThumbnailURL,
 		VideoURL:      input.VideoURL,
 		EmbedURL:      input.EmbedURL,
+		SourceType:    inferEpisodeSourceType(input.SourceType, input.VideoURL, input.EmbedURL),
 		Duration:      input.Duration,
 		AirDate:       airDate,
 	}
@@ -236,7 +254,28 @@ func (s *SeriesService) DeleteEpisode(id primitive.ObjectID) error {
 
 // UpdateEpisode updates an episode's details including season and episode number
 func (s *SeriesService) UpdateEpisode(episode *models.Episode) error {
+	episode.SourceType = inferEpisodeSourceType(episode.SourceType, episode.VideoURL, episode.EmbedURL)
 	return s.seriesRepo.UpdateEpisode(episode)
+}
+
+func inferEpisodeSourceType(sourceType models.VideoSourceType, videoURL, embedURL string) models.VideoSourceType {
+	if sourceType != "" {
+		return sourceType
+	}
+	if embedURL != "" {
+		return models.VideoSourceIframeEmbed
+	}
+	videoURL = strings.ToLower(videoURL)
+	switch {
+	case strings.Contains(videoURL, ".m3u8"), strings.Contains(videoURL, "/master.m3u8"):
+		return models.VideoSourceDirectHLS
+	case strings.Contains(videoURL, ".mp4"):
+		return models.VideoSourceDirectMP4
+	case videoURL != "":
+		return models.VideoSourceDirectMP4
+	default:
+		return models.VideoSourceIframeEmbed
+	}
 }
 
 // ReorderEpisodesInSeason reorders episodes within a season

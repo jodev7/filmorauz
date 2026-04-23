@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/filmorauz/backend/models"
@@ -16,6 +17,34 @@ type SeriesRepository struct {
 	seriesCol  *mongo.Collection
 	seasonCol  *mongo.Collection
 	episodeCol *mongo.Collection
+}
+
+func normalizeSeriesGenres(genres []string) []string {
+	if len(genres) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]struct{}, len(genres))
+	out := make([]string, 0, len(genres))
+	for _, g := range genres {
+		g = strings.ToLower(strings.TrimSpace(g))
+		if g == "" {
+			continue
+		}
+		g = strings.ReplaceAll(g, "_", "-")
+		g = strings.Join(strings.FieldsFunc(g, func(r rune) bool {
+			return r == ' ' || r == '-'
+		}), "-")
+		switch g {
+		case "science-fiction", "sciencefiction", "scifi":
+			g = "sci-fi"
+		}
+		if _, ok := seen[g]; ok {
+			continue
+		}
+		seen[g] = struct{}{}
+		out = append(out, g)
+	}
+	return out
 }
 
 // Collection returns the underlying mongo collection for admin operations
@@ -93,6 +122,7 @@ func (r *SeriesRepository) GetByID(id primitive.ObjectID) (*models.Series, error
 	if err != nil {
 		return nil, err
 	}
+	series.Genre = normalizeSeriesGenres(series.Genre)
 	return &series, nil
 }
 
@@ -105,10 +135,11 @@ func (r *SeriesRepository) GetBySlug(slug string) (*models.Series, error) {
 	if err != nil {
 		return nil, err
 	}
+	series.Genre = normalizeSeriesGenres(series.Genre)
 	return &series, nil
 }
 
-func (r *SeriesRepository) List(limit, skip int) ([]models.Series, error) {
+func (r *SeriesRepository) List(limit, skip int, genre string) ([]models.Series, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -128,6 +159,9 @@ func (r *SeriesRepository) List(limit, skip int) ([]models.Series, error) {
 			{"is_published": bson.M{"$exists": false}},
 		},
 	}
+	if normalized := normalizeSeriesGenres([]string{genre}); len(normalized) > 0 {
+		publicFilter["genre"] = bson.M{"$in": []string{normalized[0]}}
+	}
 
 	cursor, err := r.seriesCol.Find(ctx, publicFilter, opts)
 	if err != nil {
@@ -143,6 +177,9 @@ func (r *SeriesRepository) List(limit, skip int) ([]models.Series, error) {
 	// Ensure we return an empty slice instead of nil
 	if seriesList == nil {
 		seriesList = []models.Series{}
+	}
+	for i := range seriesList {
+		seriesList[i].Genre = normalizeSeriesGenres(seriesList[i].Genre)
 	}
 
 	return seriesList, nil
@@ -389,6 +426,7 @@ func (r *SeriesRepository) UpdateEpisode(episode *models.Episode) error {
 			"thumbnail_url":  episode.ThumbnailURL,
 			"video_url":      episode.VideoURL,
 			"embed_url":      episode.EmbedURL,
+			"source_type":    episode.SourceType,
 			"duration":       episode.Duration,
 			"air_date":       episode.AirDate,
 			"updated_at":     episode.UpdatedAt,
@@ -551,6 +589,9 @@ func (r *SeriesRepository) ListAdmin(limit, skip int) ([]models.Series, error) {
 	}
 	if seriesList == nil {
 		seriesList = []models.Series{}
+	}
+	for i := range seriesList {
+		seriesList[i].Genre = normalizeSeriesGenres(seriesList[i].Genre)
 	}
 	return seriesList, nil
 }

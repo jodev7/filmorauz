@@ -9,9 +9,48 @@ import { formatDuration } from "@/lib/movie-utils";
 interface SeasonListProps {
   seasons: SeasonWithEpisodes[];
   currentEpisodeId?: string;
+  seriesBackdropUrl?: string;
+  seriesPosterUrl?: string;
 }
 
-export default function SeasonList({ seasons, currentEpisodeId }: SeasonListProps) {
+function isInternalMediaUrl(url: string): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url, "http://localhost");
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host.endsWith("filmorauz.net")
+    );
+  } catch {
+    return url.startsWith("/") || url.includes("/uploads/");
+  }
+}
+
+function getEpisodeCardThumbnail(
+  episode: Episode,
+  seriesBackdropUrl?: string,
+  seriesPosterUrl?: string
+): string {
+  if (episode.thumbnail_url && isInternalMediaUrl(episode.thumbnail_url)) {
+    return episode.thumbnail_url;
+  }
+  if (seriesBackdropUrl) {
+    return seriesBackdropUrl;
+  }
+  if (seriesPosterUrl) {
+    return seriesPosterUrl;
+  }
+  return episode.thumbnail_url || "";
+}
+
+export default function SeasonList({
+  seasons,
+  currentEpisodeId,
+  seriesBackdropUrl,
+  seriesPosterUrl,
+}: SeasonListProps) {
   // Defensive: ensure seasons is always an array
   const safeSeasons = Array.isArray(seasons) ? seasons : [];
 
@@ -100,6 +139,11 @@ export default function SeasonList({ seasons, currentEpisodeId }: SeasonListProp
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 p-4">
                   {episodes.map((episode) => {
                     const isActive = episode.id === currentEpisodeId;
+                    const thumbnailUrl = getEpisodeCardThumbnail(
+                      episode,
+                      seriesBackdropUrl,
+                      seriesPosterUrl
+                    );
                     
                     return (
                       <Link
@@ -113,9 +157,9 @@ export default function SeasonList({ seasons, currentEpisodeId }: SeasonListProp
                       >
                         {/* Thumbnail */}
                         <div className="relative aspect-video bg-gray-800">
-                          {episode.thumbnail_url ? (
+                          {thumbnailUrl ? (
                             <img
-                              src={episode.thumbnail_url}
+                              src={thumbnailUrl}
                               alt={episode.title}
                               className="w-full h-full object-cover transition-transform group-hover:scale-105"
                             />

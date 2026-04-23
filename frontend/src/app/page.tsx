@@ -85,30 +85,30 @@ export default async function HomePage() {
           </div>
         </section>
 
-        {/* ── Homepage Top Banner Ad ────────────────────────── */}
+        {/* ── Homepage Top Banner Ad — lazy; shared prefetch serves it ─ */}
         <div className="max-w-7xl mx-auto px-4 mt-8 mb-6">
-          <WebsiteAdSlot placement="homepage_top_banner" variant="banner" />
+          <WebsiteAdSlot placement="homepage_top_banner" variant="banner" lazy />
         </div>
 
         {/* ── Continue Watching ─────────────────────────────── */}
         <ContinueWatchingSection />
 
-        {/* ── New Movies ─────────────────────────────────────── */}
+        {/* ── New Movies — only carousel with priority posters (above-fold) ── */}
         {recent.length > 0 && (
           <section className="max-w-7xl mx-auto px-4 py-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Clapperboard size={20} className="text-orange-500" />
+                <Clapperboard size={20} className="text-orange-500" aria-hidden="true" />
                 Yangi filmlar
               </h2>
               <Link
                 href="/movies"
                 className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-400 transition-colors"
               >
-                Hammasi <ChevronRight size={14} />
+                Hammasi <ChevronRight size={14} aria-hidden="true" />
               </Link>
             </div>
-            <MovieCarousel movies={recent} />
+            <MovieCarousel movies={recent} priorityCount={4} />
           </section>
         )}
 
@@ -117,7 +117,7 @@ export default async function HomePage() {
           <section className="max-w-7xl mx-auto px-4 py-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Flame size={20} className="text-orange-500" />
+                <Flame size={20} className="text-orange-500" aria-hidden="true" />
                 Mashhur
               </h2>
             </div>
@@ -130,14 +130,14 @@ export default async function HomePage() {
           <section className="max-w-7xl mx-auto px-4 py-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Sparkles size={20} className="text-yellow-500" />
+                <Sparkles size={20} className="text-yellow-500" aria-hidden="true" />
                 Premium
               </h2>
               <Link
                 href="/movies?premium=true"
                 className="flex items-center gap-1 text-xs text-yellow-500 hover:text-yellow-400 transition-colors"
               >
-                Hammasi <ChevronRight size={14} />
+                Hammasi <ChevronRight size={14} aria-hidden="true" />
               </Link>
             </div>
             <MovieCarousel movies={homepage.premium_movies || []} />
@@ -152,14 +152,14 @@ export default async function HomePage() {
           <section className="max-w-7xl mx-auto px-4 py-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Film size={20} className="text-orange-500" />
+                <Film size={20} className="text-orange-500" aria-hidden="true" />
                 Yangi seriallar
               </h2>
               <Link
                 href="/series"
                 className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-400 transition-colors"
               >
-                Hammasi <ChevronRight size={14} />
+                Hammasi <ChevronRight size={14} aria-hidden="true" />
               </Link>
             </div>
             <SeriesCarousel series={seriesData.slice(0, 10)} />
@@ -176,14 +176,14 @@ export default async function HomePage() {
           <section className="max-w-7xl mx-auto px-4 py-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Clapperboard size={20} className="text-orange-500" />
+                <Clapperboard size={20} className="text-orange-500" aria-hidden="true" />
                 {t("home.featuredMovies")}
               </h2>
               <Link
                 href="/movies"
                 className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-400 transition-colors"
               >
-                {t("common.seeAll")} <ChevronRight size={14} />
+                {t("common.seeAll")} <ChevronRight size={14} aria-hidden="true" />
               </Link>
             </div>
             <MovieCarousel movies={featured} />
@@ -193,7 +193,7 @@ export default async function HomePage() {
         {/* Empty state */}
         {movies.length === 0 && (
           <section className="max-w-7xl mx-auto px-4 py-24 text-center">
-            <p className="text-gray-500 text-lg">
+            <p className="text-gray-400 text-lg">
               Hali kinolar yo'q.{" "}
               <Link href="/admin/login" className="text-brand-red hover:underline">
                 Admin panelida kino qo'shing.

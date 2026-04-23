@@ -79,7 +79,10 @@ export default function NewSeriesPage() {
     setError("");
 
     try {
-      const series = await adminCreateSeries(token, form);
+      const normalizedGenres = Array.from(
+        new Set((form.genre || []).map((g) => g.trim().toLowerCase().replace(/[_\s]+/g, "-")).filter(Boolean))
+      );
+      const series = await adminCreateSeries(token, { ...form, genre: normalizedGenres });
       router.push("/admin/series");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Xatolik yuz berdi");

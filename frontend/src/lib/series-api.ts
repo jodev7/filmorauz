@@ -1,3 +1,5 @@
+import type { VideoSourceType } from "@/lib/api";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
 
 export interface Series {
@@ -41,6 +43,7 @@ export interface Episode {
   thumbnail_url: string;
   video_url: string;
   embed_url: string;
+  source_type?: VideoSourceType;
   duration: number;
   views: number;
   air_date: string;
@@ -76,8 +79,15 @@ export function buildSeriesUrl(seriesSlug: string): string {
 }
 
 // Get all series
-export async function getSeries(page: number = 1, limit: number = 20): Promise<SeriesListResponse> {
-  const res = await fetch(`${API_URL}/series?page=${page}&limit=${limit}`, {
+export async function getSeries(page: number = 1, limit: number = 20, genre?: string): Promise<SeriesListResponse> {
+  const qs = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
+  if (genre) {
+    qs.set("genre", genre);
+  }
+  const res = await fetch(`${API_URL}/series?${qs.toString()}`, {
     next: { revalidate: 60 }, // ISR: public series list, 60s cache
   });
   if (!res.ok) throw new Error("Failed to fetch series");

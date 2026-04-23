@@ -7,9 +7,15 @@ import MovieCard from "./MovieCard";
 
 interface MovieCarouselProps {
   movies: Movie[];
+  /**
+   * Number of leading cards to mark as priority (eager + fetchPriority=high).
+   * Only use this for the first above-the-fold carousel on a page. Defaults
+   * to 0 so below-the-fold carousels lazy-load every poster.
+   */
+  priorityCount?: number;
 }
 
-export default function MovieCarousel({ movies }: MovieCarouselProps) {
+export default function MovieCarousel({ movies, priorityCount = 0 }: MovieCarouselProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(true);
@@ -24,7 +30,7 @@ export default function MovieCarousel({ movies }: MovieCarouselProps) {
   useEffect(() => {
     const scrollElement = scrollRef.current;
     if (scrollElement) {
-      scrollElement.addEventListener("scroll", checkScroll);
+      scrollElement.addEventListener("scroll", checkScroll, { passive: true });
       checkScroll();
       return () => scrollElement.removeEventListener("scroll", checkScroll);
     }
@@ -49,9 +55,9 @@ export default function MovieCarousel({ movies }: MovieCarouselProps) {
         className={`absolute left-0 top-1/2 -translate-y-1/2 z-10 w-10 h-10 bg-brand-dark/80 hover:bg-brand-red rounded-full flex items-center justify-center transition-all duration-300 opacity-100 hover:scale-110 shadow-lg ${
           canScrollLeft ? "ml-2" : "-ml-12"
         }`}
-        aria-label="Scroll left"
+        aria-label="Chapga surish"
       >
-        <ChevronLeft size={20} className="text-white" />
+        <ChevronLeft size={20} className="text-white" aria-hidden="true" />
       </button>
 
       <button
@@ -59,9 +65,9 @@ export default function MovieCarousel({ movies }: MovieCarouselProps) {
         className={`absolute right-0 top-1/2 -translate-y-1/2 z-10 w-10 h-10 bg-brand-dark/80 hover:bg-brand-red rounded-full flex items-center justify-center transition-all duration-300 opacity-100 hover:scale-110 shadow-lg ${
           canScrollRight ? "mr-2" : "-mr-12"
         }`}
-        aria-label="Scroll right"
+        aria-label="O'ngga surish"
       >
-        <ChevronRight size={20} className="text-white" />
+        <ChevronRight size={20} className="text-white" aria-hidden="true" />
       </button>
 
       {/* Carousel Container */}
@@ -73,18 +79,18 @@ export default function MovieCarousel({ movies }: MovieCarouselProps) {
           msOverflowStyle: "none",
         }}
       >
- {movies.map((movie, index) => (
-            <div
-              key={movie.id}
-              className="shrink-0 w-[120px] sm:w-[140px] md:w-[160px] lg:w-[180px] snap-start isolate"
-            >
-              <MovieCard
-                movie={movie}
-                priority={index < 3} // Priority load first 3 cards
-                showSkeleton={true}
-              />
-            </div>
-          ))}
+        {movies.map((movie, index) => (
+          <div
+            key={movie.id}
+            className="shrink-0 w-[120px] sm:w-[140px] md:w-[160px] lg:w-[180px] snap-start isolate"
+          >
+            <MovieCard
+              movie={movie}
+              priority={index < priorityCount}
+              showSkeleton={true}
+            />
+          </div>
+        ))}
       </div>
     </div>
   );
