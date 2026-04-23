@@ -18,6 +18,7 @@ import {
   Upload,
   CheckCircle,
   AlertCircle,
+  GripVertical,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -26,10 +27,29 @@ import {
   adminCreateSeason,
   adminCreateEpisode,
   adminDeleteEpisode,
+  adminUpdateEpisode,
+  adminReorderEpisodes,
+  adminMoveEpisodeToSeason,
   CreateSeriesData,
   UploadProgressInfo,
+  UpdateEpisodeData,
 } from "@/lib/api";
 import { backendUploadMovieImage } from "@/lib/api";
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  useSortable,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 interface Season {
   id: string;
@@ -74,6 +94,76 @@ function formatETA(seconds?: number) {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
   return `${minutes}m ${remainingSeconds}s`;
+}
+
+// Sortable Episode Item Component
+function SortableEpisodeItem({
+  episode,
+  onDelete,
+}: {
+  episode: Episode;
+  onDelete: (episodeId: string, episodeTitle: string) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+  } = useSortable({ id: episode.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className="flex items-center gap-3 p-3 border-b border-brand-border last:border-0 hover:bg-brand-dark/30 cursor-grab active:cursor-grabbing"
+    >
+      <GripVertical className="w-4 h-4 text-gray-500 flex-shrink-0" />
+      {episode.thumbnail_url ? (
+        <img src={episode.thumbnail_url} alt="" className="w-16 h-10 object-cover rounded" />
+      ) : (
+        <div className="w-16 h-10 bg-gray-700 rounded flex items-center justify-center">
+          <Play className="w-4 h-4 text-gray-500" />
+        </div>
+      )}
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-white truncate">
+          {episode.episode_number}. {episode.title}
+        </p>
+        <p className="text-xs text-gray-400">
+          {episode.duration ? `${episode.duration} min` : ""}
+        </p>
+      </div>
+      <div className="flex items-center gap-2">
+        <a
+          href={episode.video_url || episode.thumbnail_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-brand-red hover:text-orange-400 text-sm"
+          onClick={(e) => e.stopPropagation()}
+        >
+          Ko'rish
+        </a>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(episode.id, episode.title);
+          }}
+          className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded"
+          title="O'chirish"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 
@@ -161,6 +251,14 @@ export default function EditSeriesPage() {
 
   const [addingSeason, setAddingSeason] = useState(false);
   const [addingEpisode, setAddingEpisode] = useState(false);
+
+  // Drag-and-drop state
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 8 },
+    })
+  );
 
   // Load series data
   useEffect(() => {
@@ -376,6 +474,100 @@ export default function EditSeriesPage() {
       alert(err instanceof Error ? err.message : "Failed to delete episode");
     } finally {
       setDeletingEpisode(false);
+    }
+  };
+
+  // Drag-and-drop handlers
+  const handleDragStart = (event: any) => {
+    setActiveDragId(event.active.id);
+  };
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveDragId(null);
+
+    if (!over || !token) return;
+
+    const activeId = active.id as string;
+    const overId = over.id as string;
+
+    if (activeId === overId) return;
+
+    // Find source and target seasons
+    let sourceSeasonIndex = -1;
+    let targetSeasonIndex = -1;
+    let activeEpisode: Episode | null = null;
+
+    for (let i = 0; i < seasons.length; i++) {
+      const epIndex = seasons[i].episodes.findIndex((ep) => ep.id === activeId);
+      if (epIndex !== -1) {
+        sourceSeasonIndex = i;
+        activeEpisode = seasons[i].episodes[epIndex];
+      }
+      if (seasons[i].episodes.some((ep) => ep.id === overId)) {
+        targetSeasonIndex = i;
+      }
+    }
+
+    if (!activeEpisode || sourceSeasonIndex === -1 || targetSeasonIndex === -1) return;
+
+    const sourceSeason = seasons[sourceSeasonIndex];
+    const targetSeason = seasons[targetSeasonIndex];
+
+    // If moving within the same season
+    if (sourceSeasonIndex === targetSeasonIndex) {
+      const oldIndex = sourceSeason.episodes.findIndex((ep) => ep.id === activeId);
+      const newIndex = sourceSeason.episodes.findIndex((ep) => ep.id === overId);
+
+      if (oldIndex === newIndex) return;
+
+      const newEpisodes = arrayMove(sourceSeason.episodes, oldIndex, newIndex);
+
+      // Optimistically update UI
+      setSeasons((prev) =>
+        prev.map((s, idx) =>
+          idx === sourceSeasonIndex ? { ...s, episodes: newEpisodes } : s
+        )
+      );
+
+      // Send reorder request
+      try {
+        await adminReorderEpisodes(token, sourceSeason.season.id, newEpisodes.map((ep) => ep.id));
+      } catch (err) {
+        alert(err instanceof Error ? err.message : "Failed to reorder episodes");
+        // Reload data on error
+        window.location.reload();
+      }
+      return;
+    }
+
+    // Moving between seasons
+    const newEpisodeNumber = targetSeason.episodes.length + 1;
+
+    // Optimistically update UI
+    setSeasons((prev) => {
+      const newSeasons = [...prev];
+      // Remove from source
+      newSeasons[sourceSeasonIndex] = {
+        ...newSeasons[sourceSeasonIndex],
+        episodes: newSeasons[sourceSeasonIndex].episodes.filter((ep) => ep.id !== activeId),
+      };
+      // Add to target
+      const updatedEpisode = { ...activeEpisode!, season_id: targetSeason.season.id, episode_number: newEpisodeNumber };
+      newSeasons[targetSeasonIndex] = {
+        ...newSeasons[targetSeasonIndex],
+        episodes: [...newSeasons[targetSeasonIndex].episodes, updatedEpisode],
+      };
+      return newSeasons;
+    });
+
+    // Send move request
+    try {
+      await adminMoveEpisodeToSeason(token, activeId, targetSeason.season.id, newEpisodeNumber);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to move episode");
+      // Reload data on error
+      window.location.reload();
     }
   };
 
@@ -874,51 +1066,31 @@ export default function EditSeriesPage() {
                       )}
 
                       {/* Episodes */}
-                      <div className="max-h-64 overflow-y-auto">
-                        {s.episodes.length === 0 ? (
-                          <p className="text-gray-500 text-center py-4 text-sm">Epizodlar yo'q</p>
-                        ) : (
-                          s.episodes.map((ep) => (
-                            <div
-                              key={ep.id}
-                              className="flex items-center gap-3 p-3 border-b border-brand-border last:border-0 hover:bg-brand-dark/30"
-                            >
-                              {ep.thumbnail_url ? (
-                                <img src={ep.thumbnail_url} alt="" className="w-16 h-10 object-cover rounded" />
-                              ) : (
-                                <div className="w-16 h-10 bg-gray-700 rounded flex items-center justify-center">
-                                  <Play className="w-4 h-4 text-gray-500" />
-                                </div>
-                              )}
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium text-white truncate">
-                                  {ep.episode_number}. {ep.title}
-                                </p>
-                                <p className="text-xs text-gray-400">
-                                  {ep.duration ? `${ep.duration} min` : ""}
-                                </p>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <a
-                                  href={ep.video_url || ep.thumbnail_url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-brand-red hover:text-orange-400 text-sm"
-                                >
-                                  Ko'rish
-                                </a>
-                                <button
-                                  onClick={() => setDeleteModal({ show: true, episodeId: ep.id, episodeTitle: ep.title })}
-                                  className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded"
-                                  title="O'chirish"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
+                      <DndContext
+                        sensors={sensors}
+                        collisionDetection={closestCenter}
+                        onDragStart={handleDragStart}
+                        onDragEnd={handleDragEnd}
+                      >
+                        <SortableContext
+                          items={s.episodes.map((ep) => ep.id)}
+                          strategy={verticalListSortingStrategy}
+                        >
+                          <div className="max-h-64 overflow-y-auto">
+                            {s.episodes.length === 0 ? (
+                              <p className="text-gray-500 text-center py-4 text-sm">Epizodlar yo'q</p>
+                            ) : (
+                              s.episodes.map((ep) => (
+                                <SortableEpisodeItem
+                                  key={ep.id}
+                                  episode={ep}
+                                  onDelete={(episodeId, episodeTitle) => setDeleteModal({ show: true, episodeId, episodeTitle })}
+                                />
+                              ))
+                            )}
+                          </div>
+                        </SortableContext>
+                      </DndContext>
                     </div>
                   )}
                 </div>

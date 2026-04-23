@@ -361,12 +361,16 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	adminSeasons := admin.Group("/seasons")
 	{
 		adminSeasons.POST("/:id/episodes", seriesHandler.CreateEpisode)
+		adminSeasons.POST("/:id/episodes/reorder", seriesHandler.ReorderEpisodes)
+		adminSeasons.PUT("/:id/episodes", seriesHandler.UpdateSeasonEpisodes)
 	}
 
 	// Admin episode management
 	adminEpisodes := admin.Group("/episodes")
 	{
+		adminEpisodes.PUT("/:id", seriesHandler.UpdateEpisode)
 		adminEpisodes.DELETE("/:id", seriesHandler.DeleteEpisode)
+		adminEpisodes.POST("/:id/move", seriesHandler.MoveEpisodeToSeason)
 	}
 
 	// Superadmin-only ad management

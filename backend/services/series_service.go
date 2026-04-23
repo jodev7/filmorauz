@@ -234,6 +234,33 @@ func (s *SeriesService) DeleteEpisode(id primitive.ObjectID) error {
 	return s.seriesRepo.DeleteEpisode(id)
 }
 
+// UpdateEpisode updates an episode's details including season and episode number
+func (s *SeriesService) UpdateEpisode(episode *models.Episode) error {
+	return s.seriesRepo.UpdateEpisode(episode)
+}
+
+// ReorderEpisodesInSeason reorders episodes within a season
+func (s *SeriesService) ReorderEpisodesInSeason(seasonID primitive.ObjectID, episodeIDs []primitive.ObjectID) error {
+	return s.seriesRepo.ReorderEpisodesInSeason(seasonID, episodeIDs)
+}
+
+// MoveEpisodeToSeason moves an episode to a different season with a new episode number
+func (s *SeriesService) MoveEpisodeToSeason(episodeID, newSeasonID primitive.ObjectID, newEpisodeNumber int) error {
+	return s.seriesRepo.MoveEpisodeToSeason(episodeID, newSeasonID, newEpisodeNumber)
+}
+
+// UpdateSeasonEpisodes updates the full episode structure for a season (reorder + move)
+func (s *SeriesService) UpdateSeasonEpisodes(seasonID primitive.ObjectID, episodes []models.Episode) error {
+	for i, ep := range episodes {
+		ep.EpisodeNumber = i + 1
+		ep.SeasonID = seasonID
+		if err := s.seriesRepo.UpdateEpisode(&ep); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ListAllSeriesAdmin returns all series regardless of approval status for admin dashboard.
 func (s *SeriesService) ListAllSeriesAdmin(limit, skip int) ([]models.Series, error) {
 	return s.seriesRepo.ListAdmin(limit, skip)

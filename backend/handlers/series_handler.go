@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/services"
@@ -338,6 +339,203 @@ func (h *SeriesHandler) DeleteEpisode(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "episode deleted"})
 }
 
+// PUT /api/admin/episodes/:id - Update episode (admin)
+func (h *SeriesHandler) UpdateEpisode(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode id"})
+		return
+	}
+
+	var input struct {
+		SeasonID      string `json:"season_id"`
+		EpisodeNumber int    `json:"episode_number"`
+		Title         string `json:"title"`
+		Description   string `json:"description"`
+		ThumbnailURL  string `json:"thumbnail_url"`
+		VideoURL      string `json:"video_url"`
+		EmbedURL      string `json:"embed_url"`
+		Duration      int    `json:"duration"`
+		AirDate       string `json:"air_date"`
+	}
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	episode, err := h.seriesService.GetEpisodeByID(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "episode not found"})
+		return
+	}
+
+	if input.Title != "" {
+		episode.Title = input.Title
+	}
+	if input.Description != "" {
+		episode.Description = input.Description
+	}
+	if input.ThumbnailURL != "" {
+		episode.ThumbnailURL = input.ThumbnailURL
+	}
+	if input.VideoURL != "" {
+		episode.VideoURL = input.VideoURL
+	}
+	if input.EmbedURL != "" {
+		episode.EmbedURL = input.EmbedURL
+	}
+	if input.Duration > 0 {
+		episode.Duration = input.Duration
+	}
+	if input.AirDate != "" {
+		airDate, _ := time.Parse("2006-01-02", input.AirDate)
+		if !airDate.IsZero() {
+			episode.AirDate = airDate
+		}
+	}
+	if input.SeasonID != "" {
+		seasonID, err := primitive.ObjectIDFromHex(input.SeasonID)
+		if err == nil {
+			episode.SeasonID = seasonID
+		}
+	}
+	if input.EpisodeNumber > 0 {
+		episode.EpisodeNumber = input.EpisodeNumber
+	}
+
+	err = h.seriesService.UpdateEpisode(episode)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update episode"})
+		return
+	}
+
+	c.JSON(http.StatusOK, episode)
+}
+
+// POST /api/admin/seasons/:id/episodes/reorder - Reorder episodes in a season (admin)
+func (h *SeriesHandler) ReorderEpisodes(c *gin.Context) {
+	seasonIDStr := c.Param("id")
+	seasonID, err := primitive.ObjectIDFromHex(seasonIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid season id"})
+		return
+	}
+
+	var input struct {
+		EpisodeIDs []string `json:"episode_ids" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body, episode_ids required"})
+		return
+	}
+
+	episodeIDs := make([]primitive.ObjectID, len(input.EpisodeIDs))
+	for i, idStr := range input.EpisodeIDs {
+		id, err := primitive.ObjectIDFromHex(idStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode id in list"})
+			return
+		}
+		episodeIDs[i] = id
+	}
+
+	err = h.seriesService.ReorderEpisodesInSeason(seasonID, episodeIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to reorder episodes"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "episodes reordered"})
+}
+
+// POST /api/admin/episodes/:id/move - Move episode to another season (admin)
+func (h *SeriesHandler) MoveEpisodeToSeason(c *gin.Context) {
+	episodeIDStr := c.Param("id")
+	episodeID, err := primitive.ObjectIDFromHex(episodeIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode id"})
+		return
+	}
+
+	var input struct {
+		SeasonID      string `json:"season_id" binding:"required"`
+		EpisodeNumber int    `json:"episode_number" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	seasonID, err := primitive.ObjectIDFromHex(input.SeasonID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid season id"})
+		return
+	}
+
+	err = h.seriesService.MoveEpisodeToSeason(episodeID, seasonID, input.EpisodeNumber)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to move episode"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "episode moved"})
+}
+
+// PUT /api/admin/seasons/:id/episodes - Update all episodes in a season (admin)
+func (h *SeriesHandler) UpdateSeasonEpisodes(c *gin.Context) {
+	seasonIDStr := c.Param("id")
+	seasonID, err := primitive.ObjectIDFromHex(seasonIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid season id"})
+		return
+	}
+
+	var input struct {
+		Episodes []struct {
+			ID            string `json:"id" binding:"required"`
+			Title         string `json:"title"`
+			Description   string `json:"description"`
+			ThumbnailURL  string `json:"thumbnail_url"`
+			VideoURL      string `json:"video_url"`
+			EpisodeNumber int    `json:"episode_number"`
+		} `json:"episodes" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	episodes := make([]models.Episode, len(input.Episodes))
+	for i, ep := range input.Episodes {
+		id, err := primitive.ObjectIDFromHex(ep.ID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode id in list"})
+			return
+		}
+		episodes[i] = models.Episode{
+			ID:            id,
+			SeasonID:      seasonID,
+			EpisodeNumber: i + 1,
+			Title:         ep.Title,
+			ThumbnailURL:  ep.ThumbnailURL,
+			VideoURL:      ep.VideoURL,
+		}
+	}
+
+	err = h.seriesService.UpdateSeasonEpisodes(seasonID, episodes)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update episodes"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "season episodes updated"})
+}
+
 // AdminListSeries GET /api/admin/series
 // Returns ALL series (pending, approved, rejected) for the admin dashboard.
 func (h *SeriesHandler) AdminListSeries(c *gin.Context) {
@@ -420,4 +618,3 @@ func (h *SeriesHandler) RejectSeries(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "approval_status": "rejected"})
 }
-

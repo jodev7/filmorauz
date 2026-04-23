@@ -382,14 +382,83 @@ func (r *SeriesRepository) UpdateEpisode(episode *models.Episode) error {
 	filter := bson.M{"_id": episode.ID}
 	update := bson.M{
 		"$set": bson.M{
-			"title":         episode.Title,
-			"description":   episode.Description,
-			"thumbnail_url": episode.ThumbnailURL,
-			"video_url":     episode.VideoURL,
-			"embed_url":     episode.EmbedURL,
-			"duration":      episode.Duration,
-			"air_date":      episode.AirDate,
-			"updated_at":    episode.UpdatedAt,
+			"season_id":      episode.SeasonID,
+			"episode_number": episode.EpisodeNumber,
+			"title":          episode.Title,
+			"description":    episode.Description,
+			"thumbnail_url":  episode.ThumbnailURL,
+			"video_url":      episode.VideoURL,
+			"embed_url":      episode.EmbedURL,
+			"duration":       episode.Duration,
+			"air_date":       episode.AirDate,
+			"updated_at":     episode.UpdatedAt,
+		},
+	}
+
+	_, err := r.episodeCol.UpdateOne(ctx, filter, update)
+	return err
+}
+
+// UpdateEpisodeSeasonAndNumber updates only season_id and episode_number for an episode
+func (r *SeriesRepository) UpdateEpisodeSeasonAndNumber(episodeID primitive.ObjectID, seasonID primitive.ObjectID, episodeNumber int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	filter := bson.M{"_id": episodeID}
+	update := bson.M{
+		"$set": bson.M{
+			"season_id":      seasonID,
+			"episode_number": episodeNumber,
+			"updated_at":     time.Now(),
+		},
+	}
+
+	_, err := r.episodeCol.UpdateOne(ctx, filter, update)
+	return err
+}
+
+// ReorderEpisodesInSeason updates episode numbers for a batch of episodes in a season
+func (r *SeriesRepository) ReorderEpisodesInSeason(seasonID primitive.ObjectID, episodeIDs []primitive.ObjectID) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	session, err := r.episodeCol.Database().Client().StartSession()
+	if err != nil {
+		return err
+	}
+	defer session.EndSession(ctx)
+
+	_, err = session.WithTransaction(ctx, func(sessCtx mongo.SessionContext) (interface{}, error) {
+		for i, episodeID := range episodeIDs {
+			filter := bson.M{"_id": episodeID, "season_id": seasonID}
+			update := bson.M{
+				"$set": bson.M{
+					"episode_number": i + 1,
+					"updated_at":     time.Now(),
+				},
+			}
+			_, err := r.episodeCol.UpdateOne(sessCtx, filter, update)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	})
+
+	return err
+}
+
+// MoveEpisodeToSeason moves an episode to a different season and updates its episode number
+func (r *SeriesRepository) MoveEpisodeToSeason(episodeID, newSeasonID primitive.ObjectID, newEpisodeNumber int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	filter := bson.M{"_id": episodeID}
+	update := bson.M{
+		"$set": bson.M{
+			"season_id":      newSeasonID,
+			"episode_number": newEpisodeNumber,
+			"updated_at":     time.Now(),
 		},
 	}
 

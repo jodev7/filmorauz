@@ -2425,6 +2425,77 @@ export async function adminDeleteEpisode(token: string, episodeId: string): Prom
   }
 }
 
+// Admin: Update episode
+export interface UpdateEpisodeData {
+  season_id?: string;
+  episode_number?: number;
+  title?: string;
+  description?: string;
+  thumbnail_url?: string;
+  video_url?: string;
+  embed_url?: string;
+  duration?: number;
+  air_date?: string;
+}
+
+export async function adminUpdateEpisode(
+  token: string,
+  episodeId: string,
+  data: UpdateEpisodeData
+): Promise<any> {
+  const headers = authHeaders(token);
+  headers["Content-Type"] = "application/json";
+  const res = await fetch(`${API_URL}/admin/episodes/${episodeId}`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to update episode");
+  }
+  return res.json();
+}
+
+// Admin: Reorder episodes in a season
+export async function adminReorderEpisodes(
+  token: string,
+  seasonId: string,
+  episodeIds: string[]
+): Promise<void> {
+  const headers = authHeaders(token);
+  headers["Content-Type"] = "application/json";
+  const res = await fetch(`${API_URL}/admin/seasons/${seasonId}/episodes/reorder`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ episode_ids: episodeIds }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to reorder episodes");
+  }
+}
+
+// Admin: Move episode to another season
+export async function adminMoveEpisodeToSeason(
+  token: string,
+  episodeId: string,
+  seasonId: string,
+  episodeNumber: number
+): Promise<void> {
+  const headers = authHeaders(token);
+  headers["Content-Type"] = "application/json";
+  const res = await fetch(`${API_URL}/admin/episodes/${episodeId}/move`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ season_id: seasonId, episode_number: episodeNumber }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to move episode");
+  }
+}
+
 // Ban a user
 export async function banUser(
   token: string,
