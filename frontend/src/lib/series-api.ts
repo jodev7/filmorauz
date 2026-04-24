@@ -56,6 +56,7 @@ export interface Episode {
 export interface EpisodeLink {
   id: string;
   title: string;
+  episode_number: number;
 }
 
 export interface EpisodeDetailResponse {

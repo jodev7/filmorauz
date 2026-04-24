@@ -38,10 +38,16 @@ type Config struct {
 	B2AppKey                string
 	B2Endpoint              string
 	B2PublicURL             string
+	MediaProtectedBaseURL   string
+	MediaSigningSecret      string
+	MediaTokenTTLSeconds    int
+	MediaCookieName         string
 	WorkerUploadURL         string
 	TelegramChannels        []string // loaded from TELEGRAM_CHANNELS env (comma-separated)
 	TelegramSerialsChannel  string   // loaded from TELEGRAM_SERIALS_CHANNEL env
 }
+
+var current *Config
 
 func Load() *Config {
 	// Always try to load .env — works in both dev and prod
@@ -77,6 +83,10 @@ func Load() *Config {
 		B2AppKey:                getEnvAny([]string{"B2_APPLICATION_KEY", "B2_APP_KEY"}, ""),
 		B2Endpoint:              getEnv("B2_ENDPOINT", ""),
 		B2PublicURL:             getEnv("B2_PUBLIC_URL", ""),
+		MediaProtectedBaseURL:   getEnv("MEDIA_PROTECTED_BASE_URL", ""),
+		MediaSigningSecret:      getEnv("MEDIA_SIGNING_SECRET", ""),
+		MediaTokenTTLSeconds:    parseInt(getEnv("MEDIA_TOKEN_TTL_SECONDS", "900"), 900),
+		MediaCookieName:         getEnv("MEDIA_COOKIE_NAME", "filmorauz_media"),
 		WorkerUploadURL:         getEnv("WORKER_UPLOAD_URL", ""),
 		TelegramChannels:        parseTelegramChannels(getEnv("TELEGRAM_CHANNELS", "")),
 		TelegramSerialsChannel:  getEnv("TELEGRAM_SERIALS_CHANNEL", ""),
@@ -113,7 +123,12 @@ func Load() *Config {
 	}
 
 	log.Printf("Starting in %s mode", cfg.Mode)
+	current = cfg
 	return cfg
+}
+
+func Current() *Config {
+	return current
 }
 
 func getEnv(key, fallback string) string {
@@ -141,6 +156,23 @@ func parseTelegramID(s string) int64 {
 		}
 	}
 	return id
+}
+
+func parseInt(s string, fallback int) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			if n == 0 {
+				return fallback
+			}
+			break
+		}
+		n = n*10 + int(c-'0')
+	}
+	if n <= 0 {
+		return fallback
+	}
+	return n
 }
 
 // GetEnv is exported for use in main.go

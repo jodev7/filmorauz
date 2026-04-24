@@ -74,33 +74,13 @@ export default async function EpisodePage({ params }: PageProps) {
       <Navbar />
       {episode ? (
         <>
-          <WatchPageClient movie={movieData as any} />
-          {(previousEpisode || nextEpisode) && (
-            <section className="px-4 pb-8">
-              <div className="mx-auto max-w-7xl">
-                <div className="rounded-2xl border border-brand-border bg-brand-card/70 p-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:justify-between">
-                    {previousEpisode ? (
-                      <Link
-                        href={`/episode/${previousEpisode.id}`}
-                        className="inline-flex items-center justify-center rounded-xl border border-brand-border bg-brand-dark px-4 py-3 text-sm font-medium text-white transition-colors hover:border-brand-red hover:text-brand-red sm:min-w-[180px]"
-                      >
-                        Oldingi qism
-                      </Link>
-                    ) : <div />}
-                    {nextEpisode ? (
-                      <Link
-                        href={`/episode/${nextEpisode.id}`}
-                        className="inline-flex items-center justify-center rounded-xl border border-brand-border bg-brand-dark px-4 py-3 text-sm font-medium text-white transition-colors hover:border-brand-red hover:text-brand-red sm:min-w-[180px]"
-                      >
-                        Keyingi qism
-                      </Link>
-                    ) : <div />}
-                  </div>
-                </div>
-              </div>
-            </section>
-          )}
+          <WatchPageClient
+            movie={movieData as any}
+            episodeNavigation={{
+              previousEpisode,
+              nextEpisode,
+            }}
+          />
         </>
       ) : (
         <main className="min-h-screen pt-20 flex items-center justify-center">

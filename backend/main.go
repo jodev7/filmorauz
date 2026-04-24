@@ -227,6 +227,7 @@ func main() {
 	// seriesRepo already initialized above for rating service
 	seriesService := services.NewSeriesService(seriesRepo)
 	seriesHandler := handlers.NewSeriesHandler(seriesService)
+	mediaHandler := handlers.NewMediaHandler(cfg, movieService, seriesService, userRepo)
 	homepageHandler := handlers.NewHomepageHandler(movieService, collectionService, seriesService)
 	if telegramService != nil {
 		seriesHandler.SetTelegramService(telegramService)
@@ -277,7 +278,7 @@ func main() {
 	}
 
 	// Register routes
-	routes.Setup(r, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler)
+	routes.Setup(r, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler)
 
 	// Start premium cleanup background job (runs every 10 minutes)
 	go startPremiumCleanupJob(userRepo, notificationService)

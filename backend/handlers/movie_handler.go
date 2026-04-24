@@ -63,6 +63,7 @@ func (h *MovieHandler) ListMovies(c *gin.Context) {
 			mappedCount++
 			log.Printf("[ListMovies] Mapped movie[%d] source_type: %q -> %q", i, originalType, movies[i].SourceType)
 		}
+		protectMovieMedia(&movies[i])
 	}
 	if mappedCount > 0 {
 		log.Printf("[ListMovies] Total mapped: %d/%d movies", mappedCount, len(movies))
@@ -117,6 +118,7 @@ func (h *MovieHandler) GetMovieBySlug(c *gin.Context) {
 		}
 		log.Printf("[GetMovieBySlug] Mapped source_type: %q -> %q", originalType, movie.SourceType)
 	}
+	protectMovieMedia(movie)
 
 	// Get current user if authenticated (for access check)
 	var user *models.User
@@ -169,6 +171,7 @@ func (h *MovieHandler) GetMovieByID(c *gin.Context) {
 		}
 		log.Printf("[GetMovieByID] Mapped source_type: %q -> %q", originalType, movie.SourceType)
 	}
+	protectMovieMedia(movie)
 
 	// Get current user if authenticated (for access check)
 	var user *models.User
@@ -355,7 +358,7 @@ func (h *MovieHandler) GetTrendingMovies(c *gin.Context) {
 			"id":              t.Movie.ID.Hex(),
 			"title":           t.Movie.Title,
 			"slug":            t.Movie.Slug,
-			"poster_url":      t.Movie.PosterURL,
+			"poster_url":      protectMediaURL(t.Movie.PosterURL),
 			"year":            t.Movie.Year,
 			"genre":           t.Movie.Genre,
 			"views_in_period": t.ViewsInPeriod,
@@ -383,6 +386,10 @@ func (h *MovieHandler) GetRecommendations(c *gin.Context) {
 		log.Printf("[ERROR] GetRecommendations: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get recommendations"})
 		return
+	}
+
+	for i := range recommendations {
+		protectMovieMedia(&recommendations[i])
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": recommendations})
@@ -460,6 +467,16 @@ func (h *MovieHandler) GetMovieWatchSource(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func protectMovieMedia(movie *models.Movie) {
+	if movie == nil {
+		return
+	}
+	movie.PosterURL = protectMediaURL(movie.PosterURL)
+	movie.BackdropURL = protectMediaURL(movie.BackdropURL)
+	movie.VideoURL = protectMediaURL(movie.VideoURL)
+	movie.MasterPlaylistURL = protectMediaURL(movie.MasterPlaylistURL)
 }
 
 // getDefaultQuality returns the default quality for playback

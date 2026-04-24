@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import Link from "next/link";
 import {
   Play,
   Pause,
@@ -11,18 +12,25 @@ import {
   RefreshCw,
   Settings,
   ChevronDown,
+  Crown,
+  Lock,
 } from "lucide-react";
 import Hls from "hls.js";
 import { VideoSourceType } from "@/lib/api";
+import { PremiumBadge, isUserPremium } from "@/components/PremiumComponents";
+import { useAuth } from "@/lib/auth-context";
 
 interface Props {
   videoUrl: string;
+  premiumStreamUrl?: string;
   embedUrl?: string;
   sourceType?: VideoSourceType;
   title: string;
   posterUrl?: string;
   onPlayIntent?: () => void;
   forceStart?: boolean;
+  onTimeUpdate?: (currentTime: number, duration: number) => void;
+  onEnded?: () => void;
 }
 
 // Detect if URL is an embed (YouTube, Vimeo, etc.)
@@ -110,11 +118,15 @@ function ErrorFallback({
 function DirectVideoPlayer({ 
   src, 
   title, 
-  poster 
+  poster,
+  onTimeUpdate,
+  onEnded,
 }: { 
   src: string; 
   title: string; 
-  poster?: string 
+  poster?: string;
+  onTimeUpdate?: (currentTime: number, duration: number) => void;
+  onEnded?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -149,6 +161,11 @@ function DirectVideoPlayer({
         onError={handleError}
         onLoadedData={() => setLoading(false)}
         onLoadStart={() => setLoading(true)}
+        onTimeUpdate={() => {
+          if (!videoRef.current || !onTimeUpdate) return;
+          onTimeUpdate(videoRef.current.currentTime, videoRef.current.duration || 0);
+        }}
+        onEnded={onEnded}
       >
         Your browser does not support the video tag.
       </video>
@@ -184,6 +201,7 @@ interface QualityLevel {
   index: number; // hls.js level index, -1 = Auto
   label: string;
   height: number;
+  locked?: boolean;
 }
 
 function formatTime(s: number): string {
@@ -197,7 +215,21 @@ function formatTime(s: number): string {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
-function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; poster?: string; autoPlay?: boolean }) {
+function HLSPlayer({
+  src,
+  poster,
+  autoPlay: shouldAutoPlay,
+  isPremiumUser,
+  onTimeUpdate,
+  onEnded,
+}: {
+  src: string;
+  poster?: string;
+  autoPlay?: boolean;
+  isPremiumUser: boolean;
+  onTimeUpdate?: (currentTime: number, duration: number) => void;
+  onEnded?: () => void;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -217,6 +249,7 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
   const [selectedSpeed, setSelectedSpeed] = useState(1);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const [showPremiumPrompt, setShowPremiumPrompt] = useState(false);
 
   // future preroll hook — insert ad logic here before play starts
   // future midroll hook — check currentTime intervals for mid-roll triggers
@@ -253,15 +286,30 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
         // Build deduplicated quality list sorted by height desc.
         const seen = new Set<number>();
         const levels: QualityLevel[] = [{ index: -1, label: "Auto", height: -1 }];
+        let maxFreeLevelIndex = -1;
+        let maxFreeLevelHeight = -1;
         data.levels
           .map((l, i) => ({ index: i, height: l.height }))
           .sort((a, b) => b.height - a.height)
           .forEach(({ index, height }) => {
+            if (!isPremiumUser && height <= 480 && height > maxFreeLevelHeight) {
+              maxFreeLevelHeight = height;
+              maxFreeLevelIndex = index;
+            }
             if (!seen.has(height)) {
               seen.add(height);
-              levels.push({ index, label: `${height}p`, height });
+              levels.push({
+                index,
+                label: `${height}p`,
+                height,
+                locked: !isPremiumUser && height > 480,
+              });
             }
           });
+        if (!isPremiumUser && maxFreeLevelIndex >= 0) {
+          hls.autoLevelCapping = maxFreeLevelIndex;
+          hls.nextLevel = maxFreeLevelIndex;
+        }
         setQualities(levels);
         if (shouldAutoPlay) {
           video.play().catch(() => {});
@@ -342,15 +390,19 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
     } else {
       setError("Brauzeringiz HLS formatini qo'llab-quvvatlamaydi.");
     }
-  }, [src]);
+  }, [src, isPremiumUser, shouldAutoPlay]);
 
-  const handleQualityChange = useCallback((index: number) => {
-    setSelectedQuality(index);
+  const handleQualityChange = useCallback((quality: QualityLevel) => {
     setShowQualityMenu(false);
+    if (quality.locked) {
+      setShowPremiumPrompt(true);
+      return;
+    }
+    setSelectedQuality(quality.index);
     const hls = hlsRef.current;
     const video = videoRef.current;
     if (!hls) return;
-    hls.currentLevel = index;
+    hls.currentLevel = quality.index;
     // Seek to current position to flush buffered old-quality data and reload at new level
     if (video) {
       const t = video.currentTime;
@@ -392,8 +444,9 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
     if (!video) return;
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
-    const onTimeUpdate = () => {
+    const onVideoTimeUpdate = () => {
       setCurrentTime(video.currentTime);
+      onTimeUpdate?.(video.currentTime, video.duration || 0);
       if (video.buffered.length > 0) {
         setBuffered(video.buffered.end(video.buffered.length - 1));
       }
@@ -403,19 +456,25 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
       setVolume(video.volume);
       setMuted(video.muted);
     };
+    const onVideoEnded = () => {
+      setPlaying(false);
+      onEnded?.();
+    };
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
-    video.addEventListener("timeupdate", onTimeUpdate);
+    video.addEventListener("timeupdate", onVideoTimeUpdate);
     video.addEventListener("durationchange", onDurationChange);
     video.addEventListener("volumechange", onVolumeChange);
+    video.addEventListener("ended", onVideoEnded);
     return () => {
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
-      video.removeEventListener("timeupdate", onTimeUpdate);
+      video.removeEventListener("timeupdate", onVideoTimeUpdate);
       video.removeEventListener("durationchange", onDurationChange);
       video.removeEventListener("volumechange", onVolumeChange);
+      video.removeEventListener("ended", onVideoEnded);
     };
-  }, []);
+  }, [onEnded, onTimeUpdate]);
 
   const togglePlay = () => {
     const video = videoRef.current;
@@ -503,7 +562,11 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
   return (
     <div
       ref={containerRef}
-      className="relative w-full aspect-video bg-black rounded-xl overflow-hidden select-none"
+      className={`relative w-full aspect-video overflow-hidden rounded-xl select-none ${
+        isPremiumUser
+          ? "bg-black ring-1 ring-yellow-500/30 shadow-[0_0_30px_rgba(234,179,8,0.12)]"
+          : "bg-black"
+      }`}
       onMouseMove={resetControlsTimer}
       onMouseLeave={() => setShowControls(false)}
       onMouseEnter={() => setShowControls(true)}
@@ -518,6 +581,43 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
         playsInline
       />
 
+      <div className="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-2">
+        {isPremiumUser && <PremiumBadge size="sm" showCrown />}
+        {isPremiumUser && (
+          <span className="rounded-full border border-yellow-500/25 bg-black/55 px-2.5 py-1 text-[11px] font-medium text-yellow-300 backdrop-blur-sm">
+            Premium stream
+          </span>
+        )}
+      </div>
+
+      {showPremiumPrompt && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-yellow-500/30 bg-brand-card/95 p-5 text-center shadow-[0_0_30px_rgba(234,179,8,0.12)] backdrop-blur-sm">
+            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-yellow-500 to-amber-600">
+              <Crown size={26} className="text-black" />
+            </div>
+            <h3 className="mb-2 text-lg font-semibold text-white">Premium sifat</h3>
+            <p className="mb-4 text-sm text-gray-300">
+              720p va 1080p faqat Premium foydalanuvchilar uchun mavjud.
+            </p>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <button
+                onClick={() => setShowPremiumPrompt(false)}
+                className="inline-flex flex-1 items-center justify-center rounded-xl border border-brand-border bg-brand-dark px-4 py-3 text-sm font-medium text-white transition-colors hover:border-brand-red"
+              >
+                Yopish
+              </button>
+              <Link
+                href="/premium"
+                className="inline-flex flex-1 items-center justify-center rounded-xl bg-gradient-to-r from-yellow-500 to-amber-600 px-4 py-3 text-sm font-semibold text-black transition-opacity hover:opacity-90"
+              >
+                Premium olish
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Controls overlay — transparent area passes clicks through to container toggle */}
       <div
         className={`absolute inset-0 flex flex-col justify-end transition-opacity duration-200 ${
@@ -528,7 +628,12 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
 
         {/* Controls bar — stopPropagation here so only bar clicks don't toggle play */}
-        <div className="relative px-3 pb-3 space-y-1.5" onClick={(e) => e.stopPropagation()}>
+        <div
+          className={`relative px-3 pb-3 space-y-1.5 ${
+            isPremiumUser ? "rounded-b-xl bg-gradient-to-t from-black/35 to-transparent" : ""
+          }`}
+          onClick={(e) => e.stopPropagation()}
+        >
           {/* Progress bar */}
           <div className="relative h-1 group/progress">
             {/* base track — full width always visible */}
@@ -626,16 +731,17 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
                   <ChevronDown size={12} />
                 </button>
                 {showQualityMenu && (
-                  <div className="absolute bottom-full right-0 mb-2 bg-black/90 border border-white/10 rounded-lg overflow-hidden text-xs min-w-[80px]">
+                  <div className="absolute bottom-full right-0 mb-2 min-w-[140px] overflow-hidden rounded-lg border border-white/10 bg-black/90 text-xs">
                     {qualities.map((q) => (
                       <button
                         key={q.index}
-                        onClick={() => handleQualityChange(q.index)}
-                        className={`block w-full px-3 py-1.5 text-left hover:bg-white/10 transition-colors ${
+                        onClick={() => handleQualityChange(q)}
+                        className={`flex w-full items-center justify-between px-3 py-1.5 text-left transition-colors hover:bg-white/10 ${
                           q.index === selectedQuality ? "text-brand-red font-semibold" : "text-white"
                         }`}
                       >
-                        {q.label}
+                        <span>{q.locked ? `${q.label} 🔒 Premium` : q.label}</span>
+                        {q.locked && <Lock size={12} className="text-yellow-400" />}
                       </button>
                     ))}
                   </div>
@@ -656,15 +762,20 @@ function HLSPlayer({ src, poster, autoPlay: shouldAutoPlay }: { src: string; pos
 
 export default function VideoPlayer({
   videoUrl,
+  premiumStreamUrl,
   embedUrl,
   sourceType = "iframe_embed",
   title,
   posterUrl,
   onPlayIntent,
   forceStart,
+  onTimeUpdate,
+  onEnded,
 }: Props) {
+  const { user } = useAuth();
   const [started, setStarted] = useState(false);
   const [hasPlaybackError, setHasPlaybackError] = useState(false);
+  const isPremiumViewer = isUserPremium(user);
 
   useEffect(() => {
     if (forceStart && !started) setStarted(true);
@@ -679,14 +790,18 @@ export default function VideoPlayer({
   const looksLikeMp4 = (url: string): boolean => /\.mp4($|\?)/i.test(url);
 
   let effectiveSourceType: VideoSourceType = sourceType;
+  const selectedVideoUrl =
+    sourceType === "direct_hls" || sourceType === "direct_mp4"
+      ? (isPremiumViewer ? premiumStreamUrl || videoUrl : videoUrl)
+      : videoUrl;
   if (
     (sourceType === "iframe_embed" || sourceType === ("ingestion" as VideoSourceType)) &&
-    videoUrl &&
-    !isEmbedUrl(videoUrl)
+    selectedVideoUrl &&
+    !isEmbedUrl(selectedVideoUrl)
   ) {
-    if (looksLikeHls(videoUrl)) {
+    if (looksLikeHls(selectedVideoUrl)) {
       effectiveSourceType = "direct_hls";
-    } else if (looksLikeMp4(videoUrl)) {
+    } else if (looksLikeMp4(selectedVideoUrl)) {
       effectiveSourceType = "direct_mp4";
     }
   }
@@ -696,15 +811,15 @@ export default function VideoPlayer({
     if (effectiveSourceType === "iframe_embed" && embedUrl) {
       return embedUrl;
     }
-    if (effectiveSourceType === "iframe_embed" && videoUrl) {
+    if (effectiveSourceType === "iframe_embed" && selectedVideoUrl) {
       // Fallback to videoUrl if no embedUrl provided
-      if (isEmbedUrl(videoUrl)) {
-        return toEmbedUrl(videoUrl);
+      if (isEmbedUrl(selectedVideoUrl)) {
+        return toEmbedUrl(selectedVideoUrl);
       }
       return null;
     }
     if (effectiveSourceType === "direct_mp4" || effectiveSourceType === "direct_hls") {
-      return videoUrl;
+      return selectedVideoUrl;
     }
     return null;
   };
@@ -715,11 +830,12 @@ export default function VideoPlayer({
     console.log("[VideoPlayer] source fields:", {
       sourceType,
       effectiveSourceType,
-      videoUrl,
+      videoUrl: selectedVideoUrl,
+      premiumStreamUrl,
       embedUrl,
       effectiveUrl,
     });
-  }, [sourceType, effectiveSourceType, videoUrl, embedUrl, effectiveUrl]);
+  }, [sourceType, effectiveSourceType, selectedVideoUrl, premiumStreamUrl, embedUrl, effectiveUrl]);
 
   const handlePlay = () => {
     if (onPlayIntent) {
@@ -772,7 +888,7 @@ export default function VideoPlayer({
           <p className="text-white font-display text-xl tracking-wide drop-shadow-lg">
             {title}
           </p>
-          <p className="text-gray-300 text-sm mt-1">Click to play</p>
+          <p className="text-gray-300 text-sm mt-1">Tomosha qilish uchun bosing</p>
         </div>
       </div>
     );
@@ -794,11 +910,22 @@ export default function VideoPlayer({
           src={effectiveUrl}
           title={title}
           poster={posterUrl}
+          onTimeUpdate={onTimeUpdate}
+          onEnded={onEnded}
         />
       );
 
     case "direct_hls":
-      return <HLSPlayer src={effectiveUrl} poster={posterUrl} autoPlay={forceStart} />;
+      return (
+        <HLSPlayer
+          src={effectiveUrl}
+          poster={posterUrl}
+          autoPlay={forceStart}
+          isPremiumUser={isPremiumViewer}
+          onTimeUpdate={onTimeUpdate}
+          onEnded={onEnded}
+        />
+      );
 
     default:
       return <IframePlayer src={effectiveUrl} title={title} />;

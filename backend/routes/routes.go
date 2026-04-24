@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler) {
+func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler) {
 	api := r.Group("/api")
 
 	// Health check
@@ -95,6 +95,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 
 	// Public user profile (optional auth — needed to enforce privacy for owner/admin)
 	api.GET("/users/:id", middleware.OptionalAuth(authService), userHandler.GetPublicProfile)
+	api.GET("/media/access-token", middleware.OptionalAuth(authService), mediaHandler.GetMediaToken)
 
 	// Public movie routes
 	api.GET("/homepage", homepageHandler.GetHomepageData)

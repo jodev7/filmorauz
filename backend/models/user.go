@@ -21,12 +21,12 @@ type User struct {
 	TelegramID     int64  `bson:"telegram_id,omitempty" json:"telegram_id,omitempty"`
 	TelegramChatID int64  `bson:"telegram_chat_id,omitempty" json:"telegram_chat_id,omitempty"` // chat.id from /start
 	TelegramUser   string `bson:"telegram_user,omitempty" json:"telegram_user,omitempty"`       // username without @
-	FirstName    string `bson:"first_name,omitempty" json:"first_name,omitempty"`
-	LastName     string `bson:"last_name,omitempty" json:"last_name,omitempty"`
-	PhotoURL     string `bson:"photo_url,omitempty" json:"photo_url,omitempty"`
-	LanguageCode string `bson:"language_code,omitempty" json:"language_code,omitempty"`
-	AuthProvider string `bson:"auth_provider" json:"auth_provider"` // "telegram" only
-	IsActive     bool   `bson:"is_active" json:"is_active"`
+	FirstName      string `bson:"first_name,omitempty" json:"first_name,omitempty"`
+	LastName       string `bson:"last_name,omitempty" json:"last_name,omitempty"`
+	PhotoURL       string `bson:"photo_url,omitempty" json:"photo_url,omitempty"`
+	LanguageCode   string `bson:"language_code,omitempty" json:"language_code,omitempty"`
+	AuthProvider   string `bson:"auth_provider" json:"auth_provider"` // "telegram" only
+	IsActive       bool   `bson:"is_active" json:"is_active"`
 
 	// Premium subscription fields
 	IsPremium        bool       `bson:"is_premium" json:"is_premium"`
@@ -134,4 +134,15 @@ func GetMovieAccessInfo(user *User, movie *Movie) map[string]interface{} {
 		"is_premium": movie.IsPremium,
 		"has_access": hasAccess,
 	}
+}
+
+// CanAccessSeries returns true if the series is public or the user has active premium.
+func CanAccessSeries(user *User, series *Series) bool {
+	if !series.IsPremium {
+		return true
+	}
+	if user == nil {
+		return false
+	}
+	return user.IsPremiumActive()
 }

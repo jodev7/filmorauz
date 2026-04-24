@@ -50,6 +50,18 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 	if movies == nil {
 		movies = []models.Movie{}
 	}
+	for i := range movies {
+		protectMovieMedia(&movies[i])
+	}
+	for i := range featuredCollections {
+		featuredCollections[i].PosterURL = protectMediaURL(featuredCollections[i].PosterURL)
+		for j := range featuredCollections[i].Movies {
+			featuredCollections[i].Movies[j].PosterURL = protectMediaURL(featuredCollections[i].Movies[j].PosterURL)
+		}
+	}
+	for i := range seriesList {
+		protectSeriesMedia(&seriesList[i])
+	}
 	if featuredCollections == nil {
 		featuredCollections = []models.CollectionWithMovies{}
 	}
@@ -75,7 +87,7 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 			"id":              t.Movie.ID.Hex(),
 			"title":           t.Movie.Title,
 			"slug":            t.Movie.Slug,
-			"poster_url":      t.Movie.PosterURL,
+			"poster_url":      protectMediaURL(t.Movie.PosterURL),
 			"year":            t.Movie.Year,
 			"genre":           t.Movie.Genre,
 			"views_in_period": t.ViewsInPeriod,

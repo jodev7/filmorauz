@@ -47,6 +47,9 @@ func (h *SeriesHandler) ListSeries(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list series"})
 		return
 	}
+	for i := range seriesList {
+		protectSeriesMedia(&seriesList[i])
+	}
 	log.Printf("[SERIES API] ListSeries genre_filter=%q response_genres=%v", genre, extractSeriesGenres(seriesList))
 
 	c.JSON(http.StatusOK, gin.H{
@@ -73,6 +76,7 @@ func (h *SeriesHandler) GetSeriesBySlug(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "series not found"})
 		return
 	}
+	protectSeriesWithSeasonsMedia(series)
 
 	// Increment views
 	h.seriesService.IncrementSeriesViews(series.Series.ID)
@@ -113,6 +117,9 @@ func (h *SeriesHandler) GetEpisodes(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get episodes"})
 		return
 	}
+	for i := range episodes {
+		protectEpisodeMedia(&episodes[i])
+	}
 
 	c.JSON(http.StatusOK, gin.H{"data": episodes})
 }
@@ -145,8 +152,9 @@ func (h *SeriesHandler) GetEpisode(c *gin.Context) {
 	}
 
 	type episodeNav struct {
-		ID    primitive.ObjectID `json:"id"`
-		Title string             `json:"title"`
+		ID            primitive.ObjectID `json:"id"`
+		Title         string             `json:"title"`
+		EpisodeNumber int                `json:"episode_number"`
 	}
 
 	var previousEpisode *episodeNav
@@ -170,14 +178,16 @@ func (h *SeriesHandler) GetEpisode(c *gin.Context) {
 				foundCurrent = true
 				if i > 0 {
 					previousEpisode = &episodeNav{
-						ID:    orderedEpisodes[i-1].ID,
-						Title: orderedEpisodes[i-1].Title,
+						ID:            orderedEpisodes[i-1].ID,
+						Title:         orderedEpisodes[i-1].Title,
+						EpisodeNumber: orderedEpisodes[i-1].EpisodeNumber,
 					}
 				}
 				if i+1 < len(orderedEpisodes) {
 					nextEpisode = &episodeNav{
-						ID:    orderedEpisodes[i+1].ID,
-						Title: orderedEpisodes[i+1].Title,
+						ID:            orderedEpisodes[i+1].ID,
+						Title:         orderedEpisodes[i+1].Title,
+						EpisodeNumber: orderedEpisodes[i+1].EpisodeNumber,
 					}
 				}
 				break
@@ -197,8 +207,8 @@ func (h *SeriesHandler) GetEpisode(c *gin.Context) {
 		"episode_number": episode.EpisodeNumber,
 		"title":          episode.Title,
 		"description":    episode.Description,
-		"thumbnail_url":  episode.ThumbnailURL,
-		"video_url":      episode.VideoURL,
+		"thumbnail_url":  protectMediaURL(episode.ThumbnailURL),
+		"video_url":      protectMediaURL(episode.VideoURL),
 		"embed_url":      episode.EmbedURL,
 		"source_type":    resolveEpisodeSourceType(episode),
 		"duration":       episode.Duration,
@@ -232,6 +242,35 @@ func (h *SeriesHandler) CreateSeries(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, series)
+}
+
+func protectSeriesMedia(series *models.Series) {
+	if series == nil {
+		return
+	}
+	series.PosterURL = protectMediaURL(series.PosterURL)
+	series.BackdropURL = protectMediaURL(series.BackdropURL)
+}
+
+func protectEpisodeMedia(episode *models.Episode) {
+	if episode == nil {
+		return
+	}
+	episode.ThumbnailURL = protectMediaURL(episode.ThumbnailURL)
+	episode.VideoURL = protectMediaURL(episode.VideoURL)
+}
+
+func protectSeriesWithSeasonsMedia(series *models.SeriesWithSeasons) {
+	if series == nil {
+		return
+	}
+	protectSeriesMedia(&series.Series)
+	for i := range series.Seasons {
+		series.Seasons[i].Season.PosterURL = protectMediaURL(series.Seasons[i].Season.PosterURL)
+		for j := range series.Seasons[i].Episodes {
+			protectEpisodeMedia(&series.Seasons[i].Episodes[j])
+		}
+	}
 }
 
 // PUT /api/admin/series/:id - Update series (admin)

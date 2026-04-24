@@ -4,7 +4,6 @@ import { useState } from "react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { useAuth } from "@/lib/auth-context";
-import { useI18n } from "@/lib/i18n";
 import { buyPremium } from "@/lib/api";
 import {
   Crown,
@@ -86,16 +85,16 @@ const pricingPlans: PricingPlan[] = [
 
 const premiumFeatures = [
   "Reklamasiz tomosha",
-  "4K Ultra HD sifat",
+  "720p va 1080p sifat",
+  "Tezroq stream",
+  "Serial auto-next",
+  "Premium kontent",
   "Barcha qurilmalarda foydalanish",
-  "Cheksiz film va seriallar",
-  "Orqaga qolmasdan tomosha",
-  "Premium mijozlar xizmati"
+  "Cheksiz film va seriallar"
 ];
 
 export default function PremiumPage() {
   const { user, token, refreshUser } = useAuth();
-  const { t } = useI18n();
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
@@ -114,18 +113,23 @@ export default function PremiumPage() {
     },
     {
       icon: <Gauge className="w-8 h-8" />,
-      title: "Yuqori tezlik",
-      description: "Tezkor serverlardan foydalanib, bufersiz tomosha qiling"
+      title: "Tezroq stream",
+      description: "Premium foydalanuvchilar uchun tezroq stream yo'li va barqaror tomosha"
     },
     {
       icon: <Film className="w-8 h-8" />,
-      title: "Full HD / 4K",
-      description: "Eng yuqori sifatda 4K rezolyutsiyada filmlarni ko'ring"
+      title: "720p / 1080p sifat",
+      description: "Yuqori sifatdagi tomosha rejimlari va aniq tasvir"
     },
     {
       icon: <Sparkles className="w-8 h-8" />,
-      title: "Maxsus kontent",
-      description: "Premium foydalanuvchilar uchun maxsus kontent va filmlar"
+      title: "Serial auto-next",
+      description: "Epizod tugashi bilan keyingi qism avtomatik boshlanadi"
+    },
+    {
+      icon: <Crown className="w-8 h-8" />,
+      title: "Premium kontent",
+      description: "Faqat Premium foydalanuvchilar uchun mo'ljallangan kontentga kirish"
     }
   ];
 
@@ -207,7 +211,7 @@ export default function PremiumPage() {
 
             {/* Benefits tags */}
             <div className="flex flex-wrap justify-center gap-3 mb-10">
-              {["No ads", "Fast", "HD", "Exclusive"].map((benefit) => (
+              {["Reklamasiz", "Tezroq stream", "1080p", "Auto-next", "Premium kontent"].map((benefit) => (
                 <span
                   key={benefit}
                   className="px-4 py-2 bg-gradient-to-r from-yellow-500/20 to-amber-500/20 border border-yellow-500/30 rounded-full text-yellow-400 text-sm font-medium"

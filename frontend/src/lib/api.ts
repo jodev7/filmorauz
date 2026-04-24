@@ -55,6 +55,8 @@ export interface Movie {
   type?: "movie" | "episode";
   series_slug?: string;
   series_title?: string;
+  episode_number?: number;
+  premium_stream_url?: string;
 }
 
 export interface MovieInput {
@@ -1098,6 +1100,40 @@ export interface BackendMediaUploadResponse {
   success: boolean;
   url: string;
   path: string;
+}
+
+export interface MediaAccessResponse {
+  success: boolean;
+  protected: boolean;
+  playback_url: string;
+  expires_at: string;
+  cookie_name?: string;
+}
+
+export async function getProtectedMediaAccess(params: {
+  movieId?: string;
+  episodeId?: string;
+  token?: string | null;
+}): Promise<MediaAccessResponse> {
+  const qs = new URLSearchParams();
+  if (params.movieId) qs.set("movie_id", params.movieId);
+  if (params.episodeId) qs.set("episode_id", params.episodeId);
+
+  const headers: HeadersInit = {};
+  if (params.token) {
+    headers["Authorization"] = `Bearer ${params.token}`;
+  }
+
+  const res = await fetch(`${API_URL}/media/access-token?${qs.toString()}`, {
+    headers,
+    cache: "no-store",
+    credentials: "include",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Failed to get media access" }));
+    throw new Error(err.message || err.error || "Failed to get media access");
+  }
+  return res.json();
 }
 
 export async function uploadMovieAsset(

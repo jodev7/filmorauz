@@ -2,16 +2,18 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
-import { ChevronLeft, Clock, Calendar, Heart, Eye, Crown } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ChevronLeft, ChevronRight, Clock, Calendar, Heart, Eye, Crown } from "lucide-react";
 import VideoPlayer from "@/components/VideoPlayer";
-import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, Ad, Movie } from "@/lib/api";
+import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, getProtectedMediaAccess, Ad, Movie } from "@/lib/api";
 import { pickWeightedRandomAd } from "@/lib/ads-utils";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n";
-import { isMoviePremium, isUserPremium, PremiumLockOverlay, PremiumButton, PremiumBadge } from "@/components/PremiumComponents";
+import { isMoviePremium, isUserPremium, PremiumLockOverlay, PremiumButton } from "@/components/PremiumComponents";
 import { getLocalizedTitle, getLocalizedDescription, getLocalizedGenres, getLocalizedCountry } from "@/lib/localization";
 import { formatDuration } from "@/lib/movie-utils";
+import type { EpisodeLink } from "@/lib/series-api";
 
 const PLAYER_AD_MANDATORY_SECS = 15;
 const PLAYER_AD_REPEAT_MS = 10 * 60 * 1000; // 10 minutes
@@ -179,6 +181,10 @@ async function getWatchProgressForResume(token: string, movieId: string): Promis
 
 interface WatchPageClientProps {
   movie: Movie | null;
+  episodeNavigation?: {
+    previousEpisode?: EpisodeLink | null;
+    nextEpisode?: EpisodeLink | null;
+  };
 }
 
 function RecommendationsRow({ movies }: { movies: Movie[] }) {
@@ -218,7 +224,7 @@ function RecommendationsRow({ movies }: { movies: Movie[] }) {
   );
 }
 
-export default function WatchPageClient({ movie }: WatchPageClientProps) {
+export default function WatchPageClient({ movie, episodeNavigation }: WatchPageClientProps) {
   if (!movie) {
     return (
       <div className="flex items-center justify-center min-h-[50vh]">
@@ -229,12 +235,19 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
 
   const { t } = useI18n();
   const { user, token } = useAuth();
+  const router = useRouter();
   const [isFavorite, setIsFavorite] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [recommendations, setRecommendations] = useState<Movie[]>([]);
   const [isLoadingRecommendations, setIsLoadingRecommendations] = useState(true);
   const [resumePosition, setResumePosition] = useState(0);
+  const [resolvedPlaybackUrl, setResolvedPlaybackUrl] = useState<string | null>(null);
+  const [autoNextCountdown, setAutoNextCountdown] = useState(5);
+  const [showAutoNextCountdown, setShowAutoNextCountdown] = useState(false);
+  const [showAutoNextPremiumCta, setShowAutoNextPremiumCta] = useState(false);
   const hasRecorded = useRef(false);
+  const autoNextTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoNextIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Player ad flow: user clicks play → ad shows → ad dismissed → video starts
   const [playIntended, setPlayIntended] = useState(false);
@@ -254,11 +267,49 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
   const localizedDescription = getLocalizedDescription(movie);
   const localizedGenres = getLocalizedGenres(movie);
   const localizedCountry = getLocalizedCountry(movie);
+  const isPremiumViewer = isUserPremium(user);
+  const premiumStreamUrl = isPremiumViewer ? movie.premium_stream_url || movie.video_url : movie.video_url;
   const backHref = movie.type === "episode"
     ? movie.series_slug
       ? `/series/${movie.series_slug}`
       : "/series"
     : `/movies/${movie.slug}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    const rawPlaybackUrl =
+      (movie as unknown as { master_playlist_url?: string }).master_playlist_url ||
+      premiumStreamUrl ||
+      movie.video_url;
+
+    if (!rawPlaybackUrl || (movie.source_type !== "direct_hls" && movie.source_type !== "direct_mp4")) {
+      setResolvedPlaybackUrl(rawPlaybackUrl || null);
+      return;
+    }
+
+    const loadProtectedPlayback = async () => {
+      try {
+        const response = await getProtectedMediaAccess({
+          movieId: movie.type === "episode" ? undefined : movie.id,
+          episodeId: movie.type === "episode" ? movie.id : undefined,
+          token,
+        });
+        if (!cancelled) {
+          setResolvedPlaybackUrl(response.playback_url || rawPlaybackUrl);
+        }
+      } catch (error) {
+        console.error("Failed to resolve protected media URL:", error);
+        if (!cancelled) {
+          setResolvedPlaybackUrl(rawPlaybackUrl);
+        }
+      }
+    };
+
+    loadProtectedPlayback();
+    return () => {
+      cancelled = true;
+    };
+  }, [movie.id, movie.source_type, movie.type, movie.video_url, premiumStreamUrl, token]);
 
   // Fetch watch progress for resume
   useEffect(() => {
@@ -296,9 +347,58 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
 
   // Handle video end
   const handleVideoEnded = () => {
-    if (!user || !token) return;
-    markWatchComplete(token, movie.id, Math.floor(movie.duration * 60)).catch(console.error);
+    if (user && token) {
+      markWatchComplete(token, movie.id, Math.floor(movie.duration * 60)).catch(console.error);
+    }
+    if (movie.type === "episode" && episodeNavigation?.nextEpisode) {
+      if (isPremiumViewer) {
+        setShowAutoNextPremiumCta(false);
+        setAutoNextCountdown(5);
+        setShowAutoNextCountdown(true);
+      } else {
+        setShowAutoNextCountdown(false);
+        setShowAutoNextPremiumCta(true);
+      }
+    }
   };
+
+  const cancelAutoNext = useCallback(() => {
+    setShowAutoNextCountdown(false);
+    setAutoNextCountdown(5);
+    if (autoNextTimeoutRef.current) clearTimeout(autoNextTimeoutRef.current);
+    if (autoNextIntervalRef.current) clearInterval(autoNextIntervalRef.current);
+    autoNextTimeoutRef.current = null;
+    autoNextIntervalRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    setShowAutoNextCountdown(false);
+    setShowAutoNextPremiumCta(false);
+    setAutoNextCountdown(5);
+    if (autoNextTimeoutRef.current) clearTimeout(autoNextTimeoutRef.current);
+    if (autoNextIntervalRef.current) clearInterval(autoNextIntervalRef.current);
+    autoNextTimeoutRef.current = null;
+    autoNextIntervalRef.current = null;
+  }, [movie.id]);
+
+  useEffect(() => {
+    if (!showAutoNextCountdown || !episodeNavigation?.nextEpisode) return;
+
+    autoNextIntervalRef.current = setInterval(() => {
+      setAutoNextCountdown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+
+    autoNextTimeoutRef.current = setTimeout(() => {
+      router.push(`/episode/${episodeNavigation.nextEpisode?.id}`);
+    }, 5000);
+
+    return () => {
+      if (autoNextTimeoutRef.current) clearTimeout(autoNextTimeoutRef.current);
+      if (autoNextIntervalRef.current) clearInterval(autoNextIntervalRef.current);
+      autoNextTimeoutRef.current = null;
+      autoNextIntervalRef.current = null;
+    };
+  }, [episodeNavigation?.nextEpisode, router, showAutoNextCountdown]);
 
   // One-time diagnostic: log exactly which playback fields the movie API returned.
   // These are the same values passed to <VideoPlayer />, so any missing/wrong URL
@@ -426,16 +526,16 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
         ) : (
           <div className="relative">
             <VideoPlayer
-              videoUrl={
-                (movie as unknown as { master_playlist_url?: string }).master_playlist_url ||
-                movie.video_url
-              }
+              videoUrl={resolvedPlaybackUrl || (movie as unknown as { master_playlist_url?: string }).master_playlist_url || movie.video_url}
+              premiumStreamUrl={resolvedPlaybackUrl || premiumStreamUrl}
               embedUrl={movie.embed_url}
               sourceType={movie.source_type}
               title={localizedTitle}
               posterUrl={movie.backdrop_url || movie.poster_url}
               onPlayIntent={handlePlayIntent}
               forceStart={videoCanStart}
+              onTimeUpdate={handleTimeUpdate}
+              onEnded={handleVideoEnded}
             />
             {!isUserPremium(user) && (
               <PlayerOverlayAd
@@ -443,6 +543,61 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
                 onFirstComplete={handleAdFirstComplete}
               />
             )}
+          </div>
+        )}
+
+        {movie.type === "episode" && (episodeNavigation?.previousEpisode || episodeNavigation?.nextEpisode) && (
+          <div className="mt-4 rounded-2xl border border-brand-border bg-brand-card/70 p-3 sm:p-4">
+            {showAutoNextCountdown && episodeNavigation?.nextEpisode && (
+              <div className="mb-3 flex flex-col gap-3 rounded-xl border border-yellow-500/25 bg-yellow-500/10 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm text-yellow-200">
+                  {`Keyingi qism ${autoNextCountdown} soniyadan keyin boshlanadi`}
+                </div>
+                <button
+                  onClick={cancelAutoNext}
+                  className="inline-flex items-center justify-center rounded-lg border border-yellow-500/30 bg-brand-dark px-3 py-2 text-sm font-medium text-white transition-colors hover:border-yellow-400 hover:text-yellow-200"
+                >
+                  Bekor qilish
+                </button>
+              </div>
+            )}
+            {showAutoNextPremiumCta && episodeNavigation?.nextEpisode && (
+              <div className="mb-3 flex flex-col gap-3 rounded-xl border border-yellow-500/25 bg-yellow-500/10 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm text-yellow-200">
+                  Auto-next faqat Premium foydalanuvchilar uchun
+                </div>
+                <Link
+                  href="/premium"
+                  className="inline-flex items-center justify-center rounded-lg bg-gradient-to-r from-yellow-500 to-amber-600 px-3 py-2 text-sm font-semibold text-black transition-opacity hover:opacity-90"
+                >
+                  Premium olish
+                </Link>
+              </div>
+            )}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              {episodeNavigation?.previousEpisode ? (
+                <Link
+                  href={`/episode/${episodeNavigation.previousEpisode.id}`}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-brand-border bg-brand-dark px-4 py-3 text-sm font-medium text-white transition-colors hover:border-brand-red hover:text-brand-red sm:w-auto sm:min-w-[220px] sm:justify-start"
+                >
+                  <ChevronLeft size={18} />
+                  <span>Oldingi qism</span>
+                </Link>
+              ) : (
+                <div className="hidden sm:block" />
+              )}
+              {episodeNavigation?.nextEpisode ? (
+                <Link
+                  href={`/episode/${episodeNavigation.nextEpisode.id}`}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-brand-border bg-brand-dark px-4 py-3 text-sm font-medium text-white transition-colors hover:border-brand-red hover:text-brand-red sm:w-auto sm:min-w-[220px] sm:justify-end"
+                >
+                  <span>{`Keyingi qism: ${episodeNavigation.nextEpisode.episode_number}-qism`}</span>
+                  <ChevronRight size={18} />
+                </Link>
+              ) : (
+                <div className="hidden sm:block" />
+              )}
+            </div>
           </div>
         )}
 
