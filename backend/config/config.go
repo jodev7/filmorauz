@@ -83,7 +83,7 @@ func Load() *Config {
 		B2AppKey:                getEnvAny([]string{"B2_APPLICATION_KEY", "B2_APP_KEY"}, ""),
 		B2Endpoint:              getEnv("B2_ENDPOINT", ""),
 		B2PublicURL:             getEnv("B2_PUBLIC_URL", ""),
-		MediaProtectedBaseURL:   getEnv("MEDIA_PROTECTED_BASE_URL", "/media"),
+		MediaProtectedBaseURL:   getEnv("MEDIA_PROTECTED_BASE_URL", ""),
 		MediaSigningSecret:      getEnv("MEDIA_SIGNING_SECRET", ""),
 		MediaTokenTTLSeconds:    parseInt(getEnv("MEDIA_TOKEN_TTL_SECONDS", "60"), 60),
 		MediaCookieName:         getEnv("MEDIA_COOKIE_NAME", "filmorauz_media"),
@@ -106,10 +106,13 @@ func Load() *Config {
 		log.Println("WARNING: ADMIN_TELEGRAM_ID not set, admin must be promoted via UI")
 	}
 
+	cfg.MediaProtectedBaseURL = normalizeMediaProtectedBaseURL(cfg)
+
 	log.Printf("=== Backend Configuration ===")
 	log.Printf("Mode: %s", cfg.Mode)
 	log.Printf("Worker Upload URL: %s", cfg.WorkerUploadURL)
 	log.Printf("CDN URL: %s", cfg.CDNURL)
+	log.Printf("Media Protected Base URL: %s", cfg.MediaProtectedBaseURL)
 	if cfg.B2PublicURL != "" {
 		log.Printf("B2 Public URL: %s", cfg.B2PublicURL)
 	}
@@ -136,6 +139,30 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func normalizeMediaProtectedBaseURL(cfg *Config) string {
+	if cfg == nil {
+		return "/media"
+	}
+
+	value := strings.TrimSpace(cfg.MediaProtectedBaseURL)
+	if value == "" {
+		if cfg.IsProd {
+			return "https://cdn.filmorauz.net/media"
+		}
+		return "/media"
+	}
+
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return strings.TrimSuffix(value, "/")
+	}
+
+	if value == "/media" && cfg.IsProd {
+		return "https://cdn.filmorauz.net/media"
+	}
+
+	return strings.TrimSuffix(value, "/")
 }
 
 func getEnvAny(keys []string, fallback string) string {

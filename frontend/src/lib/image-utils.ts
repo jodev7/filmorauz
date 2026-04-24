@@ -91,7 +91,7 @@ function rewriteLegacyMediaAliases(path: string): string {
 }
 
 function maybeUseCDNMediaHost(path: string): string {
-  if (!CDN_MEDIA_BASE || !path.startsWith("/media/images/")) {
+  if (!CDN_MEDIA_BASE || !path.startsWith("/media/")) {
     return path;
   }
   return `${CDN_MEDIA_BASE}${path}`;
@@ -187,5 +187,5 @@ export function normalizeImageSrc(
 
 export function isProtectedMediaUrl(src?: string | null): boolean {
   const value = src?.trim();
-  return !!value && value.startsWith("/media/");
+  return !!value && (value.startsWith("/media/") || value.startsWith(`${CDN_MEDIA_BASE}/media/`));
 }

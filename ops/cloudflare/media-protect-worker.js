@@ -7,8 +7,10 @@ export default {
       return new Response("not found", { status: 404 });
     }
 
-    const mediaPath = normalizeMediaPath(extractMediaPath(url.pathname));
+    const extractedMediaPath = extractMediaPath(url.pathname);
+    const mediaPath = normalizeMediaPath(extractedMediaPath);
     const isImagePath = mediaPath.startsWith("/images/");
+    const debugMode = isImagePath && url.searchParams.get("debug") === "1";
 
     let token = null;
     if (!isImagePath) {
@@ -58,8 +60,21 @@ export default {
     }
 
     const b2Auth = await getB2Authorization(env);
-    const mediaResult = await fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath);
+    const mediaResult = await fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath, debugMode);
     const originResponse = mediaResult.response;
+
+    if (debugMode) {
+      return Response.json({
+        pathname: url.pathname,
+        extractedMediaPath,
+        normalizedMediaPath: mediaPath,
+        candidateKeys: mediaResult.candidateKeys,
+        attemptedUrlsWithoutSecrets: mediaResult.attemptedUrlsWithoutSecrets,
+        statuses: mediaResult.statuses,
+      }, {
+        status: originResponse.ok ? 200 : originResponse.status,
+      });
+    }
 
     if (!originResponse.ok) {
       if (isImagePath) {
@@ -96,14 +111,17 @@ export default {
   },
 };
 
-async function fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath) {
+async function fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath, debugMode = false) {
   const candidates = isImagePath
     ? buildImageCandidateKeys(mediaPath)
     : [mediaPath.replace(/^\//, "")];
   let lastResponse = null;
+  const attemptedUrlsWithoutSecrets = [];
+  const statuses = [];
 
   for (const candidate of candidates) {
     const originURL = buildB2Url(env, candidate);
+    attemptedUrlsWithoutSecrets.push(originURL);
     const response = await fetch(originURL, {
       headers: {
         Authorization: b2Auth.authorizationToken,
@@ -125,16 +143,31 @@ async function fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath) {
         response,
         resolvedKey: candidate,
         fallbackUsed: candidate !== mediaPath.replace(/^\//, ""),
+        candidateKeys: candidates,
+        attemptedUrlsWithoutSecrets,
+        statuses,
       };
     }
 
     console.log("media miss", candidate, response.status);
+    const debugStatus = { key: candidate, status: response.status };
+    if (debugMode) {
+      try {
+        debugStatus.body = await response.clone().text();
+      } catch {
+        debugStatus.body = "";
+      }
+    }
+    statuses.push(debugStatus);
     lastResponse = response;
     if (!isImagePath) {
       return {
         response,
         resolvedKey: candidate,
         fallbackUsed: false,
+        candidateKeys: candidates,
+        attemptedUrlsWithoutSecrets,
+        statuses,
       };
     }
     if (response.status !== 404) {
@@ -142,6 +175,9 @@ async function fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath) {
         response,
         resolvedKey: candidate,
         fallbackUsed: false,
+        candidateKeys: candidates,
+        attemptedUrlsWithoutSecrets,
+        statuses,
       };
     }
   }
@@ -150,6 +186,9 @@ async function fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath) {
     response: lastResponse || new Response("b2 fetch failed: 404", { status: 404 }),
     resolvedKey: "",
     fallbackUsed: false,
+    candidateKeys: candidates,
+    attemptedUrlsWithoutSecrets,
+    statuses,
   };
 }
 
@@ -244,9 +283,6 @@ function buildB2Url(env, key) {
 
   if (base.includes(`/file/${bucket}`)) {
     return `${base}/${trimmedKey}`;
-  }
-  if (base.endsWith("/file")) {
-    return `${base}/${bucket}/${trimmedKey}`;
   }
   return `${base}/file/${bucket}/${trimmedKey}`;
 }

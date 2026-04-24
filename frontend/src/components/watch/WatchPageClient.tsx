@@ -295,14 +295,15 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
           token,
         });
         const playbackUrl = response.playback_url || "";
-        if (!response.protected || !playbackUrl.startsWith("/media/")) {
+        const normalizedPlaybackUrl = normalizeMediaUrl(playbackUrl, "");
+        if (!response.protected || !normalizedPlaybackUrl.includes("/media/")) {
           throw new Error("Protected playback URL is invalid");
         }
         if (process.env.NODE_ENV !== "production") {
-          console.log("[WatchPage] protected playback_url:", playbackUrl);
+          console.log("[WatchPage] protected playback_url:", normalizedPlaybackUrl);
         }
         if (!cancelled) {
-          setResolvedPlaybackUrl(playbackUrl);
+          setResolvedPlaybackUrl(normalizedPlaybackUrl);
         }
       } catch (error) {
         console.error("Failed to resolve protected media URL:", error);
