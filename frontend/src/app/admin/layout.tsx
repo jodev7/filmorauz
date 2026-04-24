@@ -11,13 +11,17 @@ export default function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { isAuthenticated, user, logout } = useAuth();
+  const { isAuthenticated, isLoading, user, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
-  
+
   // SECURITY FIX: Check if user has admin/superadmin role
   const isAdmin = user?.role === "admin" || user?.role === "superadmin";
   const isSuperAdmin = user?.role === "superadmin";
+
+  // Paths that require superadmin role specifically (backend enforces the
+  // same via middleware.RequireSuperAdmin on /api/superadmin/*).
+  const isSuperAdminPath = pathname.startsWith("/admin/ads");
 
   // Protect all /admin/* except /admin/login
   useEffect(() => {
@@ -26,13 +30,21 @@ export default function AdminLayout({
       router.replace("/admin/login");
       return;
     }
-    
+
     // SECURITY FIX: If authenticated but not admin, redirect to home or login
     // Only allow admin/superadmin users to access admin pages
     if (isAuthenticated && !isAdmin && pathname !== "/admin/login") {
       router.replace("/");
+      return;
     }
-  }, [isAuthenticated, pathname, router, isAdmin]);
+
+    // Superadmin-only sections: a normal admin hitting the URL directly
+    // gets bounced to the dashboard. Wait for the user profile to finish
+    // loading so we don't flash-redirect a superadmin mid-boot.
+    if (!isLoading && isAuthenticated && isAdmin && !isSuperAdmin && isSuperAdminPath) {
+      router.replace("/admin/dashboard");
+    }
+  }, [isAuthenticated, isLoading, pathname, router, isAdmin, isSuperAdmin, isSuperAdminPath]);
 
   // Don't render sidebar on login page
   if (pathname === "/admin/login") {
@@ -41,6 +53,13 @@ export default function AdminLayout({
 
   if (!isAuthenticated) {
     return null; // Will redirect
+  }
+
+  // Block superadmin-only pages from rendering for non-superadmin admins,
+  // matching the useEffect-driven redirect above. Prevents a flash of
+  // restricted content before the router swap.
+  if (!isLoading && isAdmin && !isSuperAdmin && isSuperAdminPath) {
+    return null;
   }
 
   const navItems = [

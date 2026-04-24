@@ -26,6 +26,30 @@ type JobGroup =
   | { type: "single"; job: IngestionJob }
   | { type: "serial"; id: string; title: string; seasons: SeasonGroup[]; expanded: boolean; totalEpisodes: number; totalSeasons: number };
 
+// Group timestamps (declared early so groupJobsBySerial can use them).
+// Each helper falls through to created_at when the newer field is unset so a
+// brand-new job without any worker activity still sorts meaningfully.
+function jobLastActivityMs(job: IngestionJob): number {
+  const updated = new Date(job.updated_at || "").getTime();
+  if (Number.isFinite(updated)) return updated;
+  const created = new Date(job.created_at || "").getTime();
+  return Number.isFinite(created) ? created : 0;
+}
+
+function groupLastActivityMs(group: JobGroup): number {
+  if (group.type === "single") {
+    return jobLastActivityMs(group.job);
+  }
+  let latest = 0;
+  for (const season of group.seasons) {
+    for (const ep of season.episodes) {
+      const t = jobLastActivityMs(ep);
+      if (t > latest) latest = t;
+    }
+  }
+  return latest;
+}
+
 // Group jobs by serial - serials are identified by season_number or episode_number being set
 function groupJobsBySerial(jobs: IngestionJob[]): JobGroup[] {
   console.log(`[groupJobsBySerial] INPUT: ${jobs.length} jobs`);
@@ -122,7 +146,12 @@ function groupJobsBySerial(jobs: IngestionJob[]): JobGroup[] {
   for (const job of singles) {
     groups.push({ type: "single", job });
   }
-  
+
+  // Sort ALL groups (serial + single) by their most recent activity descending.
+  // No type-based preference: a completed series that hasn't ticked in hours
+  // should drop below an actively-processing movie.
+  groups.sort((a, b) => groupLastActivityMs(b) - groupLastActivityMs(a));
+
   console.log(`[groupJobsBySerial] OUTPUT: ${groups.length} groups (${seriesMap.size} serial, ${singles.length} single)`);
   return groups;
 }
@@ -192,6 +221,53 @@ function formatElapsedTime(job: IngestionJob, now: number): string {
     : undefined;
   const endMs = endedAt ? new Date(endedAt).getTime() : now;
   const totalSeconds = Math.max(0, Math.floor((endMs - startMs) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad = (value: number) => String(value).padStart(2, "0");
+
+  if (hours > 0) {
+    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  }
+  return `${pad(minutes)}:${pad(seconds)}`;
+}
+
+// Series elapsed time: span from the earliest episode start to the latest
+// episode activity. Episodes that never started are ignored for the start
+// boundary. If no episode has started yet we show 00:00, mirroring movies.
+// When all episodes are in a terminal state, the end boundary freezes on
+// the latest updated/completed timestamp instead of ticking with `now`.
+function formatSerialElapsedTime(episodes: IngestionJob[], now: number): string {
+  let earliestStart = Number.POSITIVE_INFINITY;
+  let latestEnd = 0;
+  let allTerminal = episodes.length > 0;
+
+  for (const ep of episodes) {
+    const startRaw =
+      getJobTime(ep, "importStartedAt") ||
+      getJobTime(ep, "import_started_at") ||
+      getJobTime(ep, "startedAt") ||
+      getJobTime(ep, "started_at");
+    if (startRaw) {
+      const s = new Date(startRaw).getTime();
+      if (Number.isFinite(s) && s < earliestStart) earliestStart = s;
+    }
+
+    const endRaw = isTerminalJobStatus(ep.status)
+      ? ep.completed_at || ep.updated_at
+      : ep.updated_at;
+    if (endRaw) {
+      const e = new Date(endRaw).getTime();
+      if (Number.isFinite(e) && e > latestEnd) latestEnd = e;
+    }
+
+    if (!isTerminalJobStatus(ep.status)) allTerminal = false;
+  }
+
+  if (!Number.isFinite(earliestStart)) return "00:00";
+
+  const endMs = allTerminal && latestEnd > 0 ? latestEnd : now;
+  const totalSeconds = Math.max(0, Math.floor((endMs - earliestStart) / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
@@ -1499,6 +1575,7 @@ function JobsTab({
             const hasFailed = allEpisodes.some((job) => job.status === "failed" || job.status === "download_failed");
             const statusColor = hasFailed ? "bg-red-500" : hasActive ? "bg-yellow-500" : "bg-green-500";
             const statusLabel = hasFailed ? "Failed" : hasActive ? "Processing" : "Completed";
+            const serialElapsed = formatSerialElapsedTime(allEpisodes, now);
 
             return (
               <div key={serial.id} className="bg-brand-card border border-brand-border rounded-lg overflow-hidden">
@@ -1519,6 +1596,9 @@ function JobsTab({
                     </div>
                     <p className="text-sm text-gray-400">
                       {serialSummary.totalSeasons} season{serialSummary.totalSeasons !== 1 ? "s" : ""} • {serialSummary.totalEpisodes} episode{serialSummary.totalEpisodes !== 1 ? "s" : ""}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      Elapsed: {serialElapsed}
                     </p>
                   </div>
                   <div className="flex items-center gap-4 text-xs text-gray-500">

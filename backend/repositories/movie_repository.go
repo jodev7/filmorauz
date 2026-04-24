@@ -189,19 +189,48 @@ func normalizeFieldToInt(value interface{}) int {
 	}
 }
 
-func normalizeGenreFieldValue(value interface{}) []string {
-	switch g := value.(type) {
+// decodeBSONStringArray extracts a []string from a bson.M field, handling the
+// primitive.A type returned by the mongo driver alongside []interface{} and
+// []string. Returns an empty (non-nil) slice when the field is of any other type.
+func decodeBSONStringArray(value interface{}) []string {
+	var items []interface{}
+	switch v := value.(type) {
+	case primitive.A:
+		items = []interface{}(v)
 	case []interface{}:
-		genres := make([]string, 0, len(g))
-		for _, item := range g {
-			switch v := item.(type) {
-			case string:
-				genres = append(genres, v)
-			case fmt.Stringer:
-				genres = append(genres, v.String())
+		items = v
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, s := range v {
+			if s != "" {
+				out = append(out, s)
 			}
 		}
-		return normalizeGenreValues(genres)
+		return out
+	default:
+		return []string{}
+	}
+
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if s, ok := item.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func normalizeGenreFieldValue(value interface{}) []string {
+	// BSON arrays decoded into bson.M come back as primitive.A (a defined type
+	// with underlying []interface{}). A Go type switch on []interface{} does
+	// NOT match primitive.A, so we handle it explicitly — otherwise every
+	// genre read falls to the default branch and silently returns []string{}.
+	var items []interface{}
+	switch g := value.(type) {
+	case primitive.A:
+		items = []interface{}(g)
+	case []interface{}:
+		items = g
 	case []string:
 		return normalizeGenreValues(g)
 	case string:
@@ -212,6 +241,17 @@ func normalizeGenreFieldValue(value interface{}) []string {
 	default:
 		return []string{}
 	}
+
+	genres := make([]string, 0, len(items))
+	for _, item := range items {
+		switch v := item.(type) {
+		case string:
+			genres = append(genres, v)
+		case fmt.Stringer:
+			genres = append(genres, v.String())
+		}
+	}
+	return normalizeGenreValues(genres)
 }
 
 // normalizeMovieFromBSON converts a bson.M document to models.Movie, handling legacy types
@@ -416,39 +456,19 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 		movie.DescriptionUz = descUz
 	}
 
-	// Handle genres_uz — stored as []string or []interface{}
+	// Handle genres_uz — stored as []string or []interface{}/primitive.A
 	if gUz, ok := doc["genres_uz"]; ok && gUz != nil {
-		switch g := gUz.(type) {
-		case []interface{}:
-			arr := make([]string, 0, len(g))
-			for _, item := range g {
-				if s, ok := item.(string); ok {
-					arr = append(arr, s)
-				}
-			}
-			movie.GenresUz = arr
-		case []string:
-			movie.GenresUz = g
-		}
+		movie.GenresUz = decodeBSONStringArray(gUz)
 	}
 
-	// Handle countries_uz — may be stored as string (legacy) or []string/[]interface{}
+	// Handle countries_uz — may be stored as string (legacy) or []string/[]interface{}/primitive.A
 	if cUz, ok := doc["countries_uz"]; ok && cUz != nil {
-		switch c := cUz.(type) {
-		case string:
-			if c != "" {
-				movie.CountriesUz = strings.Split(c, ", ")
+		if s, isString := cUz.(string); isString {
+			if s != "" {
+				movie.CountriesUz = strings.Split(s, ", ")
 			}
-		case []interface{}:
-			arr := make([]string, 0, len(c))
-			for _, item := range c {
-				if s, ok := item.(string); ok {
-					arr = append(arr, s)
-				}
-			}
-			movie.CountriesUz = arr
-		case []string:
-			movie.CountriesUz = c
+		} else {
+			movie.CountriesUz = decodeBSONStringArray(cUz)
 		}
 	}
 
