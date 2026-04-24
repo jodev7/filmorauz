@@ -7,6 +7,7 @@ import { User as UserIcon, Crown, Shield, Send, Hash, LayoutDashboard, BadgeChec
 import { PremiumAvatarRing, resolveIsPremium, resolvePremiumStatus } from "@/components/PremiumComponents";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getPublicUser, getCurrentUser, PublicUserProfile } from "@/lib/api";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 
 interface PageProps {
   params: { id: string };
@@ -196,10 +197,10 @@ export default async function UserProfilePage({ params }: PageProps) {
                     : 'bg-gradient-to-br from-brand-red/80 to-orange-600/80'
                 }`}>
                   {profile?.avatar_url ? (
-                    <img 
-                      src={profile.avatar_url} 
-                      alt="Profile" 
-                      className="w-full h-full object-cover" 
+                    <img
+                      src={normalizeMediaUrl(profile.avatar_url)}
+                      alt="Profile"
+                      className="w-full h-full object-cover"
                     />
                   ) : (
                     getAvatarInitial(profile)

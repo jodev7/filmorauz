@@ -16,7 +16,7 @@ import { isMoviePremium, PremiumBadge } from "@/components/PremiumComponents";
 import { getMovie, getRecommendations } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
 import { formatDuration } from "@/lib/movie-utils";
-import { normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
+import { isProtectedMediaUrl, normalizeMediaUrl, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 import {
 	getLocalizedTitle,
 	getLocalizedDescription,
@@ -195,13 +195,14 @@ export default async function MovieDetailPage({ params }: Props) {
         <div className="relative h-[50vh] sm:h-[55vh] min-h-[300px] sm:min-h-[380px]">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <Image
-            src={normalizeImageSrc(movie.backdrop_url || movie.poster_url)}
+            src={normalizeMediaUrl(movie.backdrop_url || movie.poster_url)}
             alt={movie.title}
             fill
             priority
             placeholder="blur"
             blurDataURL={SHIMMER_BLUR_DATA_URL}
             sizes="100vw"
+            unoptimized={isProtectedMediaUrl(normalizeMediaUrl(movie.backdrop_url || movie.poster_url))}
             className="object-cover"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-brand-dark via-brand-dark/50 to-black/30" />

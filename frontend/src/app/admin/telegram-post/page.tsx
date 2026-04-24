@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { Send, Loader2, Upload, CheckCircle, XCircle, Users, Hash, Clock, User, Link, ToggleLeft, ToggleRight } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { sendTelegramPost, uploadTelegramPostMedia, listTelegramPosts, TelegramPost } from "@/lib/api";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 
 interface TelegramPostResult {
   channels_sent: number;
@@ -172,7 +173,7 @@ export default function TelegramPostPage() {
             )}
           </div>
           {imageUrl && (
-            <img src={imageUrl} alt="Preview" className="mt-2 w-32 h-32 object-cover rounded border border-brand-border" />
+            <img src={normalizeMediaUrl(imageUrl)} alt="Preview" className="mt-2 w-32 h-32 object-cover rounded border border-brand-border" />
           )}
         </div>
 
@@ -305,7 +306,7 @@ export default function TelegramPostPage() {
               <div key={post.id} className="bg-brand-dark border border-brand-border rounded-lg p-4">
                 <div className="flex gap-4">
                   {post.image_url && (
-                    <img src={post.image_url} alt="" className="w-16 h-16 object-cover rounded shrink-0" />
+                    <img src={normalizeMediaUrl(post.image_url)} alt="" className="w-16 h-16 object-cover rounded shrink-0" />
                   )}
                   <div className="flex-1 min-w-0">
                     <p className="text-white text-sm line-clamp-2">{post.text}</p>

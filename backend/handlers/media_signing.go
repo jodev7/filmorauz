@@ -14,6 +14,11 @@ import (
 	"github.com/filmorauz/backend/config"
 )
 
+type mediaTokenOptions struct {
+	ClientIP string
+	UAHash   string
+}
+
 func protectMediaURL(raw string) string {
 	cfg := config.Current()
 	if cfg == nil || raw == "" || cfg.MediaSigningSecret == "" {
@@ -25,7 +30,7 @@ func protectMediaURL(raw string) string {
 		return raw
 	}
 
-	token, expiresAt := buildMediaToken(cfg.MediaSigningSecret, mediaPath, cfg.MediaTokenTTLSeconds)
+	token, expiresAt := buildMediaToken(cfg.MediaSigningSecret, mediaPath, cfg.MediaTokenTTLSeconds, mediaTokenOptions{})
 	base := strings.TrimSuffix(cfg.MediaProtectedBaseURL, "/")
 	if base == "" {
 		base = "/media"
@@ -39,16 +44,21 @@ func protectMediaURL(raw string) string {
 	return protected
 }
 
-func buildMediaToken(secret, mediaPath string, ttlSeconds int) (string, time.Time) {
+func buildMediaToken(secret, mediaPath string, ttlSeconds int, opts mediaTokenOptions) (string, time.Time) {
 	if ttlSeconds <= 0 {
-		ttlSeconds = 900
+		ttlSeconds = 60
 	}
 	expiresAt := time.Now().Add(time.Duration(ttlSeconds) * time.Second)
 	scopePath := tokenScopePath(mediaPath)
 	exp := strconv.FormatInt(expiresAt.Unix(), 10)
-	sig := signMediaScope(secret, scopePath, exp)
-	payload := scopePath + "\n" + exp + "\n" + sig
+	sig := signMediaScope(secret, scopePath, exp, opts.ClientIP, opts.UAHash)
+	payload := scopePath + "\n" + exp + "\n" + sig + "\n" + opts.ClientIP + "\n" + opts.UAHash
 	return base64.RawURLEncoding.EncodeToString([]byte(payload)), expiresAt
+}
+
+func hashUserAgent(userAgent string) string {
+	sum := sha256.Sum256([]byte(userAgent))
+	return hex.EncodeToString(sum[:])
 }
 
 func extractMediaPath(raw string) (string, string, bool) {
@@ -94,10 +104,20 @@ func tokenScopePath(requestPath string) string {
 	return requestPath
 }
 
-func signMediaScope(secret, scopePath, exp string) string {
+func signMediaScope(secret, scopePath, exp, clientIP, uaHash string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
+	if clientIP == "" && uaHash == "" {
+		mac.Write([]byte(scopePath))
+		mac.Write([]byte("\n"))
+		mac.Write([]byte(exp))
+		return hex.EncodeToString(mac.Sum(nil))
+	}
 	mac.Write([]byte(scopePath))
 	mac.Write([]byte("\n"))
 	mac.Write([]byte(exp))
+	mac.Write([]byte("\n"))
+	mac.Write([]byte(clientIP))
+	mac.Write([]byte("\n"))
+	mac.Write([]byte(uaHash))
 	return hex.EncodeToString(mac.Sum(nil))
 }

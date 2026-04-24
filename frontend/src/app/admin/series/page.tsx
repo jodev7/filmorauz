@@ -23,6 +23,7 @@ import {
   rejectSeries,
   AdminSeries,
 } from "@/lib/api";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 
 type StatusFilter = "all" | "pending" | "approved" | "rejected";
 
@@ -278,7 +279,7 @@ export default function AdminSeriesPage() {
                         {s.poster_url ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
-                            src={s.poster_url}
+                            src={normalizeMediaUrl(s.poster_url)}
                             alt={s.title}
                             className="w-full h-full object-cover"
                           />

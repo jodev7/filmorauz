@@ -6,7 +6,7 @@ import { ChevronRight, ChevronLeft, Play, Star, Tv } from "lucide-react";
 import { Series } from "@/lib/series-api";
 import Link from "next/link";
 import { localizeSingleGenre } from "@/lib/localization";
-import { DEFAULT_POSTER_PLACEHOLDER, normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
+import { DEFAULT_POSTER_PLACEHOLDER, isProtectedMediaUrl, normalizeMediaUrl, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
 interface SeriesCarouselProps {
   series: Series[];
@@ -73,7 +73,9 @@ export default function SeriesCarousel({ series }: SeriesCarouselProps) {
         className="flex gap-4 overflow-x-auto scrollbar-hide pb-2 px-2"
         style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
-        {series.map((s) => (
+        {series.map((s) => {
+          const posterSrc = normalizeMediaUrl(s.poster_url, DEFAULT_POSTER_PLACEHOLDER);
+          return (
           <Link
             key={s.id}
             href={`/series/${s.slug}`}
@@ -82,12 +84,13 @@ export default function SeriesCarousel({ series }: SeriesCarouselProps) {
             {/* Poster */}
             <div className="relative aspect-[2/3] overflow-hidden bg-brand-border">
               <Image
-                src={normalizeImageSrc(s.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
+                src={posterSrc}
                 alt={s.title}
                 fill
                 sizes="(max-width: 640px) 140px, 160px"
                 placeholder="blur"
                 blurDataURL={SHIMMER_BLUR_DATA_URL}
+                unoptimized={isProtectedMediaUrl(posterSrc)}
                 className="object-cover transition-transform duration-500 group-hover:scale-105"
               />
 
@@ -152,7 +155,8 @@ export default function SeriesCarousel({ series }: SeriesCarouselProps) {
               </div>
             </div>
           </Link>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

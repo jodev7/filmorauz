@@ -7,7 +7,7 @@ import { Play } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { ContinueWatchingItem, getContinueWatching } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import { DEFAULT_POSTER_PLACEHOLDER, normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
+import { DEFAULT_POSTER_PLACEHOLDER, isProtectedMediaUrl, normalizeMediaUrl, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
 export default function ContinueWatchingSection() {
   const { t } = useI18n();
@@ -51,7 +51,9 @@ export default function ContinueWatchingSection() {
         {t("home.continueWatching")}
       </h2>
       <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide">
-        {items.map((item) => (
+        {items.map((item) => {
+          const posterSrc = normalizeMediaUrl(item.poster_url, DEFAULT_POSTER_PLACEHOLDER);
+          return (
           <Link
             key={item.movie_id}
             href={`/watch/${item.slug}`}
@@ -59,12 +61,13 @@ export default function ContinueWatchingSection() {
           >
             <div className="relative aspect-[2/3] overflow-hidden rounded-lg bg-brand-border">
               <Image
-                src={normalizeImageSrc(item.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
+                src={posterSrc}
                 alt={item.title}
                 fill
                 sizes="(max-width: 640px) 160px, 180px"
                 placeholder="blur"
                 blurDataURL={SHIMMER_BLUR_DATA_URL}
+                unoptimized={isProtectedMediaUrl(posterSrc)}
                 className="object-cover group-hover:scale-105 transition-transform duration-300"
               />
               {/* Play overlay */}
@@ -92,7 +95,8 @@ export default function ContinueWatchingSection() {
               {item.title}
             </p>
           </Link>
-        ))}
+          );
+        })}
       </div>
     </section>
   );

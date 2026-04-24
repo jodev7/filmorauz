@@ -15,6 +15,7 @@ import { getFavorites, getWatchHistory, getCurrentUser, updateProfile, uploadPro
 import SuggestionModal from "@/components/SuggestionModal";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { CurrentUser } from "@/lib/api";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 
 // Subtle premium animations (luxury, not flashy)
 const premiumAnimations = `
@@ -529,10 +530,10 @@ export default function UserPage() {
                     : 'bg-gradient-to-br from-brand-red/80 to-orange-600/80'
                 }`}>
                   {getProfileImageUrl(displayUser) ? (
-                    <img 
-                      src={getProfileImageUrl(displayUser)} 
-                      alt="Profile" 
-                      className="w-full h-full object-cover" 
+                    <img
+                      src={normalizeMediaUrl(getProfileImageUrl(displayUser))}
+                      alt="Profile"
+                      className="w-full h-full object-cover"
                     />
                   ) : (
                     getAvatarInitial(displayUser)

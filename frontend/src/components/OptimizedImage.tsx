@@ -2,7 +2,12 @@
 
 import Image from "next/image";
 import { useEffect, useState } from "react";
-import { DEFAULT_POSTER_PLACEHOLDER, normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
+import {
+  DEFAULT_POSTER_PLACEHOLDER,
+  isProtectedMediaUrl,
+  normalizeMediaUrl,
+  SHIMMER_BLUR_DATA_URL,
+} from "@/lib/image-utils";
 
 interface OptimizedImageProps {
   src: string;
@@ -39,13 +44,13 @@ export default function OptimizedImage({
 }: OptimizedImageProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
-  const [currentSrc, setCurrentSrc] = useState(() => normalizeImageSrc(src, fallbackSrc));
+  const [currentSrc, setCurrentSrc] = useState(() => normalizeMediaUrl(src, fallbackSrc));
 
   // Reset loading state when src changes
   useEffect(() => {
     setIsLoading(true);
     setHasError(false);
-    setCurrentSrc(normalizeImageSrc(src, fallbackSrc));
+    setCurrentSrc(normalizeMediaUrl(src, fallbackSrc));
   }, [src, fallbackSrc]);
 
   const handleLoad = () => {
@@ -53,7 +58,7 @@ export default function OptimizedImage({
   };
 
   const handleError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
-    const nextSrc = normalizeImageSrc(fallbackSrc, DEFAULT_POSTER_PLACEHOLDER);
+    const nextSrc = normalizeMediaUrl(fallbackSrc, DEFAULT_POSTER_PLACEHOLDER);
     const target = e.target as HTMLImageElement;
     if (currentSrc !== nextSrc) {
       setCurrentSrc(nextSrc);
@@ -69,6 +74,11 @@ export default function OptimizedImage({
 
   const w = width ?? DEFAULT_POSTER_WIDTH;
   const h = height ?? DEFAULT_POSTER_HEIGHT;
+
+  // /media/ paths are served by the Cloudflare Worker (signed, auth-gated for
+  // some subpaths); skipping the Next.js optimizer avoids /_next/image fetches
+  // hitting the worker without the user's cookie and returning 400.
+  const unoptimized = isProtectedMediaUrl(currentSrc);
 
   return (
     <div className={`relative overflow-hidden ${className}`} style={{ aspectRatio }}>
@@ -88,6 +98,7 @@ export default function OptimizedImage({
         priority={priority}
         placeholder="blur"
         blurDataURL={SHIMMER_BLUR_DATA_URL}
+        unoptimized={unoptimized}
         className={`object-cover transition-opacity duration-300 ${
           isLoading ? "opacity-0" : "opacity-100"
         }`}

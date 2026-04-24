@@ -23,6 +23,7 @@ import {
   Movie,
   uploadCollectionPoster,
 } from "@/lib/api";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 
 export default function EditCollectionPage() {
   const { token } = useAuth();
@@ -248,7 +249,7 @@ export default function EditCollectionPage() {
             placeholder="https://..."
           />
           {form.poster_url ? (
-            <img src={form.poster_url} alt="Poster preview" className="mt-2 h-24 rounded object-cover border border-brand-border" />
+            <img src={normalizeMediaUrl(form.poster_url)} alt="Poster preview" className="mt-2 h-24 rounded object-cover border border-brand-border" />
           ) : null}
         </div>
 

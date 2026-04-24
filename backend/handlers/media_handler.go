@@ -61,7 +61,7 @@ func (h *MediaHandler) GetMediaToken(c *gin.Context) {
 		return
 	}
 
-	playbackURL, cookieValue, expiresAt, err := h.buildProtectedPlayback(sourceURL)
+	playbackURL, cookieValue, expiresAt, err := h.buildProtectedPlayback(c, sourceURL)
 	if err != nil {
 		h.handleAccessError(c, err)
 		return
@@ -143,30 +143,29 @@ func (h *MediaHandler) currentUser(c *gin.Context) *models.User {
 	return user
 }
 
-func (h *MediaHandler) buildProtectedPlayback(sourceURL string) (string, string, time.Time, error) {
-	expiresAt := time.Now().Add(time.Duration(h.cfg.MediaTokenTTLSeconds) * time.Second)
+func (h *MediaHandler) buildProtectedPlayback(c *gin.Context, sourceURL string) (string, string, time.Time, error) {
 	if h.cfg.MediaSigningSecret == "" {
-		return "", "", expiresAt, errBadRequest("media protection is not configured")
+		return "", "", time.Time{}, errBadRequest("media protection is not configured")
 	}
-	protected := protectMediaURL(sourceURL)
-	if protected == sourceURL {
-		return "", "", expiresAt, errBadRequest("failed to build protected playback url")
+	mediaPath, originQS, ok := extractMediaPath(sourceURL)
+	if !ok {
+		return "", "", time.Time{}, errBadRequest("failed to build protected playback url")
 	}
-	u, err := url.Parse(protected)
-	if err != nil {
-		return "", "", expiresAt, errBadRequest("invalid protected playback url")
-	}
+
+	token, expiresAt := buildMediaToken(h.cfg.MediaSigningSecret, mediaPath, h.cfg.MediaTokenTTLSeconds, mediaTokenOptions{
+		ClientIP: clientIPFromRequest(c),
+		UAHash:   hashUserAgent(c.GetHeader("User-Agent")),
+	})
+
 	base := strings.TrimSuffix(h.cfg.MediaProtectedBaseURL, "/")
 	if base == "" {
 		base = "/media"
 	}
-	if !strings.HasPrefix(u.Path, base+"/") && u.Path != base {
-		return "", "", expiresAt, errBadRequest("protected playback url must use media proxy")
+	protected := base + mediaPath
+	if originQS != "" {
+		protected += "?origin_qs=" + url.QueryEscape(originQS)
 	}
-	token := u.Query().Get("token")
-	if token == "" {
-		return "", "", expiresAt, errBadRequest("protected playback token is missing")
-	}
+
 	return protected, token, expiresAt, nil
 }
 
@@ -174,17 +173,55 @@ func (h *MediaHandler) setMediaCookie(c *gin.Context, value string, expiresAt ti
 	if value == "" || h.cfg.MediaCookieName == "" {
 		return
 	}
+	domain := mediaCookieDomain(c.Request.Host)
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     h.cfg.MediaCookieName,
 		Value:    value,
 		Path:     "/media/",
-		Domain:   ".filmorauz.net",
+		Domain:   domain,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   !h.cfg.IsDev,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  expiresAt.UTC(),
 		MaxAge:   int(time.Until(expiresAt).Seconds()),
 	})
+}
+
+func clientIPFromRequest(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	if ip := strings.TrimSpace(c.GetHeader("CF-Connecting-IP")); ip != "" {
+		return ip
+	}
+	if forwarded := strings.TrimSpace(c.GetHeader("X-Forwarded-For")); forwarded != "" {
+		if idx := strings.Index(forwarded, ","); idx >= 0 {
+			return strings.TrimSpace(forwarded[:idx])
+		}
+		return forwarded
+	}
+	return strings.TrimSpace(c.ClientIP())
+}
+
+func mediaCookieDomain(host string) string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return ""
+	}
+	if parsed, err := url.Parse("http://" + host); err == nil {
+		host = parsed.Hostname()
+	}
+	host = strings.TrimSpace(host)
+	if host == "" || host == "localhost" || strings.Contains(host, ":") {
+		return ""
+	}
+	if strings.HasSuffix(host, ".filmorauz.net") {
+		return ".filmorauz.net"
+	}
+	if host == "filmorauz.net" {
+		return ".filmorauz.net"
+	}
+	return ""
 }
 
 type mediaHTTPError struct {

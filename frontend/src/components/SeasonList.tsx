@@ -6,7 +6,7 @@ import Link from "next/link";
 import { ChevronDown, ChevronUp, Play, Clock } from "lucide-react";
 import { SeasonWithEpisodes, Episode, buildEpisodeUrl } from "@/lib/series-api";
 import { formatDuration } from "@/lib/movie-utils";
-import { DEFAULT_POSTER_PLACEHOLDER, normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
+import { DEFAULT_POSTER_PLACEHOLDER, isProtectedMediaUrl, normalizeMediaUrl, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
 interface SeasonListProps {
   seasons: SeasonWithEpisodes[];
@@ -17,16 +17,18 @@ interface SeasonListProps {
 
 function isInternalMediaUrl(url: string): boolean {
   if (!url) return false;
+  if (url.startsWith("/media/") || url.startsWith("/uploads/")) return true;
   try {
     const parsed = new URL(url, "http://localhost");
     const host = parsed.hostname.toLowerCase();
     return (
       host === "localhost" ||
       host === "127.0.0.1" ||
-      host.endsWith("filmorauz.net")
+      host.endsWith("filmorauz.net") ||
+      host.endsWith("backblazeb2.com")
     );
   } catch {
-    return url.startsWith("/") || url.includes("/uploads/");
+    return url.startsWith("/");
   }
 }
 
@@ -141,12 +143,14 @@ export default function SeasonList({
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 p-4">
                   {episodes.map((episode) => {
                     const isActive = episode.id === currentEpisodeId;
-                    const thumbnailUrl = getEpisodeCardThumbnail(
+                    const rawThumbnailUrl = getEpisodeCardThumbnail(
                       episode,
                       seriesBackdropUrl,
                       seriesPosterUrl
                     );
-                    
+                    const thumbnailUrl = normalizeMediaUrl(rawThumbnailUrl, DEFAULT_POSTER_PLACEHOLDER);
+                    const hasThumbnail = Boolean(rawThumbnailUrl);
+
                     return (
                       <Link
                         key={episode.id}
@@ -159,14 +163,15 @@ export default function SeasonList({
                       >
                         {/* Thumbnail */}
                         <div className="relative aspect-video bg-gray-800">
-                          {thumbnailUrl ? (
+                          {hasThumbnail ? (
                             <Image
-                              src={normalizeImageSrc(thumbnailUrl, DEFAULT_POSTER_PLACEHOLDER)}
+                              src={thumbnailUrl}
                               alt={episode.title}
                               fill
                               sizes="(max-width: 768px) 50vw, (max-width: 1200px) 25vw, 200px"
                               placeholder="blur"
                               blurDataURL={SHIMMER_BLUR_DATA_URL}
+                              unoptimized={isProtectedMediaUrl(thumbnailUrl)}
                               className="object-cover transition-transform group-hover:scale-105"
                             />
                           ) : (

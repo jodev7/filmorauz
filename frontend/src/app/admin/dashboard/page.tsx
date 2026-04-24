@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Film, PlusCircle, List, ExternalLink, Users, UserPlus, Share2, Eye, Star, Tv } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { adminGetMovies, Movie, getAdminDashboardStats, getAdminShareStats, getAdminUserMetrics, getAdminTopMovies, getAdminTopSeries, DashboardStats, AdminShareStats, UserMetrics, TopContentItem } from "@/lib/api";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 
 export default function AdminDashboard() {
   const { token, user } = useAuth();
@@ -264,7 +265,7 @@ export default function AdminDashboard() {
                           <div className="flex items-center gap-2 sm:gap-3">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
-                              src={movie.poster_url}
+                              src={normalizeMediaUrl(movie.poster_url)}
                               alt={movie.title}
                               className="w-8 h-10 sm:w-8 sm:h-12 object-cover rounded"
                               onError={(e) => {
@@ -398,7 +399,7 @@ export default function AdminDashboard() {
                   <div key={item.slug} className="flex items-center gap-3 p-3 hover:bg-brand-dark/30">
                     <span className="w-6 text-center text-gray-500 text-sm font-medium">{index + 1}</span>
                     {item.poster_url && (
-                      <img src={item.poster_url} alt={item.title} className="w-10 h-14 object-cover rounded" />
+                      <img src={normalizeMediaUrl(item.poster_url)} alt={item.title} className="w-10 h-14 object-cover rounded" />
                     )}
                     <div className="flex-1 min-w-0">
                       <p className="text-white font-medium truncate">{item.title}</p>
@@ -434,7 +435,7 @@ export default function AdminDashboard() {
                   <div key={item.slug} className="flex items-center gap-3 p-3 hover:bg-brand-dark/30">
                     <span className="w-6 text-center text-gray-500 text-sm font-medium">{index + 1}</span>
                     {item.poster_url && (
-                      <img src={item.poster_url} alt={item.title} className="w-10 h-14 object-cover rounded" />
+                      <img src={normalizeMediaUrl(item.poster_url)} alt={item.title} className="w-10 h-14 object-cover rounded" />
                     )}
                     <div className="flex-1 min-w-0">
                       <p className="text-white font-medium truncate">{item.title}</p>

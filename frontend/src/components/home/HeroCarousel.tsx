@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Play } from "lucide-react";
 import { Movie } from "@/lib/api";
 import { formatDuration } from "@/lib/movie-utils";
-import { normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
+import { isProtectedMediaUrl, normalizeMediaUrl, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
 interface HeroCarouselProps {
   movies: Movie[];
@@ -78,6 +78,7 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
         {movies.map((movie, index) => {
           const isActive = index === currentIndex;
           const shouldRender = loadedIndexes.has(index);
+          const backdropSrc = normalizeMediaUrl(movie.backdrop_url || movie.poster_url);
           return (
             <div
               key={movie.id}
@@ -91,13 +92,14 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
                 {shouldRender && (
                   // eslint-disable-next-line @next/next/no-img-element
                   <Image
-                    src={normalizeImageSrc(movie.backdrop_url || movie.poster_url)}
+                    src={backdropSrc}
                     alt={movie.title}
                     fill
                     priority={index === 0}
                     placeholder="blur"
                     blurDataURL={SHIMMER_BLUR_DATA_URL}
                     sizes="100vw"
+                    unoptimized={isProtectedMediaUrl(backdropSrc)}
                     className={`w-full h-full object-cover transition-transform duration-700 ease-in-out ${
                       isActive ? "scale-105" : "scale-100"
                     }`}

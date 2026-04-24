@@ -18,6 +18,7 @@ import {
 import { Locale, DEFAULT_LOCALE } from "@/lib/i18n";
 import { formatRelativeAddedTime } from "@/lib/movie-utils";
 import { PremiumBadge, resolveIsPremium } from "./PremiumComponents";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 
 interface CommentsSectionProps {
   movieId?: string;
@@ -350,7 +351,7 @@ function CommentThread({
           <div className="flex items-center gap-2">
             {comment.user_avatar_url ? (
               <img
-                src={comment.user_avatar_url}
+                src={normalizeMediaUrl(comment.user_avatar_url)}
                 alt={comment.user_display_name}
                 className="w-8 h-8 rounded-full"
               />

@@ -7,7 +7,7 @@ import Footer from "@/components/Footer";
 import MovieCard from "@/components/MovieCard";
 import { getCollections, Collection } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
-import { DEFAULT_POSTER_PLACEHOLDER, normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
+import { DEFAULT_POSTER_PLACEHOLDER, isProtectedMediaUrl, normalizeMediaUrl, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
@@ -55,12 +55,13 @@ export default async function CollectionsPage() {
                     {collection.poster_url && (
                       <div className="relative w-16 h-24 rounded-lg overflow-hidden">
                         <Image
-                          src={normalizeImageSrc(collection.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
+                          src={normalizeMediaUrl(collection.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
                           alt={collection.title}
                           fill
                           sizes="64px"
                           placeholder="blur"
                           blurDataURL={SHIMMER_BLUR_DATA_URL}
+                          unoptimized={isProtectedMediaUrl(normalizeMediaUrl(collection.poster_url))}
                           className="object-cover"
                         />
                       </div>

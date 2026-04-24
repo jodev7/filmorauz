@@ -8,7 +8,7 @@ import { Ad, recordAdImpression, recordAdClick } from "@/lib/api";
 import { pickWeightedRandomAd, isUserPremium } from "@/lib/ads-utils";
 import { useAuth } from "@/lib/auth-context";
 import { useAdSlot } from "@/components/ads/AdSlotContext";
-import { normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
+import { isProtectedMediaUrl, normalizeMediaUrl, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
 interface WebsiteAdSlotProps {
   placement: string;
@@ -227,15 +227,17 @@ function AdMedia({ url, type }: { url: string; type: "image" | "video" }) {
     );
   }
 
+  const normalizedUrl = normalizeMediaUrl(url, "/og-image.jpg");
   return (
     <Image
-      src={normalizeImageSrc(url, "/og-image.jpg")}
+      src={normalizedUrl}
       alt=""
       aria-hidden="true"
       fill
       sizes="100vw"
       placeholder="blur"
       blurDataURL={SHIMMER_BLUR_DATA_URL}
+      unoptimized={isProtectedMediaUrl(normalizedUrl)}
       className="object-cover object-center"
     />
   );

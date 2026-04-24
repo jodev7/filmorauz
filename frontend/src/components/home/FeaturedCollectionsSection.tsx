@@ -6,6 +6,11 @@ import Image from "next/image";
 import { Collection, Movie } from "@/lib/api";
 import MovieCard from "@/components/MovieCard";
 import { useI18n } from "@/lib/i18n";
+import {
+  DEFAULT_POSTER_PLACEHOLDER,
+  isProtectedMediaUrl,
+  normalizeMediaUrl,
+} from "@/lib/image-utils";
 
 interface FeaturedCollectionsSectionProps {
   collections: Collection[];
@@ -48,11 +53,12 @@ export default function FeaturedCollectionsSection({
               {collection.poster_url && (
                 <div className="w-16 h-24 relative rounded-lg overflow-hidden flex-shrink-0">
                   <Image
-                    src={collection.poster_url}
+                    src={normalizeMediaUrl(collection.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
                     alt={collection.title}
                     fill
                     sizes="64px"
                     loading="lazy"
+                    unoptimized={isProtectedMediaUrl(normalizeMediaUrl(collection.poster_url))}
                     className="object-cover"
                   />
                 </div>

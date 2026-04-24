@@ -7,6 +7,7 @@ import { getIsNew, formatRelativeAddedTime, formatDuration } from "@/lib/movie-u
 import { isMoviePremium, PremiumBadge } from "./PremiumComponents";
 import { getLocalizedTitle, getLocalizedGenres } from "@/lib/localization";
 import OptimizedImage from "./OptimizedImage";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 
 interface Props {
   movie: Partial<Movie> & { id: string; title: string; poster_url: string; slug: string };
@@ -44,7 +45,7 @@ export default function MovieCard({ movie, priority = false, showSkeleton = true
       {/* Poster */}
       <div className="relative aspect-[2/3] overflow-hidden bg-[#1a1a24] shrink-0">
         <OptimizedImage
-          src={movie.poster_thumb_url || movie.poster_url}
+          src={normalizeMediaUrl(movie.poster_thumb_url || movie.poster_url)}
           alt={localizedTitle}
           className="transition-transform duration-500 group-hover:scale-105"
           priority={priority}

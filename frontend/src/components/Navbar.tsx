@@ -12,6 +12,7 @@ import SuggestionModal from "./SuggestionModal";
 import NotificationBell from "./NotificationBell";
 import { resolveIsPremium } from "./PremiumComponents";
 import { getLocalizedTitle, getLocalizedGenres } from "@/lib/localization";
+import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 
 export default function Navbar() {
   const { t } = useI18n();
@@ -215,7 +216,7 @@ export default function Navbar() {
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={movie.poster_url}
+                      src={normalizeMediaUrl(movie.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
                       alt={getLocalizedTitle(movie)}
                       className="w-8 h-12 object-cover rounded shrink-0"
                       onError={(e) => {
@@ -262,7 +263,7 @@ export default function Navbar() {
                 >
                   {(user?.profile_image_url || user?.photo_url) ? (
                     <img
-                      src={user.profile_image_url || user.photo_url}
+                      src={normalizeMediaUrl(user.profile_image_url || user.photo_url)}
                       alt="Profile"
                       className={`w-full h-full rounded-full object-cover ${resolveIsPremium(user) ? 'ring-2 ring-yellow-500 ring-offset-2 ring-offset-[#0a0a0f]' : ''}`}
                     />
@@ -339,7 +340,7 @@ export default function Navbar() {
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={movie.poster_url}
+                    src={normalizeMediaUrl(movie.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
                     alt={getLocalizedTitle(movie)}
                     className="w-8 h-12 object-cover rounded shrink-0"
                     onError={(e) => {

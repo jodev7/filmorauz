@@ -21,6 +21,7 @@ import {
   rejectMovie,
   Movie,
 } from "@/lib/api";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 
 type StatusFilter = "all" | "pending" | "approved" | "rejected";
 
@@ -274,7 +275,7 @@ export default function AdminMoviesPage() {
                       <div className="flex items-center gap-2 sm:gap-3">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
-                          src={movie.poster_url}
+                          src={normalizeMediaUrl(movie.poster_url)}
                           alt={movie.title}
                           className="w-8 h-12 sm:w-9 sm:h-14 object-cover rounded shrink-0"
                           onError={(e) => {

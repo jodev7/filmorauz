@@ -85,7 +85,7 @@ func Load() *Config {
 		B2PublicURL:             getEnv("B2_PUBLIC_URL", ""),
 		MediaProtectedBaseURL:   getEnv("MEDIA_PROTECTED_BASE_URL", "/media"),
 		MediaSigningSecret:      getEnv("MEDIA_SIGNING_SECRET", ""),
-		MediaTokenTTLSeconds:    parseInt(getEnv("MEDIA_TOKEN_TTL_SECONDS", "900"), 900),
+		MediaTokenTTLSeconds:    parseInt(getEnv("MEDIA_TOKEN_TTL_SECONDS", "60"), 60),
 		MediaCookieName:         getEnv("MEDIA_COOKIE_NAME", "filmorauz_media"),
 		WorkerUploadURL:         getEnv("WORKER_UPLOAD_URL", ""),
 		TelegramChannels:        parseTelegramChannels(getEnv("TELEGRAM_CHANNELS", "")),

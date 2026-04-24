@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Loader2, Plus, X, Info, Upload, CheckCircle, AlertCircle } from "lucide-react";
 import { MovieInput, VideoSourceType, directB2Upload, backendUploadMovieImage, createDirectUploadJob, DirectUploadInput, IngestionJob, UploadProgressInfo } from "@/lib/api";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 
 const QUALITIES = ["480p", "720p", "1080p", "1080p Ultra", "4K"];
 const GENRE_OPTIONS = [
@@ -503,7 +504,7 @@ export default function MovieForm({
           {form.poster_url && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={form.poster_url}
+              src={normalizeMediaUrl(form.poster_url)}
               alt="Poster preview"
               className="mt-2 h-24 rounded object-cover border border-brand-border"
               onError={(e) => {
@@ -556,7 +557,7 @@ export default function MovieForm({
           {form.backdrop_url && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={form.backdrop_url}
+              src={normalizeMediaUrl(form.backdrop_url)}
               alt="Backdrop preview"
               className="mt-2 h-24 rounded object-cover border border-brand-border w-full"
               onError={(e) => {

@@ -7,7 +7,7 @@ import { Ad, recordAdImpression, recordAdClick } from "@/lib/api";
 import { pickWeightedRandomAd, isUserPremium } from "@/lib/ads-utils";
 import { useAuth } from "@/lib/auth-context";
 import { useAdSlot } from "@/components/ads/AdSlotContext";
-import { normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
+import { isProtectedMediaUrl, normalizeMediaUrl, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
 interface FixedBottomAdProps {
   placement?: string;
@@ -114,16 +114,22 @@ export default function FixedBottomAd({
           preload="metadata"
         />
       ) : (
-        <Image
-          src={normalizeImageSrc(mediaUrl, "/og-image.jpg")}
-          alt=""
-          aria-hidden="true"
-          fill
-          sizes="100vw"
-          placeholder="blur"
-          blurDataURL={SHIMMER_BLUR_DATA_URL}
-          className="object-cover"
-        />
+        (() => {
+          const normalizedMediaUrl = normalizeMediaUrl(mediaUrl, "/og-image.jpg");
+          return (
+            <Image
+              src={normalizedMediaUrl}
+              alt=""
+              aria-hidden="true"
+              fill
+              sizes="100vw"
+              placeholder="blur"
+              blurDataURL={SHIMMER_BLUR_DATA_URL}
+              unoptimized={isProtectedMediaUrl(normalizedMediaUrl)}
+              className="object-cover"
+            />
+          );
+        })()
       )}
     </div>
   );

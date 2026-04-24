@@ -14,6 +14,7 @@ import { isMoviePremium, isUserPremium, PremiumLockOverlay, PremiumButton } from
 import { getLocalizedTitle, getLocalizedDescription, getLocalizedGenres, getLocalizedCountry } from "@/lib/localization";
 import { formatDuration } from "@/lib/movie-utils";
 import type { EpisodeLink } from "@/lib/series-api";
+import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 
 const PLAYER_AD_MANDATORY_SECS = 15;
 const PLAYER_AD_REPEAT_MS = 10 * 60 * 1000; // 10 minutes
@@ -139,7 +140,7 @@ function PlayerOverlayAd({
             playsInline
           />
         ) : (
-          <img src={url} alt="Ad" className="absolute inset-0 w-full h-full object-contain" />
+          <img src={normalizeMediaUrl(url)} alt="Ad" className="absolute inset-0 w-full h-full object-contain" />
         )}
         <div className="absolute top-3 right-3">
           {canClose ? (
@@ -204,7 +205,7 @@ function RecommendationsRow({ movies }: { movies: Movie[] }) {
           >
             <div className="relative aspect-[2/3] overflow-hidden rounded-lg bg-brand-border">
               <img
-                src={movie.poster_url}
+                src={normalizeMediaUrl(movie.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
                 alt={getLocalizedTitle(movie)}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
               />
@@ -507,9 +508,9 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
         {isMoviePremium(movie) && !isUserPremium(user) ? (
           <div className="relative aspect-video rounded-xl overflow-hidden bg-brand-dark">
             {/* Blurred poster background */}
-            <div 
+            <div
               className="absolute inset-0 bg-cover bg-center blur-xl scale-110"
-              style={{ backgroundImage: `url(${movie.poster_url})` }}
+              style={{ backgroundImage: `url(${normalizeMediaUrl(movie.poster_url, DEFAULT_POSTER_PLACEHOLDER)})` }}
             />
             <div className="absolute inset-0 bg-black/60" />
             
@@ -543,7 +544,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
                 embedUrl={movie.embed_url}
                 sourceType={movie.source_type}
                 title={localizedTitle}
-                posterUrl={movie.backdrop_url || movie.poster_url}
+                posterUrl={normalizeMediaUrl(movie.backdrop_url || movie.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
                 onPlayIntent={handlePlayIntent}
                 forceStart={videoCanStart}
                 onTimeUpdate={handleTimeUpdate}
