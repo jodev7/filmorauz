@@ -232,7 +232,7 @@ func normalizeTelegramPostImageURL(raw string) string {
 	if !ok {
 		return value
 	}
-	if strings.HasPrefix(mediaPath, "/telegram-posts/") {
+	if strings.HasPrefix(mediaPath, "/telegram-posts/") || strings.HasPrefix(mediaPath, "/images/telegram-posts/") {
 		return "/media" + mediaPath
 	}
 	return value

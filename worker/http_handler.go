@@ -418,7 +418,7 @@ func (h *ProcessHandler) handleUploadTelegramPost(w http.ResponseWriter, r *http
 		return
 	}
 
-	safeFilename, mediaKey := safeUploadKey("images/telegram-post", "telegram_post", header.Filename, header.Header.Get("Content-Type"), ".jpg")
+	safeFilename, mediaKey := safeUploadKey("images/telegram-posts", "telegram_post", header.Filename, header.Header.Get("Content-Type"), ".jpg")
 
 	log.Printf("[B2] telegram-post upload names: original=%q safe=%q key=%q", header.Filename, safeFilename, mediaKey)
 	log.Printf("[B2] Uploading telegram post: bucket=filmorauznet, key=%s, size=%d", mediaKey, len(data))
@@ -532,11 +532,11 @@ func (h *ProcessHandler) handleUploadMovieImage(w http.ResponseWriter, r *http.R
 	var keyLabel string
 	if path == "/upload-poster" {
 		imageType = "posters"
-		keyPrefix = "posters"
+		keyPrefix = "images/posters"
 		keyLabel = "poster"
 	} else if path == "/upload-backdrop" {
 		imageType = "backdrops"
-		keyPrefix = "backdrops"
+		keyPrefix = "images/backdrops"
 		keyLabel = "backdrop"
 	} else {
 		h.sendError(w, "Invalid upload path", http.StatusBadRequest)
@@ -604,9 +604,9 @@ func (h *ProcessHandler) handleUploadAd(w http.ResponseWriter, r *http.Request) 
 
 	var keyPrefix string
 	if mediaType == "video" {
-		keyPrefix = "ads/videos"
+		keyPrefix = "videos/ads"
 	} else {
-		keyPrefix = "ads/images"
+		keyPrefix = "images/ads"
 	}
 
 	formField := "file"
@@ -648,9 +648,14 @@ func (h *ProcessHandler) handleUploadAd(w http.ResponseWriter, r *http.Request) 
 
 	log.Printf("[B2] Ad upload success: %s", publicURL)
 
+	responseURL := publicURL
+	if mediaType == "image" {
+		responseURL = internalMediaURL(mediaKey)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"url":      publicURL,
+		"url":      responseURL,
 		"file_key": mediaKey,
 	})
 }
@@ -670,9 +675,9 @@ func (h *ProcessHandler) handleGetUploadURL(w http.ResponseWriter, r *http.Reque
 	var tempPath string
 	switch typeParam {
 	case "poster":
-		_, tempPath = safeUploadKey("posters", "poster", filename, "", ".jpg")
+		_, tempPath = safeUploadKey("images/posters", "poster", filename, "", ".jpg")
 	case "backdrop":
-		_, tempPath = safeUploadKey("backdrops", "backdrop", filename, "", ".jpg")
+		_, tempPath = safeUploadKey("images/backdrops", "backdrop", filename, "", ".jpg")
 	case "video":
 		_, tempPath = safeUploadKey("temp/raw", "video", filename, "", ".mp4")
 	default:

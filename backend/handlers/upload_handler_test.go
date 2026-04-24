@@ -102,7 +102,7 @@ func TestUploadTempUploadsPosterBackdropDirectlyToB2(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 				t.Fatalf("decode response: %v", err)
 			}
-			wantPrefix := "movies/" + fileType + "s/"
+			wantPrefix := "images/" + fileType + "s/"
 			if !strings.HasPrefix(response["file_key"], wantPrefix) {
 				t.Fatalf("file_key = %q, want prefix %q", response["file_key"], wantPrefix)
 			}
@@ -133,14 +133,14 @@ func TestDirectUploadFileKeyUsesRequestedPrefixes(t *testing.T) {
 			uploadType:  "poster",
 			filename:    "poster final.png",
 			contentType: "image/png",
-			wantPattern: `^posters/[0-9]+_poster\.png$`,
+			wantPattern: `^images/posters/[0-9]+_poster\.png$`,
 		},
 		{
 			name:        "backdrop",
 			uploadType:  "backdrop",
 			filename:    "backdrop final.webp",
 			contentType: "image/webp",
-			wantPattern: `^backdrops/[0-9]+_backdrop\.webp$`,
+			wantPattern: `^images/backdrops/[0-9]+_backdrop\.webp$`,
 		},
 	}
 

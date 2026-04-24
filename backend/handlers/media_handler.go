@@ -125,7 +125,7 @@ func (h *MediaHandler) resolvePublicAssetPath(mediaPath string) (string, error) 
 	if !strings.HasPrefix(mediaPath, "/") {
 		mediaPath = "/" + mediaPath
 	}
-	for _, prefix := range []string{"/posters/", "/backdrops/", "/movies/", "/series/", "/collections/", "/telegram-posts/", "/images/", "/ads/", "/suggestions/", "/avatars/"} {
+	for _, prefix := range []string{"/images/", "/movies/", "/series/", "/posters/", "/backdrops/", "/avatars/", "/ads/", "/telegram-posts/", "/collections/", "/suggestions/"} {
 		if strings.HasPrefix(mediaPath, prefix) {
 			return mediaPath, nil
 		}

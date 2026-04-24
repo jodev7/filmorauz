@@ -277,7 +277,7 @@ func (h *UploadHandler) saveToCDNWithKey(file multipart.File, mediaKey string) (
 func (h *UploadHandler) UploadMoviePoster(c *gin.Context) {
 	h.handleDirectUpload(c, uploadSpec{
 		FieldName:    "file",
-		Folder:       "posters",
+		Folder:       "images/posters",
 		Label:        "movie_poster",
 		MaxSizeBytes: maxFormImageSize,
 		AllowedTypes: allowedFormImageTypes,
@@ -289,7 +289,7 @@ func (h *UploadHandler) UploadMoviePoster(c *gin.Context) {
 func (h *UploadHandler) UploadMovieBackdrop(c *gin.Context) {
 	h.handleDirectUpload(c, uploadSpec{
 		FieldName:    "file",
-		Folder:       "backdrops",
+		Folder:       "images/backdrops",
 		Label:        "movie_backdrop",
 		MaxSizeBytes: maxFormImageSize,
 		AllowedTypes: allowedFormImageTypes,
@@ -301,7 +301,7 @@ func (h *UploadHandler) UploadMovieBackdrop(c *gin.Context) {
 func (h *UploadHandler) UploadSeriesPoster(c *gin.Context) {
 	h.handleDirectUpload(c, uploadSpec{
 		FieldName:    "file",
-		Folder:       "posters",
+		Folder:       "images/posters",
 		Label:        "series_poster",
 		MaxSizeBytes: maxFormImageSize,
 		AllowedTypes: allowedFormImageTypes,
@@ -313,7 +313,7 @@ func (h *UploadHandler) UploadSeriesPoster(c *gin.Context) {
 func (h *UploadHandler) UploadSeriesBackdrop(c *gin.Context) {
 	h.handleDirectUpload(c, uploadSpec{
 		FieldName:    "file",
-		Folder:       "backdrops",
+		Folder:       "images/backdrops",
 		Label:        "series_backdrop",
 		MaxSizeBytes: maxFormImageSize,
 		AllowedTypes: allowedFormImageTypes,
@@ -325,7 +325,7 @@ func (h *UploadHandler) UploadSeriesBackdrop(c *gin.Context) {
 func (h *UploadHandler) UploadCollectionPoster(c *gin.Context) {
 	h.handleDirectUpload(c, uploadSpec{
 		FieldName:    "file",
-		Folder:       "posters",
+		Folder:       "images/collections",
 		Label:        "collection_poster",
 		MaxSizeBytes: maxFormImageSize,
 		AllowedTypes: allowedFormImageTypes,
@@ -415,7 +415,7 @@ func (h *UploadHandler) UploadMovieAssets(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
 				return
 			}
-			objectKey = fileType + "s/" + filename
+			objectKey = "images/" + fileType + "s/" + filename
 			_, err = h.uploadBytesToB2(objectKey, data, contentType)
 			if err == nil {
 				savedURL = buildStoredMediaURL(h.config, objectKey, objectKey, "")
@@ -733,7 +733,10 @@ func (h *UploadHandler) UploadAdMedia(c *gin.Context) {
 	}
 
 	filename := fmt.Sprintf("%d_ad_%s%s", time.Now().UnixNano(), mediaType, ext)
-	objectKey := "ads/" + mediaType + "s/" + filename
+	objectKey := "videos/ads/" + filename
+	if mediaType == "image" {
+		objectKey = "images/ads/" + filename
+	}
 
 	var savedURL string
 	if h.config.IsDev {
@@ -872,7 +875,7 @@ func (h *UploadHandler) UploadTelegramPostMedia(c *gin.Context) {
 		return
 	}
 
-	objectKey := buildFolderObjectKey("images/telegram-post", "telegram_post", header.Filename, contentType, ".jpg")
+	objectKey := buildFolderObjectKey("images/telegram-posts", "telegram_post", header.Filename, contentType, ".jpg")
 	_, err = h.storeUploadedFile(objectKey, data, contentType)
 	if err != nil {
 		log.Printf("[UPLOAD_TELEGRAM_POST] direct upload failed: path=%q err=%v", objectKey, err)
@@ -1016,7 +1019,7 @@ func (h *UploadHandler) UploadTemp(c *gin.Context) {
 			c.JSON(status, gin.H{"error": readErr.Error()})
 			return
 		}
-		objectKey := buildFolderObjectKey("movies/"+subDir, fileType, header.Filename, detectedType, ".jpg")
+		objectKey := buildFolderObjectKey("images/"+subDir, fileType, header.Filename, detectedType, ".jpg")
 		savedURL, err = h.uploadBytesToB2(objectKey, data, detectedType)
 		if err != nil {
 			log.Printf("[UPLOAD_TEMP] direct image upload failed: type=%s path=%q err=%v", fileType, objectKey, err)

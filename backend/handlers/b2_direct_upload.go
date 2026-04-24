@@ -111,6 +111,9 @@ func directUploadFileKey(fileType, originalFilename, contentType string) (string
 	label := fileType
 	ext := safeUploadExt(originalFilename, contentType, fallbackExt)
 	filename := fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), label, ext)
+	if fileType == "poster" || fileType == "backdrop" {
+		prefix = "images/" + strings.Trim(prefix, "/")
+	}
 	return strings.Trim(prefix, "/") + "/" + filename, nil
 }
 

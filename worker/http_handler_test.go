@@ -21,9 +21,9 @@ func TestSafeUploadKeyUsesSafeProfileImagePath(t *testing.T) {
 }
 
 func TestSafeUploadKeyUsesSafeTelegramPostPath(t *testing.T) {
-	filename, key := safeUploadKey("images/telegram-post", "telegram_post", "poster, sale @ 50%.jpg", "image/jpeg", ".jpg")
+	filename, key := safeUploadKey("images/telegram-posts", "telegram_post", "poster, sale @ 50%.jpg", "image/jpeg", ".jpg")
 
-	if !regexp.MustCompile(`^images/telegram-post/[0-9]+_telegram_post\.jpg$`).MatchString(key) {
+	if !regexp.MustCompile(`^images/telegram-posts/[0-9]+_telegram_post\.jpg$`).MatchString(key) {
 		t.Fatalf("unexpected key: %q", key)
 	}
 	if !regexp.MustCompile(`^[0-9]+_telegram_post\.jpg$`).MatchString(filename) {
@@ -35,13 +35,13 @@ func TestSafeUploadKeyUsesSafeTelegramPostPath(t *testing.T) {
 }
 
 func TestSafeUploadKeyUsesFinalMovieAssetPath(t *testing.T) {
-	_, posterKey := safeUploadKey("posters", "poster", "poster, final.png", "image/png", ".jpg")
-	if !regexp.MustCompile(`^posters/[0-9]+_poster\.png$`).MatchString(posterKey) {
+	_, posterKey := safeUploadKey("images/posters", "poster", "poster, final.png", "image/png", ".jpg")
+	if !regexp.MustCompile(`^images/posters/[0-9]+_poster\.png$`).MatchString(posterKey) {
 		t.Fatalf("unexpected poster key: %q", posterKey)
 	}
 
-	_, backdropKey := safeUploadKey("backdrops", "backdrop", "backdrop, final.png", "image/png", ".jpg")
-	if !regexp.MustCompile(`^backdrops/[0-9]+_backdrop\.png$`).MatchString(backdropKey) {
+	_, backdropKey := safeUploadKey("images/backdrops", "backdrop", "backdrop, final.png", "image/png", ".jpg")
+	if !regexp.MustCompile(`^images/backdrops/[0-9]+_backdrop\.png$`).MatchString(backdropKey) {
 		t.Fatalf("unexpected backdrop key: %q", backdropKey)
 	}
 }

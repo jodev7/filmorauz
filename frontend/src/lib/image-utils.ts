@@ -24,11 +24,7 @@ const B2_CDN_ABSOLUTE_PREFIXES = [
 ];
 const B2_FILE_PATH_PREFIX = "/file/filmorauznet/";
 const MEDIA_BUCKET_PREFIXES = [
-  "/posters/",
-  "/backdrops/",
   "/images/",
-  "/ads/",
-  "/telegram-posts/",
   "/movies/",
   "/series/",
   "/collections/",
@@ -36,8 +32,18 @@ const MEDIA_BUCKET_PREFIXES = [
 ];
 const LEGACY_AVATAR_PREFIX = "/avatars/";
 const CANONICAL_AVATAR_PREFIX = "/images/profile/";
+const LEGACY_POSTER_PREFIX = "/posters/";
+const CANONICAL_POSTER_PREFIX = "/images/posters/";
+const LEGACY_BACKDROP_PREFIX = "/backdrops/";
+const CANONICAL_BACKDROP_PREFIX = "/images/backdrops/";
+const LEGACY_AD_PREFIX = "/ads/";
+const CANONICAL_AD_PREFIX = "/images/ads/";
 const LEGACY_TELEGRAM_POST_PREFIX = "/telegram-posts/";
-const CANONICAL_TELEGRAM_POST_PREFIX = "/images/telegram-post/";
+const CANONICAL_TELEGRAM_POST_PREFIX = "/images/telegram-posts/";
+const LEGACY_COLLECTIONS_PREFIX = "/collections/";
+const CANONICAL_COLLECTIONS_PREFIX = "/images/collections/";
+const LEGACY_SUGGESTIONS_PREFIX = "/suggestions/";
+const CANONICAL_SUGGESTIONS_PREFIX = "/images/suggestions/";
 
 function isInvalidValue(value: string): boolean {
   return !value || value === "null" || value === "undefined" || value === "-" || value === ".";
@@ -55,19 +61,23 @@ function stripB2Prefix(value: string): string | null {
   return null;
 }
 
-function rewriteAvatarAlias(path: string): string {
-  if (path.startsWith(LEGACY_AVATAR_PREFIX)) {
-    return CANONICAL_AVATAR_PREFIX + path.slice(LEGACY_AVATAR_PREFIX.length);
+function rewriteMediaAlias(path: string, legacyPrefix: string, canonicalPrefix: string): string {
+  if (path.startsWith(legacyPrefix)) {
+    return canonicalPrefix + path.slice(legacyPrefix.length);
   }
   return path;
 }
 
 function rewriteLegacyMediaAliases(path: string): string {
-  const avatarNormalized = rewriteAvatarAlias(path);
-  if (avatarNormalized.startsWith(LEGACY_TELEGRAM_POST_PREFIX)) {
-    return avatarNormalized;
-  }
-  return avatarNormalized;
+  let normalized = path;
+  normalized = rewriteMediaAlias(normalized, LEGACY_AVATAR_PREFIX, CANONICAL_AVATAR_PREFIX);
+  normalized = rewriteMediaAlias(normalized, LEGACY_POSTER_PREFIX, CANONICAL_POSTER_PREFIX);
+  normalized = rewriteMediaAlias(normalized, LEGACY_BACKDROP_PREFIX, CANONICAL_BACKDROP_PREFIX);
+  normalized = rewriteMediaAlias(normalized, LEGACY_AD_PREFIX, CANONICAL_AD_PREFIX);
+  normalized = rewriteMediaAlias(normalized, LEGACY_TELEGRAM_POST_PREFIX, CANONICAL_TELEGRAM_POST_PREFIX);
+  normalized = rewriteMediaAlias(normalized, LEGACY_COLLECTIONS_PREFIX, CANONICAL_COLLECTIONS_PREFIX);
+  normalized = rewriteMediaAlias(normalized, LEGACY_SUGGESTIONS_PREFIX, CANONICAL_SUGGESTIONS_PREFIX);
+  return normalized;
 }
 
 export function normalizeMediaUrl(
@@ -79,18 +89,33 @@ export function normalizeMediaUrl(
     return fallback;
   }
 
-  if (value.startsWith("/media/avatars/")) {
-    return "/media" + CANONICAL_AVATAR_PREFIX + value.slice("/media/avatars".length);
-  }
-
   if (value.startsWith("/media/")) {
-    return value;
+    const normalizedMediaPath = rewriteLegacyMediaAliases(value.slice("/media".length));
+    return "/media" + normalizedMediaPath;
   }
 
   // Bare "avatars/<file>" (no leading slash) — never appears from a URL parser,
   // but some older DB records store it this way.
   if (value.startsWith("avatars/")) {
     return "/media" + CANONICAL_AVATAR_PREFIX + value.slice("avatars/".length);
+  }
+  if (value.startsWith("posters/")) {
+    return "/media" + CANONICAL_POSTER_PREFIX + value.slice("posters/".length);
+  }
+  if (value.startsWith("backdrops/")) {
+    return "/media" + CANONICAL_BACKDROP_PREFIX + value.slice("backdrops/".length);
+  }
+  if (value.startsWith("ads/")) {
+    return "/media" + CANONICAL_AD_PREFIX + value.slice("ads/".length);
+  }
+  if (value.startsWith("telegram-posts/")) {
+    return "/media" + CANONICAL_TELEGRAM_POST_PREFIX + value.slice("telegram-posts/".length);
+  }
+  if (value.startsWith("collections/")) {
+    return "/media" + CANONICAL_COLLECTIONS_PREFIX + value.slice("collections/".length);
+  }
+  if (value.startsWith("suggestions/")) {
+    return "/media" + CANONICAL_SUGGESTIONS_PREFIX + value.slice("suggestions/".length);
   }
 
   // Strip the B2 absolute host or /file/filmorauznet/ prefix so the rest of

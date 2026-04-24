@@ -24,13 +24,13 @@ var mediaPathPrefixes = []string{
 	"/images/",
 	"/movies/",
 	"/series/",
-	"/collections/",
-	"/ads/",
-	"/telegram-posts/",
 	"/suggestions/",
 	"/posters/",
 	"/backdrops/",
 	"/avatars/",
+	"/ads/",
+	"/telegram-posts/",
+	"/collections/",
 }
 
 func requiresMediaToken(mediaPath string) bool {
