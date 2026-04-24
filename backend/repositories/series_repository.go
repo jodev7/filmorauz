@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -195,6 +196,7 @@ func (r *SeriesRepository) Update(series *models.Series) error {
 	update := bson.M{
 		"$set": bson.M{
 			"slug":         series.Slug,
+			"code":         series.Code,
 			"title":        series.Title,
 			"description":  series.Description,
 			"poster_url":   series.PosterURL,
@@ -210,6 +212,92 @@ func (r *SeriesRepository) Update(series *models.Series) error {
 
 	_, err := r.seriesCol.UpdateOne(ctx, filter, update)
 	return err
+}
+
+// FindHighestCode finds the highest numeric code in the series collection.
+func (r *SeriesRepository) FindHighestCode() (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cursor, err := r.seriesCol.Find(ctx, bson.M{})
+	if err != nil {
+		return 0, fmt.Errorf("failed to query series: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var highestSeq int64
+	for cursor.Next(ctx) {
+		var doc struct {
+			Code string `bson:"code"`
+		}
+		if err := cursor.Decode(&doc); err != nil {
+			continue
+		}
+
+		if doc.Code == "" {
+			continue
+		}
+
+		var seq int64
+		if _, err := fmt.Sscanf(doc.Code, "%d", &seq); err == nil && seq > highestSeq {
+			highestSeq = seq
+		}
+	}
+
+	return highestSeq, nil
+}
+
+func (r *SeriesRepository) FindSeriesWithoutCode() ([]models.Series, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	filter := bson.M{
+		"$or": []bson.M{
+			{"code": bson.M{"$exists": false}},
+			{"code": ""},
+			{"code": nil},
+		},
+	}
+	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: 1}})
+
+	cursor, err := r.seriesCol.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("find series without code: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var seriesList []models.Series
+	if err := cursor.All(ctx, &seriesList); err != nil {
+		return nil, fmt.Errorf("decode series without code: %w", err)
+	}
+	for i := range seriesList {
+		seriesList[i].Genre = normalizeSeriesGenres(seriesList[i].Genre)
+	}
+	if seriesList == nil {
+		return []models.Series{}, nil
+	}
+	return seriesList, nil
+}
+
+func (r *SeriesRepository) SetSeriesCode(id primitive.ObjectID, code string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := r.seriesCol.UpdateOne(
+		ctx,
+		bson.M{"_id": id},
+		bson.M{"$set": bson.M{
+			"code":       code,
+			"updated_at": time.Now(),
+		}},
+	)
+	if err != nil {
+		return err
+	}
+	if result.MatchedCount == 0 {
+		log.Printf("series code backfill skipped missing series: %s", id.Hex())
+	}
+	return nil
 }
 
 func (r *SeriesRepository) Delete(id primitive.ObjectID) error {

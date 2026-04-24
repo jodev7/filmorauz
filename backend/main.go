@@ -103,7 +103,8 @@ func main() {
 
 	// Set bot username for deep links
 	authService.SetBotUsername(cfg.TelegramBotUsername)
-	movieService := services.NewMovieService(movieRepo, counterRepo, notificationService, movieViewEventRepo)
+	movieService := services.NewMovieService(movieRepo, seriesRepo, counterRepo, notificationService, movieViewEventRepo)
+	seriesService := services.NewSeriesService(seriesRepo, movieRepo)
 
 	// Rating service
 	ratingService := services.NewRatingService(ratingRepo, seriesRatingRepo, movieRepo, seriesRepo)
@@ -116,6 +117,7 @@ func main() {
 
 	// Backfill movie codes for existing movies that don't have one
 	movieService.BackfillMovieCodes()
+	seriesService.BackfillSeriesCodes()
 
 	// Setup Gin
 	r := gin.Default()
@@ -225,7 +227,6 @@ func main() {
 
 	// Series repository, service, and handler
 	// seriesRepo already initialized above for rating service
-	seriesService := services.NewSeriesService(seriesRepo)
 	seriesHandler := handlers.NewSeriesHandler(seriesService)
 	mediaHandler := handlers.NewMediaHandler(cfg, movieService, seriesService, userRepo)
 	homepageHandler := handlers.NewHomepageHandler(movieService, collectionService, seriesService)

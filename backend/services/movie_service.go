@@ -102,6 +102,7 @@ func IsDuplicateMovieError(err error) bool {
 
 type MovieService struct {
 	repo            *repositories.MovieRepository
+	seriesRepo      *repositories.SeriesRepository
 	counterRepo     *repositories.CounterRepository
 	notificationSvc *NotificationService
 	viewEventRepo   *repositories.MovieViewEventRepository
@@ -109,8 +110,8 @@ type MovieService struct {
 	b2Cleanup       *B2CleanupService            // optional — nil means skip B2 cleanup
 }
 
-func NewMovieService(repo *repositories.MovieRepository, counterRepo *repositories.CounterRepository, notificationSvc *NotificationService, viewEventRepo *repositories.MovieViewEventRepository) *MovieService {
-	return &MovieService{repo: repo, counterRepo: counterRepo, notificationSvc: notificationSvc, viewEventRepo: viewEventRepo}
+func NewMovieService(repo *repositories.MovieRepository, seriesRepo *repositories.SeriesRepository, counterRepo *repositories.CounterRepository, notificationSvc *NotificationService, viewEventRepo *repositories.MovieViewEventRepository) *MovieService {
+	return &MovieService{repo: repo, seriesRepo: seriesRepo, counterRepo: counterRepo, notificationSvc: notificationSvc, viewEventRepo: viewEventRepo}
 }
 
 // SetStorageDependencies wires optional cleanup helpers so DeleteMovie can
@@ -752,24 +753,12 @@ func (s *MovieService) BackfillMovieCodes() {
 // Finds the highest existing numeric code from movies collection and returns code+1
 // Uses: 0001-9999 (4 digits), 10000-99999 (5 digits), 100000-999999 (6 digits)
 func (s *MovieService) generateUniqueCode() (string, error) {
-	// Find highest existing code from movies collection directly
-	highestSeq, err := s.repo.FindHighestCode()
+	code, err := getNextContentCode(s.repo, s.seriesRepo)
 	if err != nil {
-		return "", fmt.Errorf("failed to find highest code: %w", err)
+		return "", fmt.Errorf("failed to generate next content code: %w", err)
 	}
 
-	// Generate next code
-	nextSeq := highestSeq + 1
-
-	// Check if we've exceeded the maximum
-	if nextSeq > codeMaxLimit {
-		return "", fmt.Errorf("movie code limit exceeded: %d > %d", nextSeq, codeMaxLimit)
-	}
-
-	// Format the code based on the sequence range
-	code := formatMovieCode(nextSeq)
-
-	log.Printf("Generated sequential movie code: %s (highest_existing: %d, next: %d)", code, highestSeq, nextSeq)
+	log.Printf("Generated sequential content code for movie: %s", code)
 	return code, nil
 }
 
@@ -779,14 +768,7 @@ func (s *MovieService) generateUniqueCode() (string, error) {
 //   - seq <= 99999   → 5-digit zero-padded (e.g., 10000 -> "10000")
 //   - seq <= 999999  → 6-digit zero-padded (e.g., 100000 -> "100000")
 func formatMovieCode(seq int64) string {
-	switch {
-	case seq <= 9999:
-		return fmt.Sprintf("%04d", seq)
-	case seq <= 99999:
-		return fmt.Sprintf("%05d", seq)
-	default:
-		return fmt.Sprintf("%06d", seq)
-	}
+	return formatContentCode(seq)
 }
 
 // generateUniqueSlug creates a URL-safe slug from title and year

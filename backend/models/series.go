@@ -9,6 +9,7 @@ import (
 // Series represents a TV series
 type Series struct {
 	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Code        string             `bson:"code,omitempty" json:"code,omitempty"`
 	Slug        string             `bson:"slug" json:"slug"` // URL-friendly slug
 	Title       string             `bson:"title" json:"title"`
 	Description string             `bson:"description" json:"description"`
@@ -103,12 +104,12 @@ type SeasonInput struct {
 
 // EpisodeInput is used for create/update requests
 type EpisodeInput struct {
-	Title        string `json:"title" binding:"required"`
-	Description  string `json:"description"`
-	ThumbnailURL string `json:"thumbnail_url"`
-	VideoURL     string `json:"video_url"`
-	EmbedURL     string `json:"embed_url"`
+	Title        string          `json:"title" binding:"required"`
+	Description  string          `json:"description"`
+	ThumbnailURL string          `json:"thumbnail_url"`
+	VideoURL     string          `json:"video_url"`
+	EmbedURL     string          `json:"embed_url"`
 	SourceType   VideoSourceType `json:"source_type"`
-	Duration     int    `json:"duration"`
-	AirDate      string `json:"air_date"`
+	Duration     int             `json:"duration"`
+	AirDate      string          `json:"air_date"`
 }

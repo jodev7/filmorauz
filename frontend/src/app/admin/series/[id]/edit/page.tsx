@@ -210,6 +210,7 @@ export default function EditSeriesPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [seriesCode, setSeriesCode] = useState("");
 
   // Series data
   const [form, setForm] = useState<CreateSeriesData>({
@@ -295,6 +296,7 @@ export default function EditSeriesPage() {
         const seriesList = await adminGetSeries(token);
         const series = seriesList.find((s) => s.id === id);
         if (series) {
+          setSeriesCode(series.code || "");
           setForm({
             title: series.title,
             title_uz: series.title_uz || "",
@@ -814,6 +816,17 @@ export default function EditSeriesPage() {
                 className="w-full px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white font-mono focus:outline-none focus:border-brand-red"
               />
             </div>
+
+            {seriesCode && (
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">
+                  Serial kodi
+                </label>
+                <div className="w-full px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white font-mono">
+                  {seriesCode}
+                </div>
+              </div>
+            )}
 
             {/* Description */}
             <div>

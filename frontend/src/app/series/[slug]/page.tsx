@@ -7,6 +7,7 @@ import { ChevronLeft, Calendar, Globe, Play } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MediaImage from "@/components/MediaImage";
+import MovieCode from "@/components/MovieCode";
 import SeasonList from "@/components/SeasonList";
 import SeriesCarousel from "@/components/SeriesCarousel";
 import { getSeriesBySlug, getSeries } from "@/lib/series-api";
@@ -105,6 +106,12 @@ export default async function SeriesDetailPage({ params }: Props) {
                 <ChevronLeft size={16} />
                 Seriallarga qaytish
               </Link>
+
+              {series.code && (
+                <div className="mb-3">
+                  <MovieCode code={series.code} label="🎟 Serial kodi:" />
+                </div>
+              )}
 
               <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-white tracking-wide leading-none mb-3">
                 {series.title}

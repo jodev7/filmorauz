@@ -2370,6 +2370,7 @@ export async function getAdminShareStats(
 // Admin Series types
 export interface AdminSeries {
   id: string;
+  code?: string;
   slug: string;
   title: string;
   title_uz?: string;

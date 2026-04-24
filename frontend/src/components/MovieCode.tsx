@@ -5,9 +5,10 @@ import { Copy, Check } from "lucide-react";
 
 interface MovieCodeProps {
   code: string;
+  label?: string;
 }
 
-export default function MovieCode({ code }: MovieCodeProps) {
+export default function MovieCode({ code, label = "🎟 Kino kodi:" }: MovieCodeProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -25,7 +26,7 @@ export default function MovieCode({ code }: MovieCodeProps) {
   return (
     <div className="inline-flex items-center gap-2 bg-brand-card border border-brand-border rounded-lg px-3 py-2">
       <span className="text-sm text-gray-400">
-        🎟 Kino kodi:
+        {label}
       </span>
       <span className="font-mono text-brand-red font-bold text-lg">
         {code}

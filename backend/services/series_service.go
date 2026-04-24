@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -20,10 +21,14 @@ func isValidSeriesSlug(slug string) bool {
 
 type SeriesService struct {
 	seriesRepo *repositories.SeriesRepository
+	movieRepo  *repositories.MovieRepository
 }
 
-func NewSeriesService(seriesRepo *repositories.SeriesRepository) *SeriesService {
-	return &SeriesService{seriesRepo: seriesRepo}
+func NewSeriesService(seriesRepo *repositories.SeriesRepository, movieRepo *repositories.MovieRepository) *SeriesService {
+	return &SeriesService{
+		seriesRepo: seriesRepo,
+		movieRepo:  movieRepo,
+	}
 }
 
 // normalizeGenres trims, lowercases, and dedupes genre strings.
@@ -89,6 +94,7 @@ func (s *SeriesService) CreateSeries(input *models.SeriesInput) (*models.Series,
 	}
 
 	series := &models.Series{
+		Code:        "",
 		Slug:        slug,
 		Title:       input.Title,
 		Description: input.Description,
@@ -112,6 +118,14 @@ func (s *SeriesService) CreateSeries(input *models.SeriesInput) (*models.Series,
 			return nil, fmt.Errorf("slug already in use by another series")
 		}
 		series.Slug = series.Slug + "-" + time.Now().Format("20060102")
+	}
+
+	if strings.TrimSpace(series.Code) == "" {
+		code, err := getNextContentCode(s.movieRepo, s.seriesRepo)
+		if err != nil {
+			return nil, err
+		}
+		series.Code = code
 	}
 
 	err := s.seriesRepo.Create(series)
@@ -186,6 +200,34 @@ func (s *SeriesService) UpdateSeries(id primitive.ObjectID, input *models.Series
 	}
 
 	return series, nil
+}
+
+// BackfillSeriesCodes assigns codes to existing series that don't have one.
+// It is safe to call on startup.
+func (s *SeriesService) BackfillSeriesCodes() {
+	seriesList, err := s.seriesRepo.FindSeriesWithoutCode()
+	if err != nil {
+		log.Printf("Backfill: failed to find series without code: %v", err)
+		return
+	}
+	if len(seriesList) == 0 {
+		return
+	}
+
+	log.Printf("Backfill: assigning codes to %d existing series...", len(seriesList))
+	for _, series := range seriesList {
+		code, err := getNextContentCode(s.movieRepo, s.seriesRepo)
+		if err != nil {
+			log.Printf("Backfill: failed to generate code for series %s: %v", series.ID.Hex(), err)
+			continue
+		}
+		if err := s.seriesRepo.SetSeriesCode(series.ID, code); err != nil {
+			log.Printf("Backfill: failed to set code %s for series %s: %v", code, series.ID.Hex(), err)
+			continue
+		}
+		log.Printf("Backfill: assigned code %s to series '%s'", code, series.Title)
+	}
+	log.Printf("Backfill: series complete")
 }
 
 // DeleteSeries deletes a series

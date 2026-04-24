@@ -12,6 +12,8 @@ export default {
     const isImagePath = mediaPath.startsWith("/images/");
     const debugMode = isImagePath && url.searchParams.get("debug") === "1";
     const normalizedWorkerMediaPath = mediaPath.replace(/^\/+/, "");
+    console.log("REQUEST_PATH", url.pathname);
+    console.log("MEDIA_PATH", normalizedWorkerMediaPath);
 
     let token = null;
     if (!isImagePath) {
@@ -81,7 +83,9 @@ export default {
       if (isImagePath) {
         console.log(`media not found: requested=${mediaPath}`);
       }
-      return new Response(`b2 fetch failed: ${originResponse.status}`, { status: originResponse.status });
+      return new Response(`b2 not found: ${mediaResult.candidateKeys.join(", ")}`, {
+        status: originResponse.status,
+      });
     }
 
     const contentType = originResponse.headers.get("content-type") || "";
@@ -116,6 +120,7 @@ async function fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath, debugMode =
   const candidates = isImagePath
     ? buildImageCandidateKeys(mediaPath)
     : buildVideoCandidateKeys(mediaPath);
+  console.log("B2_CANDIDATES", candidates);
   let lastResponse = null;
   const attemptedUrlsWithoutSecrets = [];
   const statuses = [];
@@ -379,42 +384,6 @@ function normalizeMediaPath(pathname) {
 
 function buildImageCandidateKeys(mediaPath) {
   const path = mediaPath.replace(/^\/+/, "");
-
-  if (path.startsWith("images/posters/")) {
-    const file = path.slice("images/posters/".length);
-    return uniqueKeys([`images/posters/${file}`, `posters/${file}`, file]);
-  }
-
-  if (path.startsWith("images/backdrops/")) {
-    const file = path.slice("images/backdrops/".length);
-    return uniqueKeys([`images/backdrops/${file}`, `backdrops/${file}`, file]);
-  }
-
-  if (path.startsWith("images/profile/")) {
-    const file = path.slice("images/profile/".length);
-    return uniqueKeys([`images/profile/${file}`, `avatars/${file}`, `profile/${file}`, file]);
-  }
-
-  if (path.startsWith("images/telegram-posts/")) {
-    const file = path.slice("images/telegram-posts/".length);
-    return uniqueKeys([`images/telegram-posts/${file}`, `telegram-posts/${file}`, file]);
-  }
-
-  if (path.startsWith("images/ads/")) {
-    const file = path.slice("images/ads/".length);
-    return uniqueKeys([`images/ads/${file}`, `ads/images/${file}`, `ads/${file}`]);
-  }
-
-  if (path.startsWith("images/suggestions/")) {
-    const file = path.slice("images/suggestions/".length);
-    return uniqueKeys([`images/suggestions/${file}`, `suggestions/${file}`]);
-  }
-
-  if (path.startsWith("images/")) {
-    const rest = path.slice("images/".length);
-    return uniqueKeys([`images/${rest}`, rest]);
-  }
-
   return uniqueKeys([path]);
 }
 
@@ -431,7 +400,6 @@ function buildVideoCandidateKeys(mediaPath) {
   }
 
   if (key.startsWith("videos/movies/")) {
-    candidates.push(key.replace(/^videos\/movies\//, "videos/"));
     return uniqueKeys(candidates);
   }
 
