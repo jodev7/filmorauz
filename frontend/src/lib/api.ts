@@ -57,6 +57,7 @@ export interface Movie {
   series_title?: string;
   episode_number?: number;
   premium_stream_url?: string;
+  master_playlist_url?: string;
 }
 
 export interface MovieInput {

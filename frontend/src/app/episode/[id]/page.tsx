@@ -50,6 +50,7 @@ export default async function EpisodePage({ params }: PageProps) {
     description: episode.description || "",
     video_url: episode.video_url || "",
     embed_url: episode.embed_url || "",
+    master_playlist_url: episode.video_url || "",
     source_type: episode.source_type || "iframe_embed",
     poster_url: series?.series.poster_url || "",
     backdrop_url: series?.series.backdrop_url || series?.series.poster_url || "",

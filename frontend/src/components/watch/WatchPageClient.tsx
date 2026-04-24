@@ -19,7 +19,27 @@ import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils
 const PLAYER_AD_MANDATORY_SECS = 15;
 const PLAYER_AD_REPEAT_MS = 10 * 60 * 1000; // 10 minutes
 const MEDIA_ACCESS_MODE =
-  (process.env.NEXT_PUBLIC_MEDIA_ACCESS_MODE || "protected").toLowerCase();
+  (process.env.NEXT_PUBLIC_MEDIA_ACCESS_MODE || "").trim().toLowerCase() || "protected";
+const CDN_BASE_URL =
+  (process.env.NEXT_PUBLIC_CDN_BASE_URL || "").trim().replace(/\/+$/, "") ||
+  "https://cdn.filmorauz.net/file/filmorauznet";
+
+function resolvePublicPlaybackUrl(movie: Movie): string {
+  const raw =
+    movie.master_playlist_url ||
+    movie.video_url ||
+    movie.embed_url ||
+    "";
+  const value = raw.trim();
+  if (!value) return "";
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    return value;
+  }
+  if (value.startsWith("videos/")) {
+    return `${CDN_BASE_URL}/${value}`;
+  }
+  return normalizeMediaUrl(value, "");
+}
 
 // Player ad — full-overlay interrupt, 15s mandatory countdown
 // starts only after user clicks play (started=true), calls onFirstComplete when first dismissed
@@ -289,14 +309,8 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
       return;
     }
 
-    if (MEDIA_ACCESS_MODE === "public") {
-      const publicSrc = normalizeMediaUrl(
-        (movie as unknown as { master_playlist_url?: string }).master_playlist_url ||
-          movie.video_url ||
-          movie.embed_url ||
-          "",
-        ""
-      );
+    if (MEDIA_ACCESS_MODE !== "protected") {
+      const publicSrc = resolvePublicPlaybackUrl(movie);
       console.log("[player-src]", publicSrc);
       setResolvedPlaybackUrl(publicSrc || null);
       return;
@@ -334,7 +348,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
     return () => {
       cancelled = true;
     };
-  }, [movie.embed_url, movie.id, movie.source_type, movie.type, movie.video_url, token]);
+  }, [movie.embed_url, movie.id, movie.master_playlist_url, movie.source_type, movie.type, movie.video_url, token]);
 
   // Fetch watch progress for resume
   useEffect(() => {
