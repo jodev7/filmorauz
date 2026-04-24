@@ -219,7 +219,7 @@ func (h *UploadHandler) UploadProfileImage(c *gin.Context) {
 
 func buildProfileImageObjectKey(userID, originalFilename, contentType string) string {
 	ext := safeUploadExt(originalFilename, contentType, ".webp")
-	return fmt.Sprintf("avatars/%s_%d%s", userID, time.Now().UnixMilli(), ext)
+	return fmt.Sprintf("images/profile/%s_%d%s", userID, time.Now().UnixMilli(), ext)
 }
 
 // saveLocal saves file to local storage (development)

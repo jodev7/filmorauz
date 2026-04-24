@@ -12,7 +12,7 @@ import SuggestionModal from "./SuggestionModal";
 import NotificationBell from "./NotificationBell";
 import { resolveIsPremium } from "./PremiumComponents";
 import { getLocalizedTitle, getLocalizedGenres } from "@/lib/localization";
-import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
+import { DEFAULT_AVATAR_PLACEHOLDER, DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 
 export default function Navbar() {
   const { t } = useI18n();
@@ -221,7 +221,7 @@ export default function Navbar() {
                       className="w-8 h-12 object-cover rounded shrink-0"
                       onError={(e) => {
                         (e.target as HTMLImageElement).src =
-                          "/placeholder-poster.jpg";
+                          DEFAULT_POSTER_PLACEHOLDER;
                       }}
                     />
                     <div className="min-w-0">
@@ -263,9 +263,10 @@ export default function Navbar() {
                 >
                   {(user?.profile_image_url || user?.photo_url) ? (
                     <img
-                      src={normalizeMediaUrl(user.profile_image_url || user.photo_url)}
+                      src={normalizeMediaUrl(user.profile_image_url || user.photo_url, DEFAULT_AVATAR_PLACEHOLDER)}
                       alt="Profile"
                       className={`w-full h-full rounded-full object-cover ${resolveIsPremium(user) ? 'ring-2 ring-yellow-500 ring-offset-2 ring-offset-[#0a0a0f]' : ''}`}
+                      onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_AVATAR_PLACEHOLDER; }}
                     />
                   ) : (
                     <User size={20} className={resolveIsPremium(user) ? 'text-yellow-400' : 'text-zinc-400'} />
@@ -344,7 +345,7 @@ export default function Navbar() {
                     alt={getLocalizedTitle(movie)}
                     className="w-8 h-12 object-cover rounded shrink-0"
                     onError={(e) => {
-                      (e.target as HTMLImageElement).src = "/placeholder-poster.jpg";
+                      (e.target as HTMLImageElement).src = DEFAULT_POSTER_PLACEHOLDER;
                     }}
                   />
                   <div className="min-w-0">

@@ -18,7 +18,7 @@ import {
 import { Locale, DEFAULT_LOCALE } from "@/lib/i18n";
 import { formatRelativeAddedTime } from "@/lib/movie-utils";
 import { PremiumBadge, resolveIsPremium } from "./PremiumComponents";
-import { normalizeMediaUrl } from "@/lib/image-utils";
+import { DEFAULT_AVATAR_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 
 interface CommentsSectionProps {
   movieId?: string;
@@ -351,9 +351,10 @@ function CommentThread({
           <div className="flex items-center gap-2">
             {comment.user_avatar_url ? (
               <img
-                src={normalizeMediaUrl(comment.user_avatar_url)}
+                src={normalizeMediaUrl(comment.user_avatar_url, DEFAULT_AVATAR_PLACEHOLDER)}
                 alt={comment.user_display_name}
                 className="w-8 h-8 rounded-full"
+                onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_AVATAR_PLACEHOLDER; }}
               />
             ) : (
               <div className="w-8 h-8 rounded-full bg-brand-red flex items-center justify-center text-white text-sm">

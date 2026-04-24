@@ -13,7 +13,8 @@ const shimmer = `
   </svg>
 `;
 
-export const DEFAULT_POSTER_PLACEHOLDER = "/placeholder-poster.jpg";
+export const DEFAULT_POSTER_PLACEHOLDER = "/placeholder-poster.png";
+export const DEFAULT_AVATAR_PLACEHOLDER = "/placeholder-avatar.png";
 
 export const SHIMMER_BLUR_DATA_URL = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(shimmer)}`;
 
@@ -23,9 +24,30 @@ const B2_CDN_ABSOLUTE_PREFIXES = [
 ];
 const B2_FILE_PATH_PREFIX = "/file/filmorauznet/";
 const MEDIA_BUCKET_PREFIXES = ["/posters/", "/backdrops/", "/images/", "/ads/"];
+const LEGACY_AVATAR_PREFIX = "/avatars/";
+const CANONICAL_AVATAR_PREFIX = "/images/profile/";
 
 function isInvalidValue(value: string): boolean {
   return !value || value === "null" || value === "undefined" || value === "-" || value === ".";
+}
+
+function stripB2Prefix(value: string): string | null {
+  for (const prefix of B2_CDN_ABSOLUTE_PREFIXES) {
+    if (value.startsWith(prefix)) {
+      return "/" + value.slice(prefix.length).replace(/^\/+/, "");
+    }
+  }
+  if (value.startsWith(B2_FILE_PATH_PREFIX)) {
+    return "/" + value.slice(B2_FILE_PATH_PREFIX.length).replace(/^\/+/, "");
+  }
+  return null;
+}
+
+function rewriteAvatarAlias(path: string): string {
+  if (path.startsWith(LEGACY_AVATAR_PREFIX)) {
+    return CANONICAL_AVATAR_PREFIX + path.slice(LEGACY_AVATAR_PREFIX.length);
+  }
+  return path;
 }
 
 export function normalizeMediaUrl(
@@ -41,19 +63,22 @@ export function normalizeMediaUrl(
     return value;
   }
 
-  for (const prefix of B2_CDN_ABSOLUTE_PREFIXES) {
-    if (value.startsWith(prefix)) {
-      return "/media/" + value.slice(prefix.length).replace(/^\/+/, "");
-    }
+  // Bare "avatars/<file>" (no leading slash) — never appears from a URL parser,
+  // but some older DB records store it this way.
+  if (value.startsWith("avatars/")) {
+    return "/media" + CANONICAL_AVATAR_PREFIX + value.slice("avatars/".length);
   }
 
-  if (value.startsWith(B2_FILE_PATH_PREFIX)) {
-    return "/media/" + value.slice(B2_FILE_PATH_PREFIX.length).replace(/^\/+/, "");
-  }
+  // Strip the B2 absolute host or /file/filmorauznet/ prefix so the rest of
+  // the rules work on bucket-relative paths like "/posters/x.jpg".
+  const stripped = stripB2Prefix(value);
+  let path = stripped ?? value;
+
+  path = rewriteAvatarAlias(path);
 
   for (const prefix of MEDIA_BUCKET_PREFIXES) {
-    if (value.startsWith(prefix)) {
-      return "/media" + value;
+    if (path.startsWith(prefix)) {
+      return "/media" + path;
     }
   }
 

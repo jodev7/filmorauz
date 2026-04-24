@@ -286,9 +286,9 @@ func TestUploadTempForwardsVideoAsTempMovieFileField(t *testing.T) {
 	}
 }
 
-func TestBuildProfileImageObjectKeyUsesAvatarPrefix(t *testing.T) {
+func TestBuildProfileImageObjectKeyUsesProfilePrefix(t *testing.T) {
 	key := buildProfileImageObjectKey("507f1f77bcf86cd799439011", "avatar.png", "image/png")
-	if !regexp.MustCompile(`^avatars/507f1f77bcf86cd799439011_[0-9]+\.png$`).MatchString(key) {
+	if !regexp.MustCompile(`^images/profile/507f1f77bcf86cd799439011_[0-9]+\.png$`).MatchString(key) {
 		t.Fatalf("object key = %q", key)
 	}
 }
@@ -356,7 +356,7 @@ func TestUploadProfileImageUploadsDirectlyToB2(t *testing.T) {
 			if r.Header.Get("Authorization") != "upload-token" {
 				t.Fatalf("authorization header = %q", r.Header.Get("Authorization"))
 			}
-			if !strings.HasPrefix(uploadedFileName, "avatars%2F507f1f77bcf86cd799439011_") {
+			if !strings.HasPrefix(uploadedFileName, "images%2Fprofile%2F507f1f77bcf86cd799439011_") {
 				t.Fatalf("uploaded file name = %q", uploadedFileName)
 			}
 			if r.Header.Get("Content-Type") != "image/png" {
@@ -452,7 +452,7 @@ func TestUploadProfileImageUploadsDirectlyToB2(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	profileURL, _ := response["profile_image_url"].(string)
-	if !strings.HasPrefix(profileURL, "https://cdn.filmorauz.net/file/filmorauznet/avatars/507f1f77bcf86cd799439011_") {
+	if !strings.HasPrefix(profileURL, "https://cdn.filmorauz.net/file/filmorauznet/images/profile/507f1f77bcf86cd799439011_") {
 		t.Fatalf("profile_image_url = %q", profileURL)
 	}
 }

@@ -7,7 +7,7 @@ import { getIsNew, formatRelativeAddedTime, formatDuration } from "@/lib/movie-u
 import { isMoviePremium, PremiumBadge } from "./PremiumComponents";
 import { getLocalizedTitle, getLocalizedGenres } from "@/lib/localization";
 import OptimizedImage from "./OptimizedImage";
-import { normalizeMediaUrl } from "@/lib/image-utils";
+import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 
 interface Props {
   movie: Partial<Movie> & { id: string; title: string; poster_url: string; slug: string };
@@ -52,7 +52,7 @@ export default function MovieCard({ movie, priority = false, showSkeleton = true
           showSkeleton={showSkeleton}
           aspectRatio="2/3"
           onError={(e) => {
-            (e.target as HTMLImageElement).src = "/placeholder-poster.jpg";
+            (e.target as HTMLImageElement).src = DEFAULT_POSTER_PLACEHOLDER;
           }}
         />
 

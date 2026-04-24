@@ -75,7 +75,7 @@ func extractMediaPath(raw string) (string, string, bool) {
 		if idx := strings.Index(candidate, "/file/filmorauznet/"); idx >= 0 {
 			return "/" + strings.TrimPrefix(candidate[idx+len("/file/filmorauznet/"):], "/"), u.RawQuery, true
 		}
-		for _, prefix := range []string{"/videos/", "/avatars/", "/movies/", "/series/", "/collections/", "/ads/", "/telegram-posts/", "/suggestions/", "/posters/", "/backdrops/"} {
+		for _, prefix := range []string{"/videos/", "/images/", "/movies/", "/series/", "/collections/", "/ads/", "/telegram-posts/", "/suggestions/", "/posters/", "/backdrops/", "/avatars/"} {
 			if idx := strings.Index(candidate, prefix); idx >= 0 {
 				return candidate[idx:], u.RawQuery, true
 			}
