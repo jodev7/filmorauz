@@ -58,9 +58,13 @@ export default {
     }
 
     const b2Auth = await getB2Authorization(env);
-    const originResponse = await fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath);
+    const mediaResult = await fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath);
+    const originResponse = mediaResult.response;
 
     if (!originResponse.ok) {
+      if (isImagePath) {
+        console.log(`media not found: requested=${mediaPath}`);
+      }
       return new Response(`b2 fetch failed: ${originResponse.status}`, { status: originResponse.status });
     }
 
@@ -80,6 +84,8 @@ export default {
     const headers = new Headers(originResponse.headers);
     if (isImagePath) {
       headers.set("cache-control", "public, max-age=31536000, immutable");
+      headers.set("x-b2-key", mediaResult.resolvedKey || mediaPath.replace(/^\//, ""));
+      headers.set("x-media-fallback", mediaResult.fallbackUsed ? "true" : "false");
     }
 
     return new Response(originResponse.body, {
@@ -91,11 +97,13 @@ export default {
 };
 
 async function fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath) {
-  const candidates = buildMediaPathCandidates(mediaPath);
+  const candidates = isImagePath
+    ? buildImageCandidateKeys(mediaPath)
+    : [mediaPath.replace(/^\//, "")];
   let lastResponse = null;
 
   for (const candidate of candidates) {
-    const originURL = buildB2DownloadURL(env, candidate);
+    const originURL = buildB2Url(env, candidate);
     const response = await fetch(originURL, {
       headers: {
         Authorization: b2Auth.authorizationToken,
@@ -109,19 +117,40 @@ async function fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath) {
     });
 
     if (response.ok) {
-      if (candidate !== mediaPath) {
-        console.log(`media fallback: requested=${mediaPath} resolved=${candidate}`);
+      console.log("media hit", candidate);
+      if (candidate !== mediaPath.replace(/^\//, "")) {
+        console.log(`media fallback: requested=${mediaPath} resolved=/${candidate}`);
       }
-      return response;
+      return {
+        response,
+        resolvedKey: candidate,
+        fallbackUsed: candidate !== mediaPath.replace(/^\//, ""),
+      };
     }
 
+    console.log("media miss", candidate, response.status);
     lastResponse = response;
-    if (!isImagePath || response.status !== 404) {
-      return response;
+    if (!isImagePath) {
+      return {
+        response,
+        resolvedKey: candidate,
+        fallbackUsed: false,
+      };
+    }
+    if (response.status !== 404) {
+      return {
+        response,
+        resolvedKey: candidate,
+        fallbackUsed: false,
+      };
     }
   }
 
-  return lastResponse || new Response("b2 fetch failed: 404", { status: 404 });
+  return {
+    response: lastResponse || new Response("b2 fetch failed: 404", { status: 404 }),
+    resolvedKey: "",
+    fallbackUsed: false,
+  };
 }
 
 function readToken(request, url, cookieName) {
@@ -208,9 +237,18 @@ async function getB2Authorization(env) {
   return cachedB2Auth;
 }
 
-function buildB2DownloadURL(env, mediaPath) {
-  const path = mediaPath.startsWith("/") ? mediaPath : `/${mediaPath}`;
-  return `${env.B2_DOWNLOAD_URL}/${env.B2_BUCKET_NAME}${path}`;
+function buildB2Url(env, key) {
+  const trimmedKey = String(key || "").replace(/^\/+/, "");
+  const base = String(env.B2_DOWNLOAD_URL || "").replace(/\/+$/, "");
+  const bucket = String(env.B2_BUCKET_NAME || "").replace(/^\/+|\/+$/g, "");
+
+  if (base.includes(`/file/${bucket}`)) {
+    return `${base}/${trimmedKey}`;
+  }
+  if (base.endsWith("/file")) {
+    return `${base}/${bucket}/${trimmedKey}`;
+  }
+  return `${base}/file/${bucket}/${trimmedKey}`;
 }
 
 function rewritePlaylist(requestURL, playlist, token) {
@@ -264,48 +302,47 @@ function normalizeMediaPath(pathname) {
   return path;
 }
 
-function buildMediaPathCandidates(mediaPath) {
-  const path = normalizeMediaPath(mediaPath);
-  const candidates = [path];
+function buildImageCandidateKeys(mediaPath) {
+  const path = mediaPath.replace(/^\/+/, "");
 
-  const legacyMaps = [
-    {
-      canonical: "/images/profile/",
-      fallbacks: ["/avatars/", "/profile/"],
-    },
-    {
-      canonical: "/images/posters/",
-      fallbacks: ["/posters/"],
-    },
-    {
-      canonical: "/images/backdrops/",
-      fallbacks: ["/backdrops/"],
-    },
-    {
-      canonical: "/images/ads/",
-      fallbacks: ["/ads/images/", "/ads/"],
-    },
-    {
-      canonical: "/images/telegram-posts/",
-      fallbacks: ["/telegram-posts/"],
-    },
-    {
-      canonical: "/images/suggestions/",
-      fallbacks: ["/suggestions/"],
-    },
-  ];
-
-  for (const { canonical, fallbacks } of legacyMaps) {
-    if (!path.startsWith(canonical)) {
-      continue;
-    }
-
-    const suffix = path.slice(canonical.length);
-    for (const fallback of fallbacks) {
-      candidates.push(`${fallback}${suffix}`);
-    }
-    break;
+  if (path.startsWith("images/posters/")) {
+    const file = path.slice("images/posters/".length);
+    return uniqueKeys([`images/posters/${file}`, `posters/${file}`, file]);
   }
 
-  return [...new Set(candidates)];
+  if (path.startsWith("images/backdrops/")) {
+    const file = path.slice("images/backdrops/".length);
+    return uniqueKeys([`images/backdrops/${file}`, `backdrops/${file}`, file]);
+  }
+
+  if (path.startsWith("images/profile/")) {
+    const file = path.slice("images/profile/".length);
+    return uniqueKeys([`images/profile/${file}`, `avatars/${file}`, `profile/${file}`, file]);
+  }
+
+  if (path.startsWith("images/telegram-posts/")) {
+    const file = path.slice("images/telegram-posts/".length);
+    return uniqueKeys([`images/telegram-posts/${file}`, `telegram-posts/${file}`, file]);
+  }
+
+  if (path.startsWith("images/ads/")) {
+    const file = path.slice("images/ads/".length);
+    return uniqueKeys([`images/ads/${file}`, `ads/images/${file}`, `ads/${file}`]);
+  }
+
+  if (path.startsWith("images/suggestions/")) {
+    const file = path.slice("images/suggestions/".length);
+    return uniqueKeys([`images/suggestions/${file}`, `suggestions/${file}`]);
+  }
+
+  if (path.startsWith("images/")) {
+    const rest = path.slice("images/".length);
+    return uniqueKeys([`images/${rest}`, rest]);
+  }
+
+  return uniqueKeys([path]);
+}
+
+function uniqueKeys(keys) {
+  return [...new Set(keys.filter(Boolean))];
 }
