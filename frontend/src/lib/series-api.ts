@@ -50,6 +50,18 @@ export interface Episode {
   created_at: string;
   updated_at: string;
   series_slug?: string;
+  series_title?: string;
+}
+
+export interface EpisodeLink {
+  id: string;
+  title: string;
+}
+
+export interface EpisodeDetailResponse {
+  episode: Episode;
+  previous_episode?: EpisodeLink | null;
+  next_episode?: EpisodeLink | null;
 }
 
 export interface SeasonWithEpisodes {
@@ -104,7 +116,7 @@ export async function getSeriesBySlug(slug: string): Promise<SeriesWithSeasons> 
 }
 
 // Get episode by ID
-export async function getEpisode(id: string): Promise<Episode> {
+export async function getEpisode(id: string): Promise<EpisodeDetailResponse> {
   const res = await fetch(`${API_URL}/episodes/${id}`, {
     cache: "no-store",
   });

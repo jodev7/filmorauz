@@ -52,6 +52,9 @@ export interface Movie {
   is_published?: boolean;
   approved_at?: string | null;
   approved_by?: string;
+  type?: "movie" | "episode";
+  series_slug?: string;
+  series_title?: string;
 }
 
 export interface MovieInput {

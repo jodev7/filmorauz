@@ -138,12 +138,59 @@ func (h *SeriesHandler) GetEpisode(c *gin.Context) {
 	// Get series to include slug
 	series, err := h.seriesService.GetSeriesByID(episode.SeriesID)
 	seriesSlug := ""
+	seriesTitle := ""
 	if err == nil && series != nil {
 		seriesSlug = series.Slug
+		seriesTitle = series.Title
+	}
+
+	type episodeNav struct {
+		ID    primitive.ObjectID `json:"id"`
+		Title string             `json:"title"`
+	}
+
+	var previousEpisode *episodeNav
+	var nextEpisode *episodeNav
+
+	seasons, err := h.seriesService.GetSeasonsBySeriesID(episode.SeriesID)
+	if err == nil {
+		foundCurrent := false
+		var orderedEpisodes []models.Episode
+		for _, season := range seasons {
+			episodes, episodesErr := h.seriesService.GetEpisodesBySeasonID(season.ID)
+			if episodesErr != nil {
+				orderedEpisodes = nil
+				break
+			}
+			orderedEpisodes = append(orderedEpisodes, episodes...)
+		}
+
+		for i, ep := range orderedEpisodes {
+			if ep.ID == episode.ID {
+				foundCurrent = true
+				if i > 0 {
+					previousEpisode = &episodeNav{
+						ID:    orderedEpisodes[i-1].ID,
+						Title: orderedEpisodes[i-1].Title,
+					}
+				}
+				if i+1 < len(orderedEpisodes) {
+					nextEpisode = &episodeNav{
+						ID:    orderedEpisodes[i+1].ID,
+						Title: orderedEpisodes[i+1].Title,
+					}
+				}
+				break
+			}
+		}
+
+		if !foundCurrent {
+			log.Printf("[EPISODE API] current episode not found in ordered series list: episode_id=%s series_id=%s", episode.ID.Hex(), episode.SeriesID.Hex())
+		}
 	}
 
 	// Return episode with series slug
-	response := gin.H{
+	episodeResponse := gin.H{
 		"id":             episode.ID,
 		"series_id":      episode.SeriesID,
 		"season_id":      episode.SeasonID,
@@ -160,9 +207,14 @@ func (h *SeriesHandler) GetEpisode(c *gin.Context) {
 		"created_at":     episode.CreatedAt,
 		"updated_at":     episode.UpdatedAt,
 		"series_slug":    seriesSlug,
+		"series_title":   seriesTitle,
 	}
 
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusOK, gin.H{
+		"episode":          episodeResponse,
+		"previous_episode": previousEpisode,
+		"next_episode":     nextEpisode,
+	})
 }
 
 // POST /api/admin/series - Create series (admin)

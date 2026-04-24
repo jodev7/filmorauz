@@ -254,6 +254,11 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
   const localizedDescription = getLocalizedDescription(movie);
   const localizedGenres = getLocalizedGenres(movie);
   const localizedCountry = getLocalizedCountry(movie);
+  const backHref = movie.type === "episode"
+    ? movie.series_slug
+      ? `/series/${movie.series_slug}`
+      : "/series"
+    : `/movies/${movie.slug}`;
 
   // Fetch watch progress for resume
   useEffect(() => {
@@ -360,7 +365,7 @@ export default function WatchPageClient({ movie }: WatchPageClientProps) {
       <div className="h-[env(safe-area-inset-top)]" />
       <div className="bg-brand-dark/95 backdrop-blur-sm border-b border-brand-border px-3 sm:px-4 py-2 sm:py-3 flex items-center gap-3 sm:gap-4">
         <Link
-          href={`/movies/${movie.slug}`}
+          href={backHref}
           className="flex items-center gap-1.5 text-xs sm:text-sm text-gray-400 hover:text-white transition-colors"
         >
           <ChevronLeft size={18} />
