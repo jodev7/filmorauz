@@ -393,20 +393,18 @@ function uniqueKeys(keys) {
 
 function buildVideoCandidateKeys(mediaPath) {
   const key = String(mediaPath || "").replace(/^\/+/, "");
-  const candidates = [key];
-
   if (key.startsWith("videos/serials/")) {
-    return uniqueKeys(candidates);
+    return uniqueKeys([key]);
   }
 
   if (key.startsWith("videos/movies/")) {
-    return uniqueKeys(candidates);
+    return uniqueKeys([key]);
   }
 
-  if (key.startsWith("videos/") && !key.startsWith("videos/movies/")) {
-    candidates.push(key.replace(/^videos\//, "videos/movies/"));
-    return uniqueKeys(candidates);
+  if (key.startsWith("videos/")) {
+    const rest = key.slice("videos/".length);
+    return uniqueKeys([key, `videos/movies/${rest}`]);
   }
 
-  return uniqueKeys(candidates);
+  return uniqueKeys([key]);
 }

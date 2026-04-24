@@ -173,6 +173,14 @@ func (h *MediaHandler) buildProtectedPlayback(c *gin.Context, sourceURL string) 
 		return "", "", time.Time{}, false, errBadRequest("failed to build protected playback url")
 	}
 
+	if strings.EqualFold(strings.TrimSpace(h.cfg.MediaAccessMode), "public") {
+		playbackURL := strings.TrimSuffix(h.cfg.CDNBaseURL, "/") + mediaPath
+		if originQS != "" {
+			playbackURL += "?" + originQS
+		}
+		return playbackURL, "", time.Now().UTC(), false, nil
+	}
+
 	base := strings.TrimSuffix(h.cfg.MediaProtectedBaseURL, "/")
 	if base == "" {
 		base = "/media"

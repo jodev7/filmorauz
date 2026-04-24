@@ -46,12 +46,24 @@ func requiresMediaToken(mediaPath string) bool {
 
 func protectMediaURL(raw string) string {
 	cfg := config.Current()
-	if cfg == nil || raw == "" || cfg.MediaSigningSecret == "" {
+	if cfg == nil || raw == "" {
 		return raw
 	}
 
 	mediaPath, originQS, ok := extractMediaPath(raw)
 	if !ok {
+		return raw
+	}
+
+	if strings.EqualFold(strings.TrimSpace(cfg.MediaAccessMode), "public") {
+		publicURL := strings.TrimSuffix(cfg.CDNBaseURL, "/") + mediaPath
+		if originQS != "" {
+			publicURL += "?" + originQS
+		}
+		return publicURL
+	}
+
+	if cfg.MediaSigningSecret == "" {
 		return raw
 	}
 

@@ -18,12 +18,31 @@ export const DEFAULT_AVATAR_PLACEHOLDER = "/placeholder-avatar.png";
 
 export const SHIMMER_BLUR_DATA_URL = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(shimmer)}`;
 
+const MEDIA_ACCESS_MODE = (() => {
+  const configured =
+    process.env.NEXT_PUBLIC_MEDIA_ACCESS_MODE?.trim() ||
+    process.env.MEDIA_ACCESS_MODE?.trim();
+  return (configured || "protected").toLowerCase();
+})();
+
 const CDN_MEDIA_BASE = (() => {
   const configured = process.env.NEXT_PUBLIC_CDN_MEDIA_BASE?.trim();
   if (configured) {
     return configured.replace(/\/+$/, "");
   }
   return process.env.NODE_ENV === "production" ? "https://cdn.filmorauz.net" : "";
+})();
+
+const CDN_FILE_BASE = (() => {
+  const configured =
+    process.env.NEXT_PUBLIC_CDN_BASE_URL?.trim() ||
+    process.env.CDN_BASE_URL?.trim();
+  if (configured) {
+    return configured.replace(/\/+$/, "");
+  }
+  return process.env.NODE_ENV === "production"
+    ? "https://cdn.filmorauz.net/file/filmorauznet"
+    : "";
 })();
 
 const B2_CDN_ABSOLUTE_PREFIXES = [
@@ -34,6 +53,7 @@ const B2_FILE_PATH_PREFIX = "/file/filmorauznet/";
 const MEDIA_PATH_MARKER = "/media/";
 const MEDIA_BUCKET_PREFIXES = [
   "/images/",
+  "/videos/",
   "/movies/",
   "/series/",
   "/collections/",
@@ -104,6 +124,13 @@ function rewriteLegacyMediaAliases(path: string): string {
 }
 
 function maybeUseCDNMediaHost(path: string): string {
+  if (MEDIA_ACCESS_MODE === "public") {
+    const objectPath = path.startsWith("/media/") ? path.slice("/media".length) : path;
+    if (!CDN_FILE_BASE || !objectPath.startsWith("/")) {
+      return objectPath || path;
+    }
+    return `${CDN_FILE_BASE}${objectPath}`;
+  }
   if (!CDN_MEDIA_BASE || !path.startsWith("/media/")) {
     return path;
   }
@@ -176,7 +203,7 @@ export function normalizeMediaUrl(
 
   for (const prefix of MEDIA_BUCKET_PREFIXES) {
     if (path.startsWith(prefix)) {
-      return maybeUseCDNMediaHost("/media" + path);
+      return maybeUseCDNMediaHost(MEDIA_ACCESS_MODE === "public" ? path : "/media" + path);
     }
   }
 
@@ -205,6 +232,7 @@ export function normalizeImageSrc(
 }
 
 export function isProtectedMediaUrl(src?: string | null): boolean {
+  if (MEDIA_ACCESS_MODE === "public") return false;
   const value = src?.trim();
   if (!value) return false;
   if (value.startsWith("/media/")) return true;

@@ -38,6 +38,8 @@ type Config struct {
 	B2AppKey                string
 	B2Endpoint              string
 	B2PublicURL             string
+	MediaAccessMode         string
+	CDNBaseURL              string
 	MediaProtectedBaseURL   string
 	MediaSigningSecret      string
 	MediaTokenTTLSeconds    int
@@ -83,6 +85,8 @@ func Load() *Config {
 		B2AppKey:                getEnvAny([]string{"B2_APPLICATION_KEY", "B2_APP_KEY"}, ""),
 		B2Endpoint:              getEnv("B2_ENDPOINT", ""),
 		B2PublicURL:             getEnv("B2_PUBLIC_URL", ""),
+		MediaAccessMode:         strings.ToLower(getEnv("MEDIA_ACCESS_MODE", "protected")),
+		CDNBaseURL:              getEnv("CDN_BASE_URL", ""),
 		MediaProtectedBaseURL:   getEnv("MEDIA_PROTECTED_BASE_URL", ""),
 		MediaSigningSecret:      getEnv("MEDIA_SIGNING_SECRET", ""),
 		MediaTokenTTLSeconds:    parseInt(getEnv("MEDIA_TOKEN_TTL_SECONDS", "60"), 60),
@@ -107,11 +111,14 @@ func Load() *Config {
 	}
 
 	cfg.MediaProtectedBaseURL = normalizeMediaProtectedBaseURL(cfg)
+	cfg.CDNBaseURL = normalizeCDNBaseURL(cfg)
 
 	log.Printf("=== Backend Configuration ===")
 	log.Printf("Mode: %s", cfg.Mode)
 	log.Printf("Worker Upload URL: %s", cfg.WorkerUploadURL)
 	log.Printf("CDN URL: %s", cfg.CDNURL)
+	log.Printf("Media Access Mode: %s", cfg.MediaAccessMode)
+	log.Printf("CDN Base URL: %s", cfg.CDNBaseURL)
 	log.Printf("Media Protected Base URL: %s", cfg.MediaProtectedBaseURL)
 	if cfg.B2PublicURL != "" {
 		log.Printf("B2 Public URL: %s", cfg.B2PublicURL)
@@ -146,6 +153,10 @@ func normalizeMediaProtectedBaseURL(cfg *Config) string {
 		return "/media"
 	}
 
+	if strings.EqualFold(strings.TrimSpace(cfg.MediaAccessMode), "public") {
+		return normalizeCDNBaseURL(cfg)
+	}
+
 	value := strings.TrimSpace(cfg.MediaProtectedBaseURL)
 	if value == "" {
 		if cfg.IsProd {
@@ -163,6 +174,27 @@ func normalizeMediaProtectedBaseURL(cfg *Config) string {
 	}
 
 	return strings.TrimSuffix(value, "/")
+}
+
+func normalizeCDNBaseURL(cfg *Config) string {
+	if cfg == nil {
+		return "https://cdn.filmorauz.net/file/filmorauznet"
+	}
+
+	value := strings.TrimSpace(cfg.CDNBaseURL)
+	if value != "" {
+		return strings.TrimSuffix(value, "/")
+	}
+
+	if cfg.B2PublicURL != "" {
+		return strings.TrimSuffix(cfg.B2PublicURL, "/")
+	}
+
+	if cfg.CDNURL != "" {
+		return strings.TrimSuffix(cfg.CDNURL, "/") + "/file/filmorauznet"
+	}
+
+	return "https://cdn.filmorauz.net/file/filmorauznet"
 }
 
 func getEnvAny(keys []string, fallback string) string {

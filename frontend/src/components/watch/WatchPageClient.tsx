@@ -18,6 +18,8 @@ import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils
 
 const PLAYER_AD_MANDATORY_SECS = 15;
 const PLAYER_AD_REPEAT_MS = 10 * 60 * 1000; // 10 minutes
+const MEDIA_ACCESS_MODE =
+  (process.env.NEXT_PUBLIC_MEDIA_ACCESS_MODE || "protected").toLowerCase();
 
 // Player ad — full-overlay interrupt, 15s mandatory countdown
 // starts only after user clicks play (started=true), calls onFirstComplete when first dismissed
@@ -284,6 +286,19 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
     if (movie.source_type !== "direct_hls" && movie.source_type !== "direct_mp4") {
       const nonProtectedUrl = movie.embed_url || movie.video_url || null;
       setResolvedPlaybackUrl(nonProtectedUrl);
+      return;
+    }
+
+    if (MEDIA_ACCESS_MODE === "public") {
+      const publicSrc = normalizeMediaUrl(
+        (movie as unknown as { master_playlist_url?: string }).master_playlist_url ||
+          movie.video_url ||
+          movie.embed_url ||
+          "",
+        ""
+      );
+      console.log("[player-src]", publicSrc);
+      setResolvedPlaybackUrl(publicSrc || null);
       return;
     }
 
