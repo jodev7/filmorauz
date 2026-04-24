@@ -2,7 +2,6 @@
 
 import type { CSSProperties, ImgHTMLAttributes, SyntheticEvent } from "react";
 import { useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
 import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 
 interface MediaImageProps
@@ -26,7 +25,6 @@ export default function MediaImage({
   onError,
   ...imgProps
 }: MediaImageProps) {
-  const pathname = usePathname() || "";
   const resolvedUrl = normalizeMediaUrl(src, "");
   const resolvedFallback = normalizeMediaUrl(fallbackSrc, DEFAULT_POSTER_PLACEHOLDER);
   const [failed, setFailed] = useState(false);
@@ -35,7 +33,7 @@ export default function MediaImage({
   useEffect(() => {
     setFailed(false);
     setLoaded(!resolvedUrl);
-  }, [pathname, resolvedUrl]);
+  }, [resolvedUrl]);
 
   const finalSrc = failed ? resolvedFallback : resolvedUrl;
   const loadingClassName = loaded
@@ -45,7 +43,7 @@ export default function MediaImage({
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      key={`${pathname}-${resolvedUrl}`}
+      key={resolvedUrl}
       src={finalSrc || undefined}
       alt={alt}
       loading={loading}
