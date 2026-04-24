@@ -2,18 +2,22 @@ package handlers
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/filmorauz/backend/config"
+	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
 	"github.com/gin-gonic/gin"
 )
@@ -64,16 +68,27 @@ func safeForwardedUploadFilename(label, originalFilename, contentType, fallbackE
 
 // UploadHandler handles file uploads for profile images
 type UploadHandler struct {
-	userRepo *repositories.UserRepository
-	config   *config.Config
+	userRepo        *repositories.UserRepository
+	config          *config.Config
+	httpClient      *http.Client
+	b2AuthorizeURL  string
+	updateUserImage func(userIDHex string, firstName string, profileImageURL string) error
+	findUserByID    func(id string) (*models.User, error)
 }
 
 // NewUploadHandler creates a new upload handler
 func NewUploadHandler(userRepo *repositories.UserRepository, cfg *config.Config) *UploadHandler {
-	return &UploadHandler{
-		userRepo: userRepo,
-		config:   cfg,
+	handler := &UploadHandler{
+		userRepo:       userRepo,
+		config:         cfg,
+		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		b2AuthorizeURL: "https://api.backblazeb2.com/b2api/v2/b2_authorize_account",
 	}
+	if userRepo != nil {
+		handler.updateUserImage = userRepo.UpdateProfileImage
+		handler.findUserByID = userRepo.FindByID
+	}
+	return handler
 }
 
 // UploadProfileImage handles profile image upload
@@ -89,6 +104,10 @@ func (h *UploadHandler) UploadProfileImage(c *gin.Context) {
 	// Check if this is a URL update (form field "image_url")
 	imageURL := c.PostForm("image_url")
 	if imageURL != "" {
+		if h.updateUserImage == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "profile storage not configured"})
+			return
+		}
 		// URL mode - validate and save
 		if !isValidURL(imageURL) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid URL format"})
@@ -96,7 +115,7 @@ func (h *UploadHandler) UploadProfileImage(c *gin.Context) {
 		}
 
 		// Update with URL
-		err := h.userRepo.UpdateProfileImage(userID.(string), "", imageURL)
+		err := h.updateUserImage(userID.(string), "", imageURL)
 		if err != nil {
 			log.Printf("[UPLOAD] Error updating profile image URL: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update profile"})
@@ -120,112 +139,159 @@ func (h *UploadHandler) UploadProfileImage(c *gin.Context) {
 
 	// Validate file size
 	if header.Size > maxFileSize {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file too large (max 5MB)"})
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file too large (max 5MB)"})
 		return
 	}
 
-	// Validate file type
-	contentType := header.Header.Get("Content-Type")
+	fileBytes, contentType, err := readAndValidateProfileImage(file)
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "too large") {
+			status = http.StatusRequestEntityTooLarge
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
 	if !allowedImageTypes[contentType] {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file type. allowed: jpg, jpeg, png, webp"})
 		return
 	}
 
-	filename := safeForwardedUploadFilename("profile", header.Filename, contentType, ".jpg")
-	log.Printf("[UPLOAD] profile image names: original=%q safe_forwarded=%q", header.Filename, filename)
+	objectKey := buildProfileImageObjectKey(userID.(string), header.Filename, contentType)
+	log.Printf("[PROFILE_UPLOAD] processing direct avatar upload: user_id=%s original=%q object_key=%q", userID.(string), header.Filename, objectKey)
 
 	// Process based on environment
 	var savedURL string
 
 	if h.config.IsDev {
 		// DEV mode - save locally
-		savedURL, err = h.saveLocal(file, filename)
+		filename := filepath.Base(objectKey)
+		savedURL, err = h.saveLocal(bytes.NewReader(fileBytes), filename)
 		if err != nil {
-			log.Printf("[UPLOAD] Error saving locally: %v", err)
+			log.Printf("[PROFILE_UPLOAD] local save failed: user_id=%s err=%v", userID.(string), err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save file"})
 			return
 		}
 	} else {
-		// PROD mode - use worker B2 upload
-		workerURL := h.config.WorkerUploadURL
-		if workerURL == "" {
-			log.Printf("[UPLOAD] Error: WORKER_UPLOAD_URL not configured")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload service not configured"})
-			return
-		}
-
-		// Seek to beginning of file
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			log.Printf("[UPLOAD] Error seeking file: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
-			return
-		}
-
-		// Create multipart form
-		var b bytes.Buffer
-		wr := multipart.NewWriter(&b)
-		part, err := wr.CreateFormFile("image", filename)
+		savedURL, err = h.uploadProfileImageToB2(objectKey, fileBytes, contentType)
 		if err != nil {
-			log.Printf("[UPLOAD] Error creating form: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload form"})
+			log.Printf("[PROFILE_UPLOAD] direct B2 upload failed: user_id=%s object_key=%q err=%v", userID.(string), objectKey, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload profile image to storage"})
 			return
 		}
-		if _, err := io.Copy(part, file); err != nil {
-			log.Printf("[UPLOAD] Error copying to form: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
-			return
-		}
-		wr.Close()
-
-		// Upload to worker
-		workerEndpoint := workerURL + "/upload-profile"
-		log.Printf("[UPLOAD] forwarding profile image to worker: url=%s query=%q filename=%q", workerEndpoint, "", filename)
-		resp, err := http.Post(workerEndpoint, wr.FormDataContentType(), &b)
-		if err != nil {
-			log.Printf("[UPLOAD] Error uploading to worker: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
-			return
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			log.Printf("[UPLOAD] Worker returned status %d: %s", resp.StatusCode, body)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed"})
-			return
-		}
-
-		var result map[string]string
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			log.Printf("[UPLOAD] Error decoding response: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid upload response"})
-			return
-		}
-
-		savedURL = result["url"]
-		if savedURL == "" {
-			log.Printf("[UPLOAD] Worker returned empty URL")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed - no URL returned"})
-			return
-		}
+		log.Printf("[PROFILE_UPLOAD] direct B2 upload completed: user_id=%s object_key=%q url=%s", userID.(string), objectKey, savedURL)
 	}
 
-	// Update user profile with new image URL
-	err = h.userRepo.UpdateProfileImage(userID.(string), "", savedURL)
+	// Update user profile with new image URL only after storage upload succeeds.
+	if h.updateUserImage == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "profile storage not configured"})
+		return
+	}
+	err = h.updateUserImage(userID.(string), "", savedURL)
 	if err != nil {
-		log.Printf("[UPLOAD] Error updating profile image: %v", err)
+		log.Printf("[PROFILE_UPLOAD] failed to update user profile image: user_id=%s err=%v", userID.(string), err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update profile"})
+		return
+	}
+
+	if h.findUserByID == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"message":           "Profile image uploaded",
+			"profile_image_url": savedURL,
+		})
+		return
+	}
+
+	updatedUser, err := h.findUserByID(userID.(string))
+	if err != nil {
+		log.Printf("[PROFILE_UPLOAD] uploaded image but failed to refetch user: user_id=%s err=%v", userID.(string), err)
+		c.JSON(http.StatusOK, gin.H{
+			"message":           "Profile image uploaded",
+			"profile_image_url": savedURL,
+		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":           "Profile image uploaded",
 		"profile_image_url": savedURL,
+		"user":              buildCurrentUserPayload(updatedUser),
 	})
 }
 
+func readAndValidateProfileImage(file io.Reader) ([]byte, string, error) {
+	data, err := io.ReadAll(io.LimitReader(file, maxFileSize+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read file")
+	}
+	if int64(len(data)) == 0 {
+		return nil, "", fmt.Errorf("no file provided")
+	}
+	if int64(len(data)) > maxFileSize {
+		return nil, "", fmt.Errorf("file too large (max 5MB)")
+	}
+
+	contentType := http.DetectContentType(data)
+	if !allowedImageTypes[contentType] {
+		return nil, "", fmt.Errorf("invalid file type. allowed: jpg, jpeg, png, webp")
+	}
+	return data, contentType, nil
+}
+
+func buildProfileImageObjectKey(userID, originalFilename, contentType string) string {
+	ext := safeUploadExt(originalFilename, contentType, ".webp")
+	return fmt.Sprintf("avatars/%s_%d%s", userID, time.Now().UnixMilli(), ext)
+}
+
+func (h *UploadHandler) uploadProfileImageToB2(objectKey string, fileBytes []byte, contentType string) (string, error) {
+	if h.config.B2KeyID == "" || h.config.B2AppKey == "" {
+		return "", fmt.Errorf("missing B2 credentials")
+	}
+	if h.config.B2Bucket == "" && h.config.B2BucketID == "" {
+		return "", fmt.Errorf("missing B2 bucket configuration")
+	}
+
+	auth, err := h.authorizeB2()
+	if err != nil {
+		return "", err
+	}
+	bucketID, err := h.resolveB2BucketID(auth)
+	if err != nil {
+		return "", err
+	}
+	uploadURL, err := h.requestB2UploadURL(auth.APIURL, auth.AuthorizationToken, bucketID)
+	if err != nil {
+		return "", err
+	}
+
+	sum := sha1.Sum(fileBytes)
+	req, err := http.NewRequest(http.MethodPost, uploadURL.UploadURL, bytes.NewReader(fileBytes))
+	if err != nil {
+		return "", err
+	}
+	req.ContentLength = int64(len(fileBytes))
+	req.Header.Set("Authorization", uploadURL.AuthorizationToken)
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("X-Bz-File-Name", url.PathEscape(objectKey))
+	req.Header.Set("X-Bz-Content-Sha1", hex.EncodeToString(sum[:]))
+
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("b2 upload status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	return h.config.GetCDNFileURL(objectKey), nil
+}
+
 // saveLocal saves file to local storage (development)
-func (h *UploadHandler) saveLocal(file multipart.File, filename string) (string, error) {
+func (h *UploadHandler) saveLocal(file io.Reader, filename string) (string, error) {
 	// Create uploads directory if it doesn't exist
 	storageDir := "./uploads"
 	if err := os.MkdirAll(storageDir, 0755); err != nil {

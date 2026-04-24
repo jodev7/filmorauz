@@ -3,15 +3,19 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/filmorauz/backend/config"
+	"github.com/filmorauz/backend/models"
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 func TestUploadTempForwardsPosterBackdropAsImageField(t *testing.T) {
@@ -262,5 +266,176 @@ func TestUploadTempForwardsVideoAsTempMovieFileField(t *testing.T) {
 	}
 	if response["file_key"] != "temp/raw/test.mp4" {
 		t.Fatalf("file_key = %q, want temp/raw/test.mp4", response["file_key"])
+	}
+}
+
+func TestBuildProfileImageObjectKeyUsesAvatarPrefix(t *testing.T) {
+	key := buildProfileImageObjectKey("507f1f77bcf86cd799439011", "avatar.png", "image/png")
+	if !regexp.MustCompile(`^avatars/507f1f77bcf86cd799439011_[0-9]+\.png$`).MatchString(key) {
+		t.Fatalf("object key = %q", key)
+	}
+}
+
+func TestUploadProfileImageRejectsSniffedNonImage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler := NewUploadHandler(nil, &config.Config{IsDev: false})
+	router := gin.New()
+	router.POST("/api/auth/upload/profile-image", func(c *gin.Context) {
+		c.Set("user_id", "507f1f77bcf86cd799439011")
+		handler.UploadProfileImage(c)
+	})
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	fileHeader := make(textproto.MIMEHeader)
+	fileHeader.Set("Content-Disposition", `form-data; name="image"; filename="avatar.png"`)
+	fileHeader.Set("Content-Type", "image/png")
+	part, err := writer.CreatePart(fileHeader)
+	if err != nil {
+		t.Fatalf("CreatePart: %v", err)
+	}
+	if _, err := part.Write([]byte("not really an image")); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/upload/profile-image", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "invalid file type") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestUploadProfileImageUploadsDirectlyToB2(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var uploadedFileName string
+	var savedProfileURL string
+	var b2 *httptest.Server
+	b2 = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/authorize":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"accountId":"acc","authorizationToken":"auth-token","apiUrl":"` + b2.URL + `"}`))
+		case "/b2api/v2/b2_get_upload_url":
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), `"bucketId":"bucket-123"`) {
+				t.Fatalf("unexpected bucket request body: %s", string(body))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"uploadUrl":"` + b2.URL + `/upload","authorizationToken":"upload-token"}`))
+		case "/upload":
+			uploadedFileName = r.Header.Get("X-Bz-File-Name")
+			if r.Header.Get("Authorization") != "upload-token" {
+				t.Fatalf("authorization header = %q", r.Header.Get("Authorization"))
+			}
+			if !strings.HasPrefix(uploadedFileName, "avatars%2F507f1f77bcf86cd799439011_") {
+				t.Fatalf("uploaded file name = %q", uploadedFileName)
+			}
+			if r.Header.Get("Content-Type") != "image/png" {
+				t.Fatalf("content type = %q", r.Header.Get("Content-Type"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"fileId":"4_z","fileName":"` + uploadedFileName + `"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer b2.Close()
+
+	cfg := &config.Config{
+		IsDev:       false,
+		B2KeyID:     "key-id",
+		B2AppKey:    "app-key",
+		B2Bucket:    "filmorauznet",
+		B2BucketID:  "bucket-123",
+		B2PublicURL: "https://cdn.filmorauz.net/file/filmorauznet",
+	}
+	handler := NewUploadHandler(nil, cfg)
+	handler.httpClient = b2.Client()
+	handler.b2AuthorizeURL = b2.URL + "/authorize"
+	handler.updateUserImage = func(userIDHex string, firstName string, profileImageURL string) error {
+		if userIDHex != "507f1f77bcf86cd799439011" {
+			t.Fatalf("userID = %q", userIDHex)
+		}
+		if profileImageURL == "" {
+			t.Fatal("profileImageURL was empty")
+		}
+		savedProfileURL = profileImageURL
+		return nil
+	}
+	handler.findUserByID = func(id string) (*models.User, error) {
+		oid, _ := primitive.ObjectIDFromHex(id)
+		return &models.User{
+			ID:              oid,
+			Role:            "user",
+			AuthProvider:    "telegram",
+			FirstName:       "Test",
+			ProfileImageURL: savedProfileURL,
+		}, nil
+	}
+
+	router := gin.New()
+	router.POST("/api/auth/upload/profile-image", func(c *gin.Context) {
+		c.Set("user_id", "507f1f77bcf86cd799439011")
+		handler.UploadProfileImage(c)
+	})
+
+	// Minimal valid 1x1 PNG.
+	pngBytes := []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41,
+		0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+		0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92,
+		0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+		0x44, 0xae, 0x42, 0x60, 0x82,
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	fileHeader := make(textproto.MIMEHeader)
+	fileHeader.Set("Content-Disposition", `form-data; name="image"; filename="avatar.png"`)
+	fileHeader.Set("Content-Type", "image/png")
+	part, err := writer.CreatePart(fileHeader)
+	if err != nil {
+		t.Fatalf("CreatePart: %v", err)
+	}
+	if _, err := part.Write(pngBytes); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/upload/profile-image", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	profileURL, _ := response["profile_image_url"].(string)
+	if !strings.HasPrefix(profileURL, "https://cdn.filmorauz.net/file/filmorauznet/avatars/507f1f77bcf86cd799439011_") {
+		t.Fatalf("profile_image_url = %q", profileURL)
 	}
 }

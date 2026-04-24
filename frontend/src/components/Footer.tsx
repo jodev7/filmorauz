@@ -32,6 +32,12 @@ export default function Footer() {
               <Link href="/movies?genre=drama" className="hover:text-white transition-colors">{t("common.drama")}</Link>
               <Link href="/movies?genre=comedy" className="hover:text-white transition-colors">{t("common.comedy")}</Link>
             </div>
+            <div className="flex flex-col gap-2">
+              <span className="text-white font-medium mb-1">Ma&apos;lumot</span>
+              <Link href="/dmca" className="hover:text-white transition-colors">DMCA</Link>
+              <Link href="/copyright" className="hover:text-white transition-colors">Mualliflik huquqi</Link>
+              <Link href="/contact" className="hover:text-white transition-colors">Aloqa</Link>
+            </div>
           </div>
         </div>
 

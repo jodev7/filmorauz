@@ -5,7 +5,6 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { Play } from "lucide-react";
 import { Movie } from "@/lib/api";
-import { localizeSingleGenre } from "@/lib/localization";
 import { formatDuration } from "@/lib/movie-utils";
 import { normalizeImageSrc, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
 
@@ -113,18 +112,6 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
               {/* Content */}
               <div className="relative h-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-end pb-12 sm:pb-16">
                 <div className="max-w-xl sm:max-w-2xl">
-                  {/* Genres */}
-                  <div className="flex gap-2 mb-3 flex-wrap">
-                    {movie.genre?.slice(0, 3).map((g) => (
-                      <span
-                        key={g}
-                        className="text-xs border border-brand-red/60 text-brand-red px-2.5 py-0.5 rounded-full"
-                      >
-                        {localizeSingleGenre(g)}
-                      </span>
-                    ))}
-                  </div>
-
                   {/* Title */}
                   <h1 className="font-display text-3xl sm:text-4xl md:text-5xl lg:text-6xl tracking-wide text-white leading-none mb-3">
                     {movie.title}

@@ -33,8 +33,11 @@ type Config struct {
 	UploadsDir              string
 	CDNURL                  string
 	B2Bucket                string
+	B2BucketID              string
 	B2KeyID                 string
 	B2AppKey                string
+	B2Endpoint              string
+	B2PublicURL             string
 	WorkerUploadURL         string
 	TelegramChannels        []string // loaded from TELEGRAM_CHANNELS env (comma-separated)
 	TelegramSerialsChannel  string   // loaded from TELEGRAM_SERIALS_CHANNEL env
@@ -68,9 +71,12 @@ func Load() *Config {
 		AIEndpoint:              getEnv("AI_ENDPOINT", ""),
 		UploadsDir:              getEnv("UPLOADS_DIR", "./uploads"),
 		CDNURL:                  getEnv("CDN_URL", ""),
-		B2Bucket:                getEnv("B2_BUCKET", ""),
+		B2Bucket:                getEnvAny([]string{"B2_BUCKET_NAME", "B2_BUCKET"}, ""),
+		B2BucketID:              getEnv("B2_BUCKET_ID", ""),
 		B2KeyID:                 getEnv("B2_KEY_ID", ""),
-		B2AppKey:                getEnv("B2_APP_KEY", ""),
+		B2AppKey:                getEnvAny([]string{"B2_APPLICATION_KEY", "B2_APP_KEY"}, ""),
+		B2Endpoint:              getEnv("B2_ENDPOINT", ""),
+		B2PublicURL:             getEnv("B2_PUBLIC_URL", ""),
 		WorkerUploadURL:         getEnv("WORKER_UPLOAD_URL", ""),
 		TelegramChannels:        parseTelegramChannels(getEnv("TELEGRAM_CHANNELS", "")),
 		TelegramSerialsChannel:  getEnv("TELEGRAM_SERIALS_CHANNEL", ""),
@@ -94,6 +100,9 @@ func Load() *Config {
 	log.Printf("Mode: %s", cfg.Mode)
 	log.Printf("Worker Upload URL: %s", cfg.WorkerUploadURL)
 	log.Printf("CDN URL: %s", cfg.CDNURL)
+	if cfg.B2PublicURL != "" {
+		log.Printf("B2 Public URL: %s", cfg.B2PublicURL)
+	}
 
 	if cfg.IsProd {
 		if cfg.WorkerUploadURL == "" {
@@ -110,6 +119,15 @@ func Load() *Config {
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func getEnvAny(keys []string, fallback string) string {
+	for _, key := range keys {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
 	}
 	return fallback
 }
@@ -157,6 +175,9 @@ func (c *Config) GetBaseURL() string {
 func (c *Config) GetCDNFileURL(path string) string {
 	if c.IsDev {
 		return "http://localhost:" + c.Port + "/uploads/" + path
+	}
+	if c.B2PublicURL != "" {
+		return strings.TrimSuffix(c.B2PublicURL, "/") + "/" + strings.TrimPrefix(path, "/")
 	}
 	return c.CDNURL + "/file/filmorauznet/" + path
 }

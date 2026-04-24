@@ -677,7 +677,7 @@ export async function uploadProfileImage(token: string, file: File): Promise<str
   }
 
   const data = await res.json();
-  return data.profile_image_url;
+  return data.profile_image_url || data.user?.profile_image_url || "";
 }
 
 // Update profile image by URL

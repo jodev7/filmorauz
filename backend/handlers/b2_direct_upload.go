@@ -116,18 +116,17 @@ func directUploadFileKey(fileType, originalFilename, contentType string) (string
 
 func (h *UploadHandler) authorizeB2() (*b2AuthorizeResponse, error) {
 	if h.config.B2KeyID == "" || h.config.B2AppKey == "" {
-		return nil, fmt.Errorf("B2_KEY_ID and B2_APP_KEY are required")
+		return nil, fmt.Errorf("B2_KEY_ID and B2_APPLICATION_KEY are required")
 	}
 
-	req, err := http.NewRequest("GET", "https://api.backblazeb2.com/b2api/v2/b2_authorize_account", nil)
+	req, err := http.NewRequest("GET", h.b2AuthorizeURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	creds := base64.StdEncoding.EncodeToString([]byte(h.config.B2KeyID + ":" + h.config.B2AppKey))
 	req.Header.Set("Authorization", "Basic "+creds)
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := h.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -146,11 +145,14 @@ func (h *UploadHandler) authorizeB2() (*b2AuthorizeResponse, error) {
 }
 
 func (h *UploadHandler) resolveB2BucketID(auth *b2AuthorizeResponse) (string, error) {
+	if h.config.B2BucketID != "" {
+		return h.config.B2BucketID, nil
+	}
 	if auth.Allowed.BucketID != "" {
 		return auth.Allowed.BucketID, nil
 	}
 	if h.config.B2Bucket == "" {
-		return "", fmt.Errorf("B2_BUCKET is required")
+		return "", fmt.Errorf("B2_BUCKET_NAME is required")
 	}
 
 	payload, _ := json.Marshal(map[string]string{
@@ -164,8 +166,7 @@ func (h *UploadHandler) resolveB2BucketID(auth *b2AuthorizeResponse) (string, er
 	req.Header.Set("Authorization", auth.AuthorizationToken)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := h.httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -197,8 +198,7 @@ func (h *UploadHandler) requestB2UploadURL(apiURL, authToken, bucketID string) (
 	req.Header.Set("Authorization", authToken)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := h.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
