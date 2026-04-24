@@ -265,7 +265,9 @@ export default function AdminMoviesPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((movie) => (
+                {filtered.map((movie) => {
+                  const adminPosterSrc = normalizeMediaUrl(movie.poster_url);
+                  return (
                   <tr
                     key={movie.id}
                     className="border-b border-brand-border/50 last:border-0 hover:bg-brand-border/20 transition-colors"
@@ -275,7 +277,8 @@ export default function AdminMoviesPage() {
                       <div className="flex items-center gap-2 sm:gap-3">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
-                          src={normalizeMediaUrl(movie.poster_url)}
+                          key={adminPosterSrc}
+                          src={adminPosterSrc}
                           alt={movie.title}
                           className="w-8 h-12 sm:w-9 sm:h-14 object-cover rounded shrink-0"
                           onError={(e) => {
@@ -395,7 +398,8 @@ export default function AdminMoviesPage() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

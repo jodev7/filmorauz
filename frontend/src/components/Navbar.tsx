@@ -208,7 +208,9 @@ export default function Navbar() {
                     {t("common.loading")}
                   </div>
                 )}
-                {results.slice(0, 6).map((movie) => (
+                {results.slice(0, 6).map((movie) => {
+                  const posterSrc = normalizeMediaUrl(movie.poster_url, DEFAULT_POSTER_PLACEHOLDER);
+                  return (
                   <button
                     key={movie.id}
                     onClick={() => handleMovieClick(movie.slug)}
@@ -216,7 +218,8 @@ export default function Navbar() {
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={normalizeMediaUrl(movie.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
+                      key={posterSrc}
+                      src={posterSrc}
                       alt={getLocalizedTitle(movie)}
                       className="w-8 h-12 object-cover rounded shrink-0"
                       onError={(e) => {
@@ -238,7 +241,8 @@ export default function Navbar() {
                       </p>
                     </div>
                   </button>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -261,14 +265,18 @@ export default function Navbar() {
                   className="flex items-center justify-center w-10 h-10 rounded-full bg-[#12121a] border border-[#1e1e2e] hover:border-orange-500/50 transition-colors relative"
                   aria-label="Profile"
                 >
-                  {(user?.profile_image_url || user?.photo_url) ? (
+                  {(user?.profile_image_url || user?.photo_url) ? (() => {
+                    const avatarSrc = normalizeMediaUrl(user.profile_image_url || user.photo_url, DEFAULT_AVATAR_PLACEHOLDER);
+                    return (
                     <img
-                      src={normalizeMediaUrl(user.profile_image_url || user.photo_url, DEFAULT_AVATAR_PLACEHOLDER)}
+                      key={avatarSrc}
+                      src={avatarSrc}
                       alt="Profile"
                       className={`w-full h-full rounded-full object-cover ${resolveIsPremium(user) ? 'ring-2 ring-yellow-500 ring-offset-2 ring-offset-[#0a0a0f]' : ''}`}
                       onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_AVATAR_PLACEHOLDER; }}
                     />
-                  ) : (
+                    );
+                  })() : (
                     <User size={20} className={resolveIsPremium(user) ? 'text-yellow-400' : 'text-zinc-400'} />
                   )}
                   {/* Premium crown indicator */}
@@ -333,7 +341,9 @@ export default function Navbar() {
           {/* Mobile search results */}
           {results.length > 0 && (
             <div className="bg-[#12121a] border border-[#1e1e2e] rounded-xl overflow-hidden mb-3">
-              {results.slice(0, 4).map((movie) => (
+              {results.slice(0, 4).map((movie) => {
+                const posterSrc = normalizeMediaUrl(movie.poster_url, DEFAULT_POSTER_PLACEHOLDER);
+                return (
                 <button
                   key={movie.id}
                   onClick={() => handleMovieClick(movie.slug)}
@@ -341,7 +351,8 @@ export default function Navbar() {
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={normalizeMediaUrl(movie.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
+                    key={posterSrc}
+                    src={posterSrc}
                     alt={getLocalizedTitle(movie)}
                     className="w-8 h-12 object-cover rounded shrink-0"
                     onError={(e) => {
@@ -353,7 +364,8 @@ export default function Navbar() {
                     <p className="text-xs text-zinc-500">{movie.year}</p>
                   </div>
                 </button>
-              ))}
+                );
+              })}
             </div>
           )}
 

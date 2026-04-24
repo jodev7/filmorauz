@@ -172,9 +172,12 @@ export default function TelegramPostPage() {
               </button>
             )}
           </div>
-          {imageUrl && (
-            <img src={normalizeMediaUrl(imageUrl)} alt="Preview" className="mt-2 w-32 h-32 object-cover rounded border border-brand-border" />
-          )}
+          {imageUrl && (() => {
+            const previewSrc = normalizeMediaUrl(imageUrl);
+            return (
+              <img key={previewSrc} src={previewSrc} alt="Preview" className="mt-2 w-32 h-32 object-cover rounded border border-brand-border" />
+            );
+          })()}
         </div>
 
         <div className="flex items-center gap-6">
@@ -305,9 +308,12 @@ export default function TelegramPostPage() {
             {postHistory.map((post) => (
               <div key={post.id} className="bg-brand-dark border border-brand-border rounded-lg p-4">
                 <div className="flex gap-4">
-                  {post.image_url && (
-                    <img src={normalizeMediaUrl(post.image_url)} alt="" className="w-16 h-16 object-cover rounded shrink-0" />
-                  )}
+                  {post.image_url && (() => {
+                    const postImgSrc = normalizeMediaUrl(post.image_url);
+                    return (
+                      <img key={postImgSrc} src={postImgSrc} alt="" className="w-16 h-16 object-cover rounded shrink-0" />
+                    );
+                  })()}
                   <div className="flex-1 min-w-0">
                     <p className="text-white text-sm line-clamp-2">{post.text}</p>
                     {post.inline_button_text && (

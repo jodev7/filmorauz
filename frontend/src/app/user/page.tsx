@@ -529,14 +529,18 @@ export default function UserPage() {
                     ? 'bg-gradient-to-br from-[#1a1520] to-[#12121A] border-2 border-yellow-500/30' 
                     : 'bg-gradient-to-br from-brand-red/80 to-orange-600/80'
                 }`}>
-                  {getProfileImageUrl(displayUser) ? (
+                  {getProfileImageUrl(displayUser) ? (() => {
+                    const avatarSrc = normalizeMediaUrl(getProfileImageUrl(displayUser), DEFAULT_AVATAR_PLACEHOLDER);
+                    return (
                     <img
-                      src={normalizeMediaUrl(getProfileImageUrl(displayUser), DEFAULT_AVATAR_PLACEHOLDER)}
+                      key={avatarSrc}
+                      src={avatarSrc}
                       alt="Profile"
                       className="w-full h-full object-cover"
                       onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_AVATAR_PLACEHOLDER; }}
                     />
-                  ) : (
+                    );
+                  })() : (
                     getAvatarInitial(displayUser)
                   )}
                 </div>

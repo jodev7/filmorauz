@@ -272,14 +272,17 @@ export default function AdminSeriesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-brand-border">
-                {filtered.map((s) => (
+                {filtered.map((s) => {
+                  const adminSeriesPosterSrc = s.poster_url ? normalizeMediaUrl(s.poster_url) : "";
+                  return (
                   <tr key={s.id} className="hover:bg-brand-dark/30">
                     <td className="px-4 py-3">
                       <div className="w-10 h-14 bg-gray-800 rounded overflow-hidden">
-                        {s.poster_url ? (
+                        {adminSeriesPosterSrc ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
-                            src={normalizeMediaUrl(s.poster_url)}
+                            key={adminSeriesPosterSrc}
+                            src={adminSeriesPosterSrc}
                             alt={s.title}
                             className="w-full h-full object-cover"
                           />
@@ -394,7 +397,8 @@ export default function AdminSeriesPage() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

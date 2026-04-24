@@ -33,33 +33,31 @@ export default function OptimizedImage({
   onError,
   fallbackSrc = DEFAULT_POSTER_PLACEHOLDER,
 }: OptimizedImageProps) {
+  const resolvedSrc = normalizeMediaUrl(src, fallbackSrc);
+  const resolvedFallback = normalizeMediaUrl(fallbackSrc, DEFAULT_POSTER_PLACEHOLDER);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
-  const [currentSrc, setCurrentSrc] = useState(() => normalizeMediaUrl(src, fallbackSrc));
 
-  // Reset loading state when src changes
+  // Resolved URL changed (route navigation, updated props) — reset loading state
+  // and let the browser re-fetch. The key={finalSrc} below force-remounts the <img>.
   useEffect(() => {
     setIsLoading(true);
     setHasError(false);
-    setCurrentSrc(normalizeMediaUrl(src, fallbackSrc));
-  }, [src, fallbackSrc]);
+  }, [resolvedSrc]);
+
+  const finalSrc = hasError ? resolvedFallback : resolvedSrc;
 
   const handleLoad = () => {
     setIsLoading(false);
   };
 
   const handleError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
-    const nextSrc = normalizeMediaUrl(fallbackSrc, DEFAULT_POSTER_PLACEHOLDER);
-    const target = e.currentTarget;
-    if (currentSrc !== nextSrc) {
-      setCurrentSrc(nextSrc);
-      setHasError(false);
+    if (!hasError && resolvedSrc !== resolvedFallback) {
+      setHasError(true);
       setIsLoading(true);
     } else {
       setIsLoading(false);
-      setHasError(true);
     }
-    target.src = nextSrc;
     onError?.(e);
   };
 
@@ -75,8 +73,8 @@ export default function OptimizedImage({
       {/* Image */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        key={currentSrc}
-        src={currentSrc}
+        key={finalSrc}
+        src={finalSrc}
         alt={alt}
         loading={priority ? "eager" : "lazy"}
         fetchPriority={priority ? "high" : "auto"}

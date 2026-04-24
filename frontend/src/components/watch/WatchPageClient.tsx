@@ -219,7 +219,9 @@ function RecommendationsRow({ movies }: { movies: Movie[] }) {
         Sizga yoqishi mumkin
       </h3>
       <div className="flex gap-3 overflow-x-auto pb-2">
-        {movies.slice(0, 8).map((movie) => (
+        {movies.slice(0, 8).map((movie) => {
+          const posterSrc = normalizeMediaUrl(movie.poster_url, DEFAULT_POSTER_PLACEHOLDER);
+          return (
           <a
             key={movie.id}
             href={`/movies/${movie.slug}`}
@@ -227,7 +229,8 @@ function RecommendationsRow({ movies }: { movies: Movie[] }) {
           >
             <div className="relative aspect-[2/3] overflow-hidden rounded-lg bg-brand-border">
               <img
-                src={normalizeMediaUrl(movie.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
+                key={posterSrc}
+                src={posterSrc}
                 alt={getLocalizedTitle(movie)}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
               />
@@ -241,7 +244,8 @@ function RecommendationsRow({ movies }: { movies: Movie[] }) {
               {getLocalizedTitle(movie)}
             </p>
           </a>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

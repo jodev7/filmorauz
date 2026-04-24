@@ -196,13 +196,17 @@ export default async function UserProfilePage({ params }: PageProps) {
                     ? 'bg-gradient-to-br from-yellow-500/20 to-amber-600/20 border-2 border-yellow-500/50' 
                     : 'bg-gradient-to-br from-brand-red/80 to-orange-600/80'
                 }`}>
-                  {profile?.avatar_url ? (
+                  {profile?.avatar_url ? (() => {
+                    const avatarSrc = normalizeMediaUrl(profile.avatar_url, DEFAULT_AVATAR_PLACEHOLDER);
+                    return (
                     <img
-                      src={normalizeMediaUrl(profile.avatar_url, DEFAULT_AVATAR_PLACEHOLDER)}
+                      key={avatarSrc}
+                      src={avatarSrc}
                       alt="Profile"
                       className="w-full h-full object-cover"
                     />
-                  ) : (
+                    );
+                  })() : (
                     getAvatarInitial(profile)
                   )}
                 </div>

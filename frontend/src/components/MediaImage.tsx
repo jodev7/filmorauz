@@ -22,30 +22,31 @@ export default function MediaImage({
   fetchPriority = "auto",
   onError,
 }: MediaImageProps) {
-  const [currentSrc, setCurrentSrc] = useState(() => normalizeMediaUrl(src, fallbackSrc));
+  const resolvedSrc = normalizeMediaUrl(src, fallbackSrc);
+  const resolvedFallback = normalizeMediaUrl(fallbackSrc, DEFAULT_POSTER_PLACEHOLDER);
+  const [errored, setErrored] = useState(false);
 
+  // Reset error state when the resolved URL changes so a new src gets a fresh load attempt.
   useEffect(() => {
-    setCurrentSrc(normalizeMediaUrl(src, fallbackSrc));
-  }, [src, fallbackSrc]);
+    setErrored(false);
+  }, [resolvedSrc]);
 
-  const handleError = (event: React.SyntheticEvent<HTMLImageElement, Event>) => {
-    const nextSrc = normalizeMediaUrl(fallbackSrc, DEFAULT_POSTER_PLACEHOLDER);
-    if (currentSrc !== nextSrc) {
-      setCurrentSrc(nextSrc);
-      event.currentTarget.src = nextSrc;
-    }
-    onError?.(event);
-  };
+  const finalSrc = errored ? resolvedFallback : resolvedSrc;
 
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      key={currentSrc}
-      src={currentSrc}
+      key={finalSrc}
+      src={finalSrc}
       alt={alt}
       loading={loading}
       fetchPriority={fetchPriority}
-      onError={handleError}
+      onError={(event) => {
+        if (!errored && finalSrc !== resolvedFallback) {
+          setErrored(true);
+        }
+        onError?.(event);
+      }}
       className={className}
     />
   );

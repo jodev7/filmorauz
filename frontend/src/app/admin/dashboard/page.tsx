@@ -263,15 +263,21 @@ export default function AdminDashboard() {
                       >
                         <td className="px-3 sm:px-5 py-3">
                           <div className="flex items-center gap-2 sm:gap-3">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            {(() => {
+                              const rowPosterSrc = normalizeMediaUrl(movie.poster_url);
+                              return (
+                            /* eslint-disable-next-line @next/next/no-img-element */
                             <img
-                              src={normalizeMediaUrl(movie.poster_url)}
+                              key={rowPosterSrc}
+                              src={rowPosterSrc}
                               alt={movie.title}
                               className="w-8 h-10 sm:w-8 sm:h-12 object-cover rounded"
                               onError={(e) => {
                                 (e.target as HTMLImageElement).style.display = "none";
                               }}
                             />
+                              );
+                            })()}
                             <div className="min-w-0">
                               <p className="text-white font-medium truncate max-w-[120px] sm:max-w-[180px]">
                                 {movie.code && (
@@ -395,18 +401,21 @@ export default function AdminDashboard() {
           ) : (
             <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden">
               <div className="divide-y divide-brand-border">
-                {topMovies.slice(0, 5).map((item, index) => (
+                {topMovies.slice(0, 5).map((item, index) => {
+                  const topPosterSrc = item.poster_url ? normalizeMediaUrl(item.poster_url) : "";
+                  return (
                   <div key={item.slug} className="flex items-center gap-3 p-3 hover:bg-brand-dark/30">
                     <span className="w-6 text-center text-gray-500 text-sm font-medium">{index + 1}</span>
-                    {item.poster_url && (
-                      <img src={normalizeMediaUrl(item.poster_url)} alt={item.title} className="w-10 h-14 object-cover rounded" />
+                    {topPosterSrc && (
+                      <img key={topPosterSrc} src={topPosterSrc} alt={item.title} className="w-10 h-14 object-cover rounded" />
                     )}
                     <div className="flex-1 min-w-0">
                       <p className="text-white font-medium truncate">{item.title}</p>
                       <p className="text-gray-500 text-xs">{item.views_count?.toLocaleString()} ko'rish</p>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -431,18 +440,21 @@ export default function AdminDashboard() {
           ) : (
             <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden">
               <div className="divide-y divide-brand-border">
-                {topSeries.slice(0, 5).map((item, index) => (
+                {topSeries.slice(0, 5).map((item, index) => {
+                  const topSeriesPosterSrc = item.poster_url ? normalizeMediaUrl(item.poster_url) : "";
+                  return (
                   <div key={item.slug} className="flex items-center gap-3 p-3 hover:bg-brand-dark/30">
                     <span className="w-6 text-center text-gray-500 text-sm font-medium">{index + 1}</span>
-                    {item.poster_url && (
-                      <img src={normalizeMediaUrl(item.poster_url)} alt={item.title} className="w-10 h-14 object-cover rounded" />
+                    {topSeriesPosterSrc && (
+                      <img key={topSeriesPosterSrc} src={topSeriesPosterSrc} alt={item.title} className="w-10 h-14 object-cover rounded" />
                     )}
                     <div className="flex-1 min-w-0">
                       <p className="text-white font-medium truncate">{item.title}</p>
                       <p className="text-gray-500 text-xs">{item.views_count?.toLocaleString()} ko'rish</p>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

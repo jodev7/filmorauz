@@ -170,6 +170,7 @@ export default function SeasonList({
                           {hasThumbnail ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
+                              key={thumbnailUrl}
                               src={thumbnailUrl}
                               alt={episode.title}
                               loading="lazy"

@@ -349,14 +349,18 @@ function CommentThread({
         {/* Comment header with clickable author */}
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
-            {comment.user_avatar_url ? (
+            {comment.user_avatar_url ? (() => {
+              const avatarSrc = normalizeMediaUrl(comment.user_avatar_url, DEFAULT_AVATAR_PLACEHOLDER);
+              return (
               <img
-                src={normalizeMediaUrl(comment.user_avatar_url, DEFAULT_AVATAR_PLACEHOLDER)}
+                key={avatarSrc}
+                src={avatarSrc}
                 alt={comment.user_display_name}
                 className="w-8 h-8 rounded-full"
                 onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_AVATAR_PLACEHOLDER; }}
               />
-            ) : (
+              );
+            })() : (
               <div className="w-8 h-8 rounded-full bg-brand-red flex items-center justify-center text-white text-sm">
                 {comment.user_display_name.charAt(0).toUpperCase()}
               </div>

@@ -18,11 +18,23 @@ export const DEFAULT_AVATAR_PLACEHOLDER = "/placeholder-avatar.png";
 
 export const SHIMMER_BLUR_DATA_URL = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(shimmer)}`;
 
+// Only NEXT_PUBLIC_* vars — otherwise server and client resolve differently
+// and client-side navigation produces URLs that don't match what SSR rendered.
+const CDN_FILE_BASE = (() => {
+  const configured = process.env.NEXT_PUBLIC_CDN_BASE_URL?.trim();
+  if (configured) {
+    return configured.replace(/\/+$/, "");
+  }
+  return process.env.NODE_ENV === "production"
+    ? "https://cdn.filmorauz.net/file/filmorauznet"
+    : "";
+})();
+
 const MEDIA_ACCESS_MODE = (() => {
-  const configured =
-    process.env.NEXT_PUBLIC_MEDIA_ACCESS_MODE?.trim() ||
-    process.env.MEDIA_ACCESS_MODE?.trim();
-  return (configured || "protected").toLowerCase();
+  const configured = process.env.NEXT_PUBLIC_MEDIA_ACCESS_MODE?.trim().toLowerCase();
+  if (configured) return configured;
+  // If a public CDN is configured, default to public mode.
+  return CDN_FILE_BASE ? "public" : "protected";
 })();
 
 const CDN_MEDIA_BASE = (() => {
@@ -31,18 +43,6 @@ const CDN_MEDIA_BASE = (() => {
     return configured.replace(/\/+$/, "");
   }
   return process.env.NODE_ENV === "production" ? "https://cdn.filmorauz.net" : "";
-})();
-
-const CDN_FILE_BASE = (() => {
-  const configured =
-    process.env.NEXT_PUBLIC_CDN_BASE_URL?.trim() ||
-    process.env.CDN_BASE_URL?.trim();
-  if (configured) {
-    return configured.replace(/\/+$/, "");
-  }
-  return process.env.NODE_ENV === "production"
-    ? "https://cdn.filmorauz.net/file/filmorauznet"
-    : "";
 })();
 
 const B2_CDN_ABSOLUTE_PREFIXES = [
@@ -59,21 +59,18 @@ const MEDIA_BUCKET_PREFIXES = [
   "/collections/",
   "/suggestions/",
 ];
-const LEGACY_AVATAR_PREFIX = "/avatars/";
-const LEGACY_PROFILE_PREFIX = "/profile/";
-const CANONICAL_AVATAR_PREFIX = "/images/profile/";
-const LEGACY_POSTER_PREFIX = "/posters/";
-const CANONICAL_POSTER_PREFIX = "/images/posters/";
-const LEGACY_BACKDROP_PREFIX = "/backdrops/";
-const CANONICAL_BACKDROP_PREFIX = "/images/backdrops/";
-const LEGACY_AD_PREFIX = "/ads/";
-const CANONICAL_AD_PREFIX = "/images/ads/";
-const LEGACY_TELEGRAM_POST_PREFIX = "/telegram-posts/";
-const CANONICAL_TELEGRAM_POST_PREFIX = "/images/telegram-posts/";
-const LEGACY_COLLECTIONS_PREFIX = "/collections/";
-const CANONICAL_COLLECTIONS_PREFIX = "/images/collections/";
-const LEGACY_SUGGESTIONS_PREFIX = "/suggestions/";
-const CANONICAL_SUGGESTIONS_PREFIX = "/images/suggestions/";
+
+// Canonical B2 paths use /images/<kind>/... — rewrite legacy short prefixes to match.
+const LEGACY_TO_CANONICAL: Array<[string, string]> = [
+  ["/avatars/", "/images/profile/"],
+  ["/profile/", "/images/profile/"],
+  ["/posters/", "/images/posters/"],
+  ["/backdrops/", "/images/backdrops/"],
+  ["/ads/", "/images/ads/"],
+  ["/telegram-posts/", "/images/telegram-posts/"],
+  ["/collections/", "/images/collections/"],
+  ["/suggestions/", "/images/suggestions/"],
+];
 
 function isInvalidValue(value: string): boolean {
   return !value || value === "null" || value === "undefined" || value === "-" || value === ".";
@@ -103,24 +100,21 @@ function stripAbsoluteMediaPrefix(value: string): string | null {
   }
 }
 
-function rewriteMediaAlias(path: string, legacyPrefix: string, canonicalPrefix: string): string {
-  if (path.startsWith(legacyPrefix)) {
-    return canonicalPrefix + path.slice(legacyPrefix.length);
+function rewriteLegacyMediaAliases(path: string): string {
+  for (const [legacy, canonical] of LEGACY_TO_CANONICAL) {
+    if (path.startsWith(legacy)) {
+      return canonical + path.slice(legacy.length);
+    }
   }
   return path;
 }
 
-function rewriteLegacyMediaAliases(path: string): string {
-  let normalized = path;
-  normalized = rewriteMediaAlias(normalized, LEGACY_AVATAR_PREFIX, CANONICAL_AVATAR_PREFIX);
-  normalized = rewriteMediaAlias(normalized, LEGACY_PROFILE_PREFIX, CANONICAL_AVATAR_PREFIX);
-  normalized = rewriteMediaAlias(normalized, LEGACY_POSTER_PREFIX, CANONICAL_POSTER_PREFIX);
-  normalized = rewriteMediaAlias(normalized, LEGACY_BACKDROP_PREFIX, CANONICAL_BACKDROP_PREFIX);
-  normalized = rewriteMediaAlias(normalized, LEGACY_AD_PREFIX, CANONICAL_AD_PREFIX);
-  normalized = rewriteMediaAlias(normalized, LEGACY_TELEGRAM_POST_PREFIX, CANONICAL_TELEGRAM_POST_PREFIX);
-  normalized = rewriteMediaAlias(normalized, LEGACY_COLLECTIONS_PREFIX, CANONICAL_COLLECTIONS_PREFIX);
-  normalized = rewriteMediaAlias(normalized, LEGACY_SUGGESTIONS_PREFIX, CANONICAL_SUGGESTIONS_PREFIX);
-  return normalized;
+// In public mode, drop any legacy ?token=... or signed-URL query from B2 URLs
+// because public objects don't need auth and stale tokens make images 403.
+function stripQueryInPublicMode(value: string): string {
+  if (MEDIA_ACCESS_MODE !== "public") return value;
+  const queryIdx = value.indexOf("?");
+  return queryIdx === -1 ? value : value.slice(0, queryIdx);
 }
 
 function maybeUseCDNMediaHost(path: string): string {
@@ -137,14 +131,31 @@ function maybeUseCDNMediaHost(path: string): string {
   return `${CDN_MEDIA_BASE}${path}`;
 }
 
+// Bare-path shortcut table: catches DB values stored without a leading slash
+// (e.g. "posters/x.jpg", "avatars/x.jpg", "images/posters/x.jpg").
+const BARE_PATH_REWRITES: Array<[string, string]> = [
+  ["avatars/", "/images/profile/"],
+  ["profile/", "/images/profile/"],
+  ["posters/", "/images/posters/"],
+  ["backdrops/", "/images/backdrops/"],
+  ["ads/", "/images/ads/"],
+  ["telegram-posts/", "/images/telegram-posts/"],
+  ["collections/", "/images/collections/"],
+  ["suggestions/", "/images/suggestions/"],
+  ["images/", "/images/"],
+  ["videos/", "/videos/"],
+];
+
 export function normalizeMediaUrl(
   src?: string | null,
   fallback: string = DEFAULT_POSTER_PLACEHOLDER
 ): string {
-  const value = src?.trim();
-  if (!value || isInvalidValue(value)) {
+  const raw = src?.trim();
+  if (!raw || isInvalidValue(raw)) {
     return fallback;
   }
+
+  const value = stripQueryInPublicMode(raw);
 
   const absoluteMediaPath = stripAbsoluteMediaPrefix(value);
   if (absoluteMediaPath) {
@@ -157,31 +168,12 @@ export function normalizeMediaUrl(
     return maybeUseCDNMediaHost("/media" + normalizedMediaPath);
   }
 
-  // Bare "avatars/<file>" (no leading slash) — never appears from a URL parser,
-  // but some older DB records store it this way.
-  if (value.startsWith("avatars/")) {
-    return maybeUseCDNMediaHost("/media" + CANONICAL_AVATAR_PREFIX + value.slice("avatars/".length));
-  }
-  if (value.startsWith("profile/")) {
-    return maybeUseCDNMediaHost("/media" + CANONICAL_AVATAR_PREFIX + value.slice("profile/".length));
-  }
-  if (value.startsWith("posters/")) {
-    return maybeUseCDNMediaHost("/media" + CANONICAL_POSTER_PREFIX + value.slice("posters/".length));
-  }
-  if (value.startsWith("backdrops/")) {
-    return maybeUseCDNMediaHost("/media" + CANONICAL_BACKDROP_PREFIX + value.slice("backdrops/".length));
-  }
-  if (value.startsWith("ads/")) {
-    return maybeUseCDNMediaHost("/media" + CANONICAL_AD_PREFIX + value.slice("ads/".length));
-  }
-  if (value.startsWith("telegram-posts/")) {
-    return maybeUseCDNMediaHost("/media" + CANONICAL_TELEGRAM_POST_PREFIX + value.slice("telegram-posts/".length));
-  }
-  if (value.startsWith("collections/")) {
-    return maybeUseCDNMediaHost("/media" + CANONICAL_COLLECTIONS_PREFIX + value.slice("collections/".length));
-  }
-  if (value.startsWith("suggestions/")) {
-    return maybeUseCDNMediaHost("/media" + CANONICAL_SUGGESTIONS_PREFIX + value.slice("suggestions/".length));
+  // Bare paths (no leading slash) — some DB records store it this way.
+  for (const [prefix, canonical] of BARE_PATH_REWRITES) {
+    if (value.startsWith(prefix)) {
+      const objectPath = canonical + value.slice(prefix.length);
+      return maybeUseCDNMediaHost(MEDIA_ACCESS_MODE === "public" ? objectPath : "/media" + objectPath);
+    }
   }
 
   // Strip the B2 absolute host or /file/filmorauznet/ prefix so the rest of
