@@ -22,7 +22,7 @@ export default function MoviePoster({
 }: Props) {
   return (
     <OptimizedImage
-      src={normalizeMediaUrl(src, DEFAULT_POSTER_PLACEHOLDER)}
+      src={normalizeMediaUrl(src, "")}
       alt={alt}
       className={className}
       priority={priority}

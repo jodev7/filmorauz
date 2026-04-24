@@ -2,6 +2,7 @@
 
 import { SyntheticEvent, useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { ChevronDown, ChevronUp, Play, Clock } from "lucide-react";
 import { SeasonWithEpisodes, Episode, buildEpisodeUrl } from "@/lib/series-api";
 import { formatDuration } from "@/lib/movie-utils";
@@ -60,6 +61,7 @@ export default function SeasonList({
   seriesBackdropUrl,
   seriesPosterUrl,
 }: SeasonListProps) {
+  const pathname = usePathname() || "";
   // Defensive: ensure seasons is always an array
   const safeSeasons = Array.isArray(seasons) ? seasons : [];
 

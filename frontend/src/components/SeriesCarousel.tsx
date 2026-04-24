@@ -74,7 +74,7 @@ export default function SeriesCarousel({ series }: SeriesCarouselProps) {
         style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
         {series.map((s) => {
-          const posterSrc = normalizeMediaUrl(s.poster_url, DEFAULT_POSTER_PLACEHOLDER);
+          const posterSrc = s.poster_url;
           return (
           <Link
             key={s.id}

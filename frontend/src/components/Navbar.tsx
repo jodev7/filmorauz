@@ -13,6 +13,7 @@ import NotificationBell from "./NotificationBell";
 import { resolveIsPremium } from "./PremiumComponents";
 import { getLocalizedTitle, getLocalizedGenres } from "@/lib/localization";
 import { DEFAULT_AVATAR_PLACEHOLDER, DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
+import MediaImage from "@/components/ui/MediaImage";
 
 export default function Navbar() {
   const { t } = useI18n();
@@ -209,23 +210,18 @@ export default function Navbar() {
                   </div>
                 )}
                 {results.slice(0, 6).map((movie) => {
-                  const posterSrc = normalizeMediaUrl(movie.poster_url, DEFAULT_POSTER_PLACEHOLDER);
+                  const posterSrc = movie.poster_url;
                   return (
                   <button
                     key={movie.id}
                     onClick={() => handleMovieClick(movie.slug)}
                     className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#1e1e2e] transition-colors text-left"
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      key={posterSrc}
+                    <MediaImage
                       src={posterSrc}
                       alt={getLocalizedTitle(movie)}
+                      fallbackSrc={DEFAULT_POSTER_PLACEHOLDER}
                       className="w-8 h-12 object-cover rounded shrink-0"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src =
-                          DEFAULT_POSTER_PLACEHOLDER;
-                      }}
                     />
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-white truncate">
@@ -266,14 +262,13 @@ export default function Navbar() {
                   aria-label="Profile"
                 >
                   {(user?.profile_image_url || user?.photo_url) ? (() => {
-                    const avatarSrc = normalizeMediaUrl(user.profile_image_url || user.photo_url, DEFAULT_AVATAR_PLACEHOLDER);
+                    const avatarSrc = user.profile_image_url || user.photo_url || "";
                     return (
-                    <img
-                      key={avatarSrc}
+                    <MediaImage
                       src={avatarSrc}
                       alt="Profile"
+                      fallbackSrc={DEFAULT_AVATAR_PLACEHOLDER}
                       className={`w-full h-full rounded-full object-cover ${resolveIsPremium(user) ? 'ring-2 ring-yellow-500 ring-offset-2 ring-offset-[#0a0a0f]' : ''}`}
-                      onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_AVATAR_PLACEHOLDER; }}
                     />
                     );
                   })() : (
@@ -342,22 +337,18 @@ export default function Navbar() {
           {results.length > 0 && (
             <div className="bg-[#12121a] border border-[#1e1e2e] rounded-xl overflow-hidden mb-3">
               {results.slice(0, 4).map((movie) => {
-                const posterSrc = normalizeMediaUrl(movie.poster_url, DEFAULT_POSTER_PLACEHOLDER);
+                const posterSrc = movie.poster_url;
                 return (
                 <button
                   key={movie.id}
                   onClick={() => handleMovieClick(movie.slug)}
                   className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#1e1e2e] transition-colors text-left border-b border-[#1e1e2e]/50 last:border-0"
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    key={posterSrc}
+                  <MediaImage
                     src={posterSrc}
                     alt={getLocalizedTitle(movie)}
+                    fallbackSrc={DEFAULT_POSTER_PLACEHOLDER}
                     className="w-8 h-12 object-cover rounded shrink-0"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src = DEFAULT_POSTER_PLACEHOLDER;
-                    }}
                   />
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-white truncate">{getLocalizedTitle(movie)}</p>

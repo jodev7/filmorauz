@@ -70,7 +70,7 @@ export default async function SeriesDetailPage({ params }: Props) {
           {series.backdrop_url && (
             <>
               <MediaImage
-                src={normalizeMediaUrl(series.backdrop_url)}
+                src={series.backdrop_url}
                 alt={series.title}
                 loading="eager"
                 fetchPriority="high"
@@ -89,8 +89,9 @@ export default async function SeriesDetailPage({ params }: Props) {
               {series.poster_url && (
                 <div className="relative w-36 sm:w-44 md:w-48 lg:w-56 aspect-[2/3] rounded-xl shadow-2xl border border-brand-border overflow-hidden">
                   <MediaImage
-                    src={normalizeMediaUrl(series.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
+                    src={series.poster_url}
                     alt={series.title}
+                    fallbackSrc={DEFAULT_POSTER_PLACEHOLDER}
                     className="absolute inset-0 h-full w-full object-cover"
                   />
                 </div>

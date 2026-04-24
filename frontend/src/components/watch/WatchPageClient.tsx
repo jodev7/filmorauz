@@ -15,6 +15,7 @@ import { getLocalizedTitle, getLocalizedDescription, getLocalizedGenres, getLoca
 import { formatDuration } from "@/lib/movie-utils";
 import type { EpisodeLink } from "@/lib/series-api";
 import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
+import MediaImage from "@/components/ui/MediaImage";
 
 const PLAYER_AD_MANDATORY_SECS = 15;
 const PLAYER_AD_REPEAT_MS = 10 * 60 * 1000; // 10 minutes
@@ -220,7 +221,7 @@ function RecommendationsRow({ movies }: { movies: Movie[] }) {
       </h3>
       <div className="flex gap-3 overflow-x-auto pb-2">
         {movies.slice(0, 8).map((movie) => {
-          const posterSrc = normalizeMediaUrl(movie.poster_url, DEFAULT_POSTER_PLACEHOLDER);
+          const posterSrc = movie.poster_url;
           return (
           <a
             key={movie.id}
@@ -228,10 +229,10 @@ function RecommendationsRow({ movies }: { movies: Movie[] }) {
             className="shrink-0 w-[120px] sm:w-[140px] group block"
           >
             <div className="relative aspect-[2/3] overflow-hidden rounded-lg bg-brand-border">
-              <img
-                key={posterSrc}
+              <MediaImage
                 src={posterSrc}
                 alt={getLocalizedTitle(movie)}
+                fallbackSrc={DEFAULT_POSTER_PLACEHOLDER}
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
               />
               {movie.quality && (

@@ -78,7 +78,7 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
         {movies.map((movie, index) => {
           const isActive = index === currentIndex;
           const shouldRender = loadedIndexes.has(index);
-          const backdropSrc = normalizeMediaUrl(movie.backdrop_url || movie.poster_url);
+          const backdropSrc = movie.backdrop_url || movie.poster_url;
           return (
             <div
               key={movie.id}

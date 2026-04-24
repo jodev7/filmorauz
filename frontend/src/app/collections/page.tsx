@@ -55,7 +55,7 @@ export default async function CollectionsPage() {
                     {collection.poster_url && (
                       <div className="relative w-16 h-24 rounded-lg overflow-hidden">
                         <MediaImage
-                          src={normalizeMediaUrl(collection.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
+                          src={collection.poster_url}
                           alt={collection.title}
                           className="absolute inset-0 h-full w-full object-cover"
                         />

@@ -5,6 +5,7 @@ import {
   DEFAULT_POSTER_PLACEHOLDER,
   normalizeMediaUrl,
 } from "@/lib/image-utils";
+import MediaImage from "@/components/ui/MediaImage";
 
 interface OptimizedImageProps {
   src: string;
@@ -33,26 +34,21 @@ export default function OptimizedImage({
   onError,
   fallbackSrc = DEFAULT_POSTER_PLACEHOLDER,
 }: OptimizedImageProps) {
-  const resolvedSrc = normalizeMediaUrl(src, fallbackSrc);
-  const resolvedFallback = normalizeMediaUrl(fallbackSrc, DEFAULT_POSTER_PLACEHOLDER);
+  const resolvedImageUrl = normalizeMediaUrl(src, "");
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
 
-  // Resolved URL changed (route navigation, updated props) — reset loading state
-  // and let the browser re-fetch. The key={finalSrc} below force-remounts the <img>.
   useEffect(() => {
     setIsLoading(true);
     setHasError(false);
-  }, [resolvedSrc]);
-
-  const finalSrc = hasError ? resolvedFallback : resolvedSrc;
+  }, [resolvedImageUrl]);
 
   const handleLoad = () => {
     setIsLoading(false);
   };
 
   const handleError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
-    if (!hasError && resolvedSrc !== resolvedFallback) {
+    if (!hasError) {
       setHasError(true);
       setIsLoading(true);
     } else {
@@ -71,16 +67,15 @@ export default function OptimizedImage({
       )}
 
       {/* Image */}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        key={finalSrc}
-        src={finalSrc}
+      <MediaImage
+        src={resolvedImageUrl}
         alt={alt}
         loading={priority ? "eager" : "lazy"}
         fetchPriority={priority ? "high" : "auto"}
         width={width}
         height={height}
         sizes={sizes}
+        fallbackSrc={fallbackSrc}
         className={`object-cover transition-opacity duration-300 ${
           isLoading ? "opacity-0" : "opacity-100"
         }`}

@@ -194,7 +194,7 @@ export default async function MovieDetailPage({ params }: Props) {
         {/* Backdrop hero */}
         <div className="relative h-[50vh] sm:h-[55vh] min-h-[300px] sm:min-h-[380px]">
           <MediaImage
-            src={normalizeMediaUrl(movie.backdrop_url || movie.poster_url)}
+            src={movie.backdrop_url || movie.poster_url}
             alt={movie.title}
             loading="eager"
             fetchPriority="high"

@@ -16,6 +16,7 @@ import SuggestionModal from "@/components/SuggestionModal";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { CurrentUser } from "@/lib/api";
 import { DEFAULT_AVATAR_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
+import MediaImage from "@/components/ui/MediaImage";
 
 // Subtle premium animations (luxury, not flashy)
 const premiumAnimations = `
@@ -530,14 +531,13 @@ export default function UserPage() {
                     : 'bg-gradient-to-br from-brand-red/80 to-orange-600/80'
                 }`}>
                   {getProfileImageUrl(displayUser) ? (() => {
-                    const avatarSrc = normalizeMediaUrl(getProfileImageUrl(displayUser), DEFAULT_AVATAR_PLACEHOLDER);
+                    const avatarSrc = getProfileImageUrl(displayUser) || "";
                     return (
-                    <img
-                      key={avatarSrc}
+                    <MediaImage
                       src={avatarSrc}
                       alt="Profile"
+                      fallbackSrc={DEFAULT_AVATAR_PLACEHOLDER}
                       className="w-full h-full object-cover"
-                      onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_AVATAR_PLACEHOLDER; }}
                     />
                     );
                   })() : (
