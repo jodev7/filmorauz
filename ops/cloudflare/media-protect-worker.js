@@ -115,13 +115,17 @@ export default {
 async function fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath, debugMode = false) {
   const candidates = isImagePath
     ? buildImageCandidateKeys(mediaPath)
-    : [mediaPath.replace(/^\//, "")];
+    : buildVideoCandidateKeys(mediaPath);
   let lastResponse = null;
   const attemptedUrlsWithoutSecrets = [];
   const statuses = [];
 
   for (const candidate of candidates) {
-    const originURL = buildB2Url(env, candidate);
+    const b2Key = candidate.replace(/^\/+/, "");
+    const originURL = buildB2Url(env, b2Key);
+    console.log("mediaPath", mediaPath);
+    console.log("b2Key", b2Key);
+    console.log("b2Url", originURL);
     attemptedUrlsWithoutSecrets.push(originURL);
     const response = await fetch(originURL, {
       headers: {
@@ -137,6 +141,7 @@ async function fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath, debugMode =
 
     if (response.ok) {
       console.log("media hit", candidate);
+      console.log("resolved b2Key", b2Key);
       if (candidate !== mediaPath.replace(/^\//, "")) {
         console.log(`media fallback: requested=${mediaPath} resolved=/${candidate}`);
       }
@@ -151,6 +156,12 @@ async function fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath, debugMode =
     }
 
     console.log("media miss", candidate, response.status);
+    if (!isImagePath && response.status === 404) {
+      const nextCandidate = candidates[candidates.indexOf(candidate) + 1];
+      if (nextCandidate) {
+        console.log("fallback b2Key", nextCandidate.replace(/^\/+/, ""));
+      }
+    }
     const debugStatus = { key: candidate, status: response.status };
     if (debugMode) {
       try {
@@ -161,16 +172,6 @@ async function fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath, debugMode =
     }
     statuses.push(debugStatus);
     lastResponse = response;
-    if (!isImagePath) {
-      return {
-        response,
-        resolvedKey: candidate,
-        fallbackUsed: false,
-        candidateKeys: candidates,
-        attemptedUrlsWithoutSecrets,
-        statuses,
-      };
-    }
     if (response.status !== 404) {
       return {
         response,
@@ -313,8 +314,11 @@ function toMediaProxyURL(line, base) {
 }
 
 function extractMediaPath(pathname) {
-  const path = pathname.replace(/^\/media\//, "");
-  return `/${path}`;
+  const trimmed = String(pathname || "").replace(/^\/+/, "");
+  if (trimmed.startsWith("media/")) {
+    return `/${trimmed.slice("media/".length)}`;
+  }
+  return `/${trimmed}`;
 }
 
 function normalizeScope(scope) {
@@ -416,4 +420,25 @@ function buildImageCandidateKeys(mediaPath) {
 
 function uniqueKeys(keys) {
   return [...new Set(keys.filter(Boolean))];
+}
+
+function buildVideoCandidateKeys(mediaPath) {
+  const key = String(mediaPath || "").replace(/^\/+/, "");
+  const candidates = [key];
+
+  if (key.startsWith("videos/serials/")) {
+    return uniqueKeys(candidates);
+  }
+
+  if (key.startsWith("videos/movies/")) {
+    candidates.push(key.replace(/^videos\/movies\//, "videos/"));
+    return uniqueKeys(candidates);
+  }
+
+  if (key.startsWith("videos/") && !key.startsWith("videos/movies/")) {
+    candidates.push(key.replace(/^videos\//, "videos/movies/"));
+    return uniqueKeys(candidates);
+  }
+
+  return uniqueKeys(candidates);
 }
