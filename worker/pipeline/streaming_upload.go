@@ -74,7 +74,7 @@ func (u *segmentUploader) worker(id int) {
 }
 
 func (u *segmentUploader) uploadSegment(path string) {
-	remotePath := fmt.Sprintf("videos/%s/%s/%s", u.folderName, u.rendition, filepath.Base(path))
+	remotePath := fmt.Sprintf("videos/movies/%s/%s/%s", u.folderName, u.rendition, filepath.Base(path))
 
 	if _, ok := u.uploaded.Load(remotePath); ok {
 		log.Printf("[STREAM_UPLOAD] Skipping already uploaded: %s", remotePath)

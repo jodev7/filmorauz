@@ -147,7 +147,7 @@ export default function TelegramPostPage() {
           <div className="flex items-center gap-3">
             <input
               type="file"
-              accept="image/jpeg,image/png,image/webp"
+              accept="image/jpeg,image/png,image/webp,image/gif"
               className="hidden"
               ref={fileInputRef}
               onChange={handleImageUpload}

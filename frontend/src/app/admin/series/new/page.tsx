@@ -3,9 +3,9 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Save, Loader2, Film, Plus, X } from "lucide-react";
+import { ArrowLeft, Save, Loader2, Film, Plus, X, Upload } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { adminCreateSeries, CreateSeriesData } from "@/lib/api";
+import { adminCreateSeries, CreateSeriesData, uploadSeriesImage } from "@/lib/api";
 
 // Genre options for series (lowercase, matching DB)
 const GENRE_OPTIONS = [
@@ -19,6 +19,8 @@ export default function NewSeriesPage() {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [uploadingPoster, setUploadingPoster] = useState(false);
+  const [uploadingBackdrop, setUploadingBackdrop] = useState(false);
 
   const [form, setForm] = useState<CreateSeriesData>({
     title: "",
@@ -88,6 +90,30 @@ export default function NewSeriesPage() {
       setError(err instanceof Error ? err.message : "Xatolik yuz berdi");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleImageUpload = async (type: "poster" | "backdrop", file: File) => {
+    if (!token) return;
+    try {
+      if (type === "poster") {
+        setUploadingPoster(true);
+      } else {
+        setUploadingBackdrop(true);
+      }
+      const result = await uploadSeriesImage(token, file, type);
+      setForm((prev) => ({
+        ...prev,
+        [type === "poster" ? "poster_url" : "backdrop_url"]: result.url,
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      if (type === "poster") {
+        setUploadingPoster(false);
+      } else {
+        setUploadingBackdrop(false);
+      }
     }
   };
 
@@ -234,6 +260,20 @@ export default function NewSeriesPage() {
             <label className="block text-sm font-medium text-gray-300 mb-2">
               Poster URL
             </label>
+            <label className="mb-2 flex items-center gap-2 cursor-pointer w-full bg-brand-card border border-brand-border rounded-lg px-3 py-2 text-sm text-gray-300 hover:border-brand-red transition-colors">
+              {uploadingPoster ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              <span>{uploadingPoster ? "Uploading..." : "Upload poster"}</span>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) void handleImageUpload("poster", file);
+                }}
+              />
+            </label>
             <input
               type="url"
               value={form.poster_url || ""}
@@ -243,10 +283,27 @@ export default function NewSeriesPage() {
               className="w-full px-4 py-3 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
               placeholder="https://..."
             />
+            {form.poster_url ? (
+              <img src={form.poster_url} alt="Poster preview" className="mt-2 h-24 rounded object-cover border border-brand-border" />
+            ) : null}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">
               Backdrop URL
+            </label>
+            <label className="mb-2 flex items-center gap-2 cursor-pointer w-full bg-brand-card border border-brand-border rounded-lg px-3 py-2 text-sm text-gray-300 hover:border-brand-red transition-colors">
+              {uploadingBackdrop ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              <span>{uploadingBackdrop ? "Uploading..." : "Upload backdrop"}</span>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) void handleImageUpload("backdrop", file);
+                }}
+              />
             </label>
             <input
               type="url"
@@ -257,6 +314,9 @@ export default function NewSeriesPage() {
               className="w-full px-4 py-3 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
               placeholder="https://..."
             />
+            {form.backdrop_url ? (
+              <img src={form.backdrop_url} alt="Backdrop preview" className="mt-2 h-24 w-full rounded object-cover border border-brand-border" />
+            ) : null}
           </div>
         </div>
 

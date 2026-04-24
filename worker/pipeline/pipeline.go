@@ -654,10 +654,10 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	mode = p.config.StorageConfig.Mode
 	if mode == "dev" {
 		log.Printf("[PIPELINE] Storage Mode: development")
-		log.Printf("[PIPELINE] Assets Location: /stream/%s/", canonicalFolderName)
+		log.Printf("[PIPELINE] Assets Location: /stream/movies/%s/", canonicalFolderName)
 	} else {
 		log.Printf("[PIPELINE] Storage Mode: production")
-		log.Printf("[PIPELINE] Assets Location: B2/videos/%s/", canonicalFolderName)
+		log.Printf("[PIPELINE] Assets Location: B2/videos/movies/%s/", canonicalFolderName)
 	}
 
 	log.Printf("[PIPELINE] Movie ID: %v", movieResult.MovieID)

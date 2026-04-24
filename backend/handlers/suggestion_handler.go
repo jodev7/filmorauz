@@ -1,17 +1,13 @@
 package handlers
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/filmorauz/backend/config"
 	"github.com/filmorauz/backend/models"
@@ -43,6 +39,7 @@ var suggestionAllowedImageTypes = map[string]bool{
 	"image/jpg":  true,
 	"image/png":  true,
 	"image/webp": true,
+	"image/gif":  true,
 }
 
 func (h *SuggestionHandler) CreateSuggestion(c *gin.Context) {
@@ -84,12 +81,16 @@ func (h *SuggestionHandler) CreateSuggestion(c *gin.Context) {
 
 			contentType := header.Header.Get("Content-Type")
 			if !suggestionAllowedImageTypes[contentType] {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid image type. allowed: jpg, jpeg, png, webp"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid image type. allowed: jpg, jpeg, png, webp, gif"})
 				return
 			}
 
-			if header.Size > 10*1024*1024 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "image too large (max 10MB)"})
+			maxSize := maxFormImageSize
+			if contentType == "image/gif" {
+				maxSize = maxFormGIFSize
+			}
+			if header.Size > maxSize {
+				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("image too large (max %dMB)", maxSize/1024/1024)})
 				return
 			}
 
@@ -161,86 +162,27 @@ func (h *SuggestionHandler) uploadImageToStorage(file multipart.File, filename, 
 	}
 
 	cfg := h.config
-	if cfg.IsDev {
-		storageDir := "./uploads/suggestions"
-		if err := os.MkdirAll(storageDir, 0755); err != nil {
-			return "", "", err
-		}
-
-		ext := ".jpg"
-		if contentType == "image/png" {
-			ext = ".png"
-		} else if contentType == "image/webp" {
-			ext = ".webp"
-		}
-
-		newFilename := fmt.Sprintf("%d%s%s", time.Now().UnixNano(), "suggestion", ext)
-		dst, err := os.Create(storageDir + "/" + newFilename)
-		if err != nil {
-			return "", "", err
-		}
-		defer dst.Close()
-
-		if _, err := io.Copy(dst, file); err != nil {
-			return "", "", err
-		}
-
-		url := cfg.GetBaseURL() + "/uploads/suggestions/" + newFilename
-		return url, "suggestions/" + newFilename, nil
-	}
-
-	workerURL := cfg.WorkerUploadURL
-	if workerURL == "" {
-		return "", "", fmt.Errorf("worker upload URL not configured")
-	}
-
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return "", "", fmt.Errorf("failed to seek file: %w", err)
+		return "", "", fmt.Errorf("failed to process file: %w", err)
 	}
-
-	var b bytes.Buffer
-	wr := multipart.NewWriter(&b)
-	part, err := wr.CreateFormFile("image", filename)
+	maxSize := maxFormImageSize
+	if contentType == "image/gif" {
+		maxSize = maxFormGIFSize
+	}
+	data, detectedType, err := readAndValidateUpload(file, maxSize, suggestionAllowedImageTypes)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to create form: %w", err)
+		return "", "", err
 	}
-	if _, err := io.Copy(part, file); err != nil {
-		return "", "", fmt.Errorf("failed to copy file: %w", err)
-	}
-	wr.Close()
 
-	uploadURL := workerURL + "/upload-suggestion"
-	log.Printf("[SuggestionHandler] Uploading suggestion image to worker: %s", uploadURL)
-
-	resp, err := http.Post(uploadURL, wr.FormDataContentType(), &b)
+	objectKey := buildFolderObjectKey("suggestions", "suggestion", filename, detectedType, ".jpg")
+	uploader := NewUploadHandler(nil, cfg)
+	imageURL, err := uploader.storeUploadedFile(objectKey, data, detectedType)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to upload to worker: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to read worker response: %w", err)
+		return "", "", err
 	}
 
-	log.Printf("[SuggestionHandler] Worker response status: %d, body: %s", resp.StatusCode, string(body))
-
-	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("worker returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result map[string]string
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", "", fmt.Errorf("failed to decode worker response: %w, body: %s", err, string(body))
-	}
-
-	imageURL := result["url"]
-	if imageURL == "" {
-		return "", "", fmt.Errorf("worker returned empty URL, response: %s", string(body))
-	}
-
-	log.Printf("[SuggestionHandler] Upload success, URL: %s", imageURL)
-	return imageURL, "suggestions/" + filename, nil
+	log.Printf("[SuggestionHandler] Direct upload success: path=%s url=%s", objectKey, imageURL)
+	return imageURL, objectKey, nil
 }
 
 func (h *SuggestionHandler) GetMySuggestions(c *gin.Context) {

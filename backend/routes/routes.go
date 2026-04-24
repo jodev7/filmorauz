@@ -188,6 +188,13 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	{
 		// Movie asset uploads
 		admin.POST("/movies/upload", uploadHandler.UploadMovieAssets)
+		admin.POST("/upload/movie-poster", uploadHandler.UploadMoviePoster)
+		admin.POST("/upload/movie-backdrop", uploadHandler.UploadMovieBackdrop)
+		admin.POST("/upload/series-poster", uploadHandler.UploadSeriesPoster)
+		admin.POST("/upload/series-backdrop", uploadHandler.UploadSeriesBackdrop)
+		admin.POST("/upload/collection-poster", uploadHandler.UploadCollectionPoster)
+		admin.POST("/upload/ad-media", uploadHandler.UploadAdMedia)
+		admin.POST("/upload/telegram-post-media", uploadHandler.UploadTelegramPostMedia)
 
 		// Proxy upload to B2 (avoids CORS issue with direct browser upload)
 		admin.POST("/upload-temp", uploadHandler.UploadTemp)

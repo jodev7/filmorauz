@@ -272,7 +272,7 @@ func main() {
 		// This avoids conflict with /uploads which is used for website assets
 		if cfg.WorkerUploadsDir != "" {
 			log.Printf("[DEV] Serving worker uploads from: %s at /stream", cfg.WorkerUploadsDir)
-			r.Static("/stream", cfg.WorkerUploadsDir+"/movies")
+			r.Static("/stream", cfg.WorkerUploadsDir)
 		}
 	}
 

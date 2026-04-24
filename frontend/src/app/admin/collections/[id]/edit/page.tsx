@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   Save,
   Loader2,
+  Upload,
   X,
   Search,
   Plus,
@@ -20,6 +21,7 @@ import {
   adminGetMovies,
   CollectionInput,
   Movie,
+  uploadCollectionPoster,
 } from "@/lib/api";
 
 export default function EditCollectionPage() {
@@ -31,6 +33,7 @@ export default function EditCollectionPage() {
 
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
+  const [uploadingPoster, setUploadingPoster] = useState(false);
   const [movies, setMovies] = useState<Movie[]>([]);
   const [movieSearch, setMovieSearch] = useState("");
   const [filteredMovies, setFilteredMovies] = useState<Movie[]>([]);
@@ -148,6 +151,19 @@ export default function EditCollectionPage() {
     setForm({ ...form, title, slug: form.slug || slug });
   };
 
+  const handlePosterUpload = async (file: File) => {
+    if (!token) return;
+    setUploadingPoster(true);
+    try {
+      const result = await uploadCollectionPoster(token, file);
+      setForm((prev) => ({ ...prev, poster_url: result.url }));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Poster upload failed");
+    } finally {
+      setUploadingPoster(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center py-12">
@@ -210,6 +226,20 @@ export default function EditCollectionPage() {
         {/* Poster URL */}
         <div>
           <label className="block text-gray-400 text-sm mb-2">Poster URL</label>
+          <label className="mb-2 flex items-center gap-2 cursor-pointer w-full bg-brand-card border border-brand-border rounded-lg px-3 py-2 text-sm text-gray-300 hover:border-brand-red transition-colors">
+            {uploadingPoster ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+            <span>{uploadingPoster ? "Uploading..." : "Upload poster"}</span>
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void handlePosterUpload(file);
+              }}
+            />
+          </label>
           <input
             type="url"
             value={form.poster_url}
@@ -217,6 +247,9 @@ export default function EditCollectionPage() {
             className="w-full px-4 py-3 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-red-red"
             placeholder="https://..."
           />
+          {form.poster_url ? (
+            <img src={form.poster_url} alt="Poster preview" className="mt-2 h-24 rounded object-cover border border-brand-border" />
+          ) : null}
         </div>
 
         {/* Sort Order */}

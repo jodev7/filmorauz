@@ -2,15 +2,12 @@ package handlers
 
 import (
 	"bytes"
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"mime/multipart"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,7 +140,7 @@ func (h *UploadHandler) UploadProfileImage(c *gin.Context) {
 		return
 	}
 
-	fileBytes, contentType, err := readAndValidateProfileImage(file)
+	fileBytes, contentType, err := readAndValidateUpload(file, maxFileSize, allowedImageTypes)
 	if err != nil {
 		status := http.StatusBadRequest
 		if strings.Contains(err.Error(), "too large") {
@@ -174,7 +171,7 @@ func (h *UploadHandler) UploadProfileImage(c *gin.Context) {
 			return
 		}
 	} else {
-		savedURL, err = h.uploadProfileImageToB2(objectKey, fileBytes, contentType)
+		savedURL, err = h.uploadBytesToB2(objectKey, fileBytes, contentType)
 		if err != nil {
 			log.Printf("[PROFILE_UPLOAD] direct B2 upload failed: user_id=%s object_key=%q err=%v", userID.(string), objectKey, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload profile image to storage"})
@@ -220,74 +217,9 @@ func (h *UploadHandler) UploadProfileImage(c *gin.Context) {
 	})
 }
 
-func readAndValidateProfileImage(file io.Reader) ([]byte, string, error) {
-	data, err := io.ReadAll(io.LimitReader(file, maxFileSize+1))
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to read file")
-	}
-	if int64(len(data)) == 0 {
-		return nil, "", fmt.Errorf("no file provided")
-	}
-	if int64(len(data)) > maxFileSize {
-		return nil, "", fmt.Errorf("file too large (max 5MB)")
-	}
-
-	contentType := http.DetectContentType(data)
-	if !allowedImageTypes[contentType] {
-		return nil, "", fmt.Errorf("invalid file type. allowed: jpg, jpeg, png, webp")
-	}
-	return data, contentType, nil
-}
-
 func buildProfileImageObjectKey(userID, originalFilename, contentType string) string {
 	ext := safeUploadExt(originalFilename, contentType, ".webp")
 	return fmt.Sprintf("avatars/%s_%d%s", userID, time.Now().UnixMilli(), ext)
-}
-
-func (h *UploadHandler) uploadProfileImageToB2(objectKey string, fileBytes []byte, contentType string) (string, error) {
-	if h.config.B2KeyID == "" || h.config.B2AppKey == "" {
-		return "", fmt.Errorf("missing B2 credentials")
-	}
-	if h.config.B2Bucket == "" && h.config.B2BucketID == "" {
-		return "", fmt.Errorf("missing B2 bucket configuration")
-	}
-
-	auth, err := h.authorizeB2()
-	if err != nil {
-		return "", err
-	}
-	bucketID, err := h.resolveB2BucketID(auth)
-	if err != nil {
-		return "", err
-	}
-	uploadURL, err := h.requestB2UploadURL(auth.APIURL, auth.AuthorizationToken, bucketID)
-	if err != nil {
-		return "", err
-	}
-
-	sum := sha1.Sum(fileBytes)
-	req, err := http.NewRequest(http.MethodPost, uploadURL.UploadURL, bytes.NewReader(fileBytes))
-	if err != nil {
-		return "", err
-	}
-	req.ContentLength = int64(len(fileBytes))
-	req.Header.Set("Authorization", uploadURL.AuthorizationToken)
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("X-Bz-File-Name", url.PathEscape(objectKey))
-	req.Header.Set("X-Bz-Content-Sha1", hex.EncodeToString(sum[:]))
-
-	resp, err := h.httpClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return "", fmt.Errorf("b2 upload status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
-	return h.config.GetCDNFileURL(objectKey), nil
 }
 
 // saveLocal saves file to local storage (development)
@@ -339,6 +271,61 @@ func (h *UploadHandler) saveToCDNWithKey(file multipart.File, mediaKey string) (
 	}
 	log.Printf("[UPLOAD] Using CDN URL (key=%s): %s", mediaKey, cdnURL)
 	return cdnURL, nil
+}
+
+func (h *UploadHandler) UploadMoviePoster(c *gin.Context) {
+	h.handleDirectUpload(c, uploadSpec{
+		FieldName:    "file",
+		Folder:       "movies/posters",
+		Label:        "movie_poster",
+		MaxSizeBytes: maxFormImageSize,
+		AllowedTypes: allowedFormImageTypes,
+		FallbackExt:  ".jpg",
+	})
+}
+
+func (h *UploadHandler) UploadMovieBackdrop(c *gin.Context) {
+	h.handleDirectUpload(c, uploadSpec{
+		FieldName:    "file",
+		Folder:       "movies/backdrops",
+		Label:        "movie_backdrop",
+		MaxSizeBytes: maxFormImageSize,
+		AllowedTypes: allowedFormImageTypes,
+		FallbackExt:  ".jpg",
+	})
+}
+
+func (h *UploadHandler) UploadSeriesPoster(c *gin.Context) {
+	h.handleDirectUpload(c, uploadSpec{
+		FieldName:    "file",
+		Folder:       "series/posters",
+		Label:        "series_poster",
+		MaxSizeBytes: maxFormImageSize,
+		AllowedTypes: allowedFormImageTypes,
+		FallbackExt:  ".jpg",
+	})
+}
+
+func (h *UploadHandler) UploadSeriesBackdrop(c *gin.Context) {
+	h.handleDirectUpload(c, uploadSpec{
+		FieldName:    "file",
+		Folder:       "series/backdrops",
+		Label:        "series_backdrop",
+		MaxSizeBytes: maxFormImageSize,
+		AllowedTypes: allowedFormImageTypes,
+		FallbackExt:  ".jpg",
+	})
+}
+
+func (h *UploadHandler) UploadCollectionPoster(c *gin.Context) {
+	h.handleDirectUpload(c, uploadSpec{
+		FieldName:    "file",
+		Folder:       "collections/posters",
+		Label:        "collection_poster",
+		MaxSizeBytes: maxFormImageSize,
+		AllowedTypes: allowedFormImageTypes,
+		FallbackExt:  ".jpg",
+	})
 }
 
 // UploadMovieAssets handles file uploads for movie assets (poster, backdrop, video, temp_movie)
@@ -506,7 +493,7 @@ func (h *UploadHandler) uploadTempMovie(c *gin.Context) {
 			return
 		}
 	} else {
-		// PROD mode - upload to B2 temp path via worker
+		// PROD mode - upload temp movie to B2 path via worker
 		workerURL := h.config.WorkerUploadURL
 		if workerURL == "" {
 			log.Printf("[TEMP_UPLOAD] Error: WORKER_UPLOAD_URL not configured")
@@ -606,7 +593,6 @@ var adMediaAllowedMIME = map[string]string{
 	"video/mp4":       "video",
 	"video/webm":      "video",
 	"video/quicktime": "video", // .mov
-	"video/x-msvideo": "video", // .avi
 }
 
 // extToMIME maps common extensions to their canonical MIME type for fallback sniffing.
@@ -664,8 +650,7 @@ func resolveAdMIME(partCT string, filename string, file io.ReadSeeker) (mimeType
 	return sniffed, ""
 }
 
-// UploadAdMedia handles image/video uploads for ads
-// POST /api/superadmin/ads/upload  (superadmin only)
+// UploadAdMedia handles direct backend-to-B2 image/video uploads for ads.
 func (h *UploadHandler) UploadAdMedia(c *gin.Context) {
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
@@ -701,12 +686,16 @@ func (h *UploadHandler) UploadAdMedia(c *gin.Context) {
 	// Enforce size limits per category.
 	var maxSize int64
 	if mediaType == "image" {
-		maxSize = 10 * 1024 * 1024 // 10 MB
+		if contentType == "image/gif" {
+			maxSize = maxFormGIFSize
+		} else {
+			maxSize = maxFormImageSize
+		}
 	} else {
-		maxSize = 500 * 1024 * 1024 // 500 MB
+		maxSize = maxFormAdVideoSize
 	}
 	if header.Size > maxSize {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", maxSize/1024/1024)})
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", maxSize/1024/1024)})
 		return
 	}
 
@@ -720,83 +709,40 @@ func (h *UploadHandler) UploadAdMedia(c *gin.Context) {
 	}
 
 	filename := fmt.Sprintf("%d_ad_%s%s", time.Now().UnixNano(), mediaType, ext)
+	objectKey := "ads/" + filename
 
 	var savedURL string
 	if h.config.IsDev {
-		savedURL, err = h.saveAdMediaLocal(file, filename, mediaType)
-	} else {
-		// Forward to worker for B2 upload
-		workerURL := h.config.WorkerUploadURL
-		if workerURL == "" {
-			log.Printf("[UPLOAD] Ad media Error: WORKER_UPLOAD_URL not configured")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload service not configured"})
+		data, readErr := io.ReadAll(io.LimitReader(file, maxSize+1))
+		if readErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
 			return
 		}
-
+		if int64(len(data)) > maxSize {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", maxSize/1024/1024)})
+			return
+		}
+		savedURL, err = h.saveBytesLocal(objectKey, data)
+	} else {
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
 			return
 		}
-
-		var b bytes.Buffer
-		wr := multipart.NewWriter(&b)
-
-		formField := "file"
-		if mediaType == "image" {
-			formField = "image"
+		data, readErr := io.ReadAll(io.LimitReader(file, maxSize+1))
+		if readErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
+			return
 		}
-
-		part, err := wr.CreateFormFile(formField, filename)
+		if int64(len(data)) > maxSize {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", maxSize/1024/1024)})
+			return
+		}
+		savedURL, err = h.uploadBytesToB2(objectKey, data, contentType)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload form"})
-			return
-		}
-		written, err := io.Copy(part, file)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
-			return
-		}
-
-		if err := wr.WriteField("media_type", mediaType); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to add media_type"})
-			return
-		}
-		if err := wr.Close(); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to finalize upload form"})
-			return
-		}
-
-		log.Printf("[UPLOAD_AD] forwarding to worker: media_type=%s endpoint=/upload-ad field=%q filename=%q bytes_attached=%d", mediaType, formField, filename, written)
-
-		resp, err := http.Post(workerURL+"/upload-ad", wr.FormDataContentType(), &b)
-		if err != nil {
-			log.Printf("[UPLOAD_AD] Error uploading to worker: %v", err)
+			log.Printf("[UPLOAD_AD] direct B2 upload failed: media_type=%s path=%q err=%v", mediaType, objectKey, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
 			return
 		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			log.Printf("[UPLOAD_AD] Worker returned status %d: %s", resp.StatusCode, body)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed"})
-			return
-		}
-
-		var result map[string]string
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			log.Printf("[UPLOAD_AD] Error decoding response: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid upload response"})
-			return
-		}
-
-		savedURL = result["url"]
-		if savedURL == "" {
-			log.Printf("[UPLOAD_AD] Worker response missing URL: %v", result)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid upload response - no URL"})
-			return
-		}
-		log.Printf("[UPLOAD_AD] Upload success: %s", savedURL)
 	}
 	if err != nil {
 		log.Printf("[UPLOAD] Ad media upload error: %v", err)
@@ -804,7 +750,7 @@ func (h *UploadHandler) UploadAdMedia(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"url": savedURL, "media_type": mediaType})
+	c.JSON(http.StatusOK, gin.H{"success": true, "url": savedURL, "path": objectKey, "media_type": mediaType})
 }
 
 // saveAdMediaLocal saves ad media to local storage under uploads/ads/{images|videos}/
@@ -873,8 +819,7 @@ func InitUpload() {
 	_ = time.Now()
 }
 
-// UploadTelegramPostMedia handles image uploads for Telegram posts
-// POST /api/superadmin/telegram-post/upload (superadmin only)
+// UploadTelegramPostMedia handles direct backend-to-B2 uploads for Telegram post media.
 func (h *UploadHandler) UploadTelegramPostMedia(c *gin.Context) {
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
@@ -883,94 +828,30 @@ func (h *UploadHandler) UploadTelegramPostMedia(c *gin.Context) {
 	}
 	defer file.Close()
 
-	contentType := header.Header.Get("Content-Type")
-	allowedTypes := map[string]bool{
-		"image/jpeg": true,
-		"image/jpg":  true,
-		"image/png":  true,
-		"image/webp": true,
-		"image/gif":  true,
-	}
-
-	if header.Size > 10*1024*1024 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file too large (max 10MB)"})
-		return
-	}
-
-	if !allowedTypes[contentType] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported file type"})
-		return
-	}
-
-	filename := safeForwardedUploadFilename("telegram_post", header.Filename, contentType, ".jpg")
-	log.Printf("[UPLOAD] telegram-post image names: original=%q safe_forwarded=%q", header.Filename, filename)
-
-	var savedURL string
-	if h.config.IsDev {
-		savedURL, err = h.saveTelegramPostLocal(file, filename)
-	} else {
-		// Call worker for B2 upload
-		workerURL := h.config.WorkerUploadURL
-		if workerURL == "" {
-			log.Printf("[UPLOAD] Error: WORKER_UPLOAD_URL not configured")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload service not configured"})
-			return
-		}
-
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
-			return
-		}
-
-		var b bytes.Buffer
-		wr := multipart.NewWriter(&b)
-		part, err := wr.CreateFormFile("image", filename)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload form"})
-			return
-		}
-		if _, err := io.Copy(part, file); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
-			return
-		}
-		wr.Close()
-
-		workerEndpoint := workerURL + "/upload-telegram-post"
-		log.Printf("[UPLOAD] forwarding telegram-post image to worker: url=%s query=%q filename=%q", workerEndpoint, "", filename)
-		resp, err := http.Post(workerEndpoint, wr.FormDataContentType(), &b)
-		if err != nil {
-			log.Printf("[UPLOAD] Error uploading to worker: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
-			return
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			log.Printf("[UPLOAD] Worker returned status %d: %s", resp.StatusCode, body)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed"})
-			return
-		}
-
-		var result map[string]string
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid upload response"})
-			return
-		}
-
-		savedURL = result["url"]
-		if savedURL == "" {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "upload failed - no URL returned"})
-			return
-		}
-	}
+	maxSize := maxFormImageSize
+	data, contentType, err := readAndValidateUpload(file, maxFormGIFSize, allowedFormImageTypes)
 	if err != nil {
-		log.Printf("[UPLOAD] Telegram post media upload error: %v", err)
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "too large") {
+			status = http.StatusRequestEntityTooLarge
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	if contentType != "image/gif" && header.Size > maxSize {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file too large (max 10MB)"})
+		return
+	}
+
+	objectKey := buildFolderObjectKey("telegram-posts", "telegram_post", header.Filename, contentType, ".jpg")
+	savedURL, err := h.storeUploadedFile(objectKey, data, contentType)
+	if err != nil {
+		log.Printf("[UPLOAD_TELEGRAM_POST] direct upload failed: path=%q err=%v", objectKey, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload file"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"url": savedURL})
+	c.JSON(http.StatusOK, gin.H{"success": true, "url": savedURL, "path": objectKey})
 }
 
 // saveTelegramPostLocal saves telegram post images to local storage
@@ -995,7 +876,8 @@ func (h *UploadHandler) saveTelegramPostLocal(file multipart.File, filename stri
 	return h.config.GetBaseURL() + "/telegram-post/" + filename, nil
 }
 
-// UploadTemp handles proxy upload to B2 via worker (avoids CORS issue with direct browser upload)
+// UploadTemp keeps temp movie uploads on the worker path, but image poster/backdrop
+// uploads now go backend -> B2 directly.
 func (h *UploadHandler) UploadTemp(c *gin.Context) {
 	if err := c.Request.ParseMultipartForm(maxFileSize); err == nil && c.Request.MultipartForm != nil {
 		for field, files := range c.Request.MultipartForm.File {
@@ -1078,6 +960,28 @@ func (h *UploadHandler) UploadTemp(c *gin.Context) {
 			return
 		}
 		fileKey = subDir + "/" + filename
+	} else if fileType == "poster" || fileType == "backdrop" {
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
+			return
+		}
+		data, detectedType, readErr := readAndValidateUpload(file, maxSize, allowedTypes)
+		if readErr != nil {
+			status := http.StatusBadRequest
+			if strings.Contains(readErr.Error(), "too large") {
+				status = http.StatusRequestEntityTooLarge
+			}
+			c.JSON(status, gin.H{"error": readErr.Error()})
+			return
+		}
+		objectKey := buildFolderObjectKey("movies/"+subDir, fileType, header.Filename, detectedType, ".jpg")
+		savedURL, err = h.uploadBytesToB2(objectKey, data, detectedType)
+		if err != nil {
+			log.Printf("[UPLOAD_TEMP] direct image upload failed: type=%s path=%q err=%v", fileType, objectKey, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
+			return
+		}
+		fileKey = objectKey
 	} else {
 		workerURL := h.config.WorkerUploadURL
 		if workerURL == "" {

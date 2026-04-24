@@ -68,14 +68,15 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const validTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+    const validTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"];
     if (!validTypes.includes(file.type)) {
-      setError("Faqat JPG, JPEG, PNG va WebP formatlari qabul qilinadi");
+      setError("Faqat JPG, JPEG, PNG, WebP va GIF formatlari qabul qilinadi");
       return;
     }
 
-    if (file.size > 10 * 1024 * 1024) {
-      setError("Rasm hajmi 10MB dan oshmasligi kerak");
+    const maxSize = file.type === "image/gif" ? 20 * 1024 * 1024 : 10 * 1024 * 1024;
+    if (file.size > maxSize) {
+      setError(file.type === "image/gif" ? "GIF hajmi 20MB dan oshmasligi kerak" : "Rasm hajmi 10MB dan oshmasligi kerak");
       return;
     }
 
@@ -277,17 +278,17 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept="image/jpeg,image/jpg,image/png,image/webp"
+                      accept="image/jpeg,image/jpg,image/png,image/webp,image/gif"
                       onChange={handleImageSelect}
                       className="hidden"
                     />
                     <div className="text-center">
                       <Upload className="w-6 h-6 text-gray-500 mx-auto mb-1" />
                       <span className="text-sm text-gray-500">
-                        Rasm tanlang (JPG, PNG, WebP)
+                        Rasm tanlang (JPG, PNG, WebP, GIF)
                       </span>
                       <span className="text-xs text-gray-600 block mt-0.5">
-                        Max 10MB
+                        Max 10MB, GIF 20MB
                       </span>
                     </div>
                   </label>

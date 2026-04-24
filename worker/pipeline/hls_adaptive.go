@@ -784,9 +784,9 @@ func (p *Pipeline) createMasterPlaylist(masterPath string, renditions []Renditio
 // kept local for clip generation and deleted by the pipeline cleanup stage.
 // Final B2 layout:
 //
-//	videos/<folder>/master.m3u8
-//	videos/<folder>/<quality>/index.m3u8
-//	videos/<folder>/<quality>/segment_*.ts   (uploaded by streaming uploader)
+//	videos/movies/<folder>/master.m3u8
+//	videos/movies/<folder>/<quality>/index.m3u8
+//	videos/movies/<folder>/<quality>/segment_*.ts   (uploaded by streaming uploader)
 func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir string, folderName string) (string, error) {
 	jobID := job.ID.Hex()
 	log.Printf("[HLS] Uploading adaptive HLS files for job %s from %s", jobID, hlsDir)
@@ -824,7 +824,7 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 			}
 
 			relPath, _ := filepath.Rel(hlsDir, path)
-			remotePath := filepath.Join("videos", folderName, relPath)
+			remotePath := filepath.Join("videos", "movies", folderName, relPath)
 			log.Printf("[HLS] Walked local file: %s (rel=%s)", path, relPath)
 
 			// .ts segments are streamed directly to B2 by the segment uploader
@@ -894,7 +894,7 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 			if r.Err != nil {
 				log.Printf("[HLS] Upload failed for %s: %v", r.RemotePath, r.Err)
 			}
-			if r.RemotePath == "videos/"+folderName+"/master.m3u8" || strings.HasSuffix(r.RemotePath, "/master.m3u8") {
+			if r.RemotePath == "videos/movies/"+folderName+"/master.m3u8" || strings.HasSuffix(r.RemotePath, "/master.m3u8") {
 				streamingURL = r.URL
 				log.Printf("[HLS] Master playlist URL: %s", streamingURL)
 			}
@@ -971,7 +971,7 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 
 			// Track master playlist URL
 			if relPath == "master.m3u8" {
-				streamingURL = p.config.StorageConfig.BaseURL + "/stream/" + folderName + "/master.m3u8"
+				streamingURL = p.config.StorageConfig.BaseURL + "/stream/movies/" + folderName + "/master.m3u8"
 				log.Printf("[HLS] Master playlist URL: %s", streamingURL)
 			}
 

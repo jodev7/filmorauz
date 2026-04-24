@@ -1091,6 +1091,12 @@ export interface MovieAssetUploadResponse {
   temp_key?: string; // For temp_movie uploads
 }
 
+export interface BackendMediaUploadResponse {
+  success: boolean;
+  url: string;
+  path: string;
+}
+
 export async function uploadMovieAsset(
   token: string,
   file: File,
@@ -1102,12 +1108,12 @@ export async function uploadMovieAsset(
 
   switch (type) {
     case "poster":
-      uploadUrl = `${WORKER_URL}/upload-poster`;
-      formField = "image";
+      uploadUrl = `${API_URL}/admin/upload/movie-poster`;
+      formField = "file";
       break;
     case "backdrop":
-      uploadUrl = `${WORKER_URL}/upload-backdrop`;
-      formField = "image";
+      uploadUrl = `${API_URL}/admin/upload/movie-backdrop`;
+      formField = "file";
       break;
     case "temp_movie":
     case "video":
@@ -1139,7 +1145,7 @@ export async function uploadMovieAsset(
           url: response.url,
           type,
           filename: file.name,
-          temp_key: response.temp_key,
+          temp_key: response.temp_key || response.path,
         });
       } else {
         let errorMsg = "Upload failed";
@@ -1155,6 +1161,68 @@ export async function uploadMovieAsset(
 
     const formData = new FormData();
     formData.append(formField, file);
+    xhr.send(formData);
+  });
+}
+
+function uploadBackendMediaToEndpoint(
+  token: string,
+  file: File,
+  endpoint: string,
+  onProgress?: (progress: UploadProgressInfo) => void
+): Promise<BackendMediaUploadResponse> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_URL}${endpoint}`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+
+    const startedAt = Date.now();
+    xhr.upload.onprogress = (event) => {
+      if (!onProgress) return;
+      const elapsedSec = Math.max(0.001, (Date.now() - startedAt) / 1000);
+      const speedMBps = event.loaded / 1024 / 1024 / elapsedSec;
+      const info: UploadProgressInfo = {
+        loaded: event.loaded,
+        total: event.lengthComputable ? event.total : undefined,
+        uploadedMB: event.loaded / 1024 / 1024,
+        speedMBps,
+      };
+      if (event.lengthComputable) {
+        info.progress = Math.round((event.loaded / event.total) * 100);
+        const remaining = event.total - event.loaded;
+        info.etaSeconds = Math.round(remaining / 1024 / 1024 / Math.max(0.001, speedMBps));
+      }
+      onProgress(info);
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const resp = JSON.parse(xhr.responseText);
+          resolve({
+            success: resp.success ?? true,
+            url: resp.url,
+            path: resp.path || resp.file_key || "",
+          });
+        } catch {
+          reject(new Error("Invalid upload response"));
+        }
+      } else {
+        let msg = `Upload failed (${xhr.status})`;
+        try {
+          const err = JSON.parse(xhr.responseText);
+          msg = err.error || err.message || msg;
+        } catch {}
+        reject(new Error(msg));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Tarmoq xatosi. Serverga ulanib bo'lmadi."));
+    xhr.ontimeout = () => reject(new Error("Yuklash vaqti tugadi."));
+    xhr.onabort = () => reject(new Error("Yuklash to'xtatildi."));
+
+    const formData = new FormData();
+    formData.append("file", file);
     xhr.send(formData);
   });
 }
@@ -1341,80 +1409,37 @@ export async function directB2Upload(
 }
 
 // Backend-proxied upload for movie poster/backdrop. The browser POSTs the file
-// to /api/admin/upload-temp; the backend (or worker in PROD) uploads to B2 and
-// returns the final URL + file key. Same pattern used by profile image and
-// telegram-post media uploads — avoids browser→B2 CORS preflight failures.
+// to an admin upload endpoint; the backend uploads to B2 and returns the final
+// CDN URL + storage path.
 export async function backendUploadMovieImage(
   token: string,
   file: File,
   type: "poster" | "backdrop",
   onProgress?: (progress: UploadProgressInfo) => void
 ): Promise<{ url: string; file_key: string }> {
-  console.log("[BackendUpload] start:", { type, name: file.name, size: file.size, contentType: file.type });
+  const endpoint = type === "poster" ? "/admin/upload/movie-poster" : "/admin/upload/movie-backdrop";
+  const resp = await uploadBackendMediaToEndpoint(token, file, endpoint, onProgress);
+  return { url: resp.url, file_key: resp.path };
+}
 
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${API_URL}/admin/upload-temp`);
-    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+export async function uploadSeriesImage(
+  token: string,
+  file: File,
+  type: "poster" | "backdrop",
+  onProgress?: (progress: UploadProgressInfo) => void
+): Promise<{ url: string; file_key: string }> {
+  const endpoint = type === "poster" ? "/admin/upload/series-poster" : "/admin/upload/series-backdrop";
+  const resp = await uploadBackendMediaToEndpoint(token, file, endpoint, onProgress);
+  return { url: resp.url, file_key: resp.path };
+}
 
-    const startedAt = Date.now();
-    xhr.upload.onprogress = (event) => {
-      if (!onProgress) return;
-      const elapsedSec = Math.max(0.001, (Date.now() - startedAt) / 1000);
-      const speedMBps = event.loaded / 1024 / 1024 / elapsedSec;
-      const info: UploadProgressInfo = {
-        loaded: event.loaded,
-        total: event.lengthComputable ? event.total : undefined,
-        uploadedMB: event.loaded / 1024 / 1024,
-        speedMBps,
-      };
-      if (event.lengthComputable) {
-        info.progress = Math.round((event.loaded / event.total) * 100);
-        const remaining = event.total - event.loaded;
-        info.etaSeconds = Math.round(remaining / 1024 / 1024 / Math.max(0.001, speedMBps));
-      }
-      onProgress(info);
-    };
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const resp = JSON.parse(xhr.responseText);
-          console.log("[BackendUpload] success:", { type, url: resp.url, file_key: resp.file_key });
-          resolve({ url: resp.url, file_key: resp.file_key });
-        } catch (e) {
-          console.error("[BackendUpload] bad JSON:", xhr.responseText);
-          reject(new Error("Invalid upload response"));
-        }
-      } else {
-        let msg = `Upload failed (${xhr.status})`;
-        try {
-          const err = JSON.parse(xhr.responseText);
-          msg = err.error || err.message || msg;
-        } catch {}
-        console.error("[BackendUpload] failed:", { type, status: xhr.status, body: xhr.responseText.slice(0, 500) });
-        reject(new Error(msg));
-      }
-    };
-
-    xhr.onerror = () => {
-      console.error("[BackendUpload] network error:", { type });
-      reject(new Error("Tarmoq xatosi. Serverga ulanib bo'lmadi."));
-    };
-    xhr.ontimeout = () => {
-      console.error("[BackendUpload] timeout:", { type });
-      reject(new Error("Yuklash vaqti tugadi."));
-    };
-    xhr.onabort = () => {
-      console.error("[BackendUpload] aborted:", { type });
-      reject(new Error("Yuklash to'xtatildi."));
-    };
-
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("type", type);
-    xhr.send(formData);
-  });
+export async function uploadCollectionPoster(
+  token: string,
+  file: File,
+  onProgress?: (progress: UploadProgressInfo) => void
+): Promise<{ url: string; file_key: string }> {
+  const resp = await uploadBackendMediaToEndpoint(token, file, "/admin/upload/collection-poster", onProgress);
+  return { url: resp.url, file_key: resp.path };
 }
 
 // ── Ingestion API ────────────────────────────────────────────────
@@ -3238,7 +3263,7 @@ export async function uploadAdMedia(
   body.append("file", file);
   body.append("media_type", mediaType);
   // Do NOT set Content-Type — browser must set multipart/form-data with boundary automatically
-  const res = await fetch(`${API_URL}/superadmin/ads/upload`, {
+  const res = await fetch(`${API_URL}/admin/upload/ad-media`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body,
@@ -3320,7 +3345,7 @@ export async function uploadTelegramPostMedia(
 ): Promise<string> {
   const body = new FormData();
   body.append("file", file);
-  const res = await fetch(`${API_URL}/superadmin/telegram-post/upload`, {
+  const res = await fetch(`${API_URL}/admin/upload/telegram-post-media`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body,

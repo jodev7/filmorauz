@@ -3,15 +3,16 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Save, Loader2 } from "lucide-react";
+import { ArrowLeft, Save, Loader2, Upload } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { createCollection, CollectionInput } from "@/lib/api";
+import { createCollection, CollectionInput, uploadCollectionPoster } from "@/lib/api";
 
 export default function NewCollectionPage() {
   const { token } = useAuth();
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploadingPoster, setUploadingPoster] = useState(false);
 
   const [form, setForm] = useState<CollectionInput>({
     title: "",
@@ -47,6 +48,20 @@ export default function NewCollectionPage() {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "");
     setForm({ ...form, title, slug: form.slug || slug });
+  };
+
+  const handlePosterUpload = async (file: File) => {
+    if (!token) return;
+    setError(null);
+    setUploadingPoster(true);
+    try {
+      const result = await uploadCollectionPoster(token, file);
+      setForm((prev) => ({ ...prev, poster_url: result.url }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Poster upload failed");
+    } finally {
+      setUploadingPoster(false);
+    }
   };
 
   return (
@@ -108,6 +123,20 @@ export default function NewCollectionPage() {
         {/* Poster URL */}
         <div>
           <label className="block text-gray-400 text-sm mb-2">Poster URL</label>
+          <label className="mb-2 flex items-center gap-2 cursor-pointer w-full bg-brand-card border border-brand-border rounded-lg px-3 py-2 text-sm text-gray-300 hover:border-brand-red transition-colors">
+            {uploadingPoster ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+            <span>{uploadingPoster ? "Uploading..." : "Upload poster"}</span>
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void handlePosterUpload(file);
+              }}
+            />
+          </label>
           <input
             type="url"
             value={form.poster_url}
@@ -115,6 +144,9 @@ export default function NewCollectionPage() {
             className="w-full px-4 py-3 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
             placeholder="https://..."
           />
+          {form.poster_url ? (
+            <img src={form.poster_url} alt="Poster preview" className="mt-2 h-24 rounded object-cover border border-brand-border" />
+          ) : null}
         </div>
 
         {/* Sort Order */}

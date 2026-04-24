@@ -33,8 +33,8 @@ import {
   adminMoveEpisodeToSeason,
   CreateSeriesData,
   UploadProgressInfo,
+  uploadSeriesImage,
 } from "@/lib/api";
-import { backendUploadMovieImage } from "@/lib/api";
 import {
   DndContext,
   closestCenter,
@@ -411,7 +411,7 @@ export default function EditSeriesPage() {
     };
 
     try {
-      const result = await backendUploadMovieImage(token, file, type, onUploadProgress);
+      const result = await uploadSeriesImage(token, file, type, onUploadProgress);
 
       setUploads(prev => ({
         ...prev,

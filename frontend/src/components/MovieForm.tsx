@@ -484,7 +484,7 @@ export default function MovieForm({
               <>
                 <input
                   type="file"
-                  accept="image/jpeg,image/png,image/webp"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (file) handleUpload("poster", file);
@@ -494,7 +494,7 @@ export default function MovieForm({
                 />
                 <label htmlFor="poster-upload" className="upload-label">
                   <Upload size={20} />
-                  <span>Choose poster image (jpg, png, webp)</span>
+                  <span>Choose poster image (jpg, png, webp, gif)</span>
                 </label>
               </>
             )}
@@ -538,7 +538,7 @@ export default function MovieForm({
               <>
                 <input
                   type="file"
-                  accept="image/jpeg,image/png,image/webp"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (file) handleUpload("backdrop", file);
@@ -548,7 +548,7 @@ export default function MovieForm({
                 />
                 <label htmlFor="backdrop-upload" className="upload-label">
                   <Upload size={20} />
-                  <span>Choose backdrop image (jpg, png, webp)</span>
+                  <span>Choose backdrop image (jpg, png, webp, gif)</span>
                 </label>
               </>
             )}

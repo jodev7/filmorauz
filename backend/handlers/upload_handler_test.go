@@ -18,36 +18,53 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-func TestUploadTempForwardsPosterBackdropAsImageField(t *testing.T) {
+func TestUploadTempUploadsPosterBackdropDirectlyToB2(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+
+	pngBytes := []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41,
+		0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+		0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92,
+		0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+		0x44, 0xae, 0x42, 0x60, 0x82,
+	}
 
 	for _, fileType := range []string{"poster", "backdrop"} {
 		t.Run(fileType, func(t *testing.T) {
-			workerReceivedImage := false
-			worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/upload-"+fileType {
-					t.Fatalf("worker path = %q, want %q", r.URL.Path, "/upload-"+fileType)
+			var uploadedFileName string
+			var b2 *httptest.Server
+			b2 = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/authorize":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"accountId":"acc","authorizationToken":"auth-token","apiUrl":"` + b2.URL + `"}`))
+				case "/b2api/v2/b2_get_upload_url":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"uploadUrl":"` + b2.URL + `/upload","authorizationToken":"upload-token"}`))
+				case "/upload":
+					uploadedFileName = r.Header.Get("X-Bz-File-Name")
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"fileId":"4_z","fileName":"` + uploadedFileName + `"}`))
+				default:
+					t.Fatalf("unexpected path: %s", r.URL.Path)
 				}
-				file, header, err := r.FormFile("image")
-				if err != nil {
-					t.Fatalf("worker did not receive image field: %v", err)
-				}
-				defer file.Close()
-				workerReceivedImage = true
-				if header.Filename == "" {
-					t.Fatal("worker received empty filename")
-				}
-
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"url":"https://cdn.example/test.png","file_key":"` + fileType + `s/test.png"}`))
 			}))
-			defer worker.Close()
+			defer b2.Close()
 
 			handler := NewUploadHandler(nil, &config.Config{
-				IsDev:           false,
-				WorkerUploadURL: worker.URL,
+				IsDev:       false,
+				B2KeyID:     "key-id",
+				B2AppKey:    "app-key",
+				B2Bucket:    "filmorauznet",
+				B2BucketID:  "bucket-123",
+				B2PublicURL: "https://cdn.filmorauz.net/file/filmorauznet",
 			})
+			handler.httpClient = b2.Client()
+			handler.b2AuthorizeURL = b2.URL + "/authorize"
 
 			router := gin.New()
 			router.POST("/api/admin/upload-temp", handler.UploadTemp)
@@ -61,7 +78,7 @@ func TestUploadTempForwardsPosterBackdropAsImageField(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CreatePart: %v", err)
 			}
-			if _, err := part.Write([]byte("fake-png-data")); err != nil {
+			if _, err := part.Write(pngBytes); err != nil {
 				t.Fatalf("write file: %v", err)
 			}
 			if err := writer.WriteField("type", fileType); err != nil {
@@ -80,17 +97,17 @@ func TestUploadTempForwardsPosterBackdropAsImageField(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 			}
-			if !workerReceivedImage {
-				t.Fatal("worker did not receive image field")
-			}
 
 			var response map[string]string
 			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 				t.Fatalf("decode response: %v", err)
 			}
-			wantKey := fileType + "s/test.png"
-			if response["file_key"] != wantKey {
-				t.Fatalf("file_key = %q, want %q", response["file_key"], wantKey)
+			wantPrefix := "movies/" + fileType + "s/"
+			if !strings.HasPrefix(response["file_key"], wantPrefix) {
+				t.Fatalf("file_key = %q, want prefix %q", response["file_key"], wantPrefix)
+			}
+			if !strings.Contains(uploadedFileName, strings.ReplaceAll(wantPrefix, "/", "%2F")) {
+				t.Fatalf("uploaded file name = %q, want encoded prefix for %q", uploadedFileName, wantPrefix)
 			}
 		})
 	}
