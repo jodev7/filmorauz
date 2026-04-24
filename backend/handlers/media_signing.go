@@ -44,7 +44,7 @@ func buildMediaToken(secret, mediaPath string, ttlSeconds int) (string, time.Tim
 		ttlSeconds = 900
 	}
 	expiresAt := time.Now().Add(time.Duration(ttlSeconds) * time.Second)
-	scopePath := scopedMediaPath(mediaPath)
+	scopePath := tokenScopePath(mediaPath)
 	exp := strconv.FormatInt(expiresAt.Unix(), 10)
 	sig := signMediaScope(secret, scopePath, exp)
 	payload := scopePath + "\n" + exp + "\n" + sig
@@ -75,7 +75,7 @@ func extractMediaPath(raw string) (string, string, bool) {
 	return "", "", false
 }
 
-func scopedMediaPath(requestPath string) string {
+func tokenScopePath(requestPath string) string {
 	lower := strings.ToLower(requestPath)
 	if strings.HasSuffix(lower, ".m3u8") {
 		dir := path.Dir(requestPath)

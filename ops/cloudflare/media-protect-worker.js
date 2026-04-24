@@ -7,31 +7,39 @@ export default {
       return new Response("not found", { status: 404 });
     }
 
-    const tokenValue = readToken(request, url, env.MEDIA_COOKIE_NAME || "filmorauz_media");
-    if (!tokenValue) {
-      return new Response("missing media token", { status: 403 });
-    }
+    const isImagePath =
+      url.pathname.startsWith("/media/posters/") ||
+      url.pathname.startsWith("/media/backdrops/");
 
-    const token = decodeToken(tokenValue);
-    if (!token) {
-      return new Response("invalid media token", { status: 403 });
-    }
+    let tokenValue = null;
+    if (!isImagePath) {
+      tokenValue = readToken(request, url, env.MEDIA_COOKIE_NAME || "filmorauz_media");
+      if (!tokenValue) {
+        return new Response("missing media token", { status: 403 });
+      }
 
-    if (Math.floor(Date.now() / 1000) > Number(token.exp)) {
-      return new Response("expired media token", { status: 403 });
-    }
+      const token = decodeToken(tokenValue);
+      if (!token) {
+        return new Response("invalid media token", { status: 403 });
+      }
 
-    const expectedSig = await sign(env.MEDIA_SIGNING_SECRET, token.scope, token.exp);
-    if (expectedSig !== token.sig) {
-      return new Response("bad media signature", { status: 403 });
-    }
+      if (Math.floor(Date.now() / 1000) > Number(token.exp)) {
+        return new Response("expired media token", { status: 403 });
+      }
 
-    const mediaPath = url.pathname.replace(/^\/media/, "");
-    if (!mediaPath.startsWith(token.scope)) {
-      return new Response("scope mismatch", { status: 403 });
+      const expectedSig = await sign(env.MEDIA_SIGNING_SECRET, token.scope, token.exp);
+      if (expectedSig !== token.sig) {
+        return new Response("bad media signature", { status: 403 });
+      }
+
+      const mediaPath = url.pathname.replace(/^\/media/, "");
+      if (!mediaPath.startsWith(token.scope)) {
+        return new Response("scope mismatch", { status: 403 });
+      }
     }
 
     const b2Auth = await getB2Authorization(env);
+    const mediaPath = extractMediaPath(url.pathname);
     const originURL = buildB2DownloadURL(env, mediaPath);
     const originResponse = await fetch(originURL, {
       headers: {
@@ -125,10 +133,8 @@ async function getB2Authorization(env) {
 }
 
 function buildB2DownloadURL(env, mediaPath) {
-  const bucket = env.B2_BUCKET_NAME;
-  const normalizedPath = mediaPath.replace(/^\/+/, "");
-  const base = env.B2_DOWNLOAD_URL || "https://f005.backblazeb2.com";
-  return `${base}/file/${bucket}/${normalizedPath}`;
+  const path = mediaPath.startsWith("/") ? mediaPath : `/${mediaPath}`;
+  return `${env.B2_DOWNLOAD_URL}/${env.B2_BUCKET_NAME}${path}`;
 }
 
 function rewritePlaylist(requestURL, playlist, tokenValue) {
@@ -137,9 +143,11 @@ function rewritePlaylist(requestURL, playlist, tokenValue) {
     .split("\n")
     .map((line) => {
       if (!line || line.startsWith("#")) return line;
-      const rewritten = toMediaProxyURL(line, base);
-      rewritten.searchParams.set("token", tokenValue);
-      return rewritten.toString();
+      const proxiedURL = toMediaProxyURL(line, base);
+      if (tokenValue) {
+        proxiedURL.searchParams.set("token", tokenValue);
+      }
+      return `${proxiedURL.pathname}${proxiedURL.search}`;
     })
     .join("\n");
 }
@@ -154,14 +162,6 @@ function toMediaProxyURL(line, base) {
 }
 
 function extractMediaPath(pathname) {
-  const marker = "/file/";
-  const idx = pathname.indexOf(marker);
-  if (idx >= 0) {
-    const rest = pathname.slice(idx + marker.length);
-    const slash = rest.indexOf("/");
-    if (slash >= 0) {
-      return `/${rest.slice(slash + 1)}`;
-    }
-  }
-  return pathname.startsWith("/") ? pathname : `/${pathname}`;
+  const path = pathname.replace(/^\/media\//, "");
+  return `/${path}`;
 }
