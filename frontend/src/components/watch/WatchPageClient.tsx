@@ -295,15 +295,16 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
           token,
         });
         const playbackUrl = response.playback_url || "";
-        const normalizedPlaybackUrl = normalizeMediaUrl(playbackUrl, "");
-        if (!response.protected || !normalizedPlaybackUrl.includes("/media/")) {
+        const finalSrc = playbackUrl.startsWith("https://cdn.filmorauz.net/media/")
+          ? playbackUrl
+          : normalizeMediaUrl(playbackUrl, "");
+        if (!response.protected || !finalSrc.includes("/media/")) {
           throw new Error("Protected playback URL is invalid");
         }
-        if (process.env.NODE_ENV !== "production") {
-          console.log("[WatchPage] protected playback_url:", normalizedPlaybackUrl);
-        }
+        console.log("[media-token]", response.playback_url);
+        console.log("[player-src]", finalSrc);
         if (!cancelled) {
-          setResolvedPlaybackUrl(normalizedPlaybackUrl);
+          setResolvedPlaybackUrl(finalSrc);
         }
       } catch (error) {
         console.error("Failed to resolve protected media URL:", error);

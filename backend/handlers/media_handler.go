@@ -194,7 +194,15 @@ func (h *MediaHandler) buildProtectedPlayback(c *gin.Context, sourceURL string) 
 		UAHash:   hashUserAgent(c.GetHeader("User-Agent")),
 	})
 
-	return protected, token, expiresAt, true, nil
+	protectedWithToken := base + mediaPath + "?token=" + url.QueryEscape(token)
+	if originQS != "" {
+		protectedWithToken += "&origin_qs=" + url.QueryEscape(originQS)
+	}
+	if h.cfg != nil && !h.cfg.IsProd {
+		println("[MEDIA_ACCESS] playback_url=", protectedWithToken, "scope=", tokenScopePath(mediaPath))
+	}
+
+	return protectedWithToken, token, expiresAt, true, nil
 }
 
 func (h *MediaHandler) setMediaCookie(c *gin.Context, value string, expiresAt time.Time) {
