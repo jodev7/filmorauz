@@ -58,18 +58,7 @@ export default {
     }
 
     const b2Auth = await getB2Authorization(env);
-    const originURL = buildB2DownloadURL(env, mediaPath);
-    const originResponse = await fetch(originURL, {
-      headers: {
-        Authorization: b2Auth.authorizationToken,
-      },
-      cf: isImagePath
-        ? {
-            cacheEverything: true,
-            cacheTtl: 31536000,
-          }
-        : undefined,
-    });
+    const originResponse = await fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath);
 
     if (!originResponse.ok) {
       return new Response(`b2 fetch failed: ${originResponse.status}`, { status: originResponse.status });
@@ -100,6 +89,40 @@ export default {
     });
   },
 };
+
+async function fetchMediaFromB2(env, b2Auth, mediaPath, isImagePath) {
+  const candidates = buildMediaPathCandidates(mediaPath);
+  let lastResponse = null;
+
+  for (const candidate of candidates) {
+    const originURL = buildB2DownloadURL(env, candidate);
+    const response = await fetch(originURL, {
+      headers: {
+        Authorization: b2Auth.authorizationToken,
+      },
+      cf: isImagePath
+        ? {
+            cacheEverything: true,
+            cacheTtl: 31536000,
+          }
+        : undefined,
+    });
+
+    if (response.ok) {
+      if (candidate !== mediaPath) {
+        console.log(`media fallback: requested=${mediaPath} resolved=${candidate}`);
+      }
+      return response;
+    }
+
+    lastResponse = response;
+    if (!isImagePath || response.status !== 404) {
+      return response;
+    }
+  }
+
+  return lastResponse || new Response("b2 fetch failed: 404", { status: 404 });
+}
 
 function readToken(request, url, cookieName) {
   const fromQuery = url.searchParams.get("token");
@@ -239,4 +262,50 @@ function normalizeMediaPath(pathname) {
   }
 
   return path;
+}
+
+function buildMediaPathCandidates(mediaPath) {
+  const path = normalizeMediaPath(mediaPath);
+  const candidates = [path];
+
+  const legacyMaps = [
+    {
+      canonical: "/images/profile/",
+      fallbacks: ["/avatars/", "/profile/"],
+    },
+    {
+      canonical: "/images/posters/",
+      fallbacks: ["/posters/"],
+    },
+    {
+      canonical: "/images/backdrops/",
+      fallbacks: ["/backdrops/"],
+    },
+    {
+      canonical: "/images/ads/",
+      fallbacks: ["/ads/images/", "/ads/"],
+    },
+    {
+      canonical: "/images/telegram-posts/",
+      fallbacks: ["/telegram-posts/"],
+    },
+    {
+      canonical: "/images/suggestions/",
+      fallbacks: ["/suggestions/"],
+    },
+  ];
+
+  for (const { canonical, fallbacks } of legacyMaps) {
+    if (!path.startsWith(canonical)) {
+      continue;
+    }
+
+    const suffix = path.slice(canonical.length);
+    for (const fallback of fallbacks) {
+      candidates.push(`${fallback}${suffix}`);
+    }
+    break;
+  }
+
+  return [...new Set(candidates)];
 }
