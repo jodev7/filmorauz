@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/filmorauz/backend/config"
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
 	"github.com/filmorauz/backend/services"
@@ -64,6 +65,9 @@ func (h *TelegramPostHandler) SendPost(c *gin.Context) {
 		return
 	}
 
+	req.ImageURL = normalizeTelegramPostImageURL(req.ImageURL)
+	publicTelegramImageURL := absoluteTelegramPostImageURL(req.ImageURL)
+
 	hasButton := strings.TrimSpace(req.InlineButtonText) != "" || strings.TrimSpace(req.InlineButtonURL) != ""
 	if hasButton {
 		if strings.TrimSpace(req.InlineButtonText) == "" {
@@ -109,10 +113,10 @@ func (h *TelegramPostHandler) SendPost(c *gin.Context) {
 
 			var result services.AdPostResult
 			switch {
-			case req.ImageURL != "" && hasButton:
-				result = h.telegramService.SendPostWithImageAndButtonToChannel(target, req.Text, req.ImageURL, btnText, btnURL)
-			case req.ImageURL != "":
-				result = h.telegramService.SendPostWithImageToChannel(target, req.Text, req.ImageURL)
+			case publicTelegramImageURL != "" && hasButton:
+				result = h.telegramService.SendPostWithImageAndButtonToChannel(target, req.Text, publicTelegramImageURL, btnText, btnURL)
+			case publicTelegramImageURL != "":
+				result = h.telegramService.SendPostWithImageToChannel(target, req.Text, publicTelegramImageURL)
 			case hasButton:
 				result = h.telegramService.SendTextPostWithButtonToChannel(target, req.Text, btnText, btnURL)
 			default:
@@ -138,10 +142,10 @@ func (h *TelegramPostHandler) SendPost(c *gin.Context) {
 			for _, chatID := range chatIDs {
 				var result services.AdPostResult
 				switch {
-				case req.ImageURL != "" && hasButton:
-					result = h.telegramService.SendPostWithImageAndButtonToBot(chatID, req.Text, req.ImageURL, btnText, btnURL)
-				case req.ImageURL != "":
-					result = h.telegramService.SendPostWithImageToBot(chatID, req.Text, req.ImageURL)
+				case publicTelegramImageURL != "" && hasButton:
+					result = h.telegramService.SendPostWithImageAndButtonToBot(chatID, req.Text, publicTelegramImageURL, btnText, btnURL)
+				case publicTelegramImageURL != "":
+					result = h.telegramService.SendPostWithImageToBot(chatID, req.Text, publicTelegramImageURL)
 				case hasButton:
 					result = h.telegramService.SendTextPostWithButtonToBot(chatID, req.Text, btnText, btnURL)
 				default:
@@ -213,6 +217,49 @@ func parseChannelList(channelsEnv string) []string {
 		}
 	}
 	return result
+}
+
+func normalizeTelegramPostImageURL(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "/media/") || strings.HasPrefix(value, "/uploads/") {
+		return value
+	}
+
+	mediaPath, _, ok := extractMediaPath(value)
+	if !ok {
+		return value
+	}
+	if strings.HasPrefix(mediaPath, "/telegram-posts/") {
+		return "/media" + mediaPath
+	}
+	return value
+}
+
+func absoluteTelegramPostImageURL(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return value
+	}
+	if strings.HasPrefix(value, "/uploads/") {
+		cfg := config.Current()
+		if cfg != nil {
+			return strings.TrimSuffix(cfg.GetBaseURL(), "/") + strings.TrimPrefix(value, "/uploads")
+		}
+		return value
+	}
+	if strings.HasPrefix(value, "/media/") {
+		cfg := config.Current()
+		if cfg != nil && strings.TrimSpace(cfg.BaseSiteURL) != "" {
+			return strings.TrimSuffix(cfg.BaseSiteURL, "/") + value
+		}
+	}
+	return value
 }
 
 func (h *TelegramPostHandler) ListPosts(c *gin.Context) {

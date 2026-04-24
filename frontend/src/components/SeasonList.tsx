@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useState } from "react";
+import { SyntheticEvent, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronUp, Play, Clock } from "lucide-react";
 import { SeasonWithEpisodes, Episode, buildEpisodeUrl } from "@/lib/series-api";
@@ -15,21 +15,14 @@ interface SeasonListProps {
   seriesPosterUrl?: string;
 }
 
-function isInternalMediaUrl(url: string): boolean {
-  if (!url) return false;
-  if (url.startsWith("/media/") || url.startsWith("/uploads/")) return true;
-  try {
-    const parsed = new URL(url, "http://localhost");
-    const host = parsed.hostname.toLowerCase();
-    return (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host.endsWith("filmorauz.net") ||
-      host.endsWith("backblazeb2.com")
-    );
-  } catch {
-    return url.startsWith("/");
-  }
+function isKnownBrokenEpisodeThumbnail(url?: string | null): boolean {
+  const value = url?.trim().toLowerCase();
+  if (!value) return true;
+  return (
+    value.endsWith("/images/ogimage.png") ||
+    value.endsWith("/media/images/ogimage.png") ||
+    value.endsWith("/ogimage.png")
+  );
 }
 
 function getEpisodeCardThumbnail(
@@ -37,16 +30,29 @@ function getEpisodeCardThumbnail(
   seriesBackdropUrl?: string,
   seriesPosterUrl?: string
 ): string {
-  if (episode.thumbnail_url && isInternalMediaUrl(episode.thumbnail_url)) {
-    return episode.thumbnail_url;
+  const candidates = [
+    isKnownBrokenEpisodeThumbnail(episode.thumbnail_url) ? "" : episode.thumbnail_url,
+    seriesBackdropUrl,
+    seriesPosterUrl,
+    DEFAULT_POSTER_PLACEHOLDER,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeMediaUrl(candidate, "");
+    if (normalized) {
+      return normalized;
+    }
   }
-  if (seriesBackdropUrl) {
-    return seriesBackdropUrl;
+
+  return DEFAULT_POSTER_PLACEHOLDER;
+}
+
+function handleProtectedThumbnailError(event: SyntheticEvent<HTMLImageElement>) {
+  const target = event.currentTarget;
+  if (target.src.endsWith(DEFAULT_POSTER_PLACEHOLDER)) {
+    return;
   }
-  if (seriesPosterUrl) {
-    return seriesPosterUrl;
-  }
-  return episode.thumbnail_url || "";
+  target.src = DEFAULT_POSTER_PLACEHOLDER;
 }
 
 export default function SeasonList({
@@ -143,18 +149,18 @@ export default function SeasonList({
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 p-4">
                   {episodes.map((episode) => {
                     const isActive = episode.id === currentEpisodeId;
-                    const rawThumbnailUrl = getEpisodeCardThumbnail(
+                    const thumbnailUrl = getEpisodeCardThumbnail(
                       episode,
                       seriesBackdropUrl,
                       seriesPosterUrl
                     );
-                    const thumbnailUrl = normalizeMediaUrl(rawThumbnailUrl, DEFAULT_POSTER_PLACEHOLDER);
-                    const hasThumbnail = Boolean(rawThumbnailUrl);
+                    const usesProtectedMedia = isProtectedMediaUrl(thumbnailUrl);
+                    const hasThumbnail = Boolean(thumbnailUrl);
 
                     return (
                       <Link
                         key={episode.id}
-                        href={`/episode/${episode.id}`}
+                        href={buildEpisodeUrl(episode.id)}
                         className={`group block rounded-lg overflow-hidden transition-all ${
                           isActive 
                             ? "bg-brand-red/20 border border-brand-red" 
@@ -164,16 +170,27 @@ export default function SeasonList({
                         {/* Thumbnail */}
                         <div className="relative aspect-video bg-gray-800">
                           {hasThumbnail ? (
-                            <Image
-                              src={thumbnailUrl}
-                              alt={episode.title}
-                              fill
-                              sizes="(max-width: 768px) 50vw, (max-width: 1200px) 25vw, 200px"
-                              placeholder="blur"
-                              blurDataURL={SHIMMER_BLUR_DATA_URL}
-                              unoptimized={isProtectedMediaUrl(thumbnailUrl)}
-                              className="object-cover transition-transform group-hover:scale-105"
-                            />
+                            usesProtectedMedia ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={thumbnailUrl}
+                                alt={episode.title}
+                                loading="lazy"
+                                onError={handleProtectedThumbnailError}
+                                className="absolute inset-0 h-full w-full object-cover transition-transform group-hover:scale-105"
+                              />
+                            ) : (
+                              <Image
+                                src={thumbnailUrl}
+                                alt={episode.title}
+                                fill
+                                sizes="(max-width: 768px) 50vw, (max-width: 1200px) 25vw, 200px"
+                                placeholder="blur"
+                                blurDataURL={SHIMMER_BLUR_DATA_URL}
+                                unoptimized
+                                className="object-cover transition-transform group-hover:scale-105"
+                              />
+                            )
                           ) : (
                             <div className="w-full h-full flex items-center justify-center">
                               <Play className="text-gray-600" size={24} />

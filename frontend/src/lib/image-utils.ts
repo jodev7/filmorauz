@@ -23,7 +23,7 @@ const B2_CDN_ABSOLUTE_PREFIXES = [
   "https://f005.backblazeb2.com/file/filmorauznet/",
 ];
 const B2_FILE_PATH_PREFIX = "/file/filmorauznet/";
-const MEDIA_BUCKET_PREFIXES = ["/posters/", "/backdrops/", "/images/", "/ads/"];
+const MEDIA_BUCKET_PREFIXES = ["/posters/", "/backdrops/", "/images/", "/ads/", "/telegram-posts/"];
 const LEGACY_AVATAR_PREFIX = "/avatars/";
 const CANONICAL_AVATAR_PREFIX = "/images/profile/";
 

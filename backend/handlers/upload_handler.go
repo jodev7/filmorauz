@@ -844,14 +844,27 @@ func (h *UploadHandler) UploadTelegramPostMedia(c *gin.Context) {
 	}
 
 	objectKey := buildFolderObjectKey("telegram-posts", "telegram_post", header.Filename, contentType, ".jpg")
-	savedURL, err := h.storeUploadedFile(objectKey, data, contentType)
+	_, err = h.storeUploadedFile(objectKey, data, contentType)
 	if err != nil {
 		log.Printf("[UPLOAD_TELEGRAM_POST] direct upload failed: path=%q err=%v", objectKey, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload file"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "url": savedURL, "path": objectKey})
+	c.JSON(http.StatusOK, gin.H{"success": true, "url": telegramPostMediaURL(h.config, objectKey), "path": objectKey})
+}
+
+func telegramPostMediaURL(cfg *config.Config, objectKey string) string {
+	normalizedKey := strings.TrimPrefix(strings.TrimSpace(objectKey), "/")
+	if normalizedKey == "" {
+		return ""
+	}
+
+	if cfg != nil && cfg.IsDev {
+		return strings.TrimSuffix(cfg.GetBaseURL(), "/") + "/" + normalizedKey
+	}
+
+	return "/media/" + normalizedKey
 }
 
 // saveTelegramPostLocal saves telegram post images to local storage
