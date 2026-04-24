@@ -14,6 +14,7 @@ import {
   listCatalog, listCatalogCategories, CatalogItem, CatalogResponse, CatalogCategory,
   createManualImport, importFromCatalog
 } from "@/lib/api";
+import MediaImage from "@/components/ui/MediaImage";
 
 // Season type for serial grouping
 type SeasonGroup = {
@@ -739,21 +740,12 @@ function CatalogTab({
                 <div key={index} className="bg-brand-dark border border-brand-border rounded-lg p-3 flex gap-3">
                   {(result.img || result.poster) && (
                     <div className="w-16 h-24 bg-brand-card rounded overflow-hidden flex-shrink-0">
-                      <img
+                      <MediaImage
                         src={result.img || result.poster || ""}
                         alt={result.title}
                         className="w-16 h-24 object-cover"
                         loading="lazy"
-                        onError={(e) => {
-                          const target = e.target as HTMLImageElement;
-                          target.style.display = "none";
-                          const fallback = target.nextElementSibling as HTMLElement;
-                          if (fallback) fallback.style.display = "flex";
-                        }}
                       />
-                      <div className="w-16 h-24 flex items-center justify-center" style={{ display: "none" }}>
-                        <Film className="w-6 h-6 text-gray-600" />
-                      </div>
                     </div>
                   )}
                   <div className="flex-1 min-w-0">
@@ -814,21 +806,12 @@ function CatalogTab({
                 <div className="relative">
                   {item.poster ? (
                     <div className="w-full h-48 bg-brand-dark">
-                      <img
+                      <MediaImage
                         src={item.poster}
                         alt={item.title}
                         className="w-full h-48 object-cover"
                         loading="lazy"
-                        onError={(e) => {
-                          const target = e.target as HTMLImageElement;
-                          target.style.display = "none";
-                          const fallback = target.nextElementSibling as HTMLElement;
-                          if (fallback) fallback.style.display = "flex";
-                        }}
                       />
-                      <div className="w-full h-48 flex items-center justify-center" style={{ display: "none" }}>
-                        <Film className="w-12 h-12 text-gray-600" />
-                      </div>
                     </div>
                   ) : (
                     <div className="w-full h-48 bg-brand-dark flex items-center justify-center">

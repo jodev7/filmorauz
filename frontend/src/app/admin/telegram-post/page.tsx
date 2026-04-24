@@ -5,6 +5,7 @@ import { Send, Loader2, Upload, CheckCircle, XCircle, Users, Hash, Clock, User, 
 import { useAuth } from "@/lib/auth-context";
 import { sendTelegramPost, uploadTelegramPostMedia, listTelegramPosts, TelegramPost } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
+import MediaImage from "@/components/ui/MediaImage";
 
 interface TelegramPostResult {
   channels_sent: number;
@@ -175,7 +176,7 @@ export default function TelegramPostPage() {
           {imageUrl && (() => {
             const previewSrc = normalizeMediaUrl(imageUrl);
             return (
-              <img key={previewSrc} src={previewSrc} alt="Preview" className="mt-2 w-32 h-32 object-cover rounded border border-brand-border" />
+              <MediaImage src={previewSrc} alt="Preview" className="mt-2 w-32 h-32 object-cover rounded border border-brand-border" />
             );
           })()}
         </div>
@@ -311,7 +312,7 @@ export default function TelegramPostPage() {
                   {post.image_url && (() => {
                     const postImgSrc = normalizeMediaUrl(post.image_url);
                     return (
-                      <img key={postImgSrc} src={postImgSrc} alt="" className="w-16 h-16 object-cover rounded shrink-0" />
+                      <MediaImage src={postImgSrc} alt="" className="w-16 h-16 object-cover rounded shrink-0" />
                     );
                   })()}
                   <div className="flex-1 min-w-0">

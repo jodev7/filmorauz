@@ -6,6 +6,7 @@ import { Film, PlusCircle, List, ExternalLink, Users, UserPlus, Share2, Eye, Sta
 import { useAuth } from "@/lib/auth-context";
 import { adminGetMovies, Movie, getAdminDashboardStats, getAdminShareStats, getAdminUserMetrics, getAdminTopMovies, getAdminTopSeries, DashboardStats, AdminShareStats, UserMetrics, TopContentItem } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
+import MediaImage from "@/components/ui/MediaImage";
 
 export default function AdminDashboard() {
   const { token, user } = useAuth();
@@ -266,15 +267,10 @@ export default function AdminDashboard() {
                             {(() => {
                               const rowPosterSrc = normalizeMediaUrl(movie.poster_url);
                               return (
-                            /* eslint-disable-next-line @next/next/no-img-element */
-                            <img
-                              key={rowPosterSrc}
+                            <MediaImage
                               src={rowPosterSrc}
                               alt={movie.title}
                               className="w-8 h-10 sm:w-8 sm:h-12 object-cover rounded"
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).style.display = "none";
-                              }}
                             />
                               );
                             })()}
@@ -407,7 +403,7 @@ export default function AdminDashboard() {
                   <div key={item.slug} className="flex items-center gap-3 p-3 hover:bg-brand-dark/30">
                     <span className="w-6 text-center text-gray-500 text-sm font-medium">{index + 1}</span>
                     {topPosterSrc && (
-                      <img key={topPosterSrc} src={topPosterSrc} alt={item.title} className="w-10 h-14 object-cover rounded" />
+                      <MediaImage src={topPosterSrc} alt={item.title} className="w-10 h-14 object-cover rounded" />
                     )}
                     <div className="flex-1 min-w-0">
                       <p className="text-white font-medium truncate">{item.title}</p>
@@ -446,7 +442,7 @@ export default function AdminDashboard() {
                   <div key={item.slug} className="flex items-center gap-3 p-3 hover:bg-brand-dark/30">
                     <span className="w-6 text-center text-gray-500 text-sm font-medium">{index + 1}</span>
                     {topSeriesPosterSrc && (
-                      <img key={topSeriesPosterSrc} src={topSeriesPosterSrc} alt={item.title} className="w-10 h-14 object-cover rounded" />
+                      <MediaImage src={topSeriesPosterSrc} alt={item.title} className="w-10 h-14 object-cover rounded" />
                     )}
                     <div className="flex-1 min-w-0">
                       <p className="text-white font-medium truncate">{item.title}</p>

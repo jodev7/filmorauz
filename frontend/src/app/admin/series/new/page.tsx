@@ -7,6 +7,7 @@ import { ArrowLeft, Save, Loader2, Film, Plus, X, Upload } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { adminCreateSeries, CreateSeriesData, uploadSeriesImage } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
+import MediaImage from "@/components/ui/MediaImage";
 
 // Genre options for series (lowercase, matching DB)
 const GENRE_OPTIONS = [
@@ -285,7 +286,7 @@ export default function NewSeriesPage() {
               placeholder="https://..."
             />
             {form.poster_url ? (
-              <img src={normalizeMediaUrl(form.poster_url)} alt="Poster preview" className="mt-2 h-24 rounded object-cover border border-brand-border" />
+              <MediaImage src={normalizeMediaUrl(form.poster_url)} alt="Poster preview" className="mt-2 h-24 rounded object-cover border border-brand-border" />
             ) : null}
           </div>
           <div>
@@ -316,7 +317,7 @@ export default function NewSeriesPage() {
               placeholder="https://..."
             />
             {form.backdrop_url ? (
-              <img src={normalizeMediaUrl(form.backdrop_url)} alt="Backdrop preview" className="mt-2 h-24 w-full rounded object-cover border border-brand-border" />
+              <MediaImage src={normalizeMediaUrl(form.backdrop_url)} alt="Backdrop preview" className="mt-2 h-24 w-full rounded object-cover border border-brand-border" />
             ) : null}
           </div>
         </div>

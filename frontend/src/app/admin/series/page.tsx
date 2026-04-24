@@ -24,6 +24,7 @@ import {
   AdminSeries,
 } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
+import MediaImage from "@/components/ui/MediaImage";
 
 type StatusFilter = "all" | "pending" | "approved" | "rejected";
 
@@ -279,9 +280,7 @@ export default function AdminSeriesPage() {
                     <td className="px-4 py-3">
                       <div className="w-10 h-14 bg-gray-800 rounded overflow-hidden">
                         {adminSeriesPosterSrc ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            key={adminSeriesPosterSrc}
+                          <MediaImage
                             src={adminSeriesPosterSrc}
                             alt={s.title}
                             className="w-full h-full object-cover"

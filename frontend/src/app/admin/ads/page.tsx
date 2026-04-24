@@ -36,6 +36,7 @@ import {
   uploadAdMedia,
 } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
+import MediaImage from "@/components/ui/MediaImage";
 
 const SIMPLIFIED_PLACEMENTS = [
   { value: "website", label: "Website" },
@@ -177,7 +178,7 @@ function MediaUpload({
       {value && !localError && (
         <>
           {isImageValue ? (
-            <img src={normalizeMediaUrl(value)} alt="preview" className="w-full h-20 object-cover rounded border border-brand-border" />
+            <MediaImage src={normalizeMediaUrl(value)} alt="preview" className="w-full h-20 object-cover rounded border border-brand-border" />
           ) : (
             <p className="text-xs text-green-400 truncate">{value.split("/").pop()}</p>
           )}

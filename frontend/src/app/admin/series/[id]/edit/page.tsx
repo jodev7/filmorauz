@@ -36,6 +36,7 @@ import {
   uploadSeriesImage,
 } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
+import MediaImage from "@/components/ui/MediaImage";
 import {
   DndContext,
   closestCenter,
@@ -129,7 +130,7 @@ function SortableEpisodeItem({
     >
       <GripVertical className="w-4 h-4 text-gray-500 flex-shrink-0" />
       {episode.thumbnail_url ? (
-        <img src={normalizeMediaUrl(episode.thumbnail_url)} alt="" className="w-16 h-10 object-cover rounded" />
+        <MediaImage src={normalizeMediaUrl(episode.thumbnail_url)} alt="" className="w-16 h-10 object-cover rounded" />
       ) : (
         <div className="w-16 h-10 bg-gray-700 rounded flex items-center justify-center">
           <Play className="w-4 h-4 text-gray-500" />
@@ -876,11 +877,10 @@ export default function EditSeriesPage() {
                   )}
                 </div>
                 {form.poster_url && (
-                  <img
+                  <MediaImage
                     src={normalizeMediaUrl(form.poster_url)}
                     alt="Poster preview"
                     className="mt-2 h-24 rounded object-cover border border-brand-border"
-                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                   />
                 )}
               </div>
@@ -920,11 +920,10 @@ export default function EditSeriesPage() {
                   )}
                 </div>
                 {form.backdrop_url && (
-                  <img
+                  <MediaImage
                     src={normalizeMediaUrl(form.backdrop_url)}
                     alt="Backdrop preview"
                     className="mt-2 h-24 rounded object-cover border border-brand-border w-full"
-                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                   />
                 )}
               </div>
@@ -1128,7 +1127,7 @@ export default function EditSeriesPage() {
                   >
                     <div className="flex items-center gap-3">
                       {s.season.poster_url ? (
-                        <img src={normalizeMediaUrl(s.season.poster_url)} alt="" className="w-12 h-16 object-cover rounded" />
+                        <MediaImage src={normalizeMediaUrl(s.season.poster_url)} alt="" className="w-12 h-16 object-cover rounded" />
                       ) : (
                         <div className="w-12 h-16 bg-gray-700 rounded flex items-center justify-center">
                           <Tv className="w-6 h-6 text-gray-500" />

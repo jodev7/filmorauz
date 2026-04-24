@@ -24,6 +24,7 @@ import {
   uploadCollectionPoster,
 } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
+import MediaImage from "@/components/ui/MediaImage";
 
 export default function EditCollectionPage() {
   const { token } = useAuth();
@@ -249,7 +250,7 @@ export default function EditCollectionPage() {
             placeholder="https://..."
           />
           {form.poster_url ? (
-            <img src={normalizeMediaUrl(form.poster_url)} alt="Poster preview" className="mt-2 h-24 rounded object-cover border border-brand-border" />
+            <MediaImage src={normalizeMediaUrl(form.poster_url)} alt="Poster preview" className="mt-2 h-24 rounded object-cover border border-brand-border" />
           ) : null}
         </div>
 

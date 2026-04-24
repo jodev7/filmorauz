@@ -2,11 +2,11 @@
 
 import { SyntheticEvent, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import { ChevronDown, ChevronUp, Play, Clock } from "lucide-react";
 import { SeasonWithEpisodes, Episode, buildEpisodeUrl } from "@/lib/series-api";
 import { formatDuration } from "@/lib/movie-utils";
 import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
+import MediaImage from "@/components/ui/MediaImage";
 
 interface SeasonListProps {
   seasons: SeasonWithEpisodes[];
@@ -61,7 +61,6 @@ export default function SeasonList({
   seriesBackdropUrl,
   seriesPosterUrl,
 }: SeasonListProps) {
-  const pathname = usePathname() || "";
   // Defensive: ensure seasons is always an array
   const safeSeasons = Array.isArray(seasons) ? seasons : [];
 
@@ -170,12 +169,11 @@ export default function SeasonList({
                         {/* Thumbnail */}
                         <div className="relative aspect-video bg-gray-800">
                           {hasThumbnail ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              key={thumbnailUrl}
+                            <MediaImage
                               src={thumbnailUrl}
                               alt={episode.title}
                               loading="lazy"
+                              fallbackSrc={DEFAULT_POSTER_PLACEHOLDER}
                               onError={handleProtectedThumbnailError}
                               className="absolute inset-0 h-full w-full object-cover transition-transform group-hover:scale-105"
                             />

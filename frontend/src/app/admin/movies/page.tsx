@@ -22,6 +22,7 @@ import {
   Movie,
 } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
+import MediaImage from "@/components/ui/MediaImage";
 
 type StatusFilter = "all" | "pending" | "approved" | "rejected";
 
@@ -275,16 +276,10 @@ export default function AdminMoviesPage() {
                     {/* Poster + title */}
                     <td className="px-3 sm:px-5 py-3">
                       <div className="flex items-center gap-2 sm:gap-3">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          key={adminPosterSrc}
+                        <MediaImage
                           src={adminPosterSrc}
                           alt={movie.title}
                           className="w-8 h-12 sm:w-9 sm:h-14 object-cover rounded shrink-0"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).style.display =
-                              "none";
-                          }}
                         />
                         <div className="min-w-0">
                           <p className="text-white font-medium truncate max-w-[150px] sm:max-w-[200px]">

@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { X, Loader2, Film, Tv, ExternalLink, Upload, Image as ImageIcon } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { createSuggestion, SuggestionFormData } from "@/lib/api";
+import MediaImage from "@/components/ui/MediaImage";
 
 interface SuggestionModalProps {
   isOpen: boolean;
@@ -260,7 +261,7 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
                 </label>
                 {imagePreview ? (
                   <div className="relative mt-2">
-                    <img
+                    <MediaImage
                       src={imagePreview}
                       alt="Preview"
                       className="w-full max-h-48 object-contain rounded-lg border border-brand-border bg-brand-dark"
