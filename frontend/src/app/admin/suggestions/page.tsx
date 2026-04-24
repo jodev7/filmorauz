@@ -19,6 +19,7 @@ import {
   adminUpdateSuggestion,
   adminGetSuggestionStats,
 } from "@/lib/api";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 
 type StatusFilter = "all" | "pending" | "accepted" | "rejected";
 
@@ -242,7 +243,7 @@ export default function AdminSuggestionsPage() {
                     )}
                     {suggestion.image_url && (
                       <a
-                        href={suggestion.image_url}
+                        href={normalizeMediaUrl(suggestion.image_url)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-xs text-blue-400 hover:underline flex items-center gap-1 mt-1"

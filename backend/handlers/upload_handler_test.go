@@ -452,7 +452,7 @@ func TestUploadProfileImageUploadsDirectlyToB2(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	profileURL, _ := response["profile_image_url"].(string)
-	if !strings.HasPrefix(profileURL, "https://cdn.filmorauz.net/file/filmorauznet/images/profile/507f1f77bcf86cd799439011_") {
+	if !strings.HasPrefix(profileURL, "/images/profile/507f1f77bcf86cd799439011_") {
 		t.Fatalf("profile_image_url = %q", profileURL)
 	}
 }

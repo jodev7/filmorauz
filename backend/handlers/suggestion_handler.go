@@ -174,12 +174,13 @@ func (h *SuggestionHandler) uploadImageToStorage(file multipart.File, filename, 
 		return "", "", err
 	}
 
-	objectKey := buildFolderObjectKey("suggestions", "suggestion", filename, detectedType, ".jpg")
+	objectKey := buildFolderObjectKey("images/suggestions", "suggestion", filename, detectedType, ".jpg")
 	uploader := NewUploadHandler(nil, cfg)
 	imageURL, err := uploader.storeUploadedFile(objectKey, data, detectedType)
 	if err != nil {
 		return "", "", err
 	}
+	imageURL = buildStoredMediaURL(cfg, objectKey, objectKey, imageURL)
 
 	log.Printf("[SuggestionHandler] Direct upload success: path=%s url=%s", objectKey, imageURL)
 	return imageURL, objectKey, nil

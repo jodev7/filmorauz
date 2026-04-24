@@ -1,12 +1,12 @@
 "use client";
 
-import Image from "next/image";
 import { useRef, useState, useEffect } from "react";
 import { ChevronRight, ChevronLeft, Play, Star, Tv } from "lucide-react";
 import { Series } from "@/lib/series-api";
 import Link from "next/link";
+import MediaImage from "@/components/MediaImage";
 import { localizeSingleGenre } from "@/lib/localization";
-import { DEFAULT_POSTER_PLACEHOLDER, isProtectedMediaUrl, normalizeMediaUrl, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
+import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 
 interface SeriesCarouselProps {
   series: Series[];
@@ -83,15 +83,10 @@ export default function SeriesCarousel({ series }: SeriesCarouselProps) {
           >
             {/* Poster */}
             <div className="relative aspect-[2/3] overflow-hidden bg-brand-border">
-              <Image
+              <MediaImage
                 src={posterSrc}
                 alt={s.title}
-                fill
-                sizes="(max-width: 640px) 140px, 160px"
-                placeholder="blur"
-                blurDataURL={SHIMMER_BLUR_DATA_URL}
-                unoptimized={isProtectedMediaUrl(posterSrc)}
-                className="object-cover transition-transform duration-500 group-hover:scale-105"
+                className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
               />
 
               {/* Premium overlay */}

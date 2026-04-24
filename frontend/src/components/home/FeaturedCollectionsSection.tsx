@@ -2,13 +2,12 @@
 
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
-import Image from "next/image";
 import { Collection, Movie } from "@/lib/api";
 import MovieCard from "@/components/MovieCard";
+import MediaImage from "@/components/MediaImage";
 import { useI18n } from "@/lib/i18n";
 import {
   DEFAULT_POSTER_PLACEHOLDER,
-  isProtectedMediaUrl,
   normalizeMediaUrl,
 } from "@/lib/image-utils";
 
@@ -52,14 +51,10 @@ export default function FeaturedCollectionsSection({
             <div className="flex items-center gap-4">
               {collection.poster_url && (
                 <div className="w-16 h-24 relative rounded-lg overflow-hidden flex-shrink-0">
-                  <Image
+                  <MediaImage
                     src={normalizeMediaUrl(collection.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
                     alt={collection.title}
-                    fill
-                    sizes="64px"
-                    loading="lazy"
-                    unoptimized={isProtectedMediaUrl(normalizeMediaUrl(collection.poster_url))}
-                    className="object-cover"
+                    className="absolute inset-0 h-full w-full object-cover"
                   />
                 </div>
               )}

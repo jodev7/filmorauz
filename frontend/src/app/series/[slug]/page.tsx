@@ -1,17 +1,17 @@
 import type { Metadata } from "next";
 export const dynamic = "force-dynamic";
 import dynamicImport from "next/dynamic";
-import Image from "next/image";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft, Calendar, Globe, Play } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import MediaImage from "@/components/MediaImage";
 import SeasonList from "@/components/SeasonList";
 import SeriesCarousel from "@/components/SeriesCarousel";
 import { getSeriesBySlug, getSeries } from "@/lib/series-api";
 import { localizeSingleGenre } from "@/lib/localization";
-import { DEFAULT_POSTER_PLACEHOLDER, isProtectedMediaUrl, normalizeMediaUrl, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
+import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
@@ -68,17 +68,12 @@ export default async function SeriesDetailPage({ params }: Props) {
         <div className="relative h-[40vh] sm:h-[45vh] min-h-[250px]">
           {series.backdrop_url && (
             <>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <Image
+              <MediaImage
                 src={normalizeMediaUrl(series.backdrop_url)}
                 alt={series.title}
-                fill
-                priority
-                placeholder="blur"
-                blurDataURL={SHIMMER_BLUR_DATA_URL}
-                sizes="100vw"
-                unoptimized={isProtectedMediaUrl(normalizeMediaUrl(series.backdrop_url))}
-                className="object-cover"
+                loading="eager"
+                fetchPriority="high"
+                className="absolute inset-0 h-full w-full object-cover"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-brand-dark via-brand-dark/50 to-black/30" />
             </>
@@ -92,15 +87,10 @@ export default async function SeriesDetailPage({ params }: Props) {
             <div className="shrink-0">
               {series.poster_url && (
                 <div className="relative w-36 sm:w-44 md:w-48 lg:w-56 aspect-[2/3] rounded-xl shadow-2xl border border-brand-border overflow-hidden">
-                  <Image
+                  <MediaImage
                     src={normalizeMediaUrl(series.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
                     alt={series.title}
-                    fill
-                    sizes="(max-width: 640px) 144px, (max-width: 768px) 176px, (max-width: 1024px) 192px, 224px"
-                    placeholder="blur"
-                    blurDataURL={SHIMMER_BLUR_DATA_URL}
-                    unoptimized={isProtectedMediaUrl(normalizeMediaUrl(series.poster_url))}
-                    className="object-cover"
+                    className="absolute inset-0 h-full w-full object-cover"
                   />
                 </div>
               )}

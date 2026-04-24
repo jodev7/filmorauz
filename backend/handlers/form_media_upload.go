@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/filmorauz/backend/config"
 	"github.com/gin-gonic/gin"
 )
 
@@ -50,6 +51,7 @@ type uploadSpec struct {
 	MaxSizeBytes int64
 	AllowedTypes map[string]bool
 	FallbackExt  string
+	ReturnPath   string
 }
 
 func (h *UploadHandler) handleDirectUpload(c *gin.Context, spec uploadSpec) {
@@ -80,7 +82,7 @@ func (h *UploadHandler) handleDirectUpload(c *gin.Context, spec uploadSpec) {
 
 	c.JSON(200, uploadResponse{
 		Success: true,
-		URL:     url,
+		URL:     buildStoredMediaURL(h.config, spec.ReturnPath, objectKey, url),
 		Path:    objectKey,
 	})
 }
@@ -172,4 +174,27 @@ func (h *UploadHandler) uploadBytesToB2(objectKey string, fileBytes []byte, cont
 
 func logSafeUploadError(label, objectKey string, err error) {
 	log.Printf("[UPLOAD_DIRECT] %s upload failed: path=%q err=%v", label, objectKey, err)
+}
+
+func buildStoredMediaURL(cfg *config.Config, publicPath string, fallbackObjectKey string, devURL string) string {
+	if cfg != nil && cfg.IsDev {
+		return devURL
+	}
+
+	value := strings.TrimSpace(publicPath)
+	if value != "" {
+		if !strings.HasPrefix(value, "/") {
+			return "/" + value
+		}
+		return value
+	}
+
+	key := strings.TrimSpace(fallbackObjectKey)
+	if key == "" {
+		return ""
+	}
+	if strings.HasPrefix(key, "/") {
+		return key
+	}
+	return "/" + key
 }

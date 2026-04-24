@@ -1,12 +1,12 @@
 "use client";
 
-import Image from "next/image";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { Play } from "lucide-react";
 import { Movie } from "@/lib/api";
+import MediaImage from "@/components/MediaImage";
 import { formatDuration } from "@/lib/movie-utils";
-import { isProtectedMediaUrl, normalizeMediaUrl, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 
 interface HeroCarouselProps {
   movies: Movie[];
@@ -90,16 +90,11 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
               {/* Background Image with scale effect */}
               <div className="absolute inset-0 overflow-hidden">
                 {shouldRender && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <Image
+                  <MediaImage
                     src={backdropSrc}
                     alt={movie.title}
-                    fill
-                    priority={index === 0}
-                    placeholder="blur"
-                    blurDataURL={SHIMMER_BLUR_DATA_URL}
-                    sizes="100vw"
-                    unoptimized={isProtectedMediaUrl(backdropSrc)}
+                    loading={index === 0 ? "eager" : "lazy"}
+                    fetchPriority={index === 0 ? "high" : "auto"}
                     className={`w-full h-full object-cover transition-transform duration-700 ease-in-out ${
                       isActive ? "scale-105" : "scale-100"
                     }`}

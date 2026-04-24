@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { useEffect, useState, useRef, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { X } from "lucide-react";
@@ -8,7 +7,8 @@ import { Ad, recordAdImpression, recordAdClick } from "@/lib/api";
 import { pickWeightedRandomAd, isUserPremium } from "@/lib/ads-utils";
 import { useAuth } from "@/lib/auth-context";
 import { useAdSlot } from "@/components/ads/AdSlotContext";
-import { isProtectedMediaUrl, normalizeMediaUrl, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
+import MediaImage from "@/components/MediaImage";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 
 interface WebsiteAdSlotProps {
   placement: string;
@@ -216,7 +216,7 @@ function AdMedia({ url, type }: { url: string; type: "image" | "video" }) {
   if (type === "video") {
     return (
       <video
-        src={url}
+        src={normalizeMediaUrl(url, "")}
         muted
         loop
         playsInline
@@ -229,16 +229,10 @@ function AdMedia({ url, type }: { url: string; type: "image" | "video" }) {
 
   const normalizedUrl = normalizeMediaUrl(url, "/og-image.jpg");
   return (
-    <Image
+    <MediaImage
       src={normalizedUrl}
       alt=""
-      aria-hidden="true"
-      fill
-      sizes="100vw"
-      placeholder="blur"
-      blurDataURL={SHIMMER_BLUR_DATA_URL}
-      unoptimized={isProtectedMediaUrl(normalizedUrl)}
-      className="object-cover object-center"
+      className="absolute inset-0 h-full w-full object-cover object-center"
     />
   );
 }

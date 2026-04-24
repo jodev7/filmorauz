@@ -171,12 +171,13 @@ func (h *UploadHandler) UploadProfileImage(c *gin.Context) {
 			return
 		}
 	} else {
-		savedURL, err = h.uploadBytesToB2(objectKey, fileBytes, contentType)
+		_, err = h.uploadBytesToB2(objectKey, fileBytes, contentType)
 		if err != nil {
 			log.Printf("[PROFILE_UPLOAD] direct B2 upload failed: user_id=%s object_key=%q err=%v", userID.(string), objectKey, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload profile image to storage"})
 			return
 		}
+		savedURL = buildStoredMediaURL(h.config, objectKey, objectKey, "")
 		log.Printf("[PROFILE_UPLOAD] direct B2 upload completed: user_id=%s object_key=%q url=%s", userID.(string), objectKey, savedURL)
 	}
 
@@ -276,55 +277,60 @@ func (h *UploadHandler) saveToCDNWithKey(file multipart.File, mediaKey string) (
 func (h *UploadHandler) UploadMoviePoster(c *gin.Context) {
 	h.handleDirectUpload(c, uploadSpec{
 		FieldName:    "file",
-		Folder:       "movies/posters",
+		Folder:       "posters",
 		Label:        "movie_poster",
 		MaxSizeBytes: maxFormImageSize,
 		AllowedTypes: allowedFormImageTypes,
 		FallbackExt:  ".jpg",
+		ReturnPath:   "",
 	})
 }
 
 func (h *UploadHandler) UploadMovieBackdrop(c *gin.Context) {
 	h.handleDirectUpload(c, uploadSpec{
 		FieldName:    "file",
-		Folder:       "movies/backdrops",
+		Folder:       "backdrops",
 		Label:        "movie_backdrop",
 		MaxSizeBytes: maxFormImageSize,
 		AllowedTypes: allowedFormImageTypes,
 		FallbackExt:  ".jpg",
+		ReturnPath:   "",
 	})
 }
 
 func (h *UploadHandler) UploadSeriesPoster(c *gin.Context) {
 	h.handleDirectUpload(c, uploadSpec{
 		FieldName:    "file",
-		Folder:       "series/posters",
+		Folder:       "posters",
 		Label:        "series_poster",
 		MaxSizeBytes: maxFormImageSize,
 		AllowedTypes: allowedFormImageTypes,
 		FallbackExt:  ".jpg",
+		ReturnPath:   "",
 	})
 }
 
 func (h *UploadHandler) UploadSeriesBackdrop(c *gin.Context) {
 	h.handleDirectUpload(c, uploadSpec{
 		FieldName:    "file",
-		Folder:       "series/backdrops",
+		Folder:       "backdrops",
 		Label:        "series_backdrop",
 		MaxSizeBytes: maxFormImageSize,
 		AllowedTypes: allowedFormImageTypes,
 		FallbackExt:  ".jpg",
+		ReturnPath:   "",
 	})
 }
 
 func (h *UploadHandler) UploadCollectionPoster(c *gin.Context) {
 	h.handleDirectUpload(c, uploadSpec{
 		FieldName:    "file",
-		Folder:       "collections/posters",
+		Folder:       "posters",
 		Label:        "collection_poster",
 		MaxSizeBytes: maxFormImageSize,
 		AllowedTypes: allowedFormImageTypes,
 		FallbackExt:  ".jpg",
+		ReturnPath:   "",
 	})
 }
 
@@ -389,6 +395,7 @@ func (h *UploadHandler) UploadMovieAssets(c *gin.Context) {
 	filename := fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), fileType, ext)
 
 	var savedURL string
+	objectKey := ""
 
 	if h.config.IsDev {
 		savedURL, err = h.saveMovieAssetLocal(file, filename, fileType)
@@ -398,7 +405,24 @@ func (h *UploadHandler) UploadMovieAssets(c *gin.Context) {
 			return
 		}
 	} else {
-		savedURL, err = h.saveToCDN(file, filename, "movies/"+fileType+"s")
+		if fileType == "poster" || fileType == "backdrop" {
+			if _, err := file.Seek(0, io.SeekStart); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
+				return
+			}
+			data, readErr := io.ReadAll(file)
+			if readErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
+				return
+			}
+			objectKey = fileType + "s/" + filename
+			_, err = h.uploadBytesToB2(objectKey, data, contentType)
+			if err == nil {
+				savedURL = buildStoredMediaURL(h.config, objectKey, objectKey, "")
+			}
+		} else {
+			savedURL, err = h.saveToCDN(file, filename, "movies/"+fileType+"s")
+		}
 		if err != nil {
 			log.Printf("[UPLOAD] Error saving movie asset to CDN: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
@@ -709,7 +733,7 @@ func (h *UploadHandler) UploadAdMedia(c *gin.Context) {
 	}
 
 	filename := fmt.Sprintf("%d_ad_%s%s", time.Now().UnixNano(), mediaType, ext)
-	objectKey := "ads/" + filename
+	objectKey := "ads/" + mediaType + "s/" + filename
 
 	var savedURL string
 	if h.config.IsDev {
@@ -737,11 +761,16 @@ func (h *UploadHandler) UploadAdMedia(c *gin.Context) {
 			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", maxSize/1024/1024)})
 			return
 		}
-		savedURL, err = h.uploadBytesToB2(objectKey, data, contentType)
+		_, err = h.uploadBytesToB2(objectKey, data, contentType)
 		if err != nil {
 			log.Printf("[UPLOAD_AD] direct B2 upload failed: media_type=%s path=%q err=%v", mediaType, objectKey, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
 			return
+		}
+		if mediaType == "image" {
+			savedURL = buildStoredMediaURL(h.config, objectKey, objectKey, "")
+		} else {
+			savedURL = h.config.GetCDNFileURL(objectKey)
 		}
 	}
 	if err != nil {
@@ -843,7 +872,7 @@ func (h *UploadHandler) UploadTelegramPostMedia(c *gin.Context) {
 		return
 	}
 
-	objectKey := buildFolderObjectKey("telegram-posts", "telegram_post", header.Filename, contentType, ".jpg")
+	objectKey := buildFolderObjectKey("images/telegram-post", "telegram_post", header.Filename, contentType, ".jpg")
 	_, err = h.storeUploadedFile(objectKey, data, contentType)
 	if err != nil {
 		log.Printf("[UPLOAD_TELEGRAM_POST] direct upload failed: path=%q err=%v", objectKey, err)
@@ -860,11 +889,11 @@ func telegramPostMediaURL(cfg *config.Config, objectKey string) string {
 		return ""
 	}
 
-	if cfg != nil && cfg.IsDev {
-		return strings.TrimSuffix(cfg.GetBaseURL(), "/") + "/" + normalizedKey
+	devURL := ""
+	if cfg != nil {
+		devURL = strings.TrimSuffix(cfg.GetBaseURL(), "/") + "/" + normalizedKey
 	}
-
-	return "/media/" + normalizedKey
+	return buildStoredMediaURL(cfg, normalizedKey, normalizedKey, devURL)
 }
 
 // saveTelegramPostLocal saves telegram post images to local storage

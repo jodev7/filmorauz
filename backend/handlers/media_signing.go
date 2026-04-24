@@ -19,6 +19,31 @@ type mediaTokenOptions struct {
 	UAHash   string
 }
 
+var mediaPathPrefixes = []string{
+	"/videos/",
+	"/images/",
+	"/movies/",
+	"/series/",
+	"/collections/",
+	"/ads/",
+	"/telegram-posts/",
+	"/suggestions/",
+	"/posters/",
+	"/backdrops/",
+	"/avatars/",
+}
+
+func requiresMediaToken(mediaPath string) bool {
+	lower := strings.ToLower(strings.TrimSpace(mediaPath))
+	if lower == "" {
+		return false
+	}
+	if strings.HasSuffix(lower, ".m3u8") || strings.HasSuffix(lower, ".ts") || strings.HasSuffix(lower, ".m4s") {
+		return true
+	}
+	return strings.HasPrefix(lower, "/videos/")
+}
+
 func protectMediaURL(raw string) string {
 	cfg := config.Current()
 	if cfg == nil || raw == "" || cfg.MediaSigningSecret == "" {
@@ -34,6 +59,14 @@ func protectMediaURL(raw string) string {
 	base := strings.TrimSuffix(cfg.MediaProtectedBaseURL, "/")
 	if base == "" {
 		base = "/media"
+	}
+
+	if !requiresMediaToken(mediaPath) {
+		protected := base + mediaPath
+		if originQS != "" {
+			protected += "?origin_qs=" + url.QueryEscape(originQS)
+		}
+		return protected
 	}
 
 	protected := base + mediaPath + "?token=" + url.QueryEscape(token)
@@ -72,10 +105,13 @@ func extractMediaPath(raw string) (string, string, bool) {
 		if candidate == "" {
 			continue
 		}
+		if strings.HasPrefix(candidate, "/media/") {
+			return "/" + strings.TrimPrefix(candidate, "/media/"), u.RawQuery, true
+		}
 		if idx := strings.Index(candidate, "/file/filmorauznet/"); idx >= 0 {
 			return "/" + strings.TrimPrefix(candidate[idx+len("/file/filmorauznet/"):], "/"), u.RawQuery, true
 		}
-		for _, prefix := range []string{"/videos/", "/images/", "/movies/", "/series/", "/collections/", "/ads/", "/telegram-posts/", "/suggestions/", "/posters/", "/backdrops/", "/avatars/"} {
+		for _, prefix := range mediaPathPrefixes {
 			if idx := strings.Index(candidate, prefix); idx >= 0 {
 				return candidate[idx:], u.RawQuery, true
 			}

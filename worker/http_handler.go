@@ -352,6 +352,14 @@ func safeUploadKey(prefix, label, originalFilename, contentType, fallbackExt str
 	return filename, strings.Trim(prefix, "/") + "/" + filename
 }
 
+func internalMediaURL(mediaKey string) string {
+	trimmed := strings.TrimSpace(strings.TrimPrefix(mediaKey, "/"))
+	if trimmed == "" {
+		return ""
+	}
+	return "/" + trimmed
+}
+
 func (h *ProcessHandler) handleUploadProfile(w http.ResponseWriter, r *http.Request) {
 	if h.b2Store == nil {
 		h.sendError(w, "B2 storage not configured", http.StatusServiceUnavailable)
@@ -387,7 +395,7 @@ func (h *ProcessHandler) handleUploadProfile(w http.ResponseWriter, r *http.Requ
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"url": publicURL,
+		"url": internalMediaURL(filename),
 	})
 }
 
@@ -426,7 +434,7 @@ func (h *ProcessHandler) handleUploadTelegramPost(w http.ResponseWriter, r *http
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"url": publicURL,
+		"url": internalMediaURL(mediaKey),
 	})
 }
 
@@ -465,7 +473,7 @@ func (h *ProcessHandler) handleUploadSuggestion(w http.ResponseWriter, r *http.R
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"url": publicURL,
+		"url": internalMediaURL(mediaKey),
 	})
 }
 
@@ -571,7 +579,7 @@ func (h *ProcessHandler) handleUploadMovieImage(w http.ResponseWriter, r *http.R
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"url":      publicURL,
+		"url":      internalMediaURL(mediaKey),
 		"file_key": mediaKey,
 	})
 }

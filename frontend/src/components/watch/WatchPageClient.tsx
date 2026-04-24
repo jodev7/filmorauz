@@ -132,7 +132,7 @@ function PlayerOverlayAd({
       <div className="relative w-full h-full cursor-pointer" onClick={handleClick}>
         {isVideo ? (
           <video
-            src={url}
+            src={normalizeMediaUrl(url, "")}
             className="absolute inset-0 w-full h-full object-contain"
             autoPlay
             muted

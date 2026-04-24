@@ -23,9 +23,21 @@ const B2_CDN_ABSOLUTE_PREFIXES = [
   "https://f005.backblazeb2.com/file/filmorauznet/",
 ];
 const B2_FILE_PATH_PREFIX = "/file/filmorauznet/";
-const MEDIA_BUCKET_PREFIXES = ["/posters/", "/backdrops/", "/images/", "/ads/", "/telegram-posts/"];
+const MEDIA_BUCKET_PREFIXES = [
+  "/posters/",
+  "/backdrops/",
+  "/images/",
+  "/ads/",
+  "/telegram-posts/",
+  "/movies/",
+  "/series/",
+  "/collections/",
+  "/suggestions/",
+];
 const LEGACY_AVATAR_PREFIX = "/avatars/";
 const CANONICAL_AVATAR_PREFIX = "/images/profile/";
+const LEGACY_TELEGRAM_POST_PREFIX = "/telegram-posts/";
+const CANONICAL_TELEGRAM_POST_PREFIX = "/images/telegram-post/";
 
 function isInvalidValue(value: string): boolean {
   return !value || value === "null" || value === "undefined" || value === "-" || value === ".";
@@ -50,6 +62,14 @@ function rewriteAvatarAlias(path: string): string {
   return path;
 }
 
+function rewriteLegacyMediaAliases(path: string): string {
+  const avatarNormalized = rewriteAvatarAlias(path);
+  if (avatarNormalized.startsWith(LEGACY_TELEGRAM_POST_PREFIX)) {
+    return avatarNormalized;
+  }
+  return avatarNormalized;
+}
+
 export function normalizeMediaUrl(
   src?: string | null,
   fallback: string = DEFAULT_POSTER_PLACEHOLDER
@@ -57,6 +77,10 @@ export function normalizeMediaUrl(
   const value = src?.trim();
   if (!value || isInvalidValue(value)) {
     return fallback;
+  }
+
+  if (value.startsWith("/media/avatars/")) {
+    return "/media" + CANONICAL_AVATAR_PREFIX + value.slice("/media/avatars".length);
   }
 
   if (value.startsWith("/media/")) {
@@ -74,7 +98,17 @@ export function normalizeMediaUrl(
   const stripped = stripB2Prefix(value);
   let path = stripped ?? value;
 
-  path = rewriteAvatarAlias(path);
+  if (
+    !path.startsWith("/") &&
+    !path.startsWith("http://") &&
+    !path.startsWith("https://") &&
+    !path.startsWith("data:") &&
+    !path.startsWith("blob:")
+  ) {
+    path = "/" + path.replace(/^\/+/, "");
+  }
+
+  path = rewriteLegacyMediaAliases(path);
 
   for (const prefix of MEDIA_BUCKET_PREFIXES) {
     if (path.startsWith(prefix)) {

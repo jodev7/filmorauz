@@ -1,13 +1,13 @@
 "use client";
 
-import Image from "next/image";
 import { useEffect, useState, useRef, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { Ad, recordAdImpression, recordAdClick } from "@/lib/api";
 import { pickWeightedRandomAd, isUserPremium } from "@/lib/ads-utils";
 import { useAuth } from "@/lib/auth-context";
 import { useAdSlot } from "@/components/ads/AdSlotContext";
-import { isProtectedMediaUrl, normalizeMediaUrl, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
+import MediaImage from "@/components/MediaImage";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 
 interface FixedBottomAdProps {
   placement?: string;
@@ -105,7 +105,7 @@ export default function FixedBottomAd({
     >
       {isVideo ? (
         <video
-          src={mediaUrl}
+          src={normalizeMediaUrl(mediaUrl, "")}
           className="w-full h-full object-cover"
           autoPlay
           muted
@@ -117,16 +117,10 @@ export default function FixedBottomAd({
         (() => {
           const normalizedMediaUrl = normalizeMediaUrl(mediaUrl, "/og-image.jpg");
           return (
-            <Image
+            <MediaImage
               src={normalizedMediaUrl}
               alt=""
-              aria-hidden="true"
-              fill
-              sizes="100vw"
-              placeholder="blur"
-              blurDataURL={SHIMMER_BLUR_DATA_URL}
-              unoptimized={isProtectedMediaUrl(normalizedMediaUrl)}
-              className="object-cover"
+              className="absolute inset-0 h-full w-full object-cover"
             />
           );
         })()
