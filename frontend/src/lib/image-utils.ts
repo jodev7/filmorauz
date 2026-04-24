@@ -31,6 +31,7 @@ const B2_CDN_ABSOLUTE_PREFIXES = [
   "https://f005.backblazeb2.com/file/filmorauznet/",
 ];
 const B2_FILE_PATH_PREFIX = "/file/filmorauznet/";
+const MEDIA_PATH_MARKER = "/media/";
 const MEDIA_BUCKET_PREFIXES = [
   "/images/",
   "/movies/",
@@ -70,6 +71,18 @@ function stripB2Prefix(value: string): string | null {
   return null;
 }
 
+function stripAbsoluteMediaPrefix(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    if (!parsed.pathname.startsWith(MEDIA_PATH_MARKER)) {
+      return null;
+    }
+    return parsed.pathname + parsed.search;
+  } catch {
+    return null;
+  }
+}
+
 function rewriteMediaAlias(path: string, legacyPrefix: string, canonicalPrefix: string): string {
   if (path.startsWith(legacyPrefix)) {
     return canonicalPrefix + path.slice(legacyPrefix.length);
@@ -104,6 +117,12 @@ export function normalizeMediaUrl(
   const value = src?.trim();
   if (!value || isInvalidValue(value)) {
     return fallback;
+  }
+
+  const absoluteMediaPath = stripAbsoluteMediaPrefix(value);
+  if (absoluteMediaPath) {
+    const normalizedMediaPath = rewriteLegacyMediaAliases(absoluteMediaPath.slice("/media".length));
+    return maybeUseCDNMediaHost("/media" + normalizedMediaPath);
   }
 
   if (value.startsWith("/media/")) {
@@ -187,5 +206,7 @@ export function normalizeImageSrc(
 
 export function isProtectedMediaUrl(src?: string | null): boolean {
   const value = src?.trim();
-  return !!value && (value.startsWith("/media/") || value.startsWith(`${CDN_MEDIA_BASE}/media/`));
+  if (!value) return false;
+  if (value.startsWith("/media/")) return true;
+  return stripAbsoluteMediaPrefix(value) !== null;
 }

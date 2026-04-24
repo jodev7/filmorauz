@@ -11,6 +11,7 @@ export default {
     const mediaPath = normalizeMediaPath(extractedMediaPath);
     const isImagePath = mediaPath.startsWith("/images/");
     const debugMode = isImagePath && url.searchParams.get("debug") === "1";
+    const normalizedWorkerMediaPath = mediaPath.replace(/^\/+/, "");
 
     let token = null;
     if (!isImagePath) {
@@ -39,7 +40,7 @@ export default {
         return new Response("bad media signature", { status: 403 });
       }
 
-      if (!mediaPath.startsWith(claims.scope)) {
+      if (!matchesMediaScope(normalizedWorkerMediaPath, claims.scope || "")) {
         return new Response("scope mismatch", { status: 403 });
       }
 
@@ -212,7 +213,7 @@ function decodeToken(tokenValue) {
     const decoded = atob(tokenValue.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(tokenValue.length / 4) * 4, "="));
     const [scope, exp, sig, ip = "", uaHash = ""] = decoded.split("\n");
     if (!scope || !exp || !sig) return null;
-    return { scope, exp, sig, ip, uaHash };
+    return { scope: normalizeScope(scope), exp, sig, ip, uaHash };
   } catch {
     return null;
   }
@@ -294,7 +295,7 @@ function rewritePlaylist(requestURL, playlist, token) {
     .map((line) => {
       if (!line || line.startsWith("#")) return line;
       const proxiedURL = toMediaProxyURL(line, base);
-      if (token?.source === "query" && token.value) {
+      if (token?.value) {
         proxiedURL.searchParams.set("token", token.value);
       }
       return `${proxiedURL.pathname}${proxiedURL.search}`;
@@ -314,6 +315,40 @@ function toMediaProxyURL(line, base) {
 function extractMediaPath(pathname) {
   const path = pathname.replace(/^\/media\//, "");
   return `/${path}`;
+}
+
+function normalizeScope(scope) {
+  return String(scope || "").replace(/^\/+/, "");
+}
+
+function matchesMediaScope(mediaPath, scope) {
+  const normalizedMediaPath = String(mediaPath || "").replace(/^\/+/, "");
+  const normalizedScope = normalizeScope(scope);
+
+  if (!normalizedScope) {
+    return false;
+  }
+
+  if (normalizedMediaPath === normalizedScope) {
+    return true;
+  }
+
+  if (normalizedMediaPath.startsWith(normalizedScope)) {
+    return true;
+  }
+
+  const mediaDir = mediaFolderScope(normalizedMediaPath);
+  const scopeDir = mediaFolderScope(normalizedScope);
+  return mediaDir !== "" && mediaDir === scopeDir;
+}
+
+function mediaFolderScope(value) {
+  const normalized = String(value || "").replace(/^\/+/, "");
+  if (!normalized) return "";
+  if (normalized.endsWith("/")) return normalized;
+  const slash = normalized.lastIndexOf("/");
+  if (slash === -1) return normalized;
+  return `${normalized.slice(0, slash + 1)}`;
 }
 
 function normalizeMediaPath(pathname) {

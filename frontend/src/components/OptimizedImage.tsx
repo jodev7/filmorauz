@@ -75,6 +75,7 @@ export default function OptimizedImage({
       {/* Image */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
+        key={currentSrc}
         src={currentSrc}
         alt={alt}
         loading={priority ? "eager" : "lazy"}

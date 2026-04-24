@@ -73,6 +73,10 @@ func protectMediaURL(raw string) string {
 	if originQS != "" {
 		protected += "&origin_qs=" + url.QueryEscape(originQS)
 	}
+	if cfg != nil && !cfg.IsProd {
+		scopePath := tokenScopePath(mediaPath)
+		logProtectedMediaURL(protected, scopePath)
+	}
 	_ = expiresAt
 	return protected
 }
@@ -87,6 +91,10 @@ func buildMediaToken(secret, mediaPath string, ttlSeconds int, opts mediaTokenOp
 	sig := signMediaScope(secret, scopePath, exp, opts.ClientIP, opts.UAHash)
 	payload := scopePath + "\n" + exp + "\n" + sig + "\n" + opts.ClientIP + "\n" + opts.UAHash
 	return base64.RawURLEncoding.EncodeToString([]byte(payload)), expiresAt
+}
+
+func logProtectedMediaURL(playbackURL, scopePath string) {
+	println("[MEDIA] playback_url=", playbackURL, "scope=", scopePath)
 }
 
 func hashUserAgent(userAgent string) string {
@@ -122,18 +130,19 @@ func extractMediaPath(raw string) (string, string, bool) {
 }
 
 func tokenScopePath(requestPath string) string {
+	requestPath = strings.TrimPrefix(strings.TrimSpace(requestPath), "/")
 	lower := strings.ToLower(requestPath)
 	if strings.HasSuffix(lower, ".m3u8") {
 		dir := path.Dir(requestPath)
-		if dir == "." || dir == "/" {
-			return "/"
+		if dir == "." || dir == "/" || dir == "" {
+			return ""
 		}
 		return strings.TrimSuffix(dir, "/") + "/"
 	}
 	if strings.HasSuffix(lower, ".ts") || strings.HasSuffix(lower, ".m4s") {
 		dir := path.Dir(requestPath)
-		if dir == "." || dir == "/" {
-			return "/"
+		if dir == "." || dir == "/" || dir == "" {
+			return ""
 		}
 		return strings.TrimSuffix(dir, "/") + "/"
 	}

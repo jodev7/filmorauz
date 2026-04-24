@@ -21,7 +21,7 @@ func TestBuildMediaTokenIncludesBindingClaims(t *testing.T) {
 	if len(parts) != 5 {
 		t.Fatalf("expected 5 token fields, got %d", len(parts))
 	}
-	if parts[0] != "/videos/movies/demo/" {
+	if parts[0] != "videos/movies/demo/" {
 		t.Fatalf("unexpected scope: %q", parts[0])
 	}
 	if parts[3] != "203.0.113.10" {
