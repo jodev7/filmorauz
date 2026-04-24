@@ -137,9 +137,31 @@ function rewritePlaylist(requestURL, playlist, tokenValue) {
     .split("\n")
     .map((line) => {
       if (!line || line.startsWith("#")) return line;
-      const rewritten = new URL(line, base);
+      const rewritten = toMediaProxyURL(line, base);
       rewritten.searchParams.set("token", tokenValue);
       return rewritten.toString();
     })
     .join("\n");
+}
+
+function toMediaProxyURL(line, base) {
+  const absolute = new URL(line, base);
+  const path = absolute.pathname.startsWith("/media/")
+    ? absolute.pathname.replace(/^\/media/, "")
+    : extractMediaPath(absolute.pathname);
+  const proxied = new URL(`/media${path}`, base.origin);
+  return proxied;
+}
+
+function extractMediaPath(pathname) {
+  const marker = "/file/";
+  const idx = pathname.indexOf(marker);
+  if (idx >= 0) {
+    const rest = pathname.slice(idx + marker.length);
+    const slash = rest.indexOf("/");
+    if (slash >= 0) {
+      return `/${rest.slice(slash + 1)}`;
+    }
+  }
+  return pathname.startsWith("/") ? pathname : `/${pathname}`;
 }

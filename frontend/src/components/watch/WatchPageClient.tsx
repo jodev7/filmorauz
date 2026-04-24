@@ -242,6 +242,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   const [isLoadingRecommendations, setIsLoadingRecommendations] = useState(true);
   const [resumePosition, setResumePosition] = useState(0);
   const [resolvedPlaybackUrl, setResolvedPlaybackUrl] = useState<string | null>(null);
+  const [playbackAccessError, setPlaybackAccessError] = useState<string | null>(null);
   const [autoNextCountdown, setAutoNextCountdown] = useState(5);
   const [showAutoNextCountdown, setShowAutoNextCountdown] = useState(false);
   const [showAutoNextPremiumCta, setShowAutoNextPremiumCta] = useState(false);
@@ -268,7 +269,6 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   const localizedGenres = getLocalizedGenres(movie);
   const localizedCountry = getLocalizedCountry(movie);
   const isPremiumViewer = isUserPremium(user);
-  const premiumStreamUrl = isPremiumViewer ? movie.premium_stream_url || movie.video_url : movie.video_url;
   const backHref = movie.type === "episode"
     ? movie.series_slug
       ? `/series/${movie.series_slug}`
@@ -277,13 +277,12 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
 
   useEffect(() => {
     let cancelled = false;
-    const rawPlaybackUrl =
-      (movie as unknown as { master_playlist_url?: string }).master_playlist_url ||
-      premiumStreamUrl ||
-      movie.video_url;
+    setPlaybackAccessError(null);
+    setResolvedPlaybackUrl(null);
 
-    if (!rawPlaybackUrl || (movie.source_type !== "direct_hls" && movie.source_type !== "direct_mp4")) {
-      setResolvedPlaybackUrl(rawPlaybackUrl || null);
+    if (movie.source_type !== "direct_hls" && movie.source_type !== "direct_mp4") {
+      const nonProtectedUrl = movie.embed_url || movie.video_url || null;
+      setResolvedPlaybackUrl(nonProtectedUrl);
       return;
     }
 
@@ -294,13 +293,21 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
           episodeId: movie.type === "episode" ? movie.id : undefined,
           token,
         });
+        const playbackUrl = response.playback_url || "";
+        if (!response.protected || !playbackUrl.startsWith("/media/")) {
+          throw new Error("Protected playback URL is invalid");
+        }
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[WatchPage] protected playback_url:", playbackUrl);
+        }
         if (!cancelled) {
-          setResolvedPlaybackUrl(response.playback_url || rawPlaybackUrl);
+          setResolvedPlaybackUrl(playbackUrl);
         }
       } catch (error) {
         console.error("Failed to resolve protected media URL:", error);
         if (!cancelled) {
-          setResolvedPlaybackUrl(rawPlaybackUrl);
+          setPlaybackAccessError("Himoyalangan video manbasi olinmadi.");
+          setResolvedPlaybackUrl(null);
         }
       }
     };
@@ -309,7 +316,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
     return () => {
       cancelled = true;
     };
-  }, [movie.id, movie.source_type, movie.type, movie.video_url, premiumStreamUrl, token]);
+  }, [movie.embed_url, movie.id, movie.source_type, movie.type, movie.video_url, token]);
 
   // Fetch watch progress for resume
   useEffect(() => {
@@ -525,18 +532,28 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
           </div>
         ) : (
           <div className="relative">
-            <VideoPlayer
-              videoUrl={resolvedPlaybackUrl || (movie as unknown as { master_playlist_url?: string }).master_playlist_url || movie.video_url}
-              premiumStreamUrl={resolvedPlaybackUrl || premiumStreamUrl}
-              embedUrl={movie.embed_url}
-              sourceType={movie.source_type}
-              title={localizedTitle}
-              posterUrl={movie.backdrop_url || movie.poster_url}
-              onPlayIntent={handlePlayIntent}
-              forceStart={videoCanStart}
-              onTimeUpdate={handleTimeUpdate}
-              onEnded={handleVideoEnded}
-            />
+            {playbackAccessError ? (
+              <div className="flex aspect-video items-center justify-center rounded-xl bg-gray-900 px-6 text-center">
+                <p className="text-sm text-red-400">{playbackAccessError}</p>
+              </div>
+            ) : resolvedPlaybackUrl ? (
+              <VideoPlayer
+                videoUrl={resolvedPlaybackUrl}
+                premiumStreamUrl={resolvedPlaybackUrl}
+                embedUrl={movie.embed_url}
+                sourceType={movie.source_type}
+                title={localizedTitle}
+                posterUrl={movie.backdrop_url || movie.poster_url}
+                onPlayIntent={handlePlayIntent}
+                forceStart={videoCanStart}
+                onTimeUpdate={handleTimeUpdate}
+                onEnded={handleVideoEnded}
+              />
+            ) : (
+              <div className="flex aspect-video items-center justify-center rounded-xl bg-gray-900">
+                <div className="h-10 w-10 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              </div>
+            )}
             {!isUserPremium(user) && (
               <PlayerOverlayAd
                 started={playIntended}

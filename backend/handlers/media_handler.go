@@ -61,12 +61,16 @@ func (h *MediaHandler) GetMediaToken(c *gin.Context) {
 		return
 	}
 
-	playbackURL, cookieValue, expiresAt := h.buildProtectedPlayback(sourceURL)
+	playbackURL, cookieValue, expiresAt, err := h.buildProtectedPlayback(sourceURL)
+	if err != nil {
+		h.handleAccessError(c, err)
+		return
+	}
 	h.setMediaCookie(c, cookieValue, expiresAt)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":      true,
-		"protected":    playbackURL != sourceURL,
+		"protected":    true,
 		"playback_url": playbackURL,
 		"expires_at":   expiresAt.UTC().Format(time.RFC3339),
 		"cookie_name":  h.cfg.MediaCookieName,
@@ -139,21 +143,31 @@ func (h *MediaHandler) currentUser(c *gin.Context) *models.User {
 	return user
 }
 
-func (h *MediaHandler) buildProtectedPlayback(sourceURL string) (string, string, time.Time) {
+func (h *MediaHandler) buildProtectedPlayback(sourceURL string) (string, string, time.Time, error) {
 	expiresAt := time.Now().Add(time.Duration(h.cfg.MediaTokenTTLSeconds) * time.Second)
 	if h.cfg.MediaSigningSecret == "" {
-		return sourceURL, "", expiresAt
+		return "", "", expiresAt, errBadRequest("media protection is not configured")
 	}
 	protected := protectMediaURL(sourceURL)
 	if protected == sourceURL {
-		return sourceURL, "", expiresAt
+		return "", "", expiresAt, errBadRequest("failed to build protected playback url")
 	}
 	u, err := url.Parse(protected)
 	if err != nil {
-		return protected, "", expiresAt
+		return "", "", expiresAt, errBadRequest("invalid protected playback url")
+	}
+	base := strings.TrimSuffix(h.cfg.MediaProtectedBaseURL, "/")
+	if base == "" {
+		base = "/media"
+	}
+	if !strings.HasPrefix(u.Path, base+"/") && u.Path != base {
+		return "", "", expiresAt, errBadRequest("protected playback url must use media proxy")
 	}
 	token := u.Query().Get("token")
-	return protected, token, expiresAt
+	if token == "" {
+		return "", "", expiresAt, errBadRequest("protected playback token is missing")
+	}
+	return protected, token, expiresAt, nil
 }
 
 func (h *MediaHandler) setMediaCookie(c *gin.Context, value string, expiresAt time.Time) {

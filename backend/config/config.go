@@ -83,7 +83,7 @@ func Load() *Config {
 		B2AppKey:                getEnvAny([]string{"B2_APPLICATION_KEY", "B2_APP_KEY"}, ""),
 		B2Endpoint:              getEnv("B2_ENDPOINT", ""),
 		B2PublicURL:             getEnv("B2_PUBLIC_URL", ""),
-		MediaProtectedBaseURL:   getEnv("MEDIA_PROTECTED_BASE_URL", ""),
+		MediaProtectedBaseURL:   getEnv("MEDIA_PROTECTED_BASE_URL", "/media"),
 		MediaSigningSecret:      getEnv("MEDIA_SIGNING_SECRET", ""),
 		MediaTokenTTLSeconds:    parseInt(getEnv("MEDIA_TOKEN_TTL_SECONDS", "900"), 900),
 		MediaCookieName:         getEnv("MEDIA_COOKIE_NAME", "filmorauz_media"),
