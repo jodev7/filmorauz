@@ -42,7 +42,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   
   try {
     const movie = await getMovie(slug);
-    const imageUrl = movie.backdrop_url || movie.poster_url;
+    const imageUrl = normalizeMediaUrl(movie.backdrop_url || movie.poster_url, `${SITE_URL}/og-image.jpg`);
     
     // Get localized metadata based on locale
     const localizedTitle = getLocalizedTitle(movie);
@@ -162,7 +162,7 @@ export default async function MovieDetailPage({ params }: Props) {
     "@type": "Movie",
     name: localizedTitle,
     description: localizedDescription,
-    image: movie.poster_url || movie.backdrop_url,
+    image: normalizeMediaUrl(movie.poster_url || movie.backdrop_url, `${SITE_URL}/og-image.jpg`),
     datePublished: movie.year?.toString(),
     genre: localizedGenres,
     countryOfOrigin: localizedCountry,

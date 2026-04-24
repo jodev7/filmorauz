@@ -125,12 +125,34 @@ func (h *MediaHandler) resolvePublicAssetPath(mediaPath string) (string, error) 
 	if !strings.HasPrefix(mediaPath, "/") {
 		mediaPath = "/" + mediaPath
 	}
+	mediaPath = normalizeLegacyImageMediaPath(mediaPath)
 	for _, prefix := range []string{"/images/", "/movies/", "/series/", "/posters/", "/backdrops/", "/avatars/", "/ads/", "/telegram-posts/", "/collections/", "/suggestions/"} {
 		if strings.HasPrefix(mediaPath, prefix) {
 			return mediaPath, nil
 		}
 	}
 	return "", errForbidden("invalid_path", "unsupported media path")
+}
+
+func normalizeLegacyImageMediaPath(mediaPath string) string {
+	replacements := map[string]string{
+		"/posters/":        "/images/posters/",
+		"/backdrops/":      "/images/backdrops/",
+		"/avatars/":        "/images/profile/",
+		"/profile/":        "/images/profile/",
+		"/ads/":            "/images/ads/",
+		"/telegram-posts/": "/images/telegram-posts/",
+		"/suggestions/":    "/images/suggestions/",
+		"/collections/":    "/images/collections/",
+	}
+
+	for legacy, canonical := range replacements {
+		if strings.HasPrefix(mediaPath, legacy) {
+			return canonical + strings.TrimPrefix(mediaPath, legacy)
+		}
+	}
+
+	return mediaPath
 }
 
 func (h *MediaHandler) currentUser(c *gin.Context) *models.User {

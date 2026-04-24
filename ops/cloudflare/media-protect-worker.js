@@ -7,11 +7,8 @@ export default {
       return new Response("not found", { status: 404 });
     }
 
-    const isImagePath =
-      url.pathname.startsWith("/media/posters/") ||
-      url.pathname.startsWith("/media/backdrops/") ||
-      url.pathname.startsWith("/media/images/") ||
-      url.pathname.startsWith("/media/ads/");
+    const mediaPath = normalizeMediaPath(extractMediaPath(url.pathname));
+    const isImagePath = mediaPath.startsWith("/images/");
 
     let token = null;
     if (!isImagePath) {
@@ -40,7 +37,6 @@ export default {
         return new Response("bad media signature", { status: 403 });
       }
 
-      const mediaPath = url.pathname.replace(/^\/media/, "");
       if (!mediaPath.startsWith(claims.scope)) {
         return new Response("scope mismatch", { status: 403 });
       }
@@ -62,12 +58,17 @@ export default {
     }
 
     const b2Auth = await getB2Authorization(env);
-    const mediaPath = extractMediaPath(url.pathname);
     const originURL = buildB2DownloadURL(env, mediaPath);
     const originResponse = await fetch(originURL, {
       headers: {
         Authorization: b2Auth.authorizationToken,
       },
+      cf: isImagePath
+        ? {
+            cacheEverything: true,
+            cacheTtl: 31536000,
+          }
+        : undefined,
     });
 
     if (!originResponse.ok) {
@@ -87,10 +88,15 @@ export default {
       });
     }
 
+    const headers = new Headers(originResponse.headers);
+    if (isImagePath) {
+      headers.set("cache-control", "public, max-age=31536000, immutable");
+    }
+
     return new Response(originResponse.body, {
       status: originResponse.status,
       statusText: originResponse.statusText,
-      headers: originResponse.headers,
+      headers,
     });
   },
 };
@@ -202,8 +208,8 @@ function rewritePlaylist(requestURL, playlist, token) {
 function toMediaProxyURL(line, base) {
   const absolute = new URL(line, base);
   const path = absolute.pathname.startsWith("/media/")
-    ? absolute.pathname.replace(/^\/media/, "")
-    : extractMediaPath(absolute.pathname);
+    ? normalizeMediaPath(absolute.pathname.replace(/^\/media/, ""))
+    : normalizeMediaPath(extractMediaPath(absolute.pathname));
   const proxied = new URL(`/media${path}`, base.origin);
   return proxied;
 }
@@ -211,4 +217,26 @@ function toMediaProxyURL(line, base) {
 function extractMediaPath(pathname) {
   const path = pathname.replace(/^\/media\//, "");
   return `/${path}`;
+}
+
+function normalizeMediaPath(pathname) {
+  const path = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  const replacements = [
+    ["/posters/", "/images/posters/"],
+    ["/backdrops/", "/images/backdrops/"],
+    ["/avatars/", "/images/profile/"],
+    ["/profile/", "/images/profile/"],
+    ["/ads/", "/images/ads/"],
+    ["/telegram-posts/", "/images/telegram-posts/"],
+    ["/suggestions/", "/images/suggestions/"],
+    ["/collections/", "/images/collections/"],
+  ];
+
+  for (const [legacyPrefix, canonicalPrefix] of replacements) {
+    if (path.startsWith(legacyPrefix)) {
+      return `${canonicalPrefix}${path.slice(legacyPrefix.length)}`;
+    }
+  }
+
+  return path;
 }

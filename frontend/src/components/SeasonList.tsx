@@ -1,12 +1,11 @@
 "use client";
 
-import Image from "next/image";
 import { SyntheticEvent, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronUp, Play, Clock } from "lucide-react";
 import { SeasonWithEpisodes, Episode, buildEpisodeUrl } from "@/lib/series-api";
 import { formatDuration } from "@/lib/movie-utils";
-import { DEFAULT_POSTER_PLACEHOLDER, isProtectedMediaUrl, normalizeMediaUrl, SHIMMER_BLUR_DATA_URL } from "@/lib/image-utils";
+import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 
 interface SeasonListProps {
   seasons: SeasonWithEpisodes[];
@@ -154,7 +153,6 @@ export default function SeasonList({
                       seriesBackdropUrl,
                       seriesPosterUrl
                     );
-                    const usesProtectedMedia = isProtectedMediaUrl(thumbnailUrl);
                     const hasThumbnail = Boolean(thumbnailUrl);
 
                     return (
@@ -170,27 +168,14 @@ export default function SeasonList({
                         {/* Thumbnail */}
                         <div className="relative aspect-video bg-gray-800">
                           {hasThumbnail ? (
-                            usesProtectedMedia ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={thumbnailUrl}
-                                alt={episode.title}
-                                loading="lazy"
-                                onError={handleProtectedThumbnailError}
-                                className="absolute inset-0 h-full w-full object-cover transition-transform group-hover:scale-105"
-                              />
-                            ) : (
-                              <Image
-                                src={thumbnailUrl}
-                                alt={episode.title}
-                                fill
-                                sizes="(max-width: 768px) 50vw, (max-width: 1200px) 25vw, 200px"
-                                placeholder="blur"
-                                blurDataURL={SHIMMER_BLUR_DATA_URL}
-                                unoptimized
-                                className="object-cover transition-transform group-hover:scale-105"
-                              />
-                            )
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={thumbnailUrl}
+                              alt={episode.title}
+                              loading="lazy"
+                              onError={handleProtectedThumbnailError}
+                              className="absolute inset-0 h-full w-full object-cover transition-transform group-hover:scale-105"
+                            />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center">
                               <Play className="text-gray-600" size={24} />

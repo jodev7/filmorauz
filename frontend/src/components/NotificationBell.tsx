@@ -138,6 +138,7 @@ export default function NotificationBell() {
       <button
         onClick={() => setShowDropdown(!showDropdown)}
         className="relative p-2 text-gray-400 hover:text-white transition-colors"
+        aria-label={showDropdown ? "Bildirishnomalarni yopish" : "Bildirishnomalarni ochish"}
       >
         <Bell className="w-6 h-6" />
         {unreadNotificationCount > 0 && (
