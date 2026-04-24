@@ -10,13 +10,11 @@ import HeroCarousel from "@/components/home/HeroCarousel";
 import { getHomepageData } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
 
-const ContinueWatchingSection = dynamic(() => import("@/components/home/ContinueWatchingSection"));
 const FeaturedCollectionsSection = dynamic(() => import("@/components/home/FeaturedCollectionsSection"));
 const WebsiteAdSlot = dynamic(() => import("@/components/ads/WebsiteAdSlot"));
 
-// ISR: regenerate the homepage shell every 60s. User-specific sections
-// (ContinueWatchingSection, ads) are client components and still fetch
-// per-session on their own.
+// ISR: regenerate the homepage shell every 60s. User-specific sections (ads)
+// are client components and still fetch per-session on their own.
 export const revalidate = 60;
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
@@ -90,9 +88,6 @@ export default async function HomePage() {
         <div className="max-w-7xl mx-auto px-4 mt-8 mb-6">
           <WebsiteAdSlot placement="homepage_top_banner" variant="banner" lazy />
         </div>
-
-        {/* ── Continue Watching ─────────────────────────────── */}
-        <ContinueWatchingSection />
 
         {/* ── New Movies — only carousel with priority posters (above-fold) ── */}
         {recent.length > 0 && (

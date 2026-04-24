@@ -26,7 +26,6 @@ const translations: Record<string, string> = {
   "home.newReleases": "YANGI FILMLAR",
   "home.collections": "KOLLEKTSIYALAR",
   "home.trending": "MASHHUR",
-  "home.continueWatching": "KO'RISHNI DAVOM ETTIRISH",
   "home.addMovies": "Admin panelida kinolar qo'shing.",
   "home.moreInfo": "Batafsil",
   "collections.title": "Kolleksiyalar",

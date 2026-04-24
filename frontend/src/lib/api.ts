@@ -779,29 +779,6 @@ export async function recordWatchHistory(token: string, movieId: string): Promis
   }
 }
 
-// Continue watching item type
-export interface ContinueWatchingItem {
-  movie_id: string;
-  title: string;
-  slug: string;
-  poster_url: string;
-  last_position_sec: number;
-  duration_sec: number;
-  progress_percent: number;
-  last_watched_at: string;
-}
-
-// Get continue watching (authenticated)
-export async function getContinueWatching(token: string): Promise<ContinueWatchingItem[]> {
-  const res = await fetch(`${API_URL}/user/continue-watching`, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
-  });
-  if (!res.ok) throw new Error("Failed to fetch continue watching");
-  const json = await res.json();
-  return json.data || [];
-}
-
 // Save watch progress (authenticated)
 export async function saveWatchProgress(token: string, movieId: string, positionSec: number, durationSec: number): Promise<void> {
   const res = await fetch(`${API_URL}/watch/${movieId}/progress`, {
