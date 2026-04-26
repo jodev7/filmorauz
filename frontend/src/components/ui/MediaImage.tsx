@@ -17,13 +17,13 @@ interface MediaImageProps
 const loadedImageUrls = new Set<string>();
 
 export function isImageUrlLoaded(url?: string | null): boolean {
-  return Boolean(url) && loadedImageUrls.has(url);
+  if (!url) return false;
+  return loadedImageUrls.has(url);
 }
 
 export function markImageUrlLoaded(url?: string | null) {
-  if (url) {
-    loadedImageUrls.add(url);
-  }
+  if (!url) return;
+  loadedImageUrls.add(url);
 }
 
 function areStylesEqual(a?: CSSProperties, b?: CSSProperties) {
