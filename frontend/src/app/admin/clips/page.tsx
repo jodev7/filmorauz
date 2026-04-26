@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   Film,
   ExternalLink,
+  Download,
   Clock,
   Loader2,
   Upload,
@@ -30,6 +31,9 @@ import { useAuth } from "@/lib/auth-context";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
 const TASHKENT_TZ = "Asia/Tashkent";
+const CDN_BASE_URL =
+  (process.env.NEXT_PUBLIC_CDN_BASE_URL || "").trim().replace(/\/+$/, "") ||
+  "https://cdn.filmorauz.net/file/filmorauznet";
 
 // ─── Time helpers ─────────────────────────────────────────────────────────────
 
@@ -75,6 +79,10 @@ interface Clip {
   filename: string;
   path: string;
   url: string;
+  video_url?: string;
+  file_url?: string;
+  public_url?: string;
+  cdn_url?: string;
   duration: number;
   sequence: number;
   storage_type: string;
@@ -307,6 +315,45 @@ function groupByMovie(clips: Clip[]): Record<string, Clip[]> {
   return grouped;
 }
 
+function resolveClipDownloadUrl(clip: Clip): string {
+  const candidates = [
+    clip.url,
+    clip.video_url,
+    clip.file_url,
+    clip.public_url,
+    clip.cdn_url,
+  ];
+
+  for (const candidate of candidates) {
+    const value = candidate?.trim();
+    if (!value) continue;
+    if (value.startsWith("http://") || value.startsWith("https://")) {
+      if (value.includes("/media/")) {
+        const mediaIndex = value.indexOf("/media/");
+        const mediaPath = value.slice(mediaIndex + "/media".length);
+        if (mediaPath.startsWith("/videos/")) {
+          return `${CDN_BASE_URL}${mediaPath}`;
+        }
+      }
+      return value;
+    }
+    if (value.startsWith("/file/filmorauznet/")) {
+      return `${CDN_BASE_URL}/${value.slice("/file/filmorauznet/".length).replace(/^\/+/, "")}`;
+    }
+    if (value.startsWith("/media/videos/")) {
+      return `${CDN_BASE_URL}${value.slice("/media".length)}`;
+    }
+    if (value.startsWith("/videos/")) {
+      return `${CDN_BASE_URL}${value}`;
+    }
+    if (value.startsWith("videos/")) {
+      return `${CDN_BASE_URL}/${value}`;
+    }
+  }
+
+  return "";
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function AdminClipsPage() {
@@ -514,6 +561,20 @@ export default function AdminClipsPage() {
     }
   };
 
+  const handleDownloadClip = (clip: Clip) => {
+    const resolvedUrl = resolveClipDownloadUrl(clip);
+    if (!resolvedUrl) return;
+
+    const link = document.createElement("a");
+    link.href = resolvedUrl;
+    link.download = clip.filename;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const groupedClips = groupByMovie(clips);
   const pendingJobs = publishJobs.filter((j) => j.status === "pending" || j.status === "processing");
   const doneJobs = publishJobs.filter((j) => j.status === "success" || j.status === "failed");
@@ -713,6 +774,15 @@ export default function AdminClipsPage() {
                                     >
                                       <ExternalLink size={14} />
                                     </a>
+                                    <button
+                                      onClick={() => handleDownloadClip(clip)}
+                                      disabled={!resolveClipDownloadUrl(clip)}
+                                      title="Klipni yuklab olish"
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                      <Download size={12} />
+                                      Download
+                                    </button>
                                     <button
                                       onClick={() => openModal(clip)}
                                       disabled={uploading[clip.id]}

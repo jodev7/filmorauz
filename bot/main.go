@@ -36,6 +36,8 @@ type MovieInfo struct {
 	Code        string   `json:"code"`
 	WebsiteURL  string   `json:"website_url"`
 	PosterURL   string   `json:"poster_url"`
+	Poster      string   `json:"poster"`
+	PosterAlt   string   `json:"posterUrl"`
 	BackdropURL string   `json:"backdrop_url"`
 	Year        int      `json:"year"`
 	Genre       []string `json:"genre"`
@@ -313,12 +315,15 @@ func (b *Bot) lookupMovie(chatID int64, code string) {
 	}
 	detailsText := keyboards.BuildMovieDetailsText(movieInfo)
 
-	// Check if we have a poster URL
-	posterURL := movie.PosterURL
-	if posterURL == "" {
-		posterURL = movie.BackdropURL
-	}
-	log.Printf("[MOVIE] raw poster_url before send — title=%q poster_url=%q backdrop_url=%q", movie.Title, movie.PosterURL, movie.BackdropURL)
+	posterURL := firstNonEmpty(movie.PosterURL, movie.PosterAlt, movie.Poster, movie.BackdropURL)
+	log.Printf(
+		"[MOVIE] title=%q poster_url=%q posterUrl=%q poster=%q backdrop_url=%q",
+		movie.Title,
+		movie.PosterURL,
+		movie.PosterAlt,
+		movie.Poster,
+		movie.BackdropURL,
+	)
 
 	// Public URL? Try photo, but never let a broken/slow image hang /code.
 	// Flow: normalize the poster URL → HEAD probe with 5s budget → bounded
@@ -327,20 +332,21 @@ func (b *Bot) lookupMovie(chatID int64, code string) {
 	// an answer.
 	if keyboards.IsPublicURL(movie.WebsiteURL) {
 		photoURL := b.resolvePosterURL(posterURL)
+		log.Printf("[MOVIE] resolved photo url — title=%q photo_url=%q", movie.Title, photoURL)
 		photoSent := false
 
 		if photoURL != "" && b.isValidPosterURL(photoURL) {
 			reachable, probeStatus, probeErr := b.isPosterReachable(photoURL)
-			if reachable {
-				log.Printf("[MOVIE] Sending photo with caption for: %s (photo_url=%s)", movie.Title, photoURL)
-				if sendErr := b.sendMoviePhotoWithTimeout(chatID, photoURL, detailsText, movie.WebsiteURL); sendErr != nil {
-					log.Printf("[MOVIE] photo send failed — title=%q photo_url=%s tg_error=%v", movie.Title, photoURL, sendErr)
-				} else {
-					photoSent = true
-				}
+			log.Printf(
+				"[MOVIE] photo probe — title=%q photo_url=%s reachable=%t http_status=%d probe_error=%v",
+				movie.Title, photoURL, reachable, probeStatus, probeErr,
+			)
+
+			log.Printf("[MOVIE] Sending photo with caption for: %s (photo_url=%s)", movie.Title, photoURL)
+			if sendErr := b.sendMoviePhotoWithTimeout(chatID, photoURL, detailsText, movie.WebsiteURL); sendErr != nil {
+				log.Printf("[MOVIE] photo send failed — title=%q photo_url=%s tg_error=%v", movie.Title, photoURL, sendErr)
 			} else {
-				log.Printf("[MOVIE] poster unreachable — title=%q photo_url=%s http_status=%d probe_error=%v",
-					movie.Title, photoURL, probeStatus, probeErr)
+				photoSent = true
 			}
 		} else if posterURL != "" {
 			log.Printf("[MOVIE] poster URL invalid or could not be resolved — title=%q raw=%s resolved=%q cdn_base=%q",
@@ -385,28 +391,90 @@ func (b *Bot) resolvePosterURL(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
-		return raw
+	if strings.Contains(raw, "/uploads/") || strings.HasPrefix(raw, "/uploads/") || strings.HasPrefix(raw, "uploads/") {
+		return ""
 	}
 
-	cdn := b.config.CDNBaseURL
-	if cdn == "" {
+	base := b.telegramMediaBaseURL()
+	if base == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(raw, "https://") {
+		if strings.Contains(raw, "/media/images/") {
+			if idx := strings.Index(raw, "/media/"); idx != -1 {
+				return base + raw[idx+len("/media"):]
+			}
+			return raw
+		}
+		if idx := strings.Index(raw, "/file/filmorauznet/"); idx != -1 {
+			path := raw[idx+len("/file/filmorauznet/"):]
+			return b.resolvePosterURL(path)
+		}
+	}
+	if strings.HasPrefix(raw, "http://") {
+		if idx := strings.Index(raw, "/media/"); idx != -1 {
+			return base + raw[idx+len("/media"):]
+		}
+		if idx := strings.Index(raw, "/file/filmorauznet/"); idx != -1 {
+			path := raw[idx+len("/file/filmorauznet/"):]
+			return b.resolvePosterURL(path)
+		}
 		return ""
 	}
 
 	path := strings.TrimPrefix(raw, "/")
+	path = strings.TrimPrefix(path, "media/")
 	for _, r := range legacyPosterPrefixRewrites {
 		if strings.HasPrefix(path, r.from) {
 			path = r.to + strings.TrimPrefix(path, r.from)
 			break
 		}
 	}
-	return cdn + "/" + path
+
+	if strings.HasPrefix(path, "file/filmorauznet/") {
+		path = strings.TrimPrefix(path, "file/filmorauznet/")
+	}
+	if strings.HasPrefix(path, "images/") {
+		return base + "/" + path
+	}
+	if strings.HasPrefix(path, "media/images/") {
+		return base + "/" + strings.TrimPrefix(path, "media/")
+	}
+	if strings.HasPrefix(path, "backdrops/") || strings.HasPrefix(path, "posters/") || strings.HasPrefix(path, "profile/") || strings.HasPrefix(path, "avatars/") {
+		return b.resolvePosterURL(path)
+	}
+	return ""
 }
 
 func (b *Bot) isValidPosterURL(raw string) bool {
 	raw = strings.TrimSpace(raw)
-	return raw != "" && (strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://"))
+	return raw != "" && strings.HasPrefix(raw, "https://")
+}
+
+func (b *Bot) telegramMediaBaseURL() string {
+	cdn := strings.TrimSpace(b.config.CDNBaseURL)
+	if cdn == "" {
+		return "https://cdn.filmorauz.net/media"
+	}
+	cdn = strings.TrimRight(cdn, "/")
+	if idx := strings.Index(cdn, "/file/filmorauznet"); idx != -1 {
+		return cdn[:idx] + "/media"
+	}
+	if strings.Contains(cdn, "/media") {
+		return strings.TrimSuffix(cdn, "/")
+	}
+	return "https://cdn.filmorauz.net/media"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 const (

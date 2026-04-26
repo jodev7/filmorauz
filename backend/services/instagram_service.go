@@ -7,8 +7,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
+
+	"github.com/filmorauz/backend/config"
 )
 
 // parserUploadClient has a bounded timeout so a stuck parser (e.g. CPU
@@ -94,20 +98,72 @@ func actionRequired(errorType string) string {
 	return errorTypeActions["publish_failed"]
 }
 
+func resolveInstagramClipURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	cfg := config.Current()
+	cdnBase := ""
+	if cfg != nil {
+		cdnBase = strings.TrimSuffix(cfg.CDNBaseURL, "/")
+	}
+	if cdnBase == "" {
+		return raw
+	}
+
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			return raw
+		}
+		switch {
+		case strings.Contains(parsed.Path, "/file/filmorauznet/"):
+			return raw
+		case strings.Contains(parsed.Path, "/media/"):
+			mediaPath := parsed.Path[strings.Index(parsed.Path, "/media/")+len("/media"):]
+			if strings.HasPrefix(mediaPath, "/videos/") {
+				return cdnBase + mediaPath
+			}
+		case strings.HasPrefix(parsed.Path, "/videos/"):
+			return cdnBase + parsed.Path
+		}
+		return raw
+	}
+
+	if strings.HasPrefix(raw, "/media/") {
+		mediaPath := strings.TrimPrefix(raw, "/media")
+		if strings.HasPrefix(mediaPath, "/videos/") {
+			return cdnBase + mediaPath
+		}
+	}
+	if strings.HasPrefix(raw, "/videos/") {
+		return cdnBase + raw
+	}
+	if strings.HasPrefix(raw, "videos/") {
+		return cdnBase + "/" + raw
+	}
+
+	return raw
+}
+
 // UploadReelToInstagram calls the parser service /instagram/upload endpoint.
 // Returns *InstagramUploadError on failure (with classified ErrorType) or nil on success.
 func UploadReelToInstagram(parserURL, videoURL, caption string, account *InstagramAccount) error {
+	resolvedVideoURL := resolveInstagramClipURL(videoURL)
 	payload := map[string]string{
 		"account_name": account.Name,
 		"username":     account.Username,
 		"password":     account.Password,
-		"video_url":    videoURL,
+		"video_url":    resolvedVideoURL,
 		"caption":      caption,
 	}
 	body, _ := json.Marshal(payload)
 
-	endpoint := parserURL + "/instagram/upload"
-	log.Printf("[Instagram] POST %s account=%s", endpoint, account.Name)
+	endpoint := parserURL + "/instagram/upload?account=" + url.QueryEscape(account.Name)
+	log.Printf("[Instagram] POST %s account=%s raw_video_url=%s resolved_video_url=%s",
+		endpoint, account.Name, videoURL, resolvedVideoURL)
 
 	start := time.Now()
 	resp, err := parserUploadClient.Post(endpoint, "application/json", bytes.NewReader(body))

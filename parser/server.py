@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 import sys
 import hashlib
+import requests
 
 
 # Safe string truncation - never raises IndexError
@@ -137,6 +138,8 @@ IG_PRE_UPLOAD_SLEEP_RANGE = (3, 8)
 IG_UPLOAD_COOLDOWN_SECONDS = int(os.environ.get("IG_UPLOAD_COOLDOWN_SECONDS", "60"))
 _ig_last_upload_times = {}
 _ig_upload_state_lock = threading.Lock()
+REMOTE_VIDEO_DOWNLOAD_TIMEOUT = int(os.environ.get("REMOTE_VIDEO_DOWNLOAD_TIMEOUT", "45"))
+REMOTE_VIDEO_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 
 
 class InstagramUploadError(Exception):
@@ -409,6 +412,38 @@ def _ig_upload_for_account(account_config, video_path: Path, caption: str):
     if last_error:
         raise last_error
     _ig_raise("upload_failed", account, f"Instagram upload failed for account='{account}'")
+
+
+def _download_remote_video_to_path(video_url: str, output_path: str):
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+    }
+    logger.info(f"[VIDEO DOWNLOAD] starting url={video_url}")
+
+    try:
+        with requests.get(video_url, headers=headers, stream=True, timeout=REMOTE_VIDEO_DOWNLOAD_TIMEOUT) as response:
+            logger.info(f"[VIDEO DOWNLOAD] response status={response.status_code} url={video_url}")
+            if response.status_code != 200:
+                body_preview = ""
+                try:
+                    body_preview = response.text[:500]
+                except Exception:
+                    body_preview = "<unavailable>"
+                logger.error(
+                    f"[VIDEO DOWNLOAD] failed status={response.status_code} url={video_url} body={body_preview}"
+                )
+                raise Exception(
+                    f"Video download failed: HTTP {response.status_code} for {video_url}"
+                )
+
+            with open(output_path, "wb") as file_handle:
+                for chunk in response.iter_content(chunk_size=REMOTE_VIDEO_DOWNLOAD_CHUNK_SIZE):
+                    if chunk:
+                        file_handle.write(chunk)
+    except requests.RequestException as exc:
+        raise Exception(f"Video download request failed for {video_url}: {exc}") from exc
 
 class DownloadState:
     """Represents the state of an active download"""
@@ -2327,13 +2362,14 @@ class ParserHandler(BaseHTTPRequestHandler):
                     self._send_error("instagrapi not installed — run: pip install instagrapi", 500)
                     return
 
-                import tempfile, urllib.request as _urlreq
+                import tempfile
 
                 tmp_path = None
                 try:
                     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
                         tmp_path = f.name
-                    _urlreq.urlretrieve(video_url, tmp_path)
+                    logger.info(f"[Instagram] download prepare received_url={video_url} final_resolved_url={video_url}")
+                    _download_remote_video_to_path(video_url, tmp_path)
                     video_path = Path(tmp_path)
                     accounts_to_try = _ig_accounts_to_try(requested_account)
                     last_error = None
@@ -2506,7 +2542,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
                         tmp_path = f.name
                     logger.info(f"[YouTube] downloading video to {tmp_path}")
-                    urllib.request.urlretrieve(video_url, tmp_path)
+                    _download_remote_video_to_path(video_url, tmp_path)
 
                     yt_body = {
                         "snippet": {
