@@ -76,13 +76,13 @@ export default function CopyrightPage() {
                 Mualliflik huquqiga oid har qanday savol bilan bog&apos;lanish uchun:
               </p>
               <Link
-                href="https://t.me/primeposuz"
+                href="https://t.me/filmorauznet?direct"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 bg-brand-red hover:bg-orange-700 text-white font-semibold px-5 py-2.5 rounded-lg transition-colors"
               >
                 <Send size={16} />
-                @primeposuz
+                Telegram
               </Link>
             </section>
           </div>

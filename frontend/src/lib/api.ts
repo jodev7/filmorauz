@@ -312,9 +312,8 @@ export async function getHomepageData(): Promise<HomepageResponse> {
 }
 
 export async function getMovie(slug: string): Promise<Movie> {
-  const timestamp = Date.now();
   console.log("[getMovie] Requesting movie with slug:", slug);
-  const res = await fetch(`${API_URL}/movies/slug/${slug}?_t=${timestamp}`, {
+  const res = await fetch(`${API_URL}/movies/slug/${slug}`, {
     cache: "no-store",
   });
   console.log("[getMovie] Response for slug:", slug, "status:", res.status);
@@ -327,8 +326,7 @@ export async function getMovie(slug: string): Promise<Movie> {
 
 // Get movie by ID
 export async function getMovieById(id: string): Promise<Movie> {
-  const timestamp = Date.now();
-  const res = await fetch(`${API_URL}/movies/${id}?_t=${timestamp}`, {
+  const res = await fetch(`${API_URL}/movies/${id}`, {
     cache: "no-store",
   });
   if (!res.ok) throw new Error("Movie not found");

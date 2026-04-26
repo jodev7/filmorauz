@@ -12,11 +12,8 @@ interface HeroCarouselProps {
   movies: Movie[];
 }
 
-const HERO_AUTO_ADVANCE_MS = 30000;
-
 export default function HeroCarousel({ movies }: HeroCarouselProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [isHovered, setIsHovered] = useState(false);
   const [loadedIndexes, setLoadedIndexes] = useState<Set<number>>(() => new Set([0]));
 
   const markLoaded = useCallback((idx: number) => {
@@ -32,20 +29,6 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
     setCurrentIndex(idx);
     markLoaded(idx);
   }, [markLoaded]);
-
-  const goToNext = useCallback(() => {
-    setCurrentIndex((prev) => {
-      const next = (prev + 1) % movies.length;
-      markLoaded(next);
-      return next;
-    });
-  }, [movies.length, markLoaded]);
-
-  useEffect(() => {
-    if (movies.length <= 1 || isHovered) return;
-    const interval = setInterval(goToNext, HERO_AUTO_ADVANCE_MS);
-    return () => clearInterval(interval);
-  }, [movies.length, isHovered, goToNext]);
 
   // After first paint, warm the next slide image so the transition feels instant.
   useEffect(() => {
@@ -70,8 +53,6 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
   return (
     <div
       className="relative h-[60vh] min-h-[450px] max-h-[700px] overflow-hidden"
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
       aria-roledescription="carousel"
       aria-label={heroTitle ? `Hero: ${heroTitle}` : "Hero"}
     >
@@ -158,9 +139,9 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
       {/* Dots Pagination — larger hit target via invisible padding, visual unchanged */}
       {movies.length > 1 && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex gap-2">
-          {movies.map((_, index) => (
+          {movies.map((movie, index) => (
             <button
-              key={index}
+              key={movie.id || movie.slug || `hero-${index}`}
               type="button"
               onClick={() => goTo(index)}
               onMouseEnter={() => markLoaded(index)}

@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { X } from "lucide-react";
 import { Ad, recordAdImpression, recordAdClick } from "@/lib/api";
-import { pickWeightedRandomAd, isUserPremium } from "@/lib/ads-utils";
+import { isUserPremium } from "@/lib/ads-utils";
 import { useAuth } from "@/lib/auth-context";
 import { useAdSlot } from "@/components/ads/AdSlotContext";
 import MediaImage from "@/components/MediaImage";
@@ -23,8 +23,6 @@ const SLOT_HEIGHT: Record<string, string> = {
   inline: "h-[400px]",
   card:   "h-[200px]",
 };
-const AD_ROTATION_INTERVAL_MS = 30000;
-
 export default function WebsiteAdSlot({
   placement,
   className = "",
@@ -75,19 +73,6 @@ export default function WebsiteAdSlot({
     if (!shouldLoad) return;
     ensurePlacements(placements).catch(() => {});
   }, [ensurePlacements, placements, shouldLoad]);
-
-  // Rotate slowly so ad-local state doesn't churn the page every few seconds.
-  useEffect(() => {
-    if (ads.length <= 1 || !isReady) return;
-    const interval = setInterval(() => {
-      setCurrent((cur) => {
-        const currentAdId = ads[cur % ads.length]?.id;
-        const picked = pickWeightedRandomAd(ads, currentAdId);
-        return ads.indexOf(picked);
-      });
-    }, AD_ROTATION_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [ads, isReady]);
 
   useEffect(() => {
     if (ads.length === 0 || !isReady) return;

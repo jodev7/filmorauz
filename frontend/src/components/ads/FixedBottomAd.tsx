@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { Ad, recordAdImpression, recordAdClick } from "@/lib/api";
-import { pickWeightedRandomAd, isUserPremium } from "@/lib/ads-utils";
+import { isUserPremium } from "@/lib/ads-utils";
 import { useAuth } from "@/lib/auth-context";
 import { useAdSlot } from "@/components/ads/AdSlotContext";
 import MediaImage from "@/components/MediaImage";
@@ -15,8 +15,6 @@ interface FixedBottomAdProps {
 }
 
 const DEFAULT_PLACEMENT = "website_fixed_bottom";
-const AD_ROTATION_INTERVAL_MS = 30000;
-
 export default function FixedBottomAd({
   placement = DEFAULT_PLACEMENT,
   bottomOffset = "0px",
@@ -53,19 +51,6 @@ export default function FixedBottomAd({
     if (!shouldFetch) return;
     ensurePlacements(placements).catch(() => {});
   }, [ensurePlacements, placements, shouldFetch]);
-
-  // Rotate slowly so fixed ad state doesn't churn the app tree every few seconds.
-  useEffect(() => {
-    if (ads.length <= 1 || !isReady) return;
-    const interval = setInterval(() => {
-      setCurrent((cur) => {
-        const currentAdId = ads[cur % ads.length]?.id;
-        const picked = pickWeightedRandomAd(ads, currentAdId);
-        return ads.indexOf(picked);
-      });
-    }, AD_ROTATION_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [ads, isReady]);
 
   // Record impression per unique ad shown
   useEffect(() => {

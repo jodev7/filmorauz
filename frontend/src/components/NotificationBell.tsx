@@ -150,9 +150,9 @@ export default function NotificationBell() {
 
       {/* Dropdown */}
       {showDropdown && (
-        <div className="absolute right-0 sm:right-auto sm:left-0 mt-2 w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] sm:max-w-[20rem] sm:w-80 bg-brand-card border border-brand-border rounded-xl shadow-2xl z-[60] overflow-hidden">
+        <div className="absolute left-1/2 mt-2 w-[90vw] max-w-[400px] -translate-x-1/2 box-border overflow-hidden rounded-xl border border-brand-border bg-brand-card p-3 shadow-2xl z-[9999] mx-auto right-auto sm:left-auto sm:right-0 sm:w-80 sm:max-w-[20rem] sm:translate-x-0">
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-brand-border shrink-0">
+          <div className="flex items-center justify-between px-1 py-3 border-b border-brand-border shrink-0">
             <h3 className="text-white font-medium">Bildirishnomalar</h3>
             {unreadNotificationCount > 0 && (
               <button
@@ -181,7 +181,7 @@ export default function NotificationBell() {
                 <div
                   key={notification.id}
                   onClick={() => handleNotificationClick(notification)}
-                  className={`flex items-start gap-3 px-4 py-3 hover:bg-brand-dark/50 cursor-pointer transition-colors ${
+                  className={`flex items-start gap-3 px-1 py-3 hover:bg-brand-dark/50 cursor-pointer transition-colors ${
                     !notification.is_read ? "bg-brand-dark/30" : ""
                   }`}
                 >
@@ -210,7 +210,7 @@ export default function NotificationBell() {
 
           {/* Footer */}
           {notifications.length > 0 && (
-            <div className="px-4 py-3 border-t border-brand-border">
+            <div className="px-1 py-3 border-t border-brand-border">
               <button
                 onClick={() => {
                   router.push("/notifications");
