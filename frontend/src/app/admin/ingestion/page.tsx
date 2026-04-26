@@ -421,6 +421,56 @@ function getJobDisplayStatus(job: IngestionJob): string {
   return STAGE_STATUS_MAP[stage] || job.status || "unknown";
 }
 
+function normalizePercent(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function isProgressStage(status: string | undefined): boolean {
+  return status === "downloading" || status === "processing" || status === "uploading" || status === "hls_processing" || status === "finalizing_storage";
+}
+
+function getJobProgress(job: IngestionJob): number {
+  const displayStatus = getJobDisplayStatus(job);
+  const canonicalProgress = normalizePercent(job.progress);
+
+  if (job.status === "completed" || displayStatus === "completed") return 100;
+  if (job.status === "failed" || job.status === "download_failed") return canonicalProgress;
+  if (displayStatus === "downloading") return canonicalProgress;
+  if (displayStatus === "processing" || displayStatus === "uploading" || displayStatus === "hls_processing" || displayStatus === "finalizing_storage") {
+    return canonicalProgress;
+  }
+  return canonicalProgress;
+}
+
+function getJobStatusSummary(job: IngestionJob): string {
+  const displayStatus = getJobDisplayStatus(job);
+  const statusMeta = getStatusMeta(displayStatus);
+  const downloadedBytes = typeof job.downloaded_bytes === "number" ? job.downloaded_bytes : 0;
+  const totalBytes = typeof job.total_bytes === "number" ? job.total_bytes : 0;
+  const speedMBps = typeof job.speed_mbps === "number" ? job.speed_mbps : 0;
+  const etaSeconds = typeof job.eta_seconds === "number" ? job.eta_seconds : 0;
+
+  if (displayStatus === "downloading") {
+    const parts = [statusMeta.label];
+    if (downloadedBytes > 0 || totalBytes > 0) {
+      parts.push(totalBytes > 0
+        ? `${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}`
+        : formatBytes(downloadedBytes));
+    }
+    if (speedMBps > 0) parts.push(formatSpeed(speedMBps));
+    if (etaSeconds > 0) parts.push(`ETA ${formatEta(etaSeconds)}`);
+    return parts.join(" • ");
+  }
+
+  const message = (job.message || "").trim();
+  if (message && !(isProgressStage(displayStatus) && /\b\d{1,3}%\b/.test(message))) {
+    return message;
+  }
+
+  return `${job.source} • ${new Date(job.created_at).toLocaleString()}`;
+}
+
 function isTerminalJob(job: IngestionJob): boolean {
   return isTerminalJobStatus(job.status);
 }
@@ -1166,7 +1216,7 @@ function getSerialSummary(jobs: IngestionJob[]) {
   }).length;
   const overallProgress = jobs.length === 0
     ? 0
-    : Math.round(jobs.reduce((sum, job) => sum + (typeof job.progress === "number" ? job.progress : 0), 0) / jobs.length);
+    : normalizePercent(jobs.reduce((sum, job) => sum + getJobProgress(job), 0) / jobs.length);
 
   return {
     completed,
@@ -1251,7 +1301,7 @@ function JobsTab({
       id: job.id || "",
       status: job.status || "unknown",
       stage: job.stage,
-      progress: typeof job.progress === "number" ? job.progress : 0,
+      progress: getJobProgress(job),
       source: job.source || "unknown",
       source_id: job.source_id || "",
       metadata: job.metadata,
@@ -1285,15 +1335,15 @@ function JobsTab({
     const StatusIcon = statusConfig.icon;
     const episodeInfo = safeJob.episode_number ? ` • E${safeJob.episode_number}` : "";
     const isFailed = safeJob.status === "failed" || safeJob.status === "download_failed";
-    const isCompleted = safeJob.status === "completed";
-    const bytePercent =
-      !isFailed && safeJob.total_bytes > 0 && safeJob.downloaded_bytes > 0
-        ? Math.min((safeJob.downloaded_bytes / safeJob.total_bytes) * 100, 100)
-        : null;
-    let displayProgress = bytePercent !== null ? bytePercent : safeJob.progress;
-    if (isFailed && !isCompleted) {
-      displayProgress = Math.min(safeJob.progress || 0, 99);
-    }
+    const displayProgress = safeJob.progress;
+    const statusSummary = getJobStatusSummary(job);
+    const showInlineTelemetry = displayStatus === "downloading" && safeJob.downloaded_bytes > 0;
+    const showAuxMessage = Boolean(
+      safeJob.message &&
+      safeJob.status !== "completed" &&
+      !isProgressStage(displayStatus) &&
+      safeJob.message.trim() !== statusSummary.trim()
+    );
 
     if (compact) {
       return (
@@ -1315,18 +1365,18 @@ function JobsTab({
                 </span>
               </div>
               <p className="text-xs text-gray-500">
-                {safeJob.message || safeJob.source} • {new Date(safeJob.created_at).toLocaleString()}
+                {statusSummary}
               </p>
             </div>
             <div className="w-32">
               <div className="flex justify-between text-xs text-gray-400 mb-1">
                 <span className="capitalize truncate">{activeStage}</span>
-                <span>{displayProgress.toFixed(0)}%</span>
+                <span>{displayProgress}%</span>
               </div>
               <div className="h-1.5 bg-brand-border rounded-full overflow-hidden">
                 <div
                   className={`h-full ${statusConfig.color} transition-all duration-300`}
-                  style={{ width: `${Math.min(displayProgress, 100)}%` }}
+                  style={{ width: `${displayProgress}%` }}
                 />
               </div>
             </div>
@@ -1386,7 +1436,7 @@ function JobsTab({
               </span>
             </div>
             <p className="text-sm text-gray-400">
-              {safeJob.message || safeJob.source} • {new Date(safeJob.created_at).toLocaleString()}
+              {statusSummary}
             </p>
             <p className="text-xs text-gray-500">
               Elapsed: {elapsedTime} • Last update: {lastUpdateText} ago • Retry: {safeJob.retry_count}
@@ -1401,7 +1451,7 @@ function JobsTab({
           <div className="w-64">
             <div className="flex justify-between text-xs text-gray-400 mb-1">
               <span className="capitalize">{activeStage}</span>
-              <span>{displayProgress.toFixed(displayProgress < 10 ? 1 : 0)}%</span>
+              <span>{displayProgress}%</span>
             </div>
             <div className="h-2 bg-brand-border rounded-full overflow-hidden">
               <div
@@ -1409,20 +1459,28 @@ function JobsTab({
                 style={{ width: `${displayProgress}%` }}
               />
             </div>
-            {(activeStage === "downloading" || activeStage === "processing" || safeJob.progress > 0) && safeJob.downloaded_bytes > 0 && (
+            {showInlineTelemetry && (
               <div className="mt-1 text-xs text-gray-500 flex flex-wrap gap-x-2">
-                <span>{formatBytes(safeJob.downloaded_bytes)} / {formatBytes(safeJob.total_bytes)}</span>
+                <span>
+                  {safeJob.total_bytes > 0
+                    ? `${formatBytes(safeJob.downloaded_bytes)} / ${formatBytes(safeJob.total_bytes)}`
+                    : formatBytes(safeJob.downloaded_bytes)}
+                </span>
                 {safeJob.speed_mbps > 0 && (
                   <>
                     <span>•</span>
                     <span>{formatSpeed(safeJob.speed_mbps)}</span>
                   </>
                 )}
-                <span>•</span>
-                <span>{formatEta(safeJob.eta_seconds)}</span>
+                {safeJob.eta_seconds > 0 && (
+                  <>
+                    <span>•</span>
+                    <span>ETA {formatEta(safeJob.eta_seconds)}</span>
+                  </>
+                )}
               </div>
             )}
-            {safeJob.message && safeJob.status !== "completed" && (
+            {showAuxMessage && (
               <div className="mt-1 text-xs text-gray-500 truncate">
                 {safeJob.message}
               </div>

@@ -1230,16 +1230,6 @@ class ParserHandler(BaseHTTPRequestHandler):
                     logger.info(f"[PARSER DOWNLOAD COMPLETE] Size: {file_size} bytes")
                     logger.info("=" * 60)
 
-                    if backend_job_id and BACKEND_URL:
-                        self._report_progress_to_backend(backend_job_id, {
-                            "stage": "process",
-                            "status": "processing",
-                            "progress_percent": 100,
-                            "steps_download": True,
-                            "file_path": local_path,
-                            "message": "Download completed",
-                        })
-
                     self._send_json({
                         "success":           True,
                         "source":            "manual",
@@ -2223,61 +2213,18 @@ class ParserHandler(BaseHTTPRequestHandler):
                         progress_url = f"{BACKEND_URL}/api/ingestion/jobs/{backend_job_id}/progress"
                         logger.info(f"[SERVER] Progress will be reported to: {progress_url}")
                     
-                    # Generate internal job_id for progress tracking
+                    # Generate internal job_id for downloader-local progress tracking.
                     import hashlib
                     internal_job_id = hashlib.md5(output_name.encode()).hexdigest()[:12]
-                    
-                    # Start progress reporting thread BEFORE download starts
-                    # This is critical - it must run IN PARALLEL with download
-                    progress_thread = None
+
                     if backend_job_id:
-                        import threading
-                        logger.info(f"[SERVER] Starting progress reporting thread for job_id={backend_job_id}")
-
-                        # CRITICAL: Use the SAME job_id as the downloader service
-                        # The downloader uses internal_job_id for progress tracking
-                        progress_job_id = internal_job_id
-
-                        # Send initial "starting" progress immediately
+                        logger.info(f"[SERVER] Download progress will be reported directly by downloader_service for job_id={backend_job_id}")
                         self._report_progress_to_backend(backend_job_id, {
                             "stage": "download",
                             "status": "downloading",
                             "progress_percent": 0,
                             "message": "Starting download...",
                         })
-
-                        def report_progress():
-                            last_pct = -1
-                            last_bytes = 0
-                            while True:
-                                prog = downloader_service.progress.get(progress_job_id)
-                                if prog:
-                                    pct = prog.get("progress_percent", 0)
-                                    downloaded = prog.get("downloaded_bytes", 0)
-                                    # Always report if bytes changed, even if percent is same
-                                    if pct != last_pct or downloaded != last_bytes:
-                                        last_pct = pct
-                                        last_bytes = downloaded
-                                        logger.info(f"[SERVER] Progress update: job_id={backend_job_id}, progress={pct}%, downloaded={downloaded} bytes")
-                                        # Map to backend format
-                                        self._report_progress_to_backend(backend_job_id, {
-                                            "stage": prog.get("stage", "download"),
-                                            "status": prog.get("status", "downloading"),
-                                            "progress_percent": pct,
-                                            "downloaded_bytes": downloaded,
-                                            "total_bytes": prog.get("total_bytes", 0),
-                                            "speed_mbps": prog.get("speed_mb_per_sec", 0.0),
-                                            "eta_seconds": prog.get("eta_seconds", 0),
-                                            "message": prog.get("message", ""),
-                                        })
-                                # Check for download completion
-                                if prog and prog.get("status") in ["completed", "failed"]:
-                                    logger.info(f"[SERVER] Download finished, stopping progress thread")
-                                    break
-                                time.sleep(1)
-                        
-                        progress_thread = threading.Thread(target=report_progress, daemon=True)
-                        progress_thread.start()
                     else:
                         logger.warning(f"[SERVER] No backend_job_id provided, progress will not be reported!")
                     
@@ -2294,21 +2241,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                     logger.info(f"[PARSER] Parallel download completed")
                     logger.info(f"[PARSER] Merged parts into {result['file_path']}")
                     logger.info(f"[PARSER] Removed temporary part files")
-                    logger.info(f"[PARSER] Updated backend: steps.download=true, stage=process")
-                    
-                    # Final progress update
-                    # CRITICAL: Set steps_download=true to trigger backend state transition
-                    # Also include file_path so backend can store local_path
-                    if backend_job_id:
-                        time.sleep(1)
-                        self._report_progress_to_backend(backend_job_id, {
-                            "stage": "process",
-                            "status": "processing",
-                            "progress_percent": 100,
-                            "steps_download": True,
-                            "file_path": result["file_path"],
-                            "message": "Download completed, starting processing",
-                        })
+                    logger.info(f"[PARSER] Downloader reported backend completion and ready_to_process state")
                     
                     logger.info(f"[SERVER] Parser download completed: {result['file_path']}")
                     

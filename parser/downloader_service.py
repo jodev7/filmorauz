@@ -583,13 +583,13 @@ class DownloaderService:
         if backend_job_id:
             report_progress_to_backend(backend_job_id, {
                 "stage": "download",
-                "status": "processing",
-                "progress": 50,
+                "status": "ready_to_process",
+                "progress": 100,
                 "downloaded_bytes": final_size,
                 "total_bytes": total_size,
                 "speed_mbps": 0,
                 "eta_seconds": 0,
-                "message": "Download completed - worker will process",
+                "message": "Download completed",
                 "steps_download": True,
                 "file_path": output_path  # NEW: Send local file path to backend
             })
@@ -766,16 +766,16 @@ class DownloaderService:
             
             # Report completion to backend
             if backend_job_id:
-                logger.info(f"[PROGRESS] Sending completion: job_id={backend_job_id}, progress=50%, steps_download=True")
+                logger.info(f"[PROGRESS] Sending completion: job_id={backend_job_id}, progress=100%, steps_download=True")
                 report_progress_to_backend(backend_job_id, {
                     "stage": "download",
-                    "status": "processing",
-                    "progress": 50,
+                    "status": "ready_to_process",
+                    "progress": 100,
                     "downloaded_bytes": downloaded_bytes,
                     "total_bytes": total_bytes,
                     "speed_mbps": 0,
                     "eta_seconds": 0,
-                    "message": "Download completed - worker will process",
+                    "message": "Download completed",
                     "steps_download": True,
                     "file_path": output_path  # NEW: Send local file path to backend
                 })
@@ -1022,11 +1022,11 @@ class DownloaderService:
             if backend_job_id:
                 report_progress_to_backend(backend_job_id, {
                     "stage": "download",
-                    "status": "completed",
+                    "status": "ready_to_process",
                     "progress": 100,
                     "downloaded_bytes": file_size,
                     "total_bytes": file_size,
-                    "message": f"HLS download completed in {download_duration:.1f}s - ready for processing",
+                    "message": f"HLS download completed in {download_duration:.1f}s",
                     "steps_download": True,
                     "file_path": output_path,
                     "download_duration_seconds": download_duration,

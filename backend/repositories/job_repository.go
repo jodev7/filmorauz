@@ -518,13 +518,21 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 	log.Printf("[JOB REPO] UpdateProgress: id=%s stage=%q status=%q progress=%d downloaded=%d total=%d steps_download=%v",
 		id, progress.Stage, effectiveStatus, progress.Progress, progress.DownloadedBytes, progress.TotalBytes, progress.StepsDownload)
 
+	normalizedProgress := progress.Progress
+	if normalizedProgress < 0 {
+		normalizedProgress = 0
+	}
+	if normalizedProgress > 100 {
+		normalizedProgress = 100
+	}
+
 	// Build update - always set all fields from progress (allow 0 values)
 	update := bson.M{
 		"$set": bson.M{
 			"updated_at":       time.Now(),
 			"stage":            progress.Stage,
 			"status":           effectiveStatus,
-			"progress":         progress.Progress,
+			"progress":         normalizedProgress,
 			"downloaded_bytes": progress.DownloadedBytes,
 			"total_bytes":      progress.TotalBytes,
 			"speed_mbps":       progress.SpeedMBps,
@@ -550,16 +558,17 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 	}
 
 	// Set progress value
-	update["$set"].(bson.M)["progress"] = progress.Progress
+	update["$set"].(bson.M)["progress"] = normalizedProgress
 
 	// CRITICAL: Set steps.download = true ONLY when download is 100% complete
-	downloadComplete := (progress.Stage == "download" && progress.Progress >= 100) || progress.StepsDownload
+	downloadComplete := (progress.Stage == "download" && normalizedProgress >= 100) || progress.StepsDownload
 	if downloadComplete {
-		log.Printf("[JOB REPO] Download complete (progress=%d%%, steps_download=%v) - marking steps.download=true", progress.Progress, progress.StepsDownload)
+		log.Printf("[JOB REPO] Download complete (progress=%d%%, steps_download=%v) - marking steps.download=true", normalizedProgress, progress.StepsDownload)
 		update["$set"].(bson.M)["steps.download"] = true
+		update["$set"].(bson.M)["progress"] = 100
 
 		// Downloaded media waits in the processing queue until a worker slot is free.
-		if progress.StepsDownload || progress.Progress >= 100 {
+		if progress.StepsDownload || normalizedProgress >= 100 {
 			log.Printf("[JOB REPO] Download finished - moving job to ready_to_process")
 			update["$set"].(bson.M)["status"] = string(models.IngestionStatusReadyToProcess)
 			update["$set"].(bson.M)["stage"] = string(models.IngestionStatusReadyToProcess)
@@ -569,17 +578,11 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 			}
 		}
 	} else {
-		log.Printf("[JOB REPO] NOT setting steps.download (progress=%d%%, not complete)", progress.Progress)
+		log.Printf("[JOB REPO] NOT setting steps.download (progress=%d%%, not complete)", normalizedProgress)
 	}
 
 	if progress.Message != "" {
 		update["$set"].(bson.M)["message"] = progress.Message
-	}
-
-	// Update status if provided
-	if progress.Status != "" {
-		update["$set"].(bson.M)["status"] = progress.Status
-		update["$set"].(bson.M)["stage"] = progress.Status
 	}
 
 	log.Printf("[JOB REPO] Calling UpdateOne with filter: _id=%s", objID.Hex())
