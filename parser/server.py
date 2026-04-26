@@ -2014,17 +2014,37 @@ class ParserHandler(BaseHTTPRequestHandler):
         # /instagram/upload — upload a video clip as an Instagram Reel
         elif path == "/instagram/upload":
             try:
+                query = parse_qs(parsed.query)
                 body = self._read_json_body()
                 username = body.get("username", "")
                 password = body.get("password", "")
                 video_url = body.get("video_url", "")
                 caption = body.get("caption", "")
 
-                if not username or not password or not video_url:
-                    self._send_error("username, password and video_url are required", 400)
+                if not video_url:
+                    self._send_error("video_url is required", 400)
                     return
 
-                logger.info(f"[Instagram] upload requested for account={username} url={video_url}")
+                account_param = query.get("account", [""])[0].strip()
+                account_name = (
+                    account_param
+                    or body.get("account_name", "")
+                    or body.get("account", "")
+                    or username
+                ).strip()
+                account_username_map = {
+                    "main": "filmorauznet",
+                    "backup1": "filmora.uznet",
+                }
+                instagram_username = (
+                    username.strip()
+                    or account_username_map.get(account_name, "").strip()
+                )
+
+                logger.info(
+                    f"[Instagram] upload requested account_param={account_param or '-'} "
+                    f"account_name={account_name or '-'} username={instagram_username or '-'} url={video_url}"
+                )
 
                 try:
                     from instagrapi import Client
@@ -2035,10 +2055,39 @@ class ParserHandler(BaseHTTPRequestHandler):
                 import tempfile, urllib.request as _urlreq
                 from pathlib import Path
 
-                account_name = body.get("account_name", "") or username
                 session_dir = Path(__file__).parent / "ig_sessions"
                 session_dir.mkdir(exist_ok=True)
-                session_file = session_dir / f"{account_name}.json"
+
+                def _session_candidates(acc_name: str, ig_username: str):
+                    import hashlib
+
+                    candidates = []
+                    seen = set()
+                    for value in (acc_name, ig_username):
+                        value = (value or "").strip()
+                        if not value:
+                            continue
+                        for candidate_name in (
+                            f"{value}.json",
+                            f"{hashlib.md5(value.encode()).hexdigest()}.json",
+                        ):
+                            if candidate_name in seen:
+                                continue
+                            seen.add(candidate_name)
+                            candidates.append(session_dir / candidate_name)
+                    return candidates
+
+                session_candidates = _session_candidates(account_name, instagram_username)
+                existing_session_files = [path for path in session_candidates if path.exists()]
+                session_file = max(existing_session_files, key=lambda p: p.stat().st_mtime) if existing_session_files else (
+                    session_candidates[0] if session_candidates else None
+                )
+                session_exists = bool(session_file and session_file.exists())
+                logger.info(
+                    f"[Instagram] session resolve account_param={account_param or '-'} "
+                    f"username={instagram_username or '-'} "
+                    f"session_file={str(session_file) if session_file else '-'} exists={session_exists}"
+                )
 
                 tmp_path = None
                 try:
@@ -2071,9 +2120,12 @@ class ParserHandler(BaseHTTPRequestHandler):
                             return "rate_limited"
                         return "publish_failed"
 
-                    if session_file.exists():
+                    if session_exists and session_file is not None:
                         cl.load_settings(session_file)
-                        logger.info(f"[Instagram] loaded session for account={account_name}")
+                        logger.info(
+                            f"[Instagram] loaded session account={account_name or '-'} "
+                            f"username={instagram_username or '-'} path={session_file}"
+                        )
                         # Pre-check: verify session is valid before attempting upload
                         try:
                             cl.get_timeline_feed()
@@ -2081,25 +2133,57 @@ class ParserHandler(BaseHTTPRequestHandler):
                             session_err_type = _classify_ig_error(str(session_err))
                             if session_err_type in _AUTH_FAIL_TYPES:
                                 # Auth error — password fallback cannot fix this; fail immediately
-                                logger.error(f"[Instagram] session auth error ({session_err_type}) for account={account_name}, re-login required")
-                                raise
+                                logger.error(
+                                    f"[Instagram] session auth error ({session_err_type}) "
+                                    f"account={account_name or '-'} username={instagram_username or '-'} "
+                                    f"path={session_file}"
+                                )
+                                raise Exception(
+                                    f"session_expired: Saved Instagram session expired for "
+                                    f"account='{account_name}' username='{instagram_username}' "
+                                    f"at '{session_file}'. Re-run ig_login.py and log in again."
+                                )
                             # Non-auth failure (network, unknown) — try password fallback
-                            if password:
+                            if password and instagram_username:
                                 logger.warning(f"[Instagram] session check failed ({session_err}), retrying with password")
                                 cl = Client()
                                 cl.delay_range = [1, 3]
-                                cl.login(username, password)
+                                cl.login(instagram_username, password)
                                 cl.dump_settings(session_file)
-                                logger.info(f"[Instagram] re-authenticated for account={account_name}")
+                                logger.info(
+                                    f"[Instagram] re-authenticated account={account_name or '-'} "
+                                    f"username={instagram_username or '-'} path={session_file}"
+                                )
                             else:
                                 raise
                     else:
+                        if not instagram_username:
+                            raise Exception(
+                                f"no_session: Could not resolve Instagram username for account='{account_name}'. "
+                                f"Pass username explicitly or map the account in parser/server.py."
+                            )
                         if not password:
-                            raise Exception(f"no_session: No session file for account={account_name}. Run ig_login.py first.")
-                        logger.warning(f"[Instagram] no session for account={account_name}, logging in with password (may trigger challenge)")
-                        cl.login(username, password)
+                            expected_files = ", ".join(str(path) for path in session_candidates) or str(session_dir)
+                            raise Exception(
+                                f"no_session: No Instagram session file found for account='{account_name}' "
+                                f"username='{instagram_username}'. Checked: {expected_files}. "
+                                f"Run ig_login.py and log in as {instagram_username}."
+                            )
+                        logger.warning(
+                            f"[Instagram] no session account={account_name or '-'} "
+                            f"username={instagram_username or '-'}, logging in with password"
+                        )
+                        cl.login(instagram_username, password)
+                        if session_file is None:
+                            raise Exception(
+                                f"no_session: Could not determine session file path for account='{account_name}' "
+                                f"username='{instagram_username}'."
+                            )
                         cl.dump_settings(session_file)
-                        logger.info(f"[Instagram] session saved for account={account_name}")
+                        logger.info(
+                            f"[Instagram] session saved account={account_name or '-'} "
+                            f"username={instagram_username or '-'} path={session_file}"
+                        )
 
                     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
                         tmp_path = f.name
@@ -2114,11 +2198,13 @@ class ParserHandler(BaseHTTPRequestHandler):
                     # Refine: no_session prefix set explicitly above
                     if "no_session:" in error_str.lower():
                         error_type = "no_session"
+                    elif "session_expired:" in error_str.lower():
+                        error_type = "session_expired"
                     _action_map = {
-                        "challenge_required":  "ig_login.py orqali sessiyani yangilang",
-                        "checkpoint_required": "ig_login.py orqali sessiyani yangilang",
-                        "session_expired":     "ig_login.py orqali qayta login qiling",
-                        "no_session":          "ig_login.py orqali birinchi marta login qiling",
+                        "challenge_required":  "ig_login.py ni ishga tushirib Instagram challenge/checkpoint ni yakunlang",
+                        "checkpoint_required": "ig_login.py ni ishga tushirib Instagram checkpoint ni yakunlang",
+                        "session_expired":     f"ig_login.py ni qayta ishga tushirib {instagram_username or account_name or 'kerakli akkaunt'} uchun yangi sessiya saqlang",
+                        "no_session":          f"ig_login.py ni ishga tushirib {instagram_username or account_name or 'kerakli akkaunt'} uchun sessiya yarating",
                         "bad_credentials":     "Login va parolni tekshiring",
                         "rate_limited":        "Bir necha soatdan keyin urinib ko'ring",
                         "publish_failed":      "Qayta urinib ko'ring",
@@ -2590,6 +2676,5 @@ if __name__ == "__main__":
     logger.info(f"[STARTUP] Binding to   = {args.host}:{args.port}")
 
     run_server(args.host, args.port)
-
 
 
