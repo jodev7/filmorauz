@@ -168,6 +168,7 @@ func main() {
 	if processConcurrency < 1 {
 		processConcurrency = 1
 	}
+	downloadDir := getEnv("DOWNLOAD_DIR", "../parser/downloads")
 
 	// Create worker context that can be cancelled
 	workerCtx, workerCancel := context.WithCancel(context.Background())
@@ -189,6 +190,9 @@ func main() {
 		defer ticker.Stop()
 
 		// Run once at startup so restarting the worker recovers leftover stuck jobs.
+		if n, err := jobRepo.RepairCompletedDownloads(workerCtx, downloadDir); err == nil && n > 0 {
+			log.Printf("[QUEUE] repaired completed downloads count=%d", n)
+		}
 		if n, err := jobRepo.RecoverStaleJobs(workerCtx); err == nil && n > 0 {
 			log.Printf("[QUEUE] recovered stale jobs count=%d", n)
 		}
@@ -198,6 +202,9 @@ func main() {
 			case <-workerCtx.Done():
 				return
 			case <-ticker.C:
+				if _, err := jobRepo.RepairCompletedDownloads(workerCtx, downloadDir); err != nil {
+					log.Printf("[QUEUE] completed-download repair error: %v", err)
+				}
 				if _, err := jobRepo.RecoverStaleJobs(workerCtx); err != nil {
 					log.Printf("[QUEUE] stale recovery error: %v", err)
 				}
@@ -233,6 +240,11 @@ func main() {
 						return
 					}
 					if job == nil {
+						if repaired, err := jobRepo.RepairCompletedDownloads(workerCtx, downloadDir); err != nil {
+							log.Printf("[QUEUE] repair check error slot=%d: %v", slot+1, err)
+						} else if repaired > 0 {
+							log.Printf("[QUEUE] repaired completed downloads count=%d", repaired)
+						}
 						log.Printf("[QUEUE] no ready_to_process jobs")
 						time.Sleep(pollInterval)
 						return

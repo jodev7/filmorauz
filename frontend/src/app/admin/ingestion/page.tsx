@@ -504,6 +504,18 @@ function getJobProgress(job: IngestionJob): number {
   return canonicalProgress;
 }
 
+function isWaitingForProcessing(job: IngestionJob): boolean {
+  const displayStatus = getJobDisplayStatus(job);
+  const progress = getJobProgress(job);
+  return progress >= 100 &&
+    displayStatus !== "ready_to_process" &&
+    displayStatus !== "processing" &&
+    displayStatus !== "uploading" &&
+    displayStatus !== "completed" &&
+    displayStatus !== "failed" &&
+    displayStatus !== "download_failed";
+}
+
 function getJobStatusSummary(job: IngestionJob): string {
   const displayStatus = getJobDisplayStatus(job);
   const statusMeta = getStatusMeta(displayStatus);
@@ -522,6 +534,10 @@ function getJobStatusSummary(job: IngestionJob): string {
     if (speedMBps > 0) parts.push(formatSpeed(speedMBps));
     if (etaSeconds > 0) parts.push(`ETA ${formatEta(etaSeconds)}`);
     return parts.join(" • ");
+  }
+
+  if (isWaitingForProcessing(job)) {
+    return "Download complete but waiting for processing";
   }
 
   const message = (job.message || "").trim();
@@ -1389,6 +1405,7 @@ function JobsTab({
     const displayProgress = safeJob.progress;
     const statusSummary = getJobStatusSummary(job);
     const showInlineTelemetry = displayStatus === "downloading" && safeJob.downloaded_bytes > 0;
+    const waitingForProcessing = isWaitingForProcessing(job);
     const showAuxMessage = Boolean(
       safeJob.message &&
       safeJob.status !== "completed" &&
@@ -1496,6 +1513,12 @@ function JobsTab({
               <p className="mt-1 flex items-center gap-1 text-xs text-orange-400">
                 <AlertTriangle className="w-3 h-3" />
                 No update for {lastUpdateText}
+              </p>
+            )}
+            {waitingForProcessing && (
+              <p className="mt-1 flex items-center gap-1 text-xs text-amber-400">
+                <AlertTriangle className="w-3 h-3" />
+                Download complete but waiting for processing
               </p>
             )}
           </div>

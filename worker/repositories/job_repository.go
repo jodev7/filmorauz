@@ -4,6 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/filmorauz/worker/models"
@@ -12,6 +16,65 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+var nonFilenameChars = regexp.MustCompile(`[^\w\s-]`)
+var repeatedSeparators = regexp.MustCompile(`[-\s]+`)
+
+func resolveExistingLocalPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	candidates := []string{path}
+	if !filepath.IsAbs(path) {
+		if abs, err := filepath.Abs(path); err == nil {
+			candidates = append([]string{abs}, candidates...)
+		}
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Size() > 0 {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func sanitizeDownloadName(name string) string {
+	cleaned := strings.TrimSpace(name)
+	if cleaned == "" {
+		return ""
+	}
+	cleaned = nonFilenameChars.ReplaceAllString(cleaned, "")
+	cleaned = repeatedSeparators.ReplaceAllString(cleaned, "_")
+	return strings.Trim(cleaned, "_")
+}
+
+func candidateDownloadPaths(job *models.IngestionJob, downloadDir string) []string {
+	if downloadDir == "" {
+		return nil
+	}
+	names := []string{
+		job.Title,
+		job.SourceID,
+	}
+	if job.Metadata != nil {
+		names = append([]string{job.Metadata.Title}, names...)
+	}
+	seen := map[string]struct{}{}
+	var candidates []string
+	for _, name := range names {
+		safe := sanitizeDownloadName(name)
+		if safe == "" {
+			continue
+		}
+		filename := safe + ".mp4"
+		if _, ok := seen[filename]; ok {
+			continue
+		}
+		seen[filename] = struct{}{}
+		candidates = append(candidates, filepath.Join(downloadDir, filename))
+	}
+	return candidates
+}
 
 // JobRepository handles ingestion job persistence
 type JobRepository struct {
@@ -132,6 +195,7 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 		"status":         models.IngestionStatusReadyToProcess,
 		"retry_count":    bson.M{"$lt": 3},
 		"steps.download": true,
+		"local_path":     bson.M{"$exists": true, "$ne": ""},
 		"$or": []bson.M{
 			{"steps.process": bson.M{"$exists": false}},
 			{"steps.process": bson.M{"$ne": true}},
@@ -169,6 +233,14 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 		log.Printf("[REPO] ClaimNextProcessingJob: ERROR - %v", err)
 		return nil, err
 	}
+
+	verifiedPath := resolveExistingLocalPath(job.LocalPath)
+	if verifiedPath == "" {
+		log.Printf("[PROCESS] skipped job=%s reason=missing local_path", job.ID.Hex())
+		_ = r.SetError(ctx, job.ID.Hex(), "download completed but local_path missing/file not found")
+		return nil, nil
+	}
+	job.LocalPath = verifiedPath
 
 	log.Printf("[REPO] ClaimNextProcessingJob: CLAIMED job %s (status: ready_to_process -> processing, title: %s, source: %s)",
 		job.ID.Hex(), job.Title, job.Source)
@@ -222,6 +294,83 @@ func (r *JobRepository) CountPendingJobs(ctx context.Context) (int64, error) {
 
 func (r *JobRepository) ResetStaleJobs(ctx context.Context) (int64, error) {
 	return r.RecoverStaleJobs(ctx)
+}
+
+func (r *JobRepository) RepairCompletedDownloads(ctx context.Context, downloadDir string) (int64, error) {
+	filter := bson.M{
+		"progress": bson.M{"$gte": 100},
+		"status": bson.M{"$in": bson.A{
+			models.IngestionStatusQueued,
+			models.IngestionStatusDownloading,
+			models.IngestionStatusParsing,
+		}},
+	}
+
+	cursor, err := r.collection.Find(ctx, filter)
+	if err != nil {
+		return 0, err
+	}
+	defer cursor.Close(ctx)
+
+	var jobs []*models.IngestionJob
+	if err := cursor.All(ctx, &jobs); err != nil {
+		return 0, err
+	}
+
+	var repaired int64
+	now := time.Now()
+	for _, job := range jobs {
+		jobID := job.ID.Hex()
+		localPath := resolveExistingLocalPath(job.LocalPath)
+		if localPath == "" {
+			for _, candidate := range candidateDownloadPaths(job, downloadDir) {
+				if resolved := resolveExistingLocalPath(candidate); resolved != "" {
+					localPath = resolved
+					break
+				}
+			}
+		}
+
+		if localPath == "" {
+			errMsg := "download completed but local_path missing/file not found"
+			log.Printf("[DOWNLOAD] repair failed job=%s reason=%s", jobID, errMsg)
+			_, err = r.collection.UpdateByID(ctx, job.ID, bson.M{
+				"$set": bson.M{
+					"status":     models.IngestionStatusFailed,
+					"stage":      "failed",
+					"error":      errMsg,
+					"updated_at": now,
+					"local_path": "",
+				},
+			})
+			if err != nil {
+				return repaired, err
+			}
+			repaired++
+			continue
+		}
+
+		log.Printf("[DOWNLOAD] completed job=%s file=%s", jobID, localPath)
+		log.Printf("[DOWNLOAD] verified file exists job=%s", jobID)
+		_, err = r.collection.UpdateByID(ctx, job.ID, bson.M{
+			"$set": bson.M{
+				"local_path":     localPath,
+				"status":         models.IngestionStatusReadyToProcess,
+				"stage":          "ready_to_process",
+				"steps.download": true,
+				"progress":       100,
+				"updated_at":     now,
+				"error":          "",
+			},
+		})
+		if err != nil {
+			return repaired, err
+		}
+		log.Printf("[DOWNLOAD] moved to ready_to_process job=%s", jobID)
+		repaired++
+	}
+
+	return repaired, nil
 }
 
 // UpdateStatus updates the status of a job

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/filmorauz/backend/models"
@@ -12,6 +14,24 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+func resolveExistingLocalPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	candidates := []string{path}
+	if !filepath.IsAbs(path) {
+		if abs, err := filepath.Abs(path); err == nil {
+			candidates = append([]string{abs}, candidates...)
+		}
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Size() > 0 {
+			return candidate
+		}
+	}
+	return ""
+}
 
 var topLevelGroupKeyExpr = bson.M{
 	"$cond": bson.A{
@@ -219,6 +239,7 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 		"status":         models.IngestionStatusReadyToProcess,
 		"retry_count":    bson.M{"$lt": 3},
 		"steps.download": true,
+		"local_path":     bson.M{"$exists": true, "$ne": ""},
 		"steps.process":  bson.M{"$ne": true},
 	}
 
@@ -247,6 +268,16 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 		}
 		return nil, err
 	}
+
+	verifiedPath := resolveExistingLocalPath(job.LocalPath)
+	if verifiedPath == "" {
+		log.Printf("[PROCESS] skipped job=%s reason=missing local_path", job.ID.Hex())
+		if setErr := r.SetError(ctx, job.ID.Hex(), "download completed but local_path missing/file not found"); setErr != nil {
+			return nil, setErr
+		}
+		return nil, nil
+	}
+	job.LocalPath = verifiedPath
 
 	return &job, nil
 }
@@ -563,19 +594,25 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 	// CRITICAL: Set steps.download = true ONLY when download is 100% complete
 	downloadComplete := (progress.Stage == "download" && normalizedProgress >= 100) || progress.StepsDownload
 	if downloadComplete {
-		log.Printf("[JOB REPO] Download complete (progress=%d%%, steps_download=%v) - marking steps.download=true", normalizedProgress, progress.StepsDownload)
-		update["$set"].(bson.M)["steps.download"] = true
-		update["$set"].(bson.M)["progress"] = 100
-
-		// Downloaded media waits in the processing queue until a worker slot is free.
-		if progress.StepsDownload || normalizedProgress >= 100 {
-			log.Printf("[JOB REPO] Download finished - moving job to ready_to_process")
+		log.Printf("[DOWNLOAD] completed job=%s file=%s", id, progress.FilePath)
+		verifiedPath := resolveExistingLocalPath(progress.FilePath)
+		if verifiedPath == "" {
+			errMsg := "download completed but local_path missing/file not found"
+			log.Printf("[DOWNLOAD] failed verification job=%s reason=%s raw_file=%s", id, errMsg, progress.FilePath)
+			update["$set"].(bson.M)["status"] = string(models.IngestionStatusFailed)
+			update["$set"].(bson.M)["stage"] = string(models.IngestionStatusFailed)
+			update["$set"].(bson.M)["error"] = errMsg
+			update["$set"].(bson.M)["local_path"] = ""
+			update["$set"].(bson.M)["steps.download"] = false
+		} else {
+			log.Printf("[DOWNLOAD] verified file exists job=%s file=%s", id, verifiedPath)
+			update["$set"].(bson.M)["steps.download"] = true
+			update["$set"].(bson.M)["progress"] = 100
 			update["$set"].(bson.M)["status"] = string(models.IngestionStatusReadyToProcess)
 			update["$set"].(bson.M)["stage"] = string(models.IngestionStatusReadyToProcess)
-			if progress.FilePath != "" {
-				update["$set"].(bson.M)["local_path"] = progress.FilePath
-				log.Printf("[JOB REPO] Updated local_path=%s (download completed)", progress.FilePath)
-			}
+			update["$set"].(bson.M)["local_path"] = verifiedPath
+			update["$set"].(bson.M)["error"] = ""
+			log.Printf("[DOWNLOAD] moved to ready_to_process job=%s file=%s", id, verifiedPath)
 		}
 	} else {
 		log.Printf("[JOB REPO] NOT setting steps.download (progress=%d%%, not complete)", normalizedProgress)

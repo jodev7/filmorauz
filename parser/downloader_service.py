@@ -238,6 +238,12 @@ else:
 logger.info(f"[CONFIG] BACKEND_URL = '{BACKEND_URL}'")
 
 
+def _ensure_absolute_file_path(path: str) -> str:
+    if not path:
+        return ""
+    return os.path.abspath(path)
+
+
 def report_progress_to_backend(job_id: str, progress_data: dict):
     """Send progress update to backend API - best-effort only, retries on failure"""
     import time
@@ -560,6 +566,7 @@ class DownloaderService:
             except Exception as e:
                 logger.warning(f"[DOWNLOAD] Failed to remove part file {part_file}: {e}")
         
+        output_path = _ensure_absolute_file_path(output_path)
         # Final progress update
         final_size = os.path.getsize(output_path)
         
@@ -744,6 +751,7 @@ class DownloaderService:
             # Download completed successfully
             logger.info("=" * 60)
             logger.info("[DOWNLOAD COMPLETE] Single-thread download finished successfully")
+            output_path = _ensure_absolute_file_path(output_path)
             logger.info(f"[DOWNLOAD COMPLETE] File: {output_path}")
             logger.info(f"[DOWNLOAD COMPLETE] Size: {downloaded_bytes} bytes")
             logger.info("=" * 60)
@@ -767,6 +775,7 @@ class DownloaderService:
             # Report completion to backend
             if backend_job_id:
                 logger.info(f"[PROGRESS] Sending completion: job_id={backend_job_id}, progress=100%, steps_download=True")
+                logger.info(f"[DOWNLOAD] completed job={backend_job_id} file={output_path}")
                 report_progress_to_backend(backend_job_id, {
                     "stage": "download",
                     "status": "ready_to_process",
@@ -988,6 +997,7 @@ class DownloaderService:
                 raise DownloadError(f"FFmpeg failed with exit code {return_code}: {stderr_tail}")
             
             # CRITICAL: Verify file exists
+            output_path = _ensure_absolute_file_path(output_path)
             if not os.path.exists(output_path):
                 raise DownloadError(f"FFmpeg reported success but file not found: {output_path}")
             
@@ -1264,7 +1274,7 @@ class DownloaderService:
         for ext in ("mp4", "mkv", "webm", "m4v"):
             candidate = os.path.join(self.download_dir, f"{base_name}.{ext}")
             if os.path.exists(candidate):
-                local_path = candidate
+                local_path = _ensure_absolute_file_path(candidate)
                 break
 
         if not local_path:
