@@ -1460,9 +1460,12 @@ export async function uploadCollectionPoster(
 // ── Ingestion API ────────────────────────────────────────────────
 
 export type IngestionStatus = 
+  | "queued"
   | "pending" 
   | "parsing" 
   | "downloading" 
+  | "downloaded"
+  | "ready_to_process"
   | "processing" 
   | "uploading" 
   | "completed" 

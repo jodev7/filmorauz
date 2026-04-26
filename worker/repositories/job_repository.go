@@ -221,32 +221,7 @@ func (r *JobRepository) CountPendingJobs(ctx context.Context) (int64, error) {
 }
 
 func (r *JobRepository) ResetStaleJobs(ctx context.Context) (int64, error) {
-	staleThreshold := 180 * time.Minute
-	staleCutoff := time.Now().Add(-staleThreshold)
-	filter := bson.M{
-		"status":     bson.M{"$in": activeIngestionStatuses},
-		"updated_at": bson.M{"$lt": staleCutoff},
-	}
-
-	update := bson.M{
-		"$set": bson.M{
-			"status":     models.IngestionStatusPending,
-			"progress":   0,
-			"updated_at": time.Now(),
-		},
-	}
-
-	result, err := r.collection.UpdateMany(ctx, filter, update)
-	if err != nil {
-		log.Printf("[REPO] ResetStaleJobs: ERROR - %v", err)
-		return 0, err
-	}
-
-	if result.ModifiedCount > 0 {
-		log.Printf("[REPO] ResetStaleJobs: reset %d stale jobs (no update for >180 minutes)",
-			result.ModifiedCount)
-	}
-	return result.ModifiedCount, nil
+	return r.RecoverStaleJobs(ctx)
 }
 
 // UpdateStatus updates the status of a job
@@ -527,40 +502,67 @@ func (r *JobRepository) IncrementRetry(ctx context.Context, id string) error {
 }
 
 var activeIngestionStatuses = []interface{}{
-	models.IngestionStatusProcessing,
 	models.IngestionStatusDownloading,
+	models.IngestionStatusProcessing,
 	models.IngestionStatusUploading,
 }
 
-func (r *JobRepository) FailStaleProcessingJobs(ctx context.Context) (int64, error) {
+func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 	staleThreshold := 180 * time.Minute
 	staleCutoff := time.Now().Add(-staleThreshold)
-	filter := bson.M{
-		"status":     bson.M{"$in": activeIngestionStatuses},
+	now := time.Now()
+	totalRecovered := int64(0)
+
+	downloadResult, err := r.collection.UpdateMany(ctx, bson.M{
+		"status":     models.IngestionStatusDownloading,
 		"updated_at": bson.M{"$lt": staleCutoff},
-	}
-
-	update := bson.M{
+	}, bson.M{
 		"$set": bson.M{
-			"status":       models.IngestionStatusFailed,
-			"stage":        "failed",
-			"error":        "Job stuck with no update for over 180 minutes — marked as failed by stale-job protection",
-			"completed_at": time.Now(),
-			"updated_at":   time.Now(),
+			"status":     models.IngestionStatusQueued,
+			"stage":      "queued",
+			"progress":   0,
+			"updated_at": now,
+			"error":      "Recovered stale download job after timeout; returned to queue automatically",
 		},
-	}
-
-	result, err := r.collection.UpdateMany(ctx, filter, update)
+		"$unset": bson.M{
+			"completed_at": "",
+		},
+	})
 	if err != nil {
-		log.Printf("[REPO] FailStaleProcessingJobs: ERROR - %v", err)
+		log.Printf("[REPO] RecoverStaleJobs(download): ERROR - %v", err)
 		return 0, err
 	}
+	totalRecovered += downloadResult.ModifiedCount
 
-	if result.ModifiedCount > 0 {
-		log.Printf("[REPO] FailStaleProcessingJobs: failed %d stale jobs (no update for >180 minutes)",
-			result.ModifiedCount)
+	processResult, err := r.collection.UpdateMany(ctx, bson.M{
+		"status":     bson.M{"$in": []models.IngestionStatus{models.IngestionStatusProcessing, models.IngestionStatusUploading}},
+		"updated_at": bson.M{"$lt": staleCutoff},
+	}, bson.M{
+		"$set": bson.M{
+			"status":     models.IngestionStatusReadyToProcess,
+			"stage":      "ready_to_process",
+			"progress":   100,
+			"updated_at": now,
+			"error":      "Recovered stale processing job after timeout; returned to processing queue automatically",
+		},
+		"$unset": bson.M{
+			"completed_at": "",
+		},
+	})
+	if err != nil {
+		log.Printf("[REPO] RecoverStaleJobs(process): ERROR - %v", err)
+		return totalRecovered, err
 	}
-	return result.ModifiedCount, nil
+	totalRecovered += processResult.ModifiedCount
+
+	if totalRecovered > 0 {
+		log.Printf("[REPO] RecoverStaleJobs: recovered %d stale jobs older than %s", totalRecovered, staleThreshold)
+	}
+	return totalRecovered, nil
+}
+
+func (r *JobRepository) FailStaleProcessingJobs(ctx context.Context) (int64, error) {
+	return r.RecoverStaleJobs(ctx)
 }
 
 // UpdateLocalPath updates the local file path after download

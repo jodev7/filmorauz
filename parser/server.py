@@ -603,11 +603,12 @@ def _download_queue_worker(slot: int, parser_base_url: str):
         try:
             response = requests.get(claim_url, timeout=30)
             if response.status_code == 404:
+                logger.info("[QUEUE] no queued jobs")
                 time.sleep(DOWNLOAD_QUEUE_POLL_SECONDS)
                 continue
             response.raise_for_status()
             job = response.json()
-            logger.info(f"[QUEUE] slot={slot} claimed job_id={job.get('job_id')} source={job.get('source')}")
+            logger.info(f"[QUEUE] claimed job id={job.get('job_id')} queue=download slot={slot} source={job.get('source')}")
             try:
                 _run_claimed_download(job, parser_base_url)
             except Exception as exc:
@@ -626,7 +627,7 @@ def start_download_queue(parser_base_url: str):
             return
         _download_queue_started = True
 
-    logger.info(f"[QUEUE] Starting download queue with concurrency={DOWNLOAD_CONCURRENCY}")
+    logger.info(f"[QUEUE] download worker started concurrency={DOWNLOAD_CONCURRENCY}")
     for slot in range(DOWNLOAD_CONCURRENCY):
         thread = threading.Thread(
             target=_download_queue_worker,

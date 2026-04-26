@@ -324,9 +324,12 @@ const SOURCES = [
 ];
 
 const STATUS_CONFIG: Record<IngestionStatus, { color: string; icon: React.ElementType; label: string }> = {
+  queued: { color: "bg-slate-500", icon: Clock, label: "Queued" },
   pending: { color: "bg-gray-500", icon: Clock, label: "Pending" },
   parsing: { color: "bg-blue-500", icon: Loader2, label: "Parsing" },
   downloading: { color: "bg-yellow-500", icon: Download, label: "Downloading" },
+  downloaded: { color: "bg-amber-500", icon: CheckCircle, label: "Downloaded" },
+  ready_to_process: { color: "bg-orange-500", icon: Clock, label: "Ready to Process" },
   processing: { color: "bg-purple-500", icon: Settings, label: "Processing" },
   uploading: { color: "bg-indigo-500", icon: Upload, label: "Uploading" },
   completed: { color: "bg-green-500", icon: CheckCircle, label: "Completed" },
@@ -351,6 +354,9 @@ const STATUS_CONFIG: Record<IngestionStatus, { color: string; icon: React.Elemen
 const STAGE_STATUS_MAP: Record<string, IngestionStatus> = {
   parse: "parsing",
   parsing: "parsing",
+  queued: "queued",
+  downloaded: "downloaded",
+  ready_to_process: "ready_to_process",
   download: "downloading",
   downloading: "downloading",
   processing: "processing",
@@ -428,7 +434,10 @@ function getJobSummary(jobs: IngestionJob[], now: number) {
     (summary, job) => {
       const displayStatus = getJobDisplayStatus(job);
       if (!isTerminalJob(job)) summary.active += 1;
-      if (displayStatus === "pending") summary.pending += 1;
+      if (displayStatus === "queued" || displayStatus === "pending" || displayStatus === "downloaded" || displayStatus === "ready_to_process") {
+        summary.pending += 1;
+      }
+      if (displayStatus === "downloading") summary.processing += 1;
       if (displayStatus === "processing" || displayStatus === "hls_processing") summary.processing += 1;
       if (displayStatus === "uploading" || displayStatus === "finalizing_storage") summary.uploading += 1;
       if (job.status === "failed" || job.status === "download_failed") summary.failed += 1;
@@ -445,7 +454,12 @@ function matchesJobFilter(job: IngestionJob, filter: JobFilter, now: number): bo
   if (filter === "active") return !isTerminalJob(job);
   if (filter === "stuck") return isStuckJob(job, now);
   if (filter === "failed") return job.status === "failed" || job.status === "download_failed";
-  if (filter === "processing") return displayStatus === "processing" || displayStatus === "hls_processing";
+  if (filter === "processing") {
+    return displayStatus === "downloading" || displayStatus === "processing" || displayStatus === "hls_processing" || displayStatus === "uploading" || displayStatus === "finalizing_storage";
+  }
+  if (filter === "pending") {
+    return displayStatus === "queued" || displayStatus === "pending" || displayStatus === "downloaded" || displayStatus === "ready_to_process";
+  }
   return displayStatus === filter;
 }
 
@@ -1146,7 +1160,10 @@ function ManualTab({
 function getSerialSummary(jobs: IngestionJob[]) {
   const completed = jobs.filter((job) => job.status === "completed").length;
   const failed = jobs.filter((job) => job.status === "failed" || job.status === "download_failed").length;
-  const processing = jobs.length - completed - failed;
+  const processing = jobs.filter((job) => {
+    const displayStatus = getJobDisplayStatus(job);
+    return displayStatus === "downloading" || displayStatus === "processing" || displayStatus === "uploading" || displayStatus === "hls_processing" || displayStatus === "finalizing_storage";
+  }).length;
   const overallProgress = jobs.length === 0
     ? 0
     : Math.round(jobs.reduce((sum, job) => sum + (typeof job.progress === "number" ? job.progress : 0), 0) / jobs.length);

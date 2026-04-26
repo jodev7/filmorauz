@@ -183,17 +183,14 @@ func main() {
 		workerCancel()
 	}()
 
-	// Stale-job protection - marks jobs stuck with no update for >180 minutes as failed.
-	// This prevents jobs from being stuck forever if the worker crashes mid-upload
-	// or if a non-retryable pipeline error leaves the status field in a bad state.
-	// Note: FFmpeg processing can take 30-60+ minutes, so we use a longer threshold.
+	// Stale-job protection - resets stuck jobs back into the appropriate queue.
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 
-		// Run once at startup so restarting the worker cleans up leftover stuck jobs
-		if n, err := jobRepo.FailStaleProcessingJobs(workerCtx); err == nil && n > 0 {
-			log.Printf("[WORKER] Startup stale-job sweep: failed %d jobs with no update for >180 minutes", n)
+		// Run once at startup so restarting the worker recovers leftover stuck jobs.
+		if n, err := jobRepo.RecoverStaleJobs(workerCtx); err == nil && n > 0 {
+			log.Printf("[QUEUE] recovered stale jobs count=%d", n)
 		}
 
 		for {
@@ -201,18 +198,19 @@ func main() {
 			case <-workerCtx.Done():
 				return
 			case <-ticker.C:
-				if _, err := jobRepo.FailStaleProcessingJobs(workerCtx); err != nil {
-					log.Printf("[WORKER] FailStaleProcessingJobs error: %v", err)
+				if _, err := jobRepo.RecoverStaleJobs(workerCtx); err != nil {
+					log.Printf("[QUEUE] stale recovery error: %v", err)
 				}
 			}
 		}
 	}()
 
 	// Fixed-size processing pool - each goroutine owns one processing slot.
+	log.Printf("[QUEUE] processing worker started concurrency=%d", processConcurrency)
 	for workerIndex := 0; workerIndex < processConcurrency; workerIndex++ {
 		go func(slot int) {
 			pollInterval := 5 * time.Second
-			log.Printf("[WORKER] Processing slot %d/%d started", slot+1, processConcurrency)
+			log.Printf("[QUEUE] processing slot started index=%d/%d", slot+1, processConcurrency)
 
 			for {
 				select {
@@ -230,11 +228,12 @@ func main() {
 
 					job, err := jobRepo.ClaimNextProcessingJob(workerCtx)
 					if err != nil {
-						log.Printf("[WORKER] Slot %d claim error: %v", slot+1, err)
+						log.Printf("[QUEUE] processing claim error slot=%d: %v", slot+1, err)
 						time.Sleep(pollInterval)
 						return
 					}
 					if job == nil {
+						log.Printf("[QUEUE] no ready_to_process jobs")
 						time.Sleep(pollInterval)
 						return
 					}
@@ -247,7 +246,7 @@ func main() {
 						title = job.SourceID
 					}
 
-					log.Printf("[WORKER] Slot %d claimed processing job %s: %s from %s", slot+1, job.ID.Hex(), title, job.Source)
+					log.Printf("[QUEUE] claimed job id=%s queue=processing slot=%d title=%s source=%s", job.ID.Hex(), slot+1, title, job.Source)
 					safeProcessJob(pipe, workerCtx, job)
 				}()
 			}
