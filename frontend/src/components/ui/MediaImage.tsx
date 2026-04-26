@@ -1,7 +1,7 @@
 "use client";
 
 import type { CSSProperties, ImgHTMLAttributes, SyntheticEvent } from "react";
-import { useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 
 interface MediaImageProps
@@ -14,7 +14,7 @@ interface MediaImageProps
   style?: CSSProperties;
 }
 
-export default function MediaImage({
+function MediaImageImpl({
   src,
   alt,
   className = "",
@@ -25,11 +25,24 @@ export default function MediaImage({
   onError,
   ...imgProps
 }: MediaImageProps) {
-  const resolvedUrl = normalizeMediaUrl(src, "");
-  const resolvedFallback = normalizeMediaUrl(fallbackSrc, DEFAULT_POSTER_PLACEHOLDER);
-  const [failed, setFailed] = useState(false);
-  const [loaded, setLoaded] = useState(false);
+  // Memoize on the raw src prop, not the resolved value, so we don't re-run
+  // normalizeMediaUrl on every render. The output is otherwise identical for
+  // identical input, but skipping it keeps the dep array stable and avoids
+  // any chance of an effect retriggering from a transient string identity.
+  const resolvedUrl = useMemo(() => normalizeMediaUrl(src, ""), [src]);
+  const resolvedFallback = useMemo(
+    () => normalizeMediaUrl(fallbackSrc, DEFAULT_POSTER_PLACEHOLDER),
+    [fallbackSrc],
+  );
 
+  const [failed, setFailed] = useState(false);
+  // Treat empty URLs as already "loaded" so we don't sit on opacity-0
+  // forever waiting for an onLoad that will never fire.
+  const [loaded, setLoaded] = useState(() => !resolvedUrl);
+
+  // Reset transient state ONLY when the resolved URL actually changes. No
+  // pathname, no Date.now, no random — anything that doesn't change here
+  // must not cause the image to fade out.
   useEffect(() => {
     setFailed(false);
     setLoaded(!resolvedUrl);
@@ -67,3 +80,9 @@ export default function MediaImage({
     />
   );
 }
+
+// Wrap in memo so identical-prop re-renders from above don't cascade into
+// the image element. Without this, every parent re-render rebuilds the
+// className string and the inner <img> can churn.
+const MediaImage = memo(MediaImageImpl);
+export default MediaImage;

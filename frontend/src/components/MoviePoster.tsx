@@ -1,7 +1,7 @@
 "use client";
 
 import OptimizedImage from "./OptimizedImage";
-import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
+import { DEFAULT_POSTER_PLACEHOLDER } from "@/lib/image-utils";
 
 interface Props {
   src: string;
@@ -22,7 +22,7 @@ export default function MoviePoster({
 }: Props) {
   return (
     <OptimizedImage
-      src={normalizeMediaUrl(src, "")}
+      src={src}
       alt={alt}
       className={className}
       priority={priority}

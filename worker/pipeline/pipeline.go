@@ -1072,37 +1072,100 @@ func (p *Pipeline) startDownloadAndPoll(ctx context.Context, job *models.Ingesti
 	return p.pollDownloadProgress(ctx, job, videoURL)
 }
 
-// pollDownloadProgress polls /progress until download completes or fails
-// Used after /download is called (or already running)
+// pollDownloadProgress polls the parser's /progress endpoint until the
+// download completes, fails, or the watchdog catches a stuck/dead downloader.
+//
+// Three independent failure modes (fastest one wins):
+//
+//  1. Stalled-bytes watchdog: if downloaded_bytes does not advance for
+//     `noProgressTimeout`, the download is considered hung and the job fails
+//     immediately. This is the primary guard — it catches the case where the
+//     parser is still responding to /progress with the same byte counter.
+//  2. Dead-parser detection: HTTP 404 from /progress means the parser does
+//     not know this job (its download process exited or parser was
+//     restarted) — fail immediately. Repeated transport/5xx errors fail the
+//     job after `consecutiveErrorLimit` attempts.
+//  3. Overall hard cap: `maxPollSeconds` as a final safety net — the
+//     watchdog should always fire first.
 func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.IngestionJob, videoURL string) (string, error) {
 	jobID := job.ID.Hex()
 
-	log.Printf("[WORKER] pollDownloadProgress — job_id=%s, polling until completion", jobID)
+	const (
+		// Hard ceiling reduced from 7200s for testing — the watchdog should
+		// catch stuck downloads long before this fires.
+		maxPollSeconds        = 900
+		pollInterval          = 1 * time.Second
+		noProgressTimeout     = 60 * time.Second
+		consecutiveErrorLimit = 5
+	)
 
-	maxPollCount := 7200 // Max 2 hours
-	pollInterval := 1 * time.Second
+	log.Printf("[WORKER] pollDownloadProgress START — job_id=%s, video_url=%s, max=%ds, watchdog=%s, poll=%s",
+		jobID, safeTruncate(videoURL, 80), maxPollSeconds, noProgressTimeout, pollInterval)
 
-	for pollCount := 0; pollCount < maxPollCount; pollCount++ {
+	// Seed last_progress_at so any external observer (admin UI, stale-job
+	// scanner) sees a baseline when polling begins, even before the first
+	// byte arrives.
+	if err := p.jobRepo.UpdateLastProgressAt(ctx, jobID); err != nil {
+		log.Printf("[WORKER] WARN seed last_progress_at — job_id=%s, err=%v", jobID, err)
+	}
+
+	var (
+		lastBytes         int64 = -1
+		lastBytesAt             = time.Now()
+		consecutiveErrors       = 0
+	)
+
+	for pollCount := 0; pollCount < maxPollSeconds; pollCount++ {
 		time.Sleep(pollInterval)
 
-		// Call /progress endpoint
 		progressURL := fmt.Sprintf("%s/progress?job_id=%s", p.config.ParserURL, jobID)
 		progressResp, err := p.httpClient.Get(progressURL)
 		if err != nil {
-			log.Printf("[WORKER] /progress error — job_id=%s, error=%v, retrying...", jobID, err)
+			consecutiveErrors++
+			log.Printf("[WORKER] /progress transport error — job_id=%s, err=%v, consecutive=%d/%d",
+				jobID, err, consecutiveErrors, consecutiveErrorLimit)
+			if consecutiveErrors >= consecutiveErrorLimit {
+				return "", fmt.Errorf("parser /progress unreachable %d polls in a row (last err: %w) — assuming downloader/parser dead",
+					consecutiveErrors, err)
+			}
+			if dur := time.Since(lastBytesAt); dur >= noProgressTimeout {
+				return "", fmt.Errorf("download watchdog: no byte progress for %s while parser unreachable — failing fast",
+					dur.Truncate(time.Second))
+			}
 			continue
 		}
 
-		// Read raw body for debug logging
-		rawBody, err := io.ReadAll(progressResp.Body)
-		if err != nil {
-			progressResp.Body.Close()
-			log.Printf("[WORKER] /progress read error — job_id=%s, error=%v", jobID, err)
+		rawBody, readErr := io.ReadAll(progressResp.Body)
+		statusCode := progressResp.StatusCode
+		progressResp.Body.Close()
+
+		if readErr != nil {
+			consecutiveErrors++
+			log.Printf("[WORKER] /progress read error — job_id=%s, err=%v, consecutive=%d/%d",
+				jobID, readErr, consecutiveErrors, consecutiveErrorLimit)
+			if consecutiveErrors >= consecutiveErrorLimit {
+				return "", fmt.Errorf("parser /progress body unreadable %d polls in a row: %w", consecutiveErrors, readErr)
+			}
 			continue
 		}
-		log.Printf("[WORKER] /progress raw response — job_id=%s, body=%s", jobID, string(rawBody))
 
-		// Decode JSON
+		// 404 means the parser dropped this job — its download process
+		// exited or the parser was restarted. No point in polling further.
+		if statusCode == http.StatusNotFound {
+			return "", fmt.Errorf("parser /progress returned 404 — downloader process exited or job unknown to parser (body=%s)",
+				safeTruncate(string(rawBody), 200))
+		}
+		if statusCode >= 500 {
+			consecutiveErrors++
+			log.Printf("[WORKER] /progress 5xx — job_id=%s, status=%d, body=%s, consecutive=%d/%d",
+				jobID, statusCode, safeTruncate(string(rawBody), 200), consecutiveErrors, consecutiveErrorLimit)
+			if consecutiveErrors >= consecutiveErrorLimit {
+				return "", fmt.Errorf("parser /progress returned %d on %d polls in a row — parser likely dead",
+					statusCode, consecutiveErrors)
+			}
+			continue
+		}
+
 		var progress struct {
 			Success         bool    `json:"success"`
 			Status          string  `json:"status"` // starting, downloading, completed, failed
@@ -1118,51 +1181,62 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 		}
 
 		if err := json.Unmarshal(rawBody, &progress); err != nil {
-			progressResp.Body.Close()
-			log.Printf("[WORKER] /progress decode error — job_id=%s, error=%v", jobID, err)
+			consecutiveErrors++
+			log.Printf("[WORKER] /progress decode error — job_id=%s, err=%v, body=%s, consecutive=%d/%d",
+				jobID, err, safeTruncate(string(rawBody), 200), consecutiveErrors, consecutiveErrorLimit)
+			if consecutiveErrors >= consecutiveErrorLimit {
+				return "", fmt.Errorf("parser /progress emitted invalid JSON %d polls in a row: %w", consecutiveErrors, err)
+			}
 			continue
 		}
-		progressResp.Body.Close()
+		consecutiveErrors = 0
 
-		// Fallback: if progress_percent not set but legacy 'progress' field exists, use it
 		if progress.ProgressPercent == 0 && progress.Progress > 0 {
 			progress.ProgressPercent = progress.Progress
 		}
 
-		log.Printf("[WORKER] /progress parsed — job_id=%s, success=%v, status=%s, progress_percent=%d%%, downloaded=%d/%d bytes, speed=%.2f MB/s",
-			jobID, progress.Success, progress.Status, progress.ProgressPercent,
-			progress.DownloadedBytes, progress.TotalBytes, progress.SpeedMBps)
-
-		// Compute progress from bytes if progress_percent is 0 but bytes indicate activity
 		progressPercent := progress.ProgressPercent
 		if progressPercent == 0 && progress.DownloadedBytes > 0 && progress.TotalBytes > 0 {
 			computed := int((float64(progress.DownloadedBytes) / float64(progress.TotalBytes)) * 100)
 			if computed > 0 {
 				progressPercent = computed
-				log.Printf("[WORKER] computed progress from bytes — job_id=%s, percent=%d%% (dl=%d, total=%d)",
-					jobID, progressPercent, progress.DownloadedBytes, progress.TotalBytes)
 			}
 		}
 
-		// Update job progress in DB
+		stalledFor := time.Since(lastBytesAt)
+		log.Printf("[WORKER] /progress poll=%d job_id=%s status=%s pct=%d%% bytes=%d/%d speed=%.2fMB/s eta=%ds stalled_for=%s",
+			pollCount, jobID, progress.Status, progressPercent,
+			progress.DownloadedBytes, progress.TotalBytes, progress.SpeedMBps, progress.EtaSeconds,
+			stalledFor.Truncate(time.Second))
+
 		if progress.Status == "downloading" || progress.Status == "starting" {
 			msg := fmt.Sprintf("Downloading: %d%%", progressPercent)
 			if progress.SpeedMBps > 0 {
 				msg += fmt.Sprintf(" (%.1f MB/s)", progress.SpeedMBps)
 			}
-			log.Printf("[WORKER] updating job progress — job_id=%s, progress=%d%%, msg=%s", jobID, progressPercent, msg)
+			if progress.EtaSeconds > 0 {
+				msg += fmt.Sprintf(", ETA %ds", progress.EtaSeconds)
+			}
 			p.jobRepo.UpdateDownloadProgress(ctx, jobID, progressPercent,
-				progress.DownloadedBytes, progress.TotalBytes, progress.SpeedMBps, msg)
+				progress.DownloadedBytes, progress.TotalBytes, progress.SpeedMBps, progress.EtaSeconds, msg)
 		}
 
-		// Check if download completed
+		// Watchdog: if bytes advanced, reset timer; otherwise check stall.
+		if progress.DownloadedBytes > lastBytes {
+			lastBytes = progress.DownloadedBytes
+			lastBytesAt = time.Now()
+		} else if progress.Status == "downloading" || progress.Status == "starting" {
+			if stalledFor >= noProgressTimeout {
+				return "", fmt.Errorf("download watchdog: no byte progress for %s (status=%s, bytes=%d/%d) — downloader appears stuck or process dead",
+					stalledFor.Truncate(time.Second), progress.Status, progress.DownloadedBytes, progress.TotalBytes)
+			}
+		}
+
 		if progress.Status == "completed" {
 			localPath := progress.LocalPath
 			if localPath == "" {
 				return "", fmt.Errorf("parser /progress returned completed but empty local_path")
 			}
-
-			// Validate the file exists
 			if _, err := os.Stat(localPath); err != nil {
 				return "", fmt.Errorf("parser /progress returned local_path but file does not exist: %s", localPath)
 			}
@@ -1171,22 +1245,17 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 			if fileInfo, err := os.Stat(localPath); err == nil {
 				fileSize = fileInfo.Size()
 			}
-
-			log.Printf("[WORKER] download done — job_id=%s, local_path=%s, size=%d bytes",
-				jobID, localPath, fileSize)
-			log.Printf("[DOWNLOAD] local_path confirmed — job_id=%s, path=%s, size=%d", jobID, localPath, fileSize)
+			log.Printf("[WORKER] pollDownloadProgress END (completed) — job_id=%s, local_path=%s, size=%d bytes, polls=%d",
+				jobID, localPath, fileSize, pollCount+1)
 			return localPath, nil
 		}
 
-		// Check if download failed
 		if progress.Status == "failed" {
-			return "", fmt.Errorf("parser /download failed: %s", progress.Error)
+			return "", fmt.Errorf("parser /download reported failed: %s", progress.Error)
 		}
-
-		// Continue polling if still downloading or starting
 	}
 
-	return "", fmt.Errorf("download polling timeout after %d seconds", maxPollCount)
+	return "", fmt.Errorf("download polling hard timeout after %d seconds (watchdog should have fired earlier — investigate)", maxPollSeconds)
 }
 
 // downloadVideo - PARSER NOW HANDLES DOWNLOADING

@@ -66,6 +66,11 @@ type IngestionJob struct {
 	DownloadedBytes int64   `bson:"downloaded_bytes,omitempty" json:"downloaded_bytes,omitempty"`
 	TotalBytes      int64   `bson:"total_bytes,omitempty" json:"total_bytes,omitempty"`
 	SpeedMbps       float64 `bson:"speed_mbps,omitempty" json:"speed_mbps,omitempty"`
+	EtaSeconds      int     `bson:"eta_seconds,omitempty" json:"eta_seconds,omitempty"`
+	// LastProgressAt is the last time downloaded_bytes increased. The polling
+	// watchdog fails the job if this stops advancing for too long, even when
+	// the parser keeps responding (e.g. download process hung but not exited).
+	LastProgressAt *time.Time `bson:"last_progress_at,omitempty" json:"last_progress_at,omitempty"`
 
 	// NEW: Enriched metadata fields
 	EnrichedMetadata   *EnrichedMetadata `bson:"enriched_metadata,omitempty" json:"enriched_metadata,omitempty"`

@@ -684,8 +684,11 @@ func (r *JobRepository) MarkDownloadStarted(ctx context.Context, id string) erro
 }
 
 // UpdateDownloadProgress updates download progress fields in the job
-// Ensures monotonicity: never overwrite with lower progress or downloaded_bytes
-func (r *JobRepository) UpdateDownloadProgress(ctx context.Context, id string, progress int, downloadedBytes, totalBytes int64, speedMbps float64, message string) error {
+// Ensures monotonicity: never overwrite with lower progress or downloaded_bytes.
+// Sets last_progress_at to now whenever downloaded_bytes actually advances; the
+// watchdog in the worker poll loop reads this to decide if the parser-side
+// download is stalled (process alive but not making progress).
+func (r *JobRepository) UpdateDownloadProgress(ctx context.Context, id string, progress int, downloadedBytes, totalBytes int64, speedMbps float64, etaSeconds int, message string) error {
 	objID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
 		return fmt.Errorf("invalid id")
@@ -712,27 +715,52 @@ func (r *JobRepository) UpdateDownloadProgress(ctx context.Context, id string, p
 		}
 	}
 
-	update := bson.M{
-		"$set": bson.M{
-			"progress":         progress,
-			"downloaded_bytes": downloadedBytes,
-			"total_bytes":      totalBytes,
-			"speed_mbps":       speedMbps,
-			"message":          message,
-			"status":           models.IngestionStatusDownloading,
-			"updated_at":       time.Now(),
-		},
+	now := time.Now()
+	setFields := bson.M{
+		"progress":         progress,
+		"downloaded_bytes": downloadedBytes,
+		"total_bytes":      totalBytes,
+		"speed_mbps":       speedMbps,
+		"eta_seconds":      etaSeconds,
+		"message":          message,
+		"status":           models.IngestionStatusDownloading,
+		"updated_at":       now,
+	}
+	// Only stamp last_progress_at when bytes actually moved forward — this is
+	// what the watchdog uses to detect a hung downloader. If the parser keeps
+	// responding with the same byte count, updated_at still ticks (heartbeat),
+	// but last_progress_at stays frozen and the watchdog will fire.
+	if downloadedBytes > currentJob.DownloadedBytes {
+		setFields["last_progress_at"] = now
 	}
 
-	_, err = r.collection.UpdateByID(ctx, objID, update)
+	_, err = r.collection.UpdateByID(ctx, objID, bson.M{"$set": setFields})
 	if err != nil {
 		log.Printf("[REPO] UpdateDownloadProgress: UPDATE FAILED — job_id=%s, progress=%d, err=%v", id, progress, err)
 		return err
 	}
 
-	log.Printf("[REPO] UpdateDownloadProgress: job_id=%s, progress=%d%%, downloaded=%d/%d, speed=%.2f MB/s",
-		id, progress, downloadedBytes, totalBytes, speedMbps)
+	log.Printf("[REPO] UpdateDownloadProgress: job_id=%s, progress=%d%%, downloaded=%d/%d, speed=%.2f MB/s, eta=%ds",
+		id, progress, downloadedBytes, totalBytes, speedMbps, etaSeconds)
 	return nil
+}
+
+// UpdateLastProgressAt stamps last_progress_at without touching the byte
+// counters. Used when the worker first enters the polling loop so the watchdog
+// has a baseline to compare against.
+func (r *JobRepository) UpdateLastProgressAt(ctx context.Context, id string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid id")
+	}
+	now := time.Now()
+	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
+		"$set": bson.M{
+			"last_progress_at": now,
+			"updated_at":       now,
+		},
+	})
+	return err
 }
 
 // TransitionToProcessing atomically transitions job from download to processing stage

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   DEFAULT_POSTER_PLACEHOLDER,
   normalizeMediaUrl,
@@ -21,7 +21,7 @@ interface OptimizedImageProps {
   fallbackSrc?: string;
 }
 
-export default function OptimizedImage({
+function OptimizedImageImpl({
   src,
   alt,
   className = "",
@@ -34,39 +34,33 @@ export default function OptimizedImage({
   onError,
   fallbackSrc = DEFAULT_POSTER_PLACEHOLDER,
 }: OptimizedImageProps) {
-  const resolvedImageUrl = normalizeMediaUrl(src, "");
-  const [isLoading, setIsLoading] = useState(true);
-  const [hasError, setHasError] = useState(false);
+  const resolvedImageUrl = useMemo(() => normalizeMediaUrl(src, ""), [src]);
+
+  // Skeleton visibility tracks the inner image's load lifecycle. Reset only
+  // when the resolved URL actually changes — never on parent re-renders that
+  // pass an identical src.
+  const [showOverlay, setShowOverlay] = useState(true);
 
   useEffect(() => {
-    setIsLoading(true);
-    setHasError(false);
+    setShowOverlay(true);
   }, [resolvedImageUrl]);
 
-  const handleLoad = () => {
-    setIsLoading(false);
-  };
-
+  const handleLoad = () => setShowOverlay(false);
   const handleError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
-    if (!hasError) {
-      setHasError(true);
-      setIsLoading(true);
-    } else {
-      setIsLoading(false);
-    }
+    // Drop the skeleton on error so we don't sit on it forever — MediaImage
+    // will swap to the fallback src internally.
+    setShowOverlay(false);
     onError?.(e);
   };
 
   return (
     <div className={`relative overflow-hidden ${className}`} style={{ aspectRatio }}>
-      {/* Skeleton/Placeholder */}
-      {showSkeleton && isLoading && !hasError && (
+      {showSkeleton && showOverlay && (
         <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-gray-900 animate-pulse">
           <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent animate-shimmer" />
         </div>
       )}
 
-      {/* Image */}
       <MediaImage
         src={resolvedImageUrl}
         alt={alt}
@@ -76,9 +70,7 @@ export default function OptimizedImage({
         height={height}
         sizes={sizes}
         fallbackSrc={fallbackSrc}
-        className={`object-cover transition-opacity duration-300 ${
-          isLoading ? "opacity-0" : "opacity-100"
-        }`}
+        className="object-cover"
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
         onLoad={handleLoad}
         onError={handleError}
@@ -86,3 +78,9 @@ export default function OptimizedImage({
     </div>
   );
 }
+
+// Memoize so a parent re-render with the same src does not retrigger the
+// skeleton overlay or churn the underlying <img>. Without this, identical
+// re-renders can flash the skeleton back over a fully-loaded poster.
+const OptimizedImage = memo(OptimizedImageImpl);
+export default OptimizedImage;
