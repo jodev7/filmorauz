@@ -201,12 +201,15 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	var err error
 
 	if localPath == "" {
+		log.Printf("[PROCESS] skipped job=%s reason=missing local_path", jobID)
 		return fmt.Errorf("job %s is not ready_to_process: local_path is empty", jobID)
 	}
 	if fileInfo, statErr := os.Stat(localPath); statErr != nil || fileInfo.Size() == 0 {
 		if statErr != nil {
+			log.Printf("[ERROR] file missing at %s", localPath)
 			return fmt.Errorf("downloaded file is unavailable: %w", statErr)
 		}
+		log.Printf("[ERROR] file missing at %s", localPath)
 		return fmt.Errorf("downloaded file is empty: %s", localPath)
 	}
 
@@ -292,15 +295,6 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		log.Printf("[STAGE] WARNING: failed to mark process step: %v", stepErr)
 	}
 
-	// CRITICAL: Mark source file as deleted and update with processed path
-	// This clears the stale local_path (parser/downloads) and sets output_path
-	if err := p.jobRepo.MarkSourceFileDeleted(ctx, jobID, hlsPath); err != nil {
-		log.Printf("[PIPELINE] WARNING: Failed to mark source file deleted: %v", err)
-		// Continue - not fatal, but dashboard will show stale info
-	} else {
-		log.Printf("[PIPELINE] Marked source file deleted, output_path=%s, cleared local_path", hlsPath)
-	}
-
 	// Update status to uploading
 	if err := p.updateStatus(jobID, models.IngestionStatusUploading, 70); err != nil {
 		return fmt.Errorf("failed to update status to uploading: %w", err)
@@ -338,6 +332,13 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		// Continue - not fatal
 	} else {
 		log.Printf("[PIPELINE] Updated final output: mode=%s, path=%s", outputMode, finalPath)
+	}
+
+	// Clear local_path only after processing completed and the output is safely stored.
+	if err := p.jobRepo.MarkSourceFileDeleted(ctx, jobID, hlsPath); err != nil {
+		log.Printf("[PIPELINE] WARNING: Failed to mark source file deleted: %v", err)
+	} else {
+		log.Printf("[PIPELINE] Marked source file deleted after upload, output_path=%s, cleared local_path", hlsPath)
 	}
 
 	// Update progress to 90%

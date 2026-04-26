@@ -53,6 +53,7 @@ func candidateDownloadPaths(job *models.IngestionJob, downloadDir string) []stri
 		return nil
 	}
 	names := []string{
+		job.ID.Hex(),
 		job.Title,
 		job.SourceID,
 	}

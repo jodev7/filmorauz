@@ -575,6 +575,8 @@ class DownloaderService:
         logger.info("[DOWNLOAD COMPLETE] Parallel download finished successfully")
         logger.info(f"[DOWNLOAD COMPLETE] File: {output_path}")
         logger.info(f"[DOWNLOAD COMPLETE] Size: {final_size} bytes")
+        logger.info(f"[DOWNLOAD] saved file: {output_path}")
+        logger.info(f"[DOWNLOAD] file exists: {os.path.exists(output_path)}")
         logger.info("=" * 60)
         
         if job_id:
@@ -754,6 +756,8 @@ class DownloaderService:
             output_path = _ensure_absolute_file_path(output_path)
             logger.info(f"[DOWNLOAD COMPLETE] File: {output_path}")
             logger.info(f"[DOWNLOAD COMPLETE] Size: {downloaded_bytes} bytes")
+            logger.info(f"[DOWNLOAD] saved file: {output_path}")
+            logger.info(f"[DOWNLOAD] file exists: {os.path.exists(output_path)}")
             logger.info("=" * 60)
             
             # Update local progress to completed
@@ -1009,6 +1013,8 @@ class DownloaderService:
             logger.info("[DOWNLOAD COMPLETE] HLS/FFmpeg download finished successfully")
             logger.info(f"[DOWNLOAD COMPLETE] File: {output_path}")
             logger.info(f"[DOWNLOAD COMPLETE] Size: {file_size} bytes")
+            logger.info(f"[DOWNLOAD] saved file: {output_path}")
+            logger.info(f"[DOWNLOAD] file exists: {os.path.exists(output_path)}")
             logger.info("=" * 60)
             
             # Local progress - complete

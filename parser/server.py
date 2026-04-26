@@ -124,7 +124,7 @@ def _detect_serial_provider(url: str) -> str:
     return ""
 
 # Initialize downloader service
-DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "downloads")
+DOWNLOAD_DIR = os.path.abspath(os.environ.get("DOWNLOAD_DIR", str(Path(__file__).parent / "downloads")))
 downloader_service = DownloaderService(DOWNLOAD_DIR)
 
 # Active download registry for non-blocking downloads
@@ -140,6 +140,12 @@ _ig_last_upload_times = {}
 _ig_upload_state_lock = threading.Lock()
 REMOTE_VIDEO_DOWNLOAD_TIMEOUT = int(os.environ.get("REMOTE_VIDEO_DOWNLOAD_TIMEOUT", "45"))
 REMOTE_VIDEO_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+
+
+def build_job_output_name(job_id: str, fallback: str = "download") -> str:
+    safe_name = re.sub(r'[^\w\s-]', '', (job_id or fallback).strip())
+    safe_name = re.sub(r'[-\s]+', '_', safe_name).strip("_") or fallback
+    return f"{safe_name}.mp4"
 
 
 class InstagramUploadError(Exception):
@@ -579,7 +585,7 @@ def _run_claimed_download(job: dict, parser_base_url: str):
         raise RuntimeError("claimed job missing job_id")
 
     video_url, referer = _resolve_claimed_job_video(job, parser_base_url)
-    output_name = f"{job_id}/{job_id}.mp4"
+    output_name = build_job_output_name(job_id, "queue_download")
 
     logger.info(f"[QUEUE] download start job_id={job_id} source={job.get('source')} output={output_name}")
     result = downloader_service.smart_download(
@@ -1401,9 +1407,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                         self._send_json(response_payload, 422)
                         return
 
-                    safe_title = re.sub(r'[^\w\s-]', '', normalized_metadata.get("title") or source_id or "download")
-                    safe_title = re.sub(r'[-\s]+', '_', safe_title).strip("_") or "download"
-                    output_name = f"{safe_title}.mp4"
+                    output_name = build_job_output_name(job_id, normalized_metadata.get("title") or source_id or "download")
                     backend_job_id = job_id if job_id else ""
 
                     logger.info(f"[PARSER] download started - source={source}, output_name={output_name}")
@@ -1436,6 +1440,7 @@ class ParserHandler(BaseHTTPRequestHandler):
 
                     local_path = download_result.get("file_path", "")
                     if not local_path or not os.path.exists(local_path):
+                        logger.error(f"[ERROR] file missing at {local_path or '(empty)'}")
                         logger.error(f"[PARSER] download completed without local_path - source={source}, local_path={local_path}")
                         response_payload = create_worker_payload(
                             source=source,
@@ -1548,11 +1553,10 @@ class ParserHandler(BaseHTTPRequestHandler):
                 self._send_error("Missing 'video_url' parameter")
                 return
             
-            # Generate output name if not provided
-            if not output_name:
-                safe_name = re.sub(r'[^\w\s-]', '', job_id or 'download')
-                safe_name = re.sub(r'[-\s]+', '_', safe_name)
-                output_name = f"{safe_name}.mp4"
+            if job_id:
+                output_name = build_job_output_name(job_id, output_name or "download")
+            elif not output_name:
+                output_name = build_job_output_name(job_id, "download")
             
             backend_job_id = job_id if job_id else ""
             
@@ -2108,11 +2112,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                         return
                     
                     title = body.get("title", "manual_import")
-                    import re as _re
-                    output_name = output_name or _re.sub(r'[^\w\s-]', '', title)
-                    output_name = _re.sub(r'[-\s]+', '_', output_name)
-                    if not output_name.endswith((".mp4", ".m3u8", ".mkv")):
-                        output_name += ".mp4"
+                    output_name = build_job_output_name(backend_job_id, title) if backend_job_id else build_job_output_name(output_name or title, "manual_import")
                     
                     # Detect type
                     url_type = "mp4"
@@ -2152,14 +2152,16 @@ class ParserHandler(BaseHTTPRequestHandler):
                     self._send_error("Missing 'id' or 'url' parameter")
                     return
                 
-                if not output_name:
+                if backend_job_id:
+                    output_name = build_job_output_name(backend_job_id, source_id or source or "download")
+                elif not output_name:
                     # Generate default output name from source_id or URL
                     if source_id:
-                        output_name = f"{source}_{source_id}.mp4"
+                        output_name = build_job_output_name(f"{source}_{source_id}", "download")
                     else:
                         import hashlib
                         url_hash = hashlib.md5(detail_url.encode()).hexdigest()[:8]
-                        output_name = f"{source}_{url_hash}.mp4"
+                        output_name = build_job_output_name(f"{source}_{url_hash}", "download")
                 
                 # Ensure output_name has proper extension
                 if not output_name.endswith((".mp4", ".m3u8", ".mkv")):

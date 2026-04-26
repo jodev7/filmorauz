@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -169,6 +170,9 @@ func main() {
 		processConcurrency = 1
 	}
 	downloadDir := getEnv("DOWNLOAD_DIR", "../parser/downloads")
+	if absDownloadDir, err := filepath.Abs(downloadDir); err == nil {
+		downloadDir = absDownloadDir
+	}
 
 	// Create worker context that can be cancelled
 	workerCtx, workerCancel := context.WithCancel(context.Background())

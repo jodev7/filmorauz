@@ -39,12 +39,15 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	}
 	localPath := job.LocalPath
 	if localPath == "" {
+		log.Printf("[PROCESS] skipped job=%s reason=missing local_path", jobID)
 		return fmt.Errorf("episode job %s is not ready_to_process: local_path is empty", jobID)
 	}
 	if fi, err := os.Stat(localPath); err != nil || fi.Size() == 0 {
 		if err != nil {
+			log.Printf("[ERROR] file missing at %s", localPath)
 			return fmt.Errorf("episode local_path unavailable: %w", err)
 		}
+		log.Printf("[ERROR] file missing at %s", localPath)
 		return fmt.Errorf("episode local_path is empty: %s", localPath)
 	}
 
@@ -76,9 +79,6 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	if stepErr := p.jobRepo.UpdateStep(ctx, jobID, "process"); stepErr != nil {
 		log.Printf("[EPISODE] WARNING: mark process step failed: %v", stepErr)
 	}
-	if err := p.jobRepo.MarkSourceFileDeleted(ctx, jobID, hlsDir); err != nil {
-		log.Printf("[EPISODE] WARNING: MarkSourceFileDeleted: %v", err)
-	}
 
 	if err := p.updateStatus(jobID, models.IngestionStatusUploading, 70); err != nil {
 		return fmt.Errorf("episode update_status uploading: %w", err)
@@ -102,6 +102,9 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	}
 	if err := p.jobRepo.UpdateFinalOutputPath(ctx, jobID, finalPath, streamingURL, outputMode); err != nil {
 		log.Printf("[EPISODE] WARNING: UpdateFinalOutputPath: %v", err)
+	}
+	if err := p.jobRepo.MarkSourceFileDeleted(ctx, jobID, hlsDir); err != nil {
+		log.Printf("[EPISODE] WARNING: MarkSourceFileDeleted: %v", err)
 	}
 
 	// === Notify backend so the Episode row gets the playback URL ===
