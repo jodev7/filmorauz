@@ -354,6 +354,10 @@ function resolveClipDownloadUrl(clip: Clip): string {
   return "";
 }
 
+function resolveClipOpenUrl(clip: Clip): string {
+  return resolveClipDownloadUrl(clip);
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function AdminClipsPage() {
@@ -367,6 +371,7 @@ export default function AdminClipsPage() {
   const [editingJob, setEditingJob] = useState<{ id: string; value: string } | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [expandedMovies, setExpandedMovies] = useState<Set<string>>(new Set());
+  const [downloading, setDownloading] = useState<Record<string, boolean>>({});
 
   const toggleMovie = (movieId: string) =>
     setExpandedMovies((prev) => {
@@ -562,17 +567,32 @@ export default function AdminClipsPage() {
   };
 
   const handleDownloadClip = (clip: Clip) => {
-    const resolvedUrl = resolveClipDownloadUrl(clip);
-    if (!resolvedUrl) return;
+    if (!token) return;
+    setDownloading((prev) => ({ ...prev, [clip.id]: true }));
 
-    const link = document.createElement("a");
-    link.href = resolvedUrl;
-    link.download = clip.filename;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    fetch(`${API}/admin/clips/${clip.id}/download`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error(`download failed: ${res.status}`);
+        }
+        const blob = await res.blob();
+        const objectUrl = window.URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = objectUrl;
+        link.download = clip.filename || "clip.mp4";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(objectUrl);
+      })
+      .catch(() => {
+        // silently ignore
+      })
+      .finally(() => {
+        setDownloading((prev) => ({ ...prev, [clip.id]: false }));
+      });
   };
 
   const groupedClips = groupByMovie(clips);
@@ -766,7 +786,7 @@ export default function AdminClipsPage() {
                                 <td className="px-4 py-3">
                                   <div className="flex items-center justify-end gap-2">
                                     <a
-                                      href={clip.url}
+                                      href={resolveClipOpenUrl(clip)}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="text-gray-500 hover:text-gray-300 transition-colors"
@@ -776,12 +796,16 @@ export default function AdminClipsPage() {
                                     </a>
                                     <button
                                       onClick={() => handleDownloadClip(clip)}
-                                      disabled={!resolveClipDownloadUrl(clip)}
+                                      disabled={!token || downloading[clip.id]}
                                       title="Klipni yuklab olish"
                                       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
-                                      <Download size={12} />
-                                      Download
+                                      {downloading[clip.id] ? (
+                                        <Loader2 size={12} className="animate-spin" />
+                                      ) : (
+                                        <Download size={12} />
+                                      )}
+                                      {downloading[clip.id] ? "..." : "Download"}
                                     </button>
                                     <button
                                       onClick={() => openModal(clip)}

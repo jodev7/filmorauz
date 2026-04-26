@@ -2455,7 +2455,6 @@ class ParserHandler(BaseHTTPRequestHandler):
 
                 import tempfile, json as _json
                 from datetime import datetime
-                from pathlib import Path
 
                 # Required scope for uploading; if the saved token has different scopes,
                 # Google returns 403 on videos().insert() — so we always pin this.

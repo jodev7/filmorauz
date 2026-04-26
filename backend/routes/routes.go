@@ -253,6 +253,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 		// Clip management
 		admin.GET("/clips", clipHandler.ListClips)
 		admin.GET("/clips/movie/:movieId", clipHandler.GetClipsByMovie)
+		admin.GET("/clips/:id/download", clipHandler.DownloadClip)
 		admin.POST("/clips", clipHandler.SaveClips)
 		admin.DELETE("/clips/movie/:movieId", clipHandler.DeleteClipsByMovie)
 		admin.POST("/clips/:id/instagram", clipHandler.UploadToInstagram)

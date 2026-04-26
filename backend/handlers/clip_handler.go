@@ -3,10 +3,14 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
+	"github.com/filmorauz/backend/config"
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
 	"github.com/filmorauz/backend/services"
@@ -66,6 +70,110 @@ func (h *ClipHandler) GetClipsByMovie(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"data": clips,
 	})
+}
+
+func resolveClipDownloadURL(clip *models.Clip) string {
+	if clip == nil {
+		return ""
+	}
+
+	raw := strings.TrimSpace(clip.URL)
+	cfg := config.Current()
+
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		if strings.Contains(raw, "/media/") && cfg != nil && cfg.CDNBaseURL != "" {
+			if idx := strings.Index(raw, "/media/"); idx != -1 {
+				mediaPath := raw[idx+len("/media"):]
+				if strings.HasPrefix(mediaPath, "/videos/") {
+					return strings.TrimSuffix(cfg.CDNBaseURL, "/") + mediaPath
+				}
+			}
+		}
+		return raw
+	}
+
+	if cfg != nil {
+		switch {
+		case strings.HasPrefix(raw, "/videos/"):
+			return strings.TrimSuffix(cfg.CDNBaseURL, "/") + raw
+		case strings.HasPrefix(raw, "videos/"):
+			return strings.TrimSuffix(cfg.CDNBaseURL, "/") + "/" + raw
+		case raw != "":
+			return cfg.GetCDNFileURL(raw)
+		case clip.Path != "":
+			return cfg.GetCDNFileURL(clip.Path)
+		}
+	}
+
+	return raw
+}
+
+// DownloadClip GET /api/admin/clips/:id/download
+// Streams the clip through backend with attachment headers so the browser downloads it.
+func (h *ClipHandler) DownloadClip(c *gin.Context) {
+	idStr := c.Param("id")
+	clipID, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid clip id"})
+		return
+	}
+
+	ctx := context.Background()
+	clip, err := h.clipRepo.FindByID(ctx, clipID)
+	if err != nil || clip == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "clip not found"})
+		return
+	}
+
+	downloadURL := resolveClipDownloadURL(clip)
+	if downloadURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "clip url is missing"})
+		return
+	}
+
+	log.Printf("[ClipHandler] DownloadClip: clip=%s filename=%q url=%s", clip.ID.Hex(), clip.Filename, downloadURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to prepare clip download"})
+		return
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ClipHandler] DownloadClip: upstream request failed: %v", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to fetch clip"})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyPreview, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		log.Printf("[ClipHandler] DownloadClip: upstream status=%d body=%s", resp.StatusCode, string(bodyPreview))
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("clip download failed: upstream status %d", resp.StatusCode)})
+		return
+	}
+
+	filename := strings.TrimSpace(clip.Filename)
+	if filename == "" {
+		filename = "clip.mp4"
+	}
+	if !strings.HasSuffix(strings.ToLower(filename), ".mp4") {
+		filename += ".mp4"
+	}
+
+	c.Header("Content-Type", "video/mp4")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	c.Header("Cache-Control", "no-store")
+	if resp.ContentLength > 0 {
+		c.Header("Content-Length", fmt.Sprintf("%d", resp.ContentLength))
+	}
+
+	if _, err := io.Copy(c.Writer, resp.Body); err != nil {
+		log.Printf("[ClipHandler] DownloadClip: stream copy failed: %v", err)
+	}
 }
 
 func (h *ClipHandler) SaveClips(c *gin.Context) {
