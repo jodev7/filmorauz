@@ -33,69 +33,19 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	if job.Metadata == nil {
 		return fmt.Errorf("episode job %s has no metadata", jobID)
 	}
-	videoURL := job.VideoURL
-	if videoURL == "" {
-		videoURL = job.Metadata.VideoURL
-	}
-	if videoURL == "" {
-		reason := fmt.Sprintf("episode missing video_url for %s S%02dE%02d", job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber)
-		if err := p.markJobNeedsManual(jobID, reason); err != nil {
-			return fmt.Errorf("episode mark needs_manual: %w", err)
-		}
-		log.Printf("[EPISODE] needs_manual job=%s reason=%s", jobID, reason)
-		return nil
-	}
-
 	// Sanity: required linkage fields.
 	if job.EpisodeID.IsZero() || job.SeriesSlug == "" {
 		return fmt.Errorf("episode job %s missing series/episode linkage", jobID)
 	}
-
-	// Persist video_url onto the job (pollDownloadProgress reads job.VideoURL
-	// for restart safety, matching the movie pipeline's contract).
-	if job.VideoURL == "" {
-		if err := p.jobRepo.UpdateVideoURL(ctx, jobID, videoURL); err != nil {
-			log.Printf("[EPISODE] WARNING: persist video_url failed: %v", err)
-		}
-		job.VideoURL = videoURL
-	}
-
-	// === Download phase ===
-	if err := p.updateStatus(jobID, models.IngestionStatusDownloading, 10); err != nil {
-		return fmt.Errorf("episode update_status downloading: %w", err)
-	}
-
-	var localPath string
-	if job.LocalPath != "" {
-		if fi, err := os.Stat(job.LocalPath); err == nil && fi.Size() > 0 {
-			log.Printf("[EPISODE] reusing existing local_path=%s", job.LocalPath)
-			localPath = job.LocalPath
-		}
-	}
+	localPath := job.LocalPath
 	if localPath == "" {
-		if !job.Steps.DownloadStarted {
-			if err := p.jobRepo.MarkDownloadStarted(ctx, jobID); err != nil {
-				log.Printf("[EPISODE] WARNING: MarkDownloadStarted: %v", err)
-			}
-			lp, err := p.startDownloadAndPoll(ctx, job)
-			if err != nil {
-				return fmt.Errorf("episode download failed: %w", err)
-			}
-			localPath = lp
-		} else {
-			lp, err := p.pollDownloadProgress(ctx, job, videoURL)
-			if err != nil {
-				return fmt.Errorf("episode resume-poll failed: %w", err)
-			}
-			localPath = lp
+		return fmt.Errorf("episode job %s is not ready_to_process: local_path is empty", jobID)
+	}
+	if fi, err := os.Stat(localPath); err != nil || fi.Size() == 0 {
+		if err != nil {
+			return fmt.Errorf("episode local_path unavailable: %w", err)
 		}
-	}
-
-	if localPath == "" {
-		return fmt.Errorf("episode download returned empty local_path")
-	}
-	if err := p.jobRepo.TransitionToProcessing(ctx, jobID, localPath); err != nil {
-		log.Printf("[EPISODE] WARNING: TransitionToProcessing: %v", err)
+		return fmt.Errorf("episode local_path is empty: %s", localPath)
 	}
 
 	// === Process + upload phase ===

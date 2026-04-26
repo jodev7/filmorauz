@@ -10,15 +10,18 @@ import (
 type IngestionStatus string
 
 const (
-	IngestionStatusPending    IngestionStatus = "pending"
-	IngestionStatusProcessing IngestionStatus = "processing"
-	IngestionStatusCompleted  IngestionStatus = "completed"
-	IngestionStatusFailed     IngestionStatus = "failed"
+	IngestionStatusQueued         IngestionStatus = "queued"
+	IngestionStatusPending        IngestionStatus = IngestionStatusQueued
+	IngestionStatusDownloading    IngestionStatus = "downloading"
+	IngestionStatusDownloaded     IngestionStatus = "downloaded"
+	IngestionStatusReadyToProcess IngestionStatus = "ready_to_process"
+	IngestionStatusProcessing     IngestionStatus = "processing"
+	IngestionStatusUploading      IngestionStatus = "uploading"
+	IngestionStatusCompleted      IngestionStatus = "completed"
+	IngestionStatusFailed         IngestionStatus = "failed"
 
 	// Legacy statuses for pipeline compatibility (deprecated but still used)
 	IngestionStatusParsing     IngestionStatus = "parsing"
-	IngestionStatusDownloading IngestionStatus = "downloading"
-	IngestionStatusUploading   IngestionStatus = "uploading"
 	IngestionStatusNeedsManual IngestionStatus = "needs_manual"
 
 	// NEW: Detailed pipeline statuses

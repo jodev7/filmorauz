@@ -95,7 +95,12 @@ func (r *JobRepository) Create(ctx context.Context, job *models.IngestionJob) er
 	job.ID = primitive.NewObjectID()
 	job.CreatedAt = time.Now()
 	job.UpdatedAt = time.Now()
-	job.Status = models.IngestionStatusPending
+	if job.Status == "" {
+		job.Status = models.IngestionStatusQueued
+	}
+	if job.Stage == "" {
+		job.Stage = string(job.Status)
+	}
 	job.Progress = 0
 	job.Steps = models.JobSteps{}
 	job.Logs = []models.IngestionLog{}
@@ -141,7 +146,7 @@ func (r *JobRepository) GetPendingJobs(ctx context.Context, limit int) ([]*model
 	filter := bson.M{
 		"status": bson.M{
 			"$in": []models.IngestionStatus{
-				models.IngestionStatusPending,
+				models.IngestionStatusQueued,
 				models.IngestionStatusFailed,
 			},
 		},
@@ -168,21 +173,16 @@ func (r *JobRepository) GetPendingJobs(ctx context.Context, limit int) ([]*model
 	return jobs, nil
 }
 
-// ClaimNextJob atomically claims the next pending job
+// ClaimNextJob atomically claims the next queued download job.
 // This uses FindOneAndUpdate to ensure only one worker can claim a job
 // Returns nil if no jobs are available
-// Note: Only claims jobs where steps.download is NOT true (download not complete)
 func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob, error) {
 	filter := bson.M{
-		"status": models.IngestionStatusPending,
+		"status": models.IngestionStatusQueued,
 		"retry_count": bson.M{
 			"$lt": 3, // Max 3 retries
 		},
-		// Only claim jobs where download is NOT complete - skip to processing
-		// This ensures worker doesn't re-run parser for jobs already downloaded
-		"steps.download": bson.M{
-			"$ne": true,
-		},
+		"steps.download": bson.M{"$ne": true},
 	}
 
 	now := time.Now()
@@ -191,7 +191,8 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 	// we re-stamp it so each attempt has its own timer.
 	update := bson.M{
 		"$set": bson.M{
-			"status":     models.IngestionStatusProcessing,
+			"status":     models.IngestionStatusDownloading,
+			"stage":      "download",
 			"updated_at": now,
 			"started_at": now,
 		},
@@ -212,11 +213,10 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 	return &job, nil
 }
 
-// ClaimNextProcessingJob atomically claims a job ready for ffmpeg processing
-// This is called when steps.download=true but steps.process=false
+// ClaimNextProcessingJob atomically claims a job ready for ffmpeg processing.
 func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.IngestionJob, error) {
 	filter := bson.M{
-		"status":         models.IngestionStatusPending,
+		"status":         models.IngestionStatusReadyToProcess,
 		"retry_count":    bson.M{"$lt": 3},
 		"steps.download": true,
 		"steps.process":  bson.M{"$ne": true},
@@ -229,7 +229,7 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 		bson.M{
 			"$set": bson.M{
 				"status":     models.IngestionStatusProcessing,
-				"stage":      "process",
+				"stage":      "processing",
 				"updated_at": now,
 				"started_at": bson.M{"$ifNull": bson.A{"$started_at", now}},
 			},
@@ -262,6 +262,7 @@ func (r *JobRepository) UpdateStatus(ctx context.Context, id string, status mode
 		"$set": bson.M{
 			"status":     status,
 			"progress":   progress,
+			"stage":      string(status),
 			"updated_at": time.Now(),
 		},
 	}
@@ -269,6 +270,8 @@ func (r *JobRepository) UpdateStatus(ctx context.Context, id string, status mode
 	if status == models.IngestionStatusCompleted || status == models.IngestionStatusFailed {
 		completedAt := time.Now()
 		update["$set"].(bson.M)["completed_at"] = completedAt
+	} else {
+		update["$unset"] = bson.M{"completed_at": ""}
 	}
 
 	_, err = r.collection.UpdateByID(ctx, objID, update)
@@ -341,10 +344,26 @@ func (r *JobRepository) SetError(ctx context.Context, id string, errMsg string) 
 		"$set": bson.M{
 			"error":      errMsg,
 			"status":     models.IngestionStatusFailed,
+			"stage":      "failed",
 			"updated_at": time.Now(),
 		},
 	})
 
+	return err
+}
+
+func (r *JobRepository) ClearError(ctx context.Context, id string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid id")
+	}
+
+	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
+		"$set": bson.M{
+			"error":      "",
+			"updated_at": time.Now(),
+		},
+	})
 	return err
 }
 
@@ -357,7 +376,11 @@ func (r *JobRepository) IncrementRetry(ctx context.Context, id string) error {
 
 	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
 		"$inc": bson.M{"retry_count": 1},
-		"$set": bson.M{"status": models.IngestionStatusPending, "updated_at": time.Now()},
+		"$set": bson.M{
+			"status":     models.IngestionStatusQueued,
+			"stage":      "queued",
+			"updated_at": time.Now(),
+		},
 	})
 
 	return err
@@ -455,6 +478,8 @@ func DeriveStatusFromStage(stage string) string {
 		return "parsing"
 	case "download":
 		return "downloading"
+	case "ready_to_process":
+		return "ready_to_process"
 	case "process", "watermark", "ffmpeg", "hls", "poster", "backdrop":
 		return "processing"
 	case "done":
@@ -514,11 +539,13 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 	}
 	if progress.Status != "" {
 		update["$set"].(bson.M)["status"] = progress.Status
+		update["$set"].(bson.M)["stage"] = progress.Status
 	} else if progress.Stage != "" {
 		// Derive status from stage if not explicitly provided
 		derived := DeriveStatusFromStage(progress.Stage)
 		if derived != "" {
 			update["$set"].(bson.M)["status"] = derived
+			update["$set"].(bson.M)["stage"] = derived
 		}
 	}
 
@@ -531,11 +558,11 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 		log.Printf("[JOB REPO] Download complete (progress=%d%%, steps_download=%v) - marking steps.download=true", progress.Progress, progress.StepsDownload)
 		update["$set"].(bson.M)["steps.download"] = true
 
-		// On download complete: save local_path but do NOT force stage/status —
-		// worker sets those explicitly when it starts processing.
+		// Downloaded media waits in the processing queue until a worker slot is free.
 		if progress.StepsDownload || progress.Progress >= 100 {
-			log.Printf("[JOB REPO] Download finished - setting status to downloaded")
-			update["$set"].(bson.M)["status"] = "downloaded"
+			log.Printf("[JOB REPO] Download finished - moving job to ready_to_process")
+			update["$set"].(bson.M)["status"] = string(models.IngestionStatusReadyToProcess)
+			update["$set"].(bson.M)["stage"] = string(models.IngestionStatusReadyToProcess)
 			if progress.FilePath != "" {
 				update["$set"].(bson.M)["local_path"] = progress.FilePath
 				log.Printf("[JOB REPO] Updated local_path=%s (download completed)", progress.FilePath)
@@ -552,6 +579,7 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 	// Update status if provided
 	if progress.Status != "" {
 		update["$set"].(bson.M)["status"] = progress.Status
+		update["$set"].(bson.M)["stage"] = progress.Status
 	}
 
 	log.Printf("[JOB REPO] Calling UpdateOne with filter: _id=%s", objID.Hex())

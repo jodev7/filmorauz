@@ -164,6 +164,10 @@ func main() {
 
 	// Start worker
 	log.Println("Starting ingestion worker...")
+	processConcurrency := getEnvAsInt("PROCESS_CONCURRENCY", 3)
+	if processConcurrency < 1 {
+		processConcurrency = 1
+	}
 
 	// Create worker context that can be cancelled
 	workerCtx, workerCancel := context.WithCancel(context.Background())
@@ -204,98 +208,51 @@ func main() {
 		}
 	}()
 
-	// Main worker loop - uses atomic job claiming for multi-worker safety
-	go func() {
-		pollInterval := 5 * time.Second
-		ticker := time.NewTicker(pollInterval)
-		defer ticker.Stop()
+	// Fixed-size processing pool - each goroutine owns one processing slot.
+	for workerIndex := 0; workerIndex < processConcurrency; workerIndex++ {
+		go func(slot int) {
+			pollInterval := 5 * time.Second
+			log.Printf("[WORKER] Processing slot %d/%d started", slot+1, processConcurrency)
 
-		log.Println("Worker started - polling for jobs every 5 seconds")
-
-		// Debug: Log pending job counts at startup
-		if count, err := jobRepo.CountPendingJobs(workerCtx); err == nil {
-			log.Printf("[WORKER] Startup: found %d pending jobs", count)
-		} else {
-			log.Printf("[WORKER] Startup: could not count pending jobs: %v", err)
-		}
-
-		for {
-			select {
-			case <-workerCtx.Done():
-				log.Println("Worker stopped")
-				return
-			case <-ticker.C:
-				// Debug: log pending job counts every poll
-				if count, err := jobRepo.CountPendingJobs(workerCtx); err == nil && count > 0 {
-					log.Printf("[WORKER] Poll: %d pending jobs found", count)
+			for {
+				select {
+				case <-workerCtx.Done():
+					return
+				default:
 				}
 
-				// Wrap job processing in panic recovery to ensure worker stability
 				func() {
 					defer func() {
 						if r := recover(); r != nil {
-							log.Printf("[PANIC RECOVERY] Worker loop panicked: %v", r)
-							// Continue the loop - don't let panic kill the worker
+							log.Printf("[PANIC RECOVERY] Worker slot %d panicked: %v", slot+1, r)
 						}
 					}()
 
-					// Poll for jobs - process all available jobs in this tick
-					for {
-						// Atomically claim the next pending job
-						// This ensures only one worker processes each job
-						log.Printf("[WORKER] Polling for pending jobs...")
-						job, err := jobRepo.ClaimNextJob(workerCtx)
-						if err != nil {
-							log.Printf("[WORKER] Error claiming job: %v", err)
-							break
-						}
+					job, err := jobRepo.ClaimNextProcessingJob(workerCtx)
+					if err != nil {
+						log.Printf("[WORKER] Slot %d claim error: %v", slot+1, err)
+						time.Sleep(pollInterval)
+						return
+					}
+					if job == nil {
+						time.Sleep(pollInterval)
+						return
+					}
 
-						// If no download job available, try claiming a processing job
-						// This handles jobs where steps.download=true but steps.process=false
-						if job == nil {
-							log.Printf("[WORKER] No download jobs, polling for processing jobs...")
-							job, err = jobRepo.ClaimNextProcessingJob(workerCtx)
-							if err != nil {
-								log.Printf("[WORKER] Error claiming processing job: %v", err)
-								break
-							}
-							if job != nil {
-								log.Printf("[WORKER] Claimed processing job (steps.download=true): %s", job.ID.Hex())
-							}
-						} else {
-							log.Printf("[WORKER] Claimed download job: %s (steps.download will be set after parser)", job.ID.Hex())
-						}
+					title := job.Title
+					if title == "" && job.Metadata != nil {
+						title = job.Metadata.Title
+					}
+					if title == "" {
+						title = job.SourceID
+					}
 
-						if job == nil {
-							// No jobs available, stop polling this tick
-							log.Printf("[WORKER] No pending jobs found")
-							break
-						}
-
-						title := job.Title
-						if title == "" && job.Metadata != nil {
-							title = job.Metadata.Title
-						}
-						if title == "" {
-							title = job.SourceID
-						}
-
-						// DEBUG: Log job details to diagnose metadata loading issue
-						log.Printf("[WORKER] Claimed job %s: %s from %s", job.ID.Hex(), title, job.Source)
-						log.Printf("[WORKER] job.local_path=%s", job.LocalPath)
-						log.Printf("[WORKER] metadata nil? %v", job.Metadata == nil)
-						if job.Metadata != nil {
-							log.Printf("[WORKER] metadata title=%s", job.Metadata.Title)
-						}
-
-						// Process the job with panic recovery
-						// This ensures a single job failure doesn't crash the worker
-						safeProcessJob(pipe, workerCtx, job)
-					} // end for loop
+					log.Printf("[WORKER] Slot %d claimed processing job %s: %s from %s", slot+1, job.ID.Hex(), title, job.Source)
+					safeProcessJob(pipe, workerCtx, job)
 				}()
 			}
-		}
-	}()
+		}(workerIndex)
+	}
 
 	log.Println("Worker is running. Press Ctrl+C to stop.")
 

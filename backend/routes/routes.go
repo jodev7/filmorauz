@@ -177,6 +177,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	// Worker claim endpoint - worker calls this to get a job for ffmpeg processing
 	// Returns job where steps.download=true and steps.process=false
 	api.GET("/ingestion/jobs/worker/claim", ingestionHandler.WorkerClaimJob)
+	api.GET("/ingestion/jobs/parser/claim", ingestionHandler.ParserClaimJob)
 
 	// Get presigned upload URL for direct B2 upload
 	api.GET("/get-upload-url", ingestionHandler.GetUploadURL)

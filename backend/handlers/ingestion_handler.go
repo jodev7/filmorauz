@@ -426,7 +426,8 @@ func (h *IngestionHandler) CreateIngestionJob(c *gin.Context) {
 		Source:    input.Source,
 		SourceID:  input.SourceID,
 		DetailURL: input.DetailURL,
-		Status:    models.IngestionStatusPending,
+		Status:    models.IngestionStatusQueued,
+		Stage:     string(models.IngestionStatusQueued),
 		Progress:  0,
 		Steps:     models.JobSteps{},
 		Logs:      []models.IngestionLog{},
@@ -520,9 +521,10 @@ func (h *IngestionHandler) CreateDirectUploadJob(c *gin.Context) {
 		DetailURL:   input.TempFileURL, // Store temp URL in DetailURL
 		TempFileURL: input.TempFileURL,
 		TempFileKey: input.TempFileKey, // Store B2 temp key for cleanup tracking
-		Status:      models.IngestionStatusPending,
+		Status:      models.IngestionStatusReadyToProcess,
+		Stage:       string(models.IngestionStatusReadyToProcess),
 		Progress:    0,
-		Steps:       models.JobSteps{},
+		Steps:       models.JobSteps{Download: true},
 		Logs:        []models.IngestionLog{},
 		Metadata:    metadata,
 		Quality:     input.Quality,
@@ -668,19 +670,25 @@ func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
 			models.IngestionStatusFailed,
 			models.IngestionStatusDownloadFailed,
 		}}
-	case "pending":
+	case "pending", "queued":
 		filter["$or"] = bson.A{
-			bson.M{"status": models.IngestionStatusPending},
-			bson.M{"stage": "pending"},
+			bson.M{"status": models.IngestionStatusQueued},
+			bson.M{"stage": "queued"},
 		}
+	case "downloading":
+		filter["status"] = models.IngestionStatusDownloading
+	case "ready_to_process":
+		filter["status"] = models.IngestionStatusReadyToProcess
 	case "processing":
 		filter["$or"] = bson.A{
 			bson.M{"status": bson.M{"$in": bson.A{
 				models.IngestionStatusProcessing,
+				models.IngestionStatusUploading,
 				models.IngestionStatusHLSProcessing,
 			}}},
 			bson.M{"stage": bson.M{"$in": bson.A{
 				"processing",
+				"uploading",
 				"hls_processing",
 			}}},
 		}
@@ -757,7 +765,7 @@ func (h *IngestionHandler) RetryIngestionJob(c *gin.Context) {
 
 	// Allow retry from ANY state (except already processing)
 	// This enables retry from: pending, failed, completed, processing (if stuck)
-	if job.Status == models.IngestionStatusProcessing {
+	if job.Status == models.IngestionStatusProcessing || job.Status == models.IngestionStatusUploading || job.Status == models.IngestionStatusDownloading {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "job is already being processed"})
 		return
 	}
@@ -765,43 +773,34 @@ func (h *IngestionHandler) RetryIngestionJob(c *gin.Context) {
 	// Determine the appropriate stage based on existing job state
 	// If local_path exists and steps.download is true, go to processing stage
 	// Otherwise, start from download stage
-	newStage := "download"
+	newStatus := models.IngestionStatusQueued
 
 	if job.LocalPath != "" && job.Steps.Download {
-		// File already downloaded, go to processing
-		newStage = "process"
-		log.Printf("[INGESTION] RETRY: Job %s has local_path=%s, starting from process stage", id, job.LocalPath)
+		newStatus = models.IngestionStatusReadyToProcess
+		log.Printf("[INGESTION] RETRY: Job %s has local_path=%s, resetting to ready_to_process", id, job.LocalPath)
 	} else if job.Steps.Download && job.LocalPath == "" {
-		// Download marked complete but no local_path - restart from download
-		newStage = "download"
+		newStatus = models.IngestionStatusQueued
 		log.Printf("[INGESTION] RETRY: Job %s has steps.download but no local_path, restarting download", id)
 	} else {
-		log.Printf("[INGESTION] RETRY: Job %s starting from download stage", id)
+		log.Printf("[INGESTION] RETRY: Job %s restarting from queued download stage", id)
 	}
 
-	// Update status to pending (worker will pick it up)
-	if err := h.jobRepo.UpdateStatus(ctx, id, models.IngestionStatusPending, 0); err != nil {
+	progressValue := 0
+	if newStatus == models.IngestionStatusReadyToProcess {
+		progressValue = 100
+	}
+	if err := h.jobRepo.UpdateStatus(ctx, id, newStatus, progressValue); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update job status"})
 		return
 	}
 
-	// Update stage and status using UpdateProgress
-	if err := h.jobRepo.UpdateProgress(ctx, id, &repositories.ProgressUpdate{
-		Stage:    newStage,
-		Status:   "pending",
-		Progress: 0,
-	}); err != nil {
-		log.Printf("[INGESTION] WARNING: failed to update stage: %v", err)
-	}
-
-	// Clear error message using SetError with empty string
-	if err := h.jobRepo.SetError(ctx, id, ""); err != nil {
+	if err := h.jobRepo.ClearError(ctx, id); err != nil {
 		log.Printf("[INGESTION] WARNING: failed to clear error: %v", err)
 	}
 
-	log.Printf("[INGESTION] RETRY: Job %s restarted - status=pending, stage=%s", id, newStage)
+	log.Printf("[INGESTION] RETRY: Job %s restarted - status=%s", id, newStatus)
 
-	c.JSON(http.StatusOK, gin.H{"message": "job retry initiated", "stage": newStage})
+	c.JSON(http.StatusOK, gin.H{"message": "job retry initiated", "status": newStatus})
 }
 
 // UpdateJobProgress updates the download progress for a job
@@ -964,6 +963,38 @@ func (h *IngestionHandler) WorkerClaimJob(c *gin.Context) {
 	// No jobs ready for processing
 	log.Printf("[INGESTION] WORKER: No jobs ready for processing")
 	c.JSON(http.StatusNotFound, gin.H{"error": "no jobs ready for processing"})
+}
+
+// ParserClaimJob allows the parser service to atomically claim the next queued download job.
+// GET /api/ingestion/jobs/parser/claim
+func (h *IngestionHandler) ParserClaimJob(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	job, err := h.jobRepo.ClaimNextJob(ctx)
+	if err != nil {
+		log.Printf("[INGESTION] PARSER: Error claiming download job: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to claim job"})
+		return
+	}
+	if job == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no queued jobs"})
+		return
+	}
+
+	log.Printf("[INGESTION] PARSER: Claimed job %s for download", job.ID.Hex())
+	c.JSON(http.StatusOK, gin.H{
+		"job_id":      job.ID.Hex(),
+		"title":       job.Title,
+		"source":      job.Source,
+		"source_id":   job.SourceID,
+		"detail_url":  job.DetailURL,
+		"video_url":   job.VideoURL,
+		"local_path":  job.LocalPath,
+		"status":      job.Status,
+		"contentType": job.ContentType,
+		"metadata":    job.Metadata,
+	})
 }
 
 // DeleteIngestionJob deletes a job
@@ -1263,7 +1294,8 @@ func (h *IngestionHandler) CreateManualJob(c *gin.Context) {
 		SourceID: sourceID,
 		// For manual imports, we store the video URL in DetailURL
 		DetailURL: input.VideoURL,
-		Status:    models.IngestionStatusPending,
+		Status:    models.IngestionStatusQueued,
+		Stage:     string(models.IngestionStatusQueued),
 		Progress:  0,
 		Steps:     models.JobSteps{},
 		Logs:      []models.IngestionLog{},
@@ -1387,7 +1419,8 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 		Source:      input.Source,
 		SourceID:    input.SourceID,
 		DetailURL:   input.DetailURL,
-		Status:      models.IngestionStatusPending,
+		Status:      models.IngestionStatusQueued,
+		Stage:       string(models.IngestionStatusQueued),
 		Progress:    0,
 		Steps:       models.JobSteps{},
 		Logs:        []models.IngestionLog{},

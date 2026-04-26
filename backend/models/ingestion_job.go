@@ -10,16 +10,18 @@ import (
 type IngestionStatus string
 
 const (
-	IngestionStatusPending    IngestionStatus = "pending"
-	IngestionStatusDownloaded IngestionStatus = "downloaded"
-	IngestionStatusProcessing IngestionStatus = "processing"
-	IngestionStatusCompleted  IngestionStatus = "completed"
-	IngestionStatusFailed     IngestionStatus = "failed"
+	IngestionStatusQueued         IngestionStatus = "queued"
+	IngestionStatusPending        IngestionStatus = IngestionStatusQueued
+	IngestionStatusDownloading    IngestionStatus = "downloading"
+	IngestionStatusDownloaded     IngestionStatus = "downloaded"
+	IngestionStatusReadyToProcess IngestionStatus = "ready_to_process"
+	IngestionStatusProcessing     IngestionStatus = "processing"
+	IngestionStatusUploading      IngestionStatus = "uploading"
+	IngestionStatusCompleted      IngestionStatus = "completed"
+	IngestionStatusFailed         IngestionStatus = "failed"
 
 	// Legacy statuses for pipeline compatibility (deprecated but still used)
 	IngestionStatusParsing     IngestionStatus = "parsing"
-	IngestionStatusDownloading IngestionStatus = "downloading"
-	IngestionStatusUploading   IngestionStatus = "uploading"
 	IngestionStatusNeedsManual IngestionStatus = "needs_manual"
 
 	// NEW: Detailed pipeline statuses
@@ -71,7 +73,7 @@ type IngestionJob struct {
 	CompletedAt *time.Time `bson:"completed_at,omitempty" json:"completed_at,omitempty"`
 
 	// Real-time download progress fields
-	Stage           string  `bson:"stage,omitempty" json:"stage,omitempty"`     // "parsing", "downloading", "processing", "uploading"
+	Stage           string  `bson:"stage,omitempty" json:"stage,omitempty"`
 	Message         string  `bson:"message,omitempty" json:"message,omitempty"` // Human-readable message
 	DownloadedBytes int64   `bson:"downloaded_bytes,omitempty" json:"downloaded_bytes,omitempty"`
 	TotalBytes      int64   `bson:"total_bytes,omitempty" json:"total_bytes,omitempty"`

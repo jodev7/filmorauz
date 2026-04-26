@@ -196,131 +196,38 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		return fmt.Errorf("failed to update status to parsing: %w", err)
 	}
 
-	// Step 1: Check if we can skip download (file already exists)
-	// This allows retry without re-downloading
 	var metadata *models.ParsedMovieMetadata
-	var localPath string
-	var err error // Declare err at function level for download step
+	localPath := job.LocalPath
+	var err error
 
-	// Check if job already has local_path from previous download
-	if job.LocalPath != "" && job.Metadata != nil {
-		log.Printf("[PIPELINE] Job has local_path: %s", job.LocalPath)
-		// Verify file exists and is valid
-		if fileInfo, err := os.Stat(job.LocalPath); err == nil && fileInfo.Size() > 0 {
-			log.Printf("[PIPELINE] Skipping download - file already exists (size: %d bytes)", fileInfo.Size())
-			localPath = job.LocalPath
-			metadata = job.Metadata
-			// CRITICAL: Validate metadata is not nil and has required fields
-			if metadata == nil || metadata.Title == "" {
-				log.Printf("[PIPELINE] WARNING: metadata is nil or empty, will re-parse")
-				localPath = ""
-			} else {
-				// If steps.download is not set, transition atomically to processing
-				// This clears any previous error and sets proper stage
-				if !job.Steps.Download {
-					log.Printf("[PIPELINE] Job has existing local_path but steps.download=false - transitioning to processing")
-					log.Printf("[PARSER] job moved to processing — job_id=%s (existing local_path)", jobID)
-					if err := p.jobRepo.TransitionToProcessing(ctx, jobID, localPath); err != nil {
-						log.Printf("[PIPELINE] WARNING: Failed to transition to processing: %v", err)
-						// Fallback
-						if stepErr := p.jobRepo.UpdateStep(ctx, jobID, "download"); stepErr != nil {
-							log.Printf("[PIPELINE] Failed to mark download step: %v", stepErr)
-						}
-					}
-				}
-				log.Printf("[PIPELINE] Using existing metadata: %s (%d)", metadata.Title, metadata.Year)
-			}
-		} else {
-			log.Printf("[PIPELINE] File does not exist or is empty, will re-download")
-			localPath = ""
+	if localPath == "" {
+		return fmt.Errorf("job %s is not ready_to_process: local_path is empty", jobID)
+	}
+	if fileInfo, statErr := os.Stat(localPath); statErr != nil || fileInfo.Size() == 0 {
+		if statErr != nil {
+			return fmt.Errorf("downloaded file is unavailable: %w", statErr)
 		}
+		return fmt.Errorf("downloaded file is empty: %s", localPath)
 	}
 
-	// Download phase - either get existing file or start async download
-	// NEW: Async download flow with proper polling
-	if localPath == "" {
-		log.Printf("[WORKER] download start — source=%s, source_id=%s", job.Source, job.SourceID)
-
-		// CRITICAL: Need metadata and video_url from parser
-		// parseMovieDetails returns metadata and local_path (if parser already downloaded)
-		// In new parser flow, download_needed=true, so localPath should be empty
-		meta, _, parseErr := p.parseMovieDetails(job)
-		if parseErr != nil {
-			var manualErr *needsManualError
-			if errors.As(parseErr, &manualErr) {
-				reason := strings.TrimSpace(manualErr.Reason)
-				if reason == "" {
-					reason = "parser could not resolve video_url"
-				}
-				if markErr := p.markJobNeedsManual(jobID, reason); markErr != nil {
-					return fmt.Errorf("mark needs_manual: %w", markErr)
-				}
-				log.Printf("[PIPELINE] job %s moved to needs_manual: %s", jobID, reason)
-				return nil
+	metadata = job.Metadata
+	meta, _, parseErr := p.parseMovieDetails(job)
+	if parseErr != nil {
+		var manualErr *needsManualError
+		if errors.As(parseErr, &manualErr) {
+			reason := strings.TrimSpace(manualErr.Reason)
+			if reason == "" {
+				reason = "parser could not resolve video metadata"
 			}
-			return fmt.Errorf("parser error: %w", parseErr)
+			if markErr := p.markJobNeedsManual(jobID, reason); markErr != nil {
+				return fmt.Errorf("mark needs_manual: %w", markErr)
+			}
+			log.Printf("[PIPELINE] job %s moved to needs_manual: %s", jobID, reason)
+			return nil
 		}
+		log.Printf("[PIPELINE] WARNING: parser metadata refresh failed for job %s: %v", jobID, parseErr)
+	} else if meta != nil {
 		metadata = meta
-
-		// The parser selected best video URL is in meta.VideoURL
-		videoURL := meta.VideoURL
-		if videoURL == "" {
-			return fmt.Errorf("parser did not return video_url for download")
-		}
-
-		// Persist video_url to job for worker restart safety (pollDownloadProgress uses job.VideoURL)
-		if err := p.jobRepo.UpdateVideoURL(ctx, jobID, videoURL); err != nil {
-			log.Printf("[PIPELINE] WARNING: Failed to persist video_url: %v", err)
-		}
-		// Update in-memory job as well
-		job.VideoURL = videoURL
-
-		// Check if download was already started (worker restart case)
-		if job.Steps.DownloadStarted {
-			log.Printf("[WORKER] download already started — job_id=%s, resuming polling", jobID)
-			// Resume polling /progress instead of calling /download again
-			localPath, err = p.pollDownloadProgress(ctx, job, videoURL)
-			if err != nil {
-				return fmt.Errorf("download polling failed: %w", err)
-			}
-		} else {
-			// First time calling /download for this job
-			log.Printf("[WORKER] calling /download — job_id=%s, url=%s", jobID, safeTruncate(videoURL, 60))
-
-			// Mark download as started BEFORE calling (prevents duplicate calls on retry)
-			if err := p.jobRepo.MarkDownloadStarted(ctx, jobID); err != nil {
-				log.Printf("[PIPELINE] WARNING: Failed to mark download_started: %v", err)
-			}
-
-			// Call parser /download (non-blocking, returns immediately)
-			localPath, err = p.startDownloadAndPoll(ctx, job)
-			if err != nil {
-				return fmt.Errorf("download failed: %w", err)
-			}
-		}
-
-		// Transition to processing after successful download
-		if localPath != "" {
-			log.Printf("[WORKER] download completed — job_id=%s, local_path=%s", jobID, localPath)
-			log.Printf("[WORKER] moving to processing — job_id=%s", jobID)
-
-			if err := p.jobRepo.TransitionToProcessing(ctx, jobID, localPath); err != nil {
-				log.Printf("[PIPELINE] WARNING: Failed to transition to processing: %v", err)
-				if upErr := p.jobRepo.UpdateLocalPath(ctx, jobID, localPath); upErr != nil {
-					log.Printf("[PIPELINE] Failed to update local_path: %v", upErr)
-				}
-				if stepErr := p.jobRepo.UpdateStep(ctx, jobID, "download"); stepErr != nil {
-					log.Printf("[PIPELINE] Failed to mark download step: %v", stepErr)
-				}
-			}
-		} else {
-			// localPath empty - this is a failure (not a retry scenario)
-			log.Printf("[PIPELINE] ERROR: download returned empty local_path")
-			if err := p.failJobWithStatus(jobID, models.IngestionStatusDownloadFailed, "parser failed to return local_path"); err != nil {
-				log.Printf("[PIPELINE] Failed to mark job as download_failed: %v", err)
-			}
-			return fmt.Errorf("parser failed to return local_path")
-		}
 	}
 
 	// Defensive check: validate metadata is not nil after parsing
@@ -340,16 +247,8 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	// If parser already downloaded the file (localPath != ""), use it
 	// Otherwise, downloadVideo will check job.LocalPath and use that if available
 	var videoPath string
-	if localPath != "" {
-		videoPath = localPath
-		log.Printf("[STAGE] download complete — using parser-downloaded file: %s", videoPath)
-	} else {
-		videoPath, err = p.downloadVideo(job, metadata)
-		if err != nil {
-			return fmt.Errorf("download failed: %w", err)
-		}
-		log.Printf("[STAGE] download complete — videoPath: %s", videoPath)
-	}
+	videoPath = localPath
+	log.Printf("[STAGE] download complete — using parser-downloaded file: %s", videoPath)
 	// NOTE: do NOT defer cleanupFile here — file must survive retries until processing succeeds
 
 	// Update status to processing

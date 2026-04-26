@@ -80,12 +80,10 @@ func (r *JobRepository) UpdateVideoURL(ctx context.Context, id, videoURL string)
 	return err
 }
 
-// ClaimNextJob atomically claims the next pending job for download processing
-// It finds a job with status=pending, retry_count<3, and steps.download not completed
-// Returns the claimed job with status updated to processing
+// ClaimNextJob atomically claims the next queued download job.
 func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob, error) {
 	filter := bson.M{
-		"status":      models.IngestionStatusPending,
+		"status":      models.IngestionStatusQueued,
 		"retry_count": bson.M{"$lt": 3},
 		"$or": []bson.M{
 			{"steps.download": bson.M{"$exists": false}},
@@ -98,7 +96,7 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 	// does not run while the job is sitting in the pending queue.
 	update := bson.M{
 		"$set": bson.M{
-			"status":     models.IngestionStatusProcessing,
+			"status":     models.IngestionStatusDownloading,
 			"stage":      "download",
 			"updated_at": now,
 			"started_at": now,
@@ -109,7 +107,7 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 		SetSort(bson.D{{Key: "created_at", Value: 1}})
 
 	log.Printf("[REPO] ClaimNextJob: querying for pending download jobs...")
-	log.Printf("[REPO] ClaimNextJob filter: status=pending, retry_count<3, steps.download=$exists:false OR steps.download=false")
+	log.Printf("[REPO] ClaimNextJob filter: status=queued, retry_count<3, steps.download=$exists:false OR steps.download=false")
 	log.Printf("[REPO] ClaimNextJob FINAL QUERY: %+v", filter)
 
 	var job models.IngestionJob
@@ -123,16 +121,15 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 		return nil, err
 	}
 
-	log.Printf("[REPO] ClaimNextJob: CLAIMED job %s (status: pending -> processing, title: %s, source: %s)",
+	log.Printf("[REPO] ClaimNextJob: CLAIMED job %s (status: queued -> downloading, title: %s, source: %s)",
 		job.ID.Hex(), job.Title, job.Source)
 	return &job, nil
 }
 
-// ClaimNextProcessingJob atomically claims a job ready for ffmpeg processing
-// This is called when steps.download=true but steps.process=false
+// ClaimNextProcessingJob atomically claims a job ready for ffmpeg processing.
 func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.IngestionJob, error) {
 	filter := bson.M{
-		"status":         models.IngestionStatusPending,
+		"status":         models.IngestionStatusReadyToProcess,
 		"retry_count":    bson.M{"$lt": 3},
 		"steps.download": true,
 		"$or": []bson.M{
@@ -148,7 +145,7 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 		bson.M{
 			"$set": bson.M{
 				"status":     models.IngestionStatusProcessing,
-				"stage":      "process",
+				"stage":      "processing",
 				"updated_at": now,
 				"started_at": bson.M{"$ifNull": bson.A{"$started_at", now}},
 			},
@@ -156,7 +153,7 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 	}
 
 	log.Printf("[REPO] ClaimNextProcessingJob: querying for pending processing jobs...")
-	log.Printf("[REPO] ClaimNextProcessingJob filter: status=pending, retry_count<3, steps.download=true, steps.process=$exists:false OR steps.process!=true")
+	log.Printf("[REPO] ClaimNextProcessingJob filter: status=ready_to_process, retry_count<3, steps.download=true, steps.process=$exists:false OR steps.process!=true")
 	log.Printf("[REPO] ClaimNextProcessingJob FINAL QUERY: %+v", filter)
 
 	opts := options.FindOneAndUpdate().
@@ -173,7 +170,7 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 		return nil, err
 	}
 
-	log.Printf("[REPO] ClaimNextProcessingJob: CLAIMED job %s (status: pending -> processing, title: %s, source: %s)",
+	log.Printf("[REPO] ClaimNextProcessingJob: CLAIMED job %s (status: ready_to_process -> processing, title: %s, source: %s)",
 		job.ID.Hex(), job.Title, job.Source)
 	return &job, nil
 }
@@ -183,7 +180,7 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 func (r *JobRepository) CountPendingJobs(ctx context.Context) (int64, error) {
 	// Count all pending jobs (regardless of steps)
 	filter := bson.M{
-		"status": models.IngestionStatusPending,
+		"status": models.IngestionStatusQueued,
 	}
 	total, err := r.collection.CountDocuments(ctx, filter)
 	if err != nil {
@@ -192,7 +189,7 @@ func (r *JobRepository) CountPendingJobs(ctx context.Context) (int64, error) {
 
 	// Count jobs needing download
 	downloadFilter := bson.M{
-		"status": models.IngestionStatusPending,
+		"status": models.IngestionStatusQueued,
 		"$or": []bson.M{
 			{"steps.download": bson.M{"$exists": false}},
 			{"steps.download": false},
@@ -206,7 +203,7 @@ func (r *JobRepository) CountPendingJobs(ctx context.Context) (int64, error) {
 
 	// Count jobs needing processing (download done, process not done)
 	processFilter := bson.M{
-		"status":         models.IngestionStatusPending,
+		"status":         models.IngestionStatusReadyToProcess,
 		"steps.download": true,
 		"$or": []bson.M{
 			{"steps.process": bson.M{"$exists": false}},
@@ -460,6 +457,7 @@ func (r *JobRepository) SetError(ctx context.Context, id string, errMsg string) 
 		"$set": bson.M{
 			"error":      errMsg,
 			"status":     models.IngestionStatusFailed,
+			"stage":      "failed",
 			"updated_at": time.Now(),
 		},
 	})
@@ -515,8 +513,9 @@ func (r *JobRepository) IncrementRetry(ctx context.Context, id string) error {
 		setFields["completed_at"] = time.Now()
 		log.Printf("[REPO] IncrementRetry: job %s reached max retries (%d) — marking as failed (terminal)", id, newRetry)
 	} else {
-		setFields["status"] = models.IngestionStatusPending
-		log.Printf("[REPO] IncrementRetry: job %s retry %d/%d — resetting to pending", id, newRetry, maxRetries)
+		setFields["status"] = models.IngestionStatusQueued
+		setFields["stage"] = "queued"
+		log.Printf("[REPO] IncrementRetry: job %s retry %d/%d — resetting to queued", id, newRetry, maxRetries)
 	}
 
 	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
@@ -777,9 +776,9 @@ func (r *JobRepository) TransitionToProcessing(ctx context.Context, id, localPat
 	// This handles edge case where job was claimed but stuck at stage=download
 	update := bson.M{
 		"$set": bson.M{
-			"status":         models.IngestionStatusProcessing,
-			"stage":          "processing",
-			"progress":       50,
+			"status":         models.IngestionStatusReadyToProcess,
+			"stage":          "ready_to_process",
+			"progress":       100,
 			"local_path":     localPath,
 			"steps.download": true,
 			"error":          "",
@@ -793,7 +792,7 @@ func (r *JobRepository) TransitionToProcessing(ctx context.Context, id, localPat
 		return err
 	}
 
-	log.Printf("[REPO] TransitionToProcessing: job %s transitioned to processing (local_path=%s)", id, localPath)
+	log.Printf("[REPO] TransitionToProcessing: job %s transitioned to ready_to_process (local_path=%s)", id, localPath)
 	return nil
 }
 
@@ -807,8 +806,8 @@ func (r *JobRepository) RetryFromDownload(ctx context.Context, id string) error 
 
 	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
 		"$set": bson.M{
-			"status":         models.IngestionStatusPending,
-			"stage":          "download",
+			"status":         models.IngestionStatusQueued,
+			"stage":          "queued",
 			"progress":       0,
 			"local_path":     "",
 			"steps.download": false,
@@ -833,9 +832,9 @@ func (r *JobRepository) RetryFromProcess(ctx context.Context, id string) error {
 
 	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
 		"$set": bson.M{
-			"status":         models.IngestionStatusPending,
-			"stage":          "process",
-			"progress":       50,
+			"status":         models.IngestionStatusReadyToProcess,
+			"stage":          "ready_to_process",
+			"progress":       100,
 			"steps.download": true, // Keep download as complete
 			"steps.process":  false,
 			"steps.upload":   false,
@@ -857,9 +856,9 @@ func (r *JobRepository) RetryFromUpload(ctx context.Context, id string) error {
 
 	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
 		"$set": bson.M{
-			"status":         models.IngestionStatusPending,
-			"stage":          "upload",
-			"progress":       80,
+			"status":         models.IngestionStatusReadyToProcess,
+			"stage":          "ready_to_process",
+			"progress":       100,
 			"steps.download": true,
 			"steps.process":  true,
 			"steps.upload":   false,

@@ -513,6 +513,127 @@ WORKER_URL = os.environ.get("WORKER_URL", "http://localhost:8083")
 # Backend URL - for reporting progress
 # Must be explicitly set for progress reporting to work
 BACKEND_URL = os.environ.get("BACKEND_URL", "")
+DOWNLOAD_CONCURRENCY = max(1, int(os.environ.get("DOWNLOAD_CONCURRENCY", "6")))
+DOWNLOAD_QUEUE_POLL_SECONDS = max(1, int(os.environ.get("DOWNLOAD_QUEUE_POLL_SECONDS", "5")))
+_download_queue_started = False
+_download_queue_lock = threading.Lock()
+
+
+def _report_backend_failure(job_id: str, message: str):
+    if not job_id or not BACKEND_URL:
+        return
+    report_progress_to_backend(job_id, {
+        "stage": "download",
+        "status": "failed",
+        "progress": 0,
+        "message": message,
+    })
+
+
+def _resolve_claimed_job_video(job: dict, parser_base_url: str) -> tuple[str, str]:
+    video_url = (job.get("video_url") or "").strip()
+    referer = ""
+    metadata = job.get("metadata") or {}
+    if isinstance(metadata, dict):
+        referer = (metadata.get("video_page_url") or "").strip()
+
+    if video_url:
+        if not referer:
+            referer = (job.get("detail_url") or "").strip()
+        return video_url, referer
+
+    params = {
+        "source": job.get("source", ""),
+        "id": job.get("source_id", ""),
+        "url": job.get("detail_url", ""),
+        "job_id": job.get("job_id", ""),
+    }
+    if job.get("source") == "manual" and isinstance(metadata, dict):
+        if metadata.get("title"):
+            params["title"] = metadata["title"]
+        if metadata.get("year"):
+            params["year"] = str(metadata["year"])
+        if metadata.get("poster"):
+            params["poster_url"] = metadata["poster"]
+        if metadata.get("backdrop"):
+            params["backdrop_url"] = metadata["backdrop"]
+
+    response = requests.get(f"{parser_base_url}/details", params=params, timeout=180)
+    response.raise_for_status()
+    payload = response.json()
+
+    if payload.get("error"):
+        raise RuntimeError(payload["error"])
+
+    video_url = (payload.get("video_url") or "").strip()
+    if not video_url:
+        raise RuntimeError("parser details did not return video_url")
+
+    referer = (payload.get("video_page_url") or referer or job.get("detail_url") or "").strip()
+    return video_url, referer
+
+
+def _run_claimed_download(job: dict, parser_base_url: str):
+    job_id = (job.get("job_id") or "").strip()
+    if not job_id:
+        raise RuntimeError("claimed job missing job_id")
+
+    video_url, referer = _resolve_claimed_job_video(job, parser_base_url)
+    output_name = f"{job_id}/{job_id}.mp4"
+
+    logger.info(f"[QUEUE] download start job_id={job_id} source={job.get('source')} output={output_name}")
+    result = downloader_service.smart_download(
+        url=video_url,
+        output_name=output_name,
+        job_id=job_id,
+        backend_job_id=job_id,
+        referer=referer or None,
+    )
+    if not result.get("success"):
+        raise RuntimeError(result.get("error") or "download failed")
+
+
+def _download_queue_worker(slot: int, parser_base_url: str):
+    claim_url = f"{BACKEND_URL}/api/ingestion/jobs/parser/claim"
+    while True:
+        if not BACKEND_URL:
+            time.sleep(DOWNLOAD_QUEUE_POLL_SECONDS)
+            continue
+
+        try:
+            response = requests.get(claim_url, timeout=30)
+            if response.status_code == 404:
+                time.sleep(DOWNLOAD_QUEUE_POLL_SECONDS)
+                continue
+            response.raise_for_status()
+            job = response.json()
+            logger.info(f"[QUEUE] slot={slot} claimed job_id={job.get('job_id')} source={job.get('source')}")
+            try:
+                _run_claimed_download(job, parser_base_url)
+            except Exception as exc:
+                logger.error(f"[QUEUE] slot={slot} job_id={job.get('job_id')} failed: {exc}", exc_info=True)
+                _report_backend_failure(job.get("job_id", ""), str(exc))
+        except Exception as exc:
+            logger.warning(f"[QUEUE] slot={slot} claim error: {exc}")
+            time.sleep(DOWNLOAD_QUEUE_POLL_SECONDS)
+
+
+def start_download_queue(parser_base_url: str):
+    global _download_queue_started
+
+    with _download_queue_lock:
+        if _download_queue_started:
+            return
+        _download_queue_started = True
+
+    logger.info(f"[QUEUE] Starting download queue with concurrency={DOWNLOAD_CONCURRENCY}")
+    for slot in range(DOWNLOAD_CONCURRENCY):
+        thread = threading.Thread(
+            target=_download_queue_worker,
+            args=(slot + 1, parser_base_url),
+            daemon=True,
+        )
+        thread.start()
 
 
 class ParserHandler(BaseHTTPRequestHandler):
@@ -2844,6 +2965,7 @@ def run_server(host="0.0.0.0", port=8082):
     logger.info(f"Parser API server running on http://{host}:{port}")
     logger.info(f"Available sources: {AVAILABLE_SOURCES}")
     logger.info(f"Parser base URL for workers: {ParserHandler.server_address_str}")
+    start_download_queue(ParserHandler.server_address_str)
     
     try:
         httpd.serve_forever()
