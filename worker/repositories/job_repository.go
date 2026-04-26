@@ -77,6 +77,32 @@ func candidateDownloadPaths(job *models.IngestionJob, downloadDir string) []stri
 	return candidates
 }
 
+func resolveExistingDownloadedArtifact(jobID, rawPath, downloadDir string) string {
+	if verified := resolveExistingLocalPath(rawPath); verified != "" {
+		return verified
+	}
+	base := strings.TrimSpace(jobID)
+	if base == "" {
+		return ""
+	}
+	preferred := []string{
+		filepath.Join(downloadDir, base+".mp4"),
+		filepath.Join(downloadDir, base+".MUX.mp4"),
+	}
+	for _, candidate := range preferred {
+		if verified := resolveExistingLocalPath(candidate); verified != "" {
+			return verified
+		}
+	}
+	matches, _ := filepath.Glob(filepath.Join(downloadDir, base+"*"))
+	for _, match := range matches {
+		if verified := resolveExistingLocalPath(match); verified != "" {
+			return verified
+		}
+	}
+	return ""
+}
+
 // JobRepository handles ingestion job persistence
 type JobRepository struct {
 	collection *mongo.Collection
@@ -322,7 +348,7 @@ func (r *JobRepository) RepairCompletedDownloads(ctx context.Context, downloadDi
 	now := time.Now()
 	for _, job := range jobs {
 		jobID := job.ID.Hex()
-		localPath := resolveExistingLocalPath(job.LocalPath)
+		localPath := resolveExistingDownloadedArtifact(jobID, job.LocalPath, downloadDir)
 		if localPath == "" {
 			for _, candidate := range candidateDownloadPaths(job, downloadDir) {
 				if resolved := resolveExistingLocalPath(candidate); resolved != "" {

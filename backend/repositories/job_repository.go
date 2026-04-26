@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/filmorauz/backend/models"
@@ -28,6 +29,40 @@ func resolveExistingLocalPath(path string) string {
 	for _, candidate := range candidates {
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Size() > 0 {
 			return candidate
+		}
+	}
+	return ""
+}
+
+func resolveExistingDownloadedArtifact(jobID, rawPath string) string {
+	if verified := resolveExistingLocalPath(rawPath); verified != "" {
+		return verified
+	}
+
+	downloadDir := os.Getenv("DOWNLOAD_DIR")
+	if strings.TrimSpace(downloadDir) == "" {
+		downloadDir = "/opt/filmorauz/parser/downloads"
+	}
+	downloadDir = filepath.Clean(downloadDir)
+	base := strings.TrimSpace(jobID)
+	if base == "" {
+		return ""
+	}
+
+	preferred := []string{
+		filepath.Join(downloadDir, base+".mp4"),
+		filepath.Join(downloadDir, base+".MUX.mp4"),
+	}
+	for _, candidate := range preferred {
+		if verified := resolveExistingLocalPath(candidate); verified != "" {
+			return verified
+		}
+	}
+
+	matches, _ := filepath.Glob(filepath.Join(downloadDir, base+"*"))
+	for _, match := range matches {
+		if verified := resolveExistingLocalPath(match); verified != "" {
+			return verified
 		}
 	}
 	return ""
@@ -488,16 +523,18 @@ func (r *JobRepository) UpdateStep(ctx context.Context, id string, step string) 
 
 // ProgressUpdate represents download progress data from parser
 type ProgressUpdate struct {
-	Stage           string  `json:"stage"`
-	Status          string  `json:"status"`
-	Progress        int     `json:"progress_percent"`
-	DownloadedBytes int64   `json:"downloaded_bytes"`
-	TotalBytes      int64   `json:"total_bytes"`
-	SpeedMBps       float64 `json:"speed_mbps"`
-	EtaSeconds      int     `json:"eta_seconds"`
-	Message         string  `json:"message"`
-	StepsDownload   bool    `json:"steps_download"`
-	FilePath        string  `json:"file_path"` // NEW: Local file path after download completes
+	Stage              string  `json:"stage"`
+	Status             string  `json:"status"`
+	Progress           int     `json:"progress_percent"`
+	DownloadedBytes    int64   `json:"downloaded_bytes"`
+	TotalBytes         int64   `json:"total_bytes"`
+	SpeedMBps          float64 `json:"speed_mbps"`
+	EtaSeconds         int     `json:"eta_seconds"`
+	Message            string  `json:"message"`
+	StepsDownload      bool    `json:"steps_download"`
+	FilePath           string  `json:"file_path"` // NEW: Local file path after download completes
+	LocalPath          string  `json:"local_path"`
+	DownloadedFilePath string  `json:"downloaded_file_path"`
 }
 
 // DeriveStatusFromStage maps pipeline stage to job status
@@ -594,15 +631,25 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 	// CRITICAL: Set steps.download = true ONLY when download is 100% complete
 	downloadComplete := (progress.Stage == "download" && normalizedProgress >= 100) || progress.StepsDownload
 	if downloadComplete {
-		log.Printf("[DOWNLOAD] completed job=%s file=%s", id, progress.FilePath)
-		verifiedPath := resolveExistingLocalPath(progress.FilePath)
+		candidatePath := progress.LocalPath
+		if candidatePath == "" {
+			candidatePath = progress.FilePath
+		}
+		if candidatePath == "" {
+			candidatePath = progress.DownloadedFilePath
+		}
+		log.Printf("[INGESTION] complete download job=%s local_path=%s", id, candidatePath)
+		log.Printf("[DOWNLOAD] completed job=%s file=%s", id, candidatePath)
+		verifiedPath := resolveExistingDownloadedArtifact(id, candidatePath)
 		if verifiedPath == "" {
 			errMsg := "download completed but local_path missing/file not found"
-			log.Printf("[DOWNLOAD] failed verification job=%s reason=%s raw_file=%s", id, errMsg, progress.FilePath)
+			log.Printf("[DOWNLOAD] failed verification job=%s reason=%s raw_file=%s", id, errMsg, candidatePath)
 			update["$set"].(bson.M)["status"] = string(models.IngestionStatusFailed)
 			update["$set"].(bson.M)["stage"] = string(models.IngestionStatusFailed)
 			update["$set"].(bson.M)["error"] = errMsg
 			update["$set"].(bson.M)["local_path"] = ""
+			update["$set"].(bson.M)["file_path"] = ""
+			update["$set"].(bson.M)["downloaded_file_path"] = ""
 			update["$set"].(bson.M)["steps.download"] = false
 		} else {
 			log.Printf("[DOWNLOAD] verified file exists job=%s file=%s", id, verifiedPath)
@@ -611,6 +658,8 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 			update["$set"].(bson.M)["status"] = string(models.IngestionStatusReadyToProcess)
 			update["$set"].(bson.M)["stage"] = string(models.IngestionStatusReadyToProcess)
 			update["$set"].(bson.M)["local_path"] = verifiedPath
+			update["$set"].(bson.M)["file_path"] = verifiedPath
+			update["$set"].(bson.M)["downloaded_file_path"] = verifiedPath
 			update["$set"].(bson.M)["error"] = ""
 			log.Printf("[DOWNLOAD] moved to ready_to_process job=%s file=%s", id, verifiedPath)
 		}
@@ -632,6 +681,11 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 	}
 
 	log.Printf("[JOB REPO] RESULT: MatchedCount=%d, ModifiedCount=%d", result.MatchedCount, result.ModifiedCount)
+	if downloadComplete {
+		savedPath, _ := update["$set"].(bson.M)["local_path"].(string)
+		log.Printf("[DOWNLOAD_COMPLETE] job=%s saved local_path=%s exists=%v", id, savedPath, savedPath != "" && resolveExistingLocalPath(savedPath) != "")
+		log.Printf("[DOWNLOAD_COMPLETE] backend update response=%d", result.ModifiedCount)
+	}
 
 	if result.MatchedCount == 0 {
 		log.Printf("[JOB REPO] ERROR: No document matched _id=%s", objID.Hex())

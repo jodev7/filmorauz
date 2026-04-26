@@ -824,17 +824,19 @@ func (h *IngestionHandler) UpdateJobProgress(c *gin.Context) {
 	}
 
 	var progress struct {
-		Stage           string  `json:"stage"`
-		Status          string  `json:"status"`
-		ProgressPercent int     `json:"progress_percent"`
-		Progress        int     `json:"progress"` // Alternative field name
-		DownloadedBytes int64   `json:"downloaded_bytes"`
-		TotalBytes      int64   `json:"total_bytes"`
-		SpeedMBps       float64 `json:"speed_mbps"`
-		EtaSeconds      int     `json:"eta_seconds"`
-		Message         string  `json:"message"`
-		StepsDownload   bool    `json:"steps_download"`
-		FilePath        string  `json:"file_path"` // Local file path after download completes
+		Stage              string  `json:"stage"`
+		Status             string  `json:"status"`
+		ProgressPercent    int     `json:"progress_percent"`
+		Progress           int     `json:"progress"` // Alternative field name
+		DownloadedBytes    int64   `json:"downloaded_bytes"`
+		TotalBytes         int64   `json:"total_bytes"`
+		SpeedMBps          float64 `json:"speed_mbps"`
+		EtaSeconds         int     `json:"eta_seconds"`
+		Message            string  `json:"message"`
+		StepsDownload      bool    `json:"steps_download"`
+		FilePath           string  `json:"file_path"` // Local file path after download completes
+		LocalPath          string  `json:"local_path"`
+		DownloadedFilePath string  `json:"downloaded_file_path"`
 	}
 
 	if err := c.ShouldBindJSON(&progress); err != nil {
@@ -857,16 +859,29 @@ func (h *IngestionHandler) UpdateJobProgress(c *gin.Context) {
 	}
 
 	progressUpdate := &repositories.ProgressUpdate{
-		Stage:           progress.Stage,
-		Status:          progress.Status,
-		Progress:        progressValue,
-		DownloadedBytes: progress.DownloadedBytes,
-		TotalBytes:      progress.TotalBytes,
-		SpeedMBps:       progress.SpeedMBps,
-		EtaSeconds:      progress.EtaSeconds,
-		Message:         progress.Message,
-		StepsDownload:   progress.StepsDownload,
-		FilePath:        progress.FilePath,
+		Stage:              progress.Stage,
+		Status:             progress.Status,
+		Progress:           progressValue,
+		DownloadedBytes:    progress.DownloadedBytes,
+		TotalBytes:         progress.TotalBytes,
+		SpeedMBps:          progress.SpeedMBps,
+		EtaSeconds:         progress.EtaSeconds,
+		Message:            progress.Message,
+		StepsDownload:      progress.StepsDownload,
+		FilePath:           progress.FilePath,
+		LocalPath:          progress.LocalPath,
+		DownloadedFilePath: progress.DownloadedFilePath,
+	}
+
+	if progress.StepsDownload || progressValue >= 100 {
+		pathForLog := progress.LocalPath
+		if pathForLog == "" {
+			pathForLog = progress.FilePath
+		}
+		if pathForLog == "" {
+			pathForLog = progress.DownloadedFilePath
+		}
+		log.Printf("[INGESTION] complete download job=%s local_path=%s", id, pathForLog)
 	}
 
 	log.Printf("[INGESTION] PROGRESS: calling repository.UpdateProgress with id=%q, progress=%d", id, progressUpdate.Progress)

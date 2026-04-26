@@ -45,27 +45,29 @@ const (
 
 // IngestionJob represents a movie ingestion job
 type IngestionJob struct {
-	ID                primitive.ObjectID   `bson:"_id,omitempty" json:"id"`
-	MovieID           primitive.ObjectID   `bson:"movie_id,omitempty" json:"movie_id,omitempty"`
-	Title             string               `bson:"title" json:"title"` // Movie title
-	Source            string               `bson:"source" json:"source"`
-	SourceID          string               `bson:"source_id" json:"source_id"`
-	DetailURL         string               `bson:"detail_url" json:"detail_url"`
-	Status            IngestionStatus      `bson:"status" json:"status"`
-	Progress          int                  `bson:"progress" json:"progress"`
-	Steps             JobSteps             `bson:"steps" json:"steps"`
-	Logs              []IngestionLog       `bson:"logs" json:"logs"`
-	Metadata          *ParsedMovieMetadata `bson:"metadata,omitempty" json:"metadata,omitempty"`
-	Error             string               `bson:"error,omitempty" json:"error,omitempty"`
-	LocalPath         string               `bson:"local_path,omitempty" json:"local_path,omitempty"`                   // Original source file path (parser/downloads)
-	OutputPath        string               `bson:"output_path,omitempty" json:"output_path,omitempty"`                 // Processed output path (worker/uploads/... or B2)
-	PlaylistPath      string               `bson:"playlist_path,omitempty" json:"playlist_path,omitempty"`             // HLS playlist path
-	OutputMode        string               `bson:"output_mode,omitempty" json:"output_mode,omitempty"`                 // "development" or "production"
-	SourceFileDeleted bool                 `bson:"source_file_deleted,omitempty" json:"source_file_deleted,omitempty"` // True if source file was deleted after processing
-	VideoURL          string               `bson:"video_url,omitempty" json:"video_url,omitempty"`
-	RetryCount        int                  `bson:"retry_count" json:"retry_count"`
-	CreatedAt         time.Time            `bson:"created_at" json:"created_at"`
-	UpdatedAt         time.Time            `bson:"updated_at" json:"updated_at"`
+	ID                 primitive.ObjectID   `bson:"_id,omitempty" json:"id"`
+	MovieID            primitive.ObjectID   `bson:"movie_id,omitempty" json:"movie_id,omitempty"`
+	Title              string               `bson:"title" json:"title"` // Movie title
+	Source             string               `bson:"source" json:"source"`
+	SourceID           string               `bson:"source_id" json:"source_id"`
+	DetailURL          string               `bson:"detail_url" json:"detail_url"`
+	Status             IngestionStatus      `bson:"status" json:"status"`
+	Progress           int                  `bson:"progress" json:"progress"`
+	Steps              JobSteps             `bson:"steps" json:"steps"`
+	Logs               []IngestionLog       `bson:"logs" json:"logs"`
+	Metadata           *ParsedMovieMetadata `bson:"metadata,omitempty" json:"metadata,omitempty"`
+	Error              string               `bson:"error,omitempty" json:"error,omitempty"`
+	LocalPath          string               `bson:"local_path,omitempty" json:"local_path,omitempty"`                     // Original source file path (parser/downloads)
+	FilePath           string               `bson:"file_path,omitempty" json:"file_path,omitempty"`                       // Legacy alias for local_path
+	DownloadedFilePath string               `bson:"downloaded_file_path,omitempty" json:"downloaded_file_path,omitempty"` // Legacy alias for local_path
+	OutputPath         string               `bson:"output_path,omitempty" json:"output_path,omitempty"`                   // Processed output path (worker/uploads/... or B2)
+	PlaylistPath       string               `bson:"playlist_path,omitempty" json:"playlist_path,omitempty"`               // HLS playlist path
+	OutputMode         string               `bson:"output_mode,omitempty" json:"output_mode,omitempty"`                   // "development" or "production"
+	SourceFileDeleted  bool                 `bson:"source_file_deleted,omitempty" json:"source_file_deleted,omitempty"`   // True if source file was deleted after processing
+	VideoURL           string               `bson:"video_url,omitempty" json:"video_url,omitempty"`
+	RetryCount         int                  `bson:"retry_count" json:"retry_count"`
+	CreatedAt          time.Time            `bson:"created_at" json:"created_at"`
+	UpdatedAt          time.Time            `bson:"updated_at" json:"updated_at"`
 	// StartedAt is set when a worker first claims the job (status -> processing).
 	// Elapsed time should be measured from this, NOT created_at, so jobs sitting
 	// in the pending queue do not show a growing timer.

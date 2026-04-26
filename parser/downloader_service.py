@@ -244,6 +244,15 @@ def _ensure_absolute_file_path(path: str) -> str:
     return os.path.abspath(path)
 
 
+def _with_path_aliases(payload: dict, file_path: str) -> dict:
+    if file_path:
+        absolute = _ensure_absolute_file_path(file_path)
+        payload["file_path"] = absolute
+        payload["local_path"] = absolute
+        payload["downloaded_file_path"] = absolute
+    return payload
+
+
 def report_progress_to_backend(job_id: str, progress_data: dict):
     """Send progress update to backend API - best-effort only, retries on failure"""
     import time
@@ -279,6 +288,10 @@ def report_progress_to_backend(job_id: str, progress_data: dict):
             with urllib.request.urlopen(req, timeout=15) as response:
                 response_body = response.read().decode("utf-8")
                 logger.info(f"[PROGRESS] RESPONSE {response.status}: {response_body}")
+                if progress_data.get("steps_download") or progress_data.get("progress") == 100 or progress_data.get("progress_percent") == 100:
+                    path_for_log = progress_data.get("local_path") or progress_data.get("file_path") or progress_data.get("downloaded_file_path") or ""
+                    logger.info(f"[DOWNLOAD_COMPLETE] job={job_id} saved local_path={path_for_log} exists={os.path.exists(path_for_log) if path_for_log else False}")
+                    logger.info(f"[DOWNLOAD_COMPLETE] backend update response={response.status}")
                 logger.info(f"[PROGRESS] SUCCESS: job={job_id}, progress={progress_data.get('progress', progress_data.get('progress_percent', 0))}%")
                 return
         except Exception as e:
@@ -590,7 +603,7 @@ class DownloaderService:
             })
         
         if backend_job_id:
-            report_progress_to_backend(backend_job_id, {
+            report_progress_to_backend(backend_job_id, _with_path_aliases({
                 "stage": "download",
                 "status": "ready_to_process",
                 "progress": 100,
@@ -600,8 +613,7 @@ class DownloaderService:
                 "eta_seconds": 0,
                 "message": "Download completed",
                 "steps_download": True,
-                "file_path": output_path  # NEW: Send local file path to backend
-            })
+            }, output_path))
             # NOTE: Do NOT trigger worker here - worker already initiated the download
             # Worker will continue processing after parser returns
             # trigger_worker(backend_job_id)
@@ -780,7 +792,7 @@ class DownloaderService:
             if backend_job_id:
                 logger.info(f"[PROGRESS] Sending completion: job_id={backend_job_id}, progress=100%, steps_download=True")
                 logger.info(f"[DOWNLOAD] completed job={backend_job_id} file={output_path}")
-                report_progress_to_backend(backend_job_id, {
+                report_progress_to_backend(backend_job_id, _with_path_aliases({
                     "stage": "download",
                     "status": "ready_to_process",
                     "progress": 100,
@@ -790,8 +802,7 @@ class DownloaderService:
                     "eta_seconds": 0,
                     "message": "Download completed",
                     "steps_download": True,
-                    "file_path": output_path  # NEW: Send local file path to backend
-                })
+                }, output_path))
                 
                 # NOTE: Do NOT call trigger_worker - worker already initiated this download
                 # Worker will continue processing after parser returns
@@ -1036,7 +1047,7 @@ class DownloaderService:
             
             # Backend progress - complete
             if backend_job_id:
-                report_progress_to_backend(backend_job_id, {
+                report_progress_to_backend(backend_job_id, _with_path_aliases({
                     "stage": "download",
                     "status": "ready_to_process",
                     "progress": 100,
@@ -1044,9 +1055,8 @@ class DownloaderService:
                     "total_bytes": file_size,
                     "message": f"HLS download completed in {download_duration:.1f}s",
                     "steps_download": True,
-                    "file_path": output_path,
                     "download_duration_seconds": download_duration,
-                })
+                }, output_path))
             
             return output_path
             
