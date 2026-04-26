@@ -10,6 +10,8 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -28,6 +30,47 @@ type IngestionHandler struct {
 	parserURL  string
 	workerURL  string
 	httpClient *http.Client
+}
+
+func resolveCompletedDownloadPath(jobID, rawPath string) string {
+	candidates := []string{}
+	if strings.TrimSpace(rawPath) != "" {
+		candidates = append(candidates, rawPath)
+	}
+
+	downloadDir := os.Getenv("DOWNLOAD_DIR")
+	if strings.TrimSpace(downloadDir) == "" {
+		downloadDir = "/opt/filmorauz/parser/downloads"
+	}
+	base := strings.TrimSpace(jobID)
+	if base != "" {
+		candidates = append(candidates,
+			filepath.Join(downloadDir, base+".mp4"),
+			filepath.Join(downloadDir, base+".MUX.mp4"),
+		)
+		if matches, err := filepath.Glob(filepath.Join(downloadDir, base+"*")); err == nil {
+			candidates = append(candidates, matches...)
+		}
+	}
+
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		absPath, err := filepath.Abs(candidate)
+		if err != nil {
+			absPath = candidate
+		}
+		if _, ok := seen[absPath]; ok {
+			continue
+		}
+		seen[absPath] = struct{}{}
+		if info, statErr := os.Stat(absPath); statErr == nil && !info.IsDir() && info.Size() > 0 {
+			return absPath
+		}
+	}
+	return ""
 }
 
 // NewIngestionHandler creates a new ingestion handler
@@ -882,6 +925,57 @@ func (h *IngestionHandler) UpdateJobProgress(c *gin.Context) {
 			pathForLog = progress.DownloadedFilePath
 		}
 		log.Printf("[INGESTION] complete download job=%s local_path=%s", id, pathForLog)
+
+		resolvedPath := resolveCompletedDownloadPath(id, pathForLog)
+		if resolvedPath != "" {
+			objID, objErr := primitive.ObjectIDFromHex(id)
+			if objErr != nil {
+				log.Printf("[INGESTION] COMPLETE: invalid job id %s: %v", id, objErr)
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid job id"})
+				return
+			}
+
+			update := bson.M{
+				"$set": bson.M{
+					"local_path":           resolvedPath,
+					"file_path":            resolvedPath,
+					"downloaded_file_path": resolvedPath,
+					"status":               models.IngestionStatusReadyToProcess,
+					"stage":                "ready_to_process",
+					"progress":             100,
+					"updated_at":           time.Now(),
+					"error":                "",
+					"steps.download":       true,
+				},
+				"$unset": bson.M{
+					"completed_at": "",
+				},
+			}
+
+			result, updErr := h.jobRepo.GetCollection().UpdateByID(ctx, objID, update)
+			if updErr != nil {
+				log.Printf("[INGESTION] COMPLETE: failed to persist local_path for job=%s path=%s err=%v", id, resolvedPath, updErr)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save completed download"})
+				return
+			}
+
+			log.Printf("[INGESTION] COMPLETE: job=%s saved local_path=%s matched=%d modified=%d", id, resolvedPath, result.MatchedCount, result.ModifiedCount)
+			c.JSON(http.StatusOK, gin.H{"message": "Download completion saved", "local_path": resolvedPath, "status": "ready_to_process"})
+			return
+		}
+
+		log.Printf("[INGESTION] COMPLETE: job=%s progress=100 but file path not resolved yet; keeping non-failed state", id)
+		if objID, objErr := primitive.ObjectIDFromHex(id); objErr == nil {
+			_, _ = h.jobRepo.GetCollection().UpdateOne(ctx, bson.M{"_id": objID}, bson.M{
+				"$set": bson.M{
+					"progress":   100,
+					"updated_at": time.Now(),
+					"message":    "Download completed, waiting for file path verification",
+				},
+			})
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "Download completion pending path verification"})
+		return
 	}
 
 	log.Printf("[INGESTION] PROGRESS: calling repository.UpdateProgress with id=%q, progress=%d", id, progressUpdate.Progress)

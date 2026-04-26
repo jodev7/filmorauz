@@ -5,6 +5,7 @@ import subprocess
 import threading
 import logging
 import time
+import glob
 import urllib.request
 import urllib.error
 from urllib.parse import urlparse
@@ -251,6 +252,44 @@ def _with_path_aliases(payload: dict, file_path: str) -> dict:
         payload["local_path"] = absolute
         payload["downloaded_file_path"] = absolute
     return payload
+
+
+def _resolve_completed_download_path(job_id: str, candidate_path: str, download_dir: str) -> str:
+    candidates = []
+    if candidate_path:
+        candidates.append(_ensure_absolute_file_path(candidate_path))
+    if job_id:
+        candidates.extend([
+            os.path.join(download_dir, f"{job_id}.mp4"),
+            os.path.join(download_dir, f"{job_id}.MUX.mp4"),
+        ])
+        candidates.extend(sorted(glob.glob(os.path.join(download_dir, f"{job_id}*"))))
+
+    seen = set()
+    for candidate in candidates:
+        path = _ensure_absolute_file_path(candidate)
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        if os.path.exists(path) and os.path.isfile(path) and os.path.getsize(path) > 0:
+            return path
+    return ""
+
+
+def _report_download_complete(job_id: str, candidate_path: str, download_dir: str):
+    resolved_path = _resolve_completed_download_path(job_id, candidate_path, download_dir)
+    if not resolved_path:
+        logger.error(f"[ERROR] file missing at {candidate_path or os.path.join(download_dir, str(job_id))}")
+        return
+
+    logger.info(f"[DOWNLOAD COMPLETE] job={job_id} path={resolved_path}")
+    report_progress_to_backend(job_id, _with_path_aliases({
+        "stage": "download",
+        "status": "ready_to_process",
+        "progress": 100,
+        "message": "Download completed",
+        "steps_download": True,
+    }, resolved_path))
 
 
 def report_progress_to_backend(job_id: str, progress_data: dict):
