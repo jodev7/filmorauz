@@ -27,28 +27,91 @@ type JobGroup =
   | { type: "single"; job: IngestionJob }
   | { type: "serial"; id: string; title: string; seasons: SeasonGroup[]; expanded: boolean; totalEpisodes: number; totalSeasons: number };
 
-// Group timestamps (declared early so groupJobsBySerial can use them).
-// Each helper falls through to created_at when the newer field is unset so a
-// brand-new job without any worker activity still sorts meaningfully.
-function jobLastActivityMs(job: IngestionJob): number {
-  const updated = new Date(job.updated_at || "").getTime();
-  if (Number.isFinite(updated)) return updated;
+const JOB_STATUS_ORDER: Record<string, number> = {
+  downloading: 0,
+  processing: 1,
+  hls_processing: 1,
+  cutting_video: 1,
+  removing_watermark: 1,
+  adding_logo: 1,
+  queued: 2,
+  pending: 2,
+  downloaded: 2,
+  ready_to_process: 3,
+  uploading: 4,
+  finalizing_storage: 4,
+  uploading_poster: 4,
+  completed: 5,
+  failed: 6,
+  download_failed: 6,
+};
+
+function getCreatedTimeMs(job: IngestionJob): number {
   const created = new Date(job.created_at || "").getTime();
   return Number.isFinite(created) ? created : 0;
 }
 
-function groupLastActivityMs(group: JobGroup): number {
+function getStableJobKey(job: IngestionJob): string {
+  const legacyId = (job as unknown as { _id?: string })._id;
+  return job.id || legacyId || "";
+}
+
+function getStableJobSortStatus(job: IngestionJob): string {
+  const displayStatus = getJobDisplayStatus(job);
+  if (displayStatus in JOB_STATUS_ORDER) return displayStatus;
+  if (job.status in JOB_STATUS_ORDER) return job.status;
+  return "failed";
+}
+
+function compareJobsStable(a: IngestionJob, b: IngestionJob): number {
+  const statusDiff = (JOB_STATUS_ORDER[getStableJobSortStatus(a)] ?? 999) - (JOB_STATUS_ORDER[getStableJobSortStatus(b)] ?? 999);
+  if (statusDiff !== 0) return statusDiff;
+
+  const createdDiff = getCreatedTimeMs(a) - getCreatedTimeMs(b);
+  if (createdDiff !== 0) return createdDiff;
+
+  return getStableJobKey(a).localeCompare(getStableJobKey(b));
+}
+
+function getGroupSortMeta(group: JobGroup): { statusRank: number; createdMs: number; key: string } {
   if (group.type === "single") {
-    return jobLastActivityMs(group.job);
+    return {
+      statusRank: JOB_STATUS_ORDER[getStableJobSortStatus(group.job)] ?? 999,
+      createdMs: getCreatedTimeMs(group.job),
+      key: getStableJobKey(group.job),
+    };
   }
-  let latest = 0;
-  for (const season of group.seasons) {
-    for (const ep of season.episodes) {
-      const t = jobLastActivityMs(ep);
-      if (t > latest) latest = t;
-    }
+
+  const episodes = group.seasons.flatMap((season) => season.episodes);
+  let statusRank = 999;
+  let createdMs = Number.POSITIVE_INFINITY;
+  let key = group.id;
+
+  for (const ep of episodes) {
+    const epRank = JOB_STATUS_ORDER[getStableJobSortStatus(ep)] ?? 999;
+    if (epRank < statusRank) statusRank = epRank;
+
+    const epCreated = getCreatedTimeMs(ep);
+    if (epCreated < createdMs) createdMs = epCreated;
+
+    const epKey = getStableJobKey(ep);
+    if (epKey && epKey < key) key = epKey;
   }
-  return latest;
+
+  return {
+    statusRank,
+    createdMs: Number.isFinite(createdMs) ? createdMs : 0,
+    key,
+  };
+}
+
+function compareGroupsStable(a: JobGroup, b: JobGroup): number {
+  const aMeta = getGroupSortMeta(a);
+  const bMeta = getGroupSortMeta(b);
+
+  if (aMeta.statusRank !== bMeta.statusRank) return aMeta.statusRank - bMeta.statusRank;
+  if (aMeta.createdMs !== bMeta.createdMs) return aMeta.createdMs - bMeta.createdMs;
+  return aMeta.key.localeCompare(bMeta.key);
 }
 
 // Group jobs by serial - serials are identified by season_number or episode_number being set
@@ -148,10 +211,8 @@ function groupJobsBySerial(jobs: IngestionJob[]): JobGroup[] {
     groups.push({ type: "single", job });
   }
 
-  // Sort ALL groups (serial + single) by their most recent activity descending.
-  // No type-based preference: a completed series that hasn't ticked in hours
-  // should drop below an actively-processing movie.
-  groups.sort((a, b) => groupLastActivityMs(b) - groupLastActivityMs(a));
+  // Keep list order stable across 1s polling updates.
+  groups.sort(compareGroupsStable);
 
   console.log(`[groupJobsBySerial] OUTPUT: ${groups.length} groups (${seriesMap.size} serial, ${singles.length} single)`);
   return groups;
@@ -516,17 +577,7 @@ function matchesJobFilter(job: IngestionJob, filter: JobFilter, now: number): bo
 function getFilteredAndSortedJobs(jobs: IngestionJob[], filter: JobFilter, now: number): IngestionJob[] {
   return jobs
     .filter((job) => job.id && matchesJobFilter(job, filter, now))
-    .sort((a, b) => {
-      const aStuck = isStuckJob(a, now) ? 1 : 0;
-      const bStuck = isStuckJob(b, now) ? 1 : 0;
-      if (aStuck !== bStuck) return bStuck - aStuck;
-
-      const aActive = !isTerminalJob(a) ? 1 : 0;
-      const bActive = !isTerminalJob(b) ? 1 : 0;
-      if (aActive !== bActive) return bActive - aActive;
-
-      return getLastUpdateMs(b) - getLastUpdateMs(a);
-    });
+    .sort(compareJobsStable);
 }
 
 // Catalog Tab Component
@@ -1298,7 +1349,7 @@ function JobsTab({
     if (!job.id) return null;
 
     const safeJob = {
-      id: job.id || "",
+      id: getStableJobKey(job),
       status: job.status || "unknown",
       stage: job.stage,
       progress: getJobProgress(job),
