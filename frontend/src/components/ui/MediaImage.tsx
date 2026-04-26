@@ -14,6 +14,15 @@ interface MediaImageProps
   style?: CSSProperties;
 }
 
+function areStylesEqual(a?: CSSProperties, b?: CSSProperties) {
+  if (a === b) return true;
+  if (!a || !b) return !a && !b;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => a[key as keyof CSSProperties] === b[key as keyof CSSProperties]);
+}
+
 function MediaImageImpl({
   src,
   alt,
@@ -83,6 +92,17 @@ function MediaImageImpl({
 // Wrap in memo so identical-prop re-renders from above don't cascade into
 // the image element. Without this, every parent re-render rebuilds the
 // className string and the inner <img> can churn.
-const MediaImage = memo(MediaImageImpl);
+const MediaImage = memo(MediaImageImpl, (prev, next) => (
+  prev.src === next.src &&
+  prev.alt === next.alt &&
+  prev.className === next.className &&
+  prev.fallbackSrc === next.fallbackSrc &&
+  prev.loading === next.loading &&
+  prev.fetchPriority === next.fetchPriority &&
+  prev.width === next.width &&
+  prev.height === next.height &&
+  prev.sizes === next.sizes &&
+  areStylesEqual(prev.style, next.style)
+));
 MediaImage.displayName = "MediaImage";
 export default MediaImage;

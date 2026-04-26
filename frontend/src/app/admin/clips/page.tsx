@@ -138,6 +138,13 @@ interface PublishModal {
   scheduledCreated: boolean;
 }
 
+interface PaginationControlsProps {
+  page: number;
+  totalPages: number;
+  onPrev: () => void;
+  onNext: () => void;
+}
+
 // ─── Platform config ──────────────────────────────────────────────────────────
 
 const PLATFORM_META: Record<
@@ -300,6 +307,30 @@ function PlatformBadge({ platform }: { platform: Platform }) {
   );
 }
 
+function PaginationControls({ page, totalPages, onPrev, onNext }: PaginationControlsProps) {
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <button
+        onClick={onPrev}
+        disabled={page <= 1}
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-brand-border text-xs text-gray-400 hover:text-white hover:border-gray-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Prev
+      </button>
+      <span className="text-xs text-gray-500 min-w-[88px] text-center">
+        Page {totalPages === 0 ? 0 : page} of {totalPages}
+      </span>
+      <button
+        onClick={onNext}
+        disabled={page >= totalPages}
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-brand-border text-xs text-gray-400 hover:text-white hover:border-gray-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Next
+      </button>
+    </div>
+  );
+}
+
 function formatDuration(seconds: number) {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
@@ -362,10 +393,15 @@ function resolveClipOpenUrl(clip: Clip): string {
 
 export default function AdminClipsPage() {
   const { token } = useAuth();
+  const clipsPageLimit = 10;
+  const jobsPageLimit = 10;
   const [clips, setClips] = useState<Clip[]>([]);
+  const [clipsPage, setClipsPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [allAccounts, setAllAccounts] = useState<AllAccounts>({ instagram: [], youtube: [], tiktok: [] });
   const [publishJobs, setPublishJobs] = useState<PublishJob[]>([]);
+  const [jobsPage, setJobsPage] = useState(1);
+  const [jobsTotal, setJobsTotal] = useState(0);
   const [uploading, setUploading] = useState<Record<string, boolean>>({});
   const [modal, setModal] = useState<PublishModal | null>(null);
   const [editingJob, setEditingJob] = useState<{ id: string; value: string } | null>(null);
@@ -424,23 +460,40 @@ export default function AdminClipsPage() {
   const fetchJobs = useCallback(async () => {
     if (!token) return;
     try {
-      const res = await fetch(`${API}/admin/publish/jobs?limit=100`, {
+      const offset = (jobsPage - 1) * jobsPageLimit;
+      const res = await fetch(`${API}/admin/publish/jobs?limit=${jobsPageLimit}&offset=${offset}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
         const data = await res.json();
-        setPublishJobs(data.data || []);
+        setPublishJobs(data.items || data.data || []);
+        setJobsTotal(data.total || 0);
       }
     } catch {
       // silently ignore
     }
-  }, [token]);
+  }, [token, jobsPage]);
 
   useEffect(() => {
     fetchClips();
     fetchAccounts();
     fetchJobs();
   }, [fetchClips, fetchAccounts, fetchJobs]);
+
+  useEffect(() => {
+    const totalMovieGroups = Object.keys(groupByMovie(clips)).length;
+    const totalPages = Math.max(1, Math.ceil(totalMovieGroups / clipsPageLimit));
+    if (clipsPage > totalPages) {
+      setClipsPage(totalPages);
+    }
+  }, [clips, clipsPage]);
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(jobsTotal / jobsPageLimit));
+    if (jobsPage > totalPages) {
+      setJobsPage(totalPages);
+    }
+  }, [jobsPage, jobsTotal]);
 
   const openModal = (clip: Clip) => {
     // Pre-select first account for each platform that has accounts configured
@@ -596,8 +649,15 @@ export default function AdminClipsPage() {
   };
 
   const groupedClips = groupByMovie(clips);
+  const groupedClipEntries = Object.entries(groupedClips);
+  const clipsTotalPages = Math.max(1, Math.ceil(groupedClipEntries.length / clipsPageLimit));
+  const pagedGroupedClipEntries = groupedClipEntries.slice(
+    (clipsPage - 1) * clipsPageLimit,
+    clipsPage * clipsPageLimit,
+  );
   const pendingJobs = publishJobs.filter((j) => j.status === "pending" || j.status === "processing");
   const doneJobs = publishJobs.filter((j) => j.status === "success" || j.status === "failed");
+  const jobsTotalPages = Math.max(1, Math.ceil(jobsTotal / jobsPageLimit));
 
   return (
     <div className="p-4 sm:p-8">
@@ -644,7 +704,15 @@ export default function AdminClipsPage() {
         </div>
       ) : (
         <div className="space-y-8">
-          {Object.entries(groupedClips).map(([movieId, movieClips]) => {
+          <div className="flex justify-end">
+            <PaginationControls
+              page={clipsPage}
+              totalPages={clipsTotalPages}
+              onPrev={() => setClipsPage((prev) => Math.max(1, prev - 1))}
+              onNext={() => setClipsPage((prev) => Math.min(clipsTotalPages, prev + 1))}
+            />
+          </div>
+          {pagedGroupedClipEntries.map(([movieId, movieClips]) => {
             const isExpanded = expandedMovies.has(movieId);
             const moviePublishJobs = publishJobs.filter((j) =>
               movieClips.some((c) => c.id === j.clip_id)
@@ -832,16 +900,32 @@ export default function AdminClipsPage() {
               </div>
             );
           })}
+          <div className="flex justify-end">
+            <PaginationControls
+              page={clipsPage}
+              totalPages={clipsTotalPages}
+              onPrev={() => setClipsPage((prev) => Math.max(1, prev - 1))}
+              onNext={() => setClipsPage((prev) => Math.min(clipsTotalPages, prev + 1))}
+            />
+          </div>
         </div>
       )}
 
       {/* ── Scheduled publish jobs ───────────────────────────────── */}
-      {publishJobs.length > 0 && (
+      {jobsTotal > 0 && (
         <div className="mt-10">
-          <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <CalendarClock size={20} className="text-blue-400" />
-            Rejalashtirilgan yuklamalar
-          </h2>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+              <CalendarClock size={20} className="text-blue-400" />
+              Rejalashtirilgan yuklamalar
+            </h2>
+            <PaginationControls
+              page={jobsPage}
+              totalPages={jobsTotalPages}
+              onPrev={() => setJobsPage((prev) => Math.max(1, prev - 1))}
+              onNext={() => setJobsPage((prev) => Math.min(jobsTotalPages, prev + 1))}
+            />
+          </div>
 
           {/* Pending / processing */}
           {pendingJobs.length > 0 && (
@@ -946,7 +1030,7 @@ export default function AdminClipsPage() {
                 <span className="text-sm text-gray-400">Bajarilgan</span>
               </div>
               <div className="divide-y divide-brand-border/50">
-                {doneJobs.slice(0, 20).map((j) => (
+                {doneJobs.map((j) => (
                   <div
                     key={j.id}
                     className="px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4"
@@ -979,6 +1063,14 @@ export default function AdminClipsPage() {
               </div>
             </div>
           )}
+          <div className="flex justify-end mt-4">
+            <PaginationControls
+              page={jobsPage}
+              totalPages={jobsTotalPages}
+              onPrev={() => setJobsPage((prev) => Math.max(1, prev - 1))}
+              onNext={() => setJobsPage((prev) => Math.min(jobsTotalPages, prev + 1))}
+            />
+          </div>
         </div>
       )}
 

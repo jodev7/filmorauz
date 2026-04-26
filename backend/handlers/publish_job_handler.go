@@ -254,7 +254,13 @@ func (h *PublishJobHandler) ListAll(c *gin.Context) {
 	if jobs == nil {
 		jobs = []models.PublishJob{}
 	}
-	c.JSON(http.StatusOK, gin.H{"data": jobs, "total": total})
+	c.JSON(http.StatusOK, gin.H{
+		"data":   jobs,
+		"items":  jobs,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
 }
 
 // UpdateTime PATCH /api/admin/publish/jobs/:jobId

@@ -16,6 +16,25 @@ interface Props {
   showSkeleton?: boolean; // Allow disabling skeleton if needed
 }
 
+function areMovieCardPropsEqual(prev: Props, next: Props) {
+  return (
+    prev.priority === next.priority &&
+    prev.showSkeleton === next.showSkeleton &&
+    prev.movie.id === next.movie.id &&
+    prev.movie.slug === next.movie.slug &&
+    prev.movie.title === next.movie.title &&
+    prev.movie.poster_url === next.movie.poster_url &&
+    prev.movie.poster_thumb_url === next.movie.poster_thumb_url &&
+    prev.movie.year === next.movie.year &&
+    prev.movie.duration === next.movie.duration &&
+    prev.movie.quality === next.movie.quality &&
+    prev.movie.code === next.movie.code &&
+    prev.movie.created_at === next.movie.created_at &&
+    prev.movie.is_premium === next.movie.is_premium &&
+    (prev.movie as any).rating_avg === (next.movie as any).rating_avg
+  );
+}
+
 function MovieCardImpl({ movie, priority = false, showSkeleton = true }: Props) {
   // Get localized metadata based on locale
   const localizedTitle = getLocalizedTitle(movie);
@@ -147,7 +166,7 @@ function MovieCardImpl({ movie, priority = false, showSkeleton = true }: Props) 
   );
 }
 
-const MovieCard = memo(MovieCardImpl);
+const MovieCard = memo(MovieCardImpl, areMovieCardPropsEqual);
 MovieCard.displayName = "MovieCard";
 
 export default MovieCard;

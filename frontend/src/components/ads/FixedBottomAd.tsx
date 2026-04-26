@@ -15,6 +15,7 @@ interface FixedBottomAdProps {
 }
 
 const DEFAULT_PLACEMENT = "website_fixed_bottom";
+const AD_ROTATION_INTERVAL_MS = 30000;
 
 export default function FixedBottomAd({
   placement = DEFAULT_PLACEMENT,
@@ -53,7 +54,7 @@ export default function FixedBottomAd({
     ensurePlacements(placements).catch(() => {});
   }, [ensurePlacements, placements, shouldFetch]);
 
-  // Rotate with weighted random every 5 seconds when multiple ads exist
+  // Rotate slowly so fixed ad state doesn't churn the app tree every few seconds.
   useEffect(() => {
     if (ads.length <= 1 || !isReady) return;
     const interval = setInterval(() => {
@@ -62,7 +63,7 @@ export default function FixedBottomAd({
         const picked = pickWeightedRandomAd(ads, currentAdId);
         return ads.indexOf(picked);
       });
-    }, 5000);
+    }, AD_ROTATION_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [ads, isReady]);
 

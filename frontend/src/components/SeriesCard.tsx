@@ -11,6 +11,19 @@ interface SeriesCardProps {
   series: Series;
 }
 
+function areSeriesCardPropsEqual(prev: SeriesCardProps, next: SeriesCardProps) {
+  return (
+    prev.series.id === next.series.id &&
+    prev.series.slug === next.series.slug &&
+    prev.series.title === next.series.title &&
+    prev.series.poster_url === next.series.poster_url &&
+    prev.series.year === next.series.year &&
+    prev.series.rating_avg === next.series.rating_avg &&
+    prev.series.is_premium === next.series.is_premium &&
+    (prev.series.genre?.[0] || "") === (next.series.genre?.[0] || "")
+  );
+}
+
 function SeriesCardImpl({ series }: SeriesCardProps) {
   return (
     <Link
@@ -81,7 +94,7 @@ function SeriesCardImpl({ series }: SeriesCardProps) {
   );
 }
 
-const SeriesCard = memo(SeriesCardImpl);
+const SeriesCard = memo(SeriesCardImpl, areSeriesCardPropsEqual);
 SeriesCard.displayName = "SeriesCard";
 
 export default SeriesCard;

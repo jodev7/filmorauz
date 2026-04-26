@@ -34,7 +34,7 @@ function MovieCarouselImpl({ movies, priorityCount = 0 }: MovieCarouselProps) {
       checkScroll();
       return () => scrollElement.removeEventListener("scroll", checkScroll);
     }
-  }, [movies]);
+  }, [movies.length]);
 
   const scroll = (direction: "left" | "right") => {
     if (!scrollRef.current) return;

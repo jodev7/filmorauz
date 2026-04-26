@@ -12,6 +12,8 @@ interface HeroCarouselProps {
   movies: Movie[];
 }
 
+const HERO_AUTO_ADVANCE_MS = 30000;
+
 export default function HeroCarousel({ movies }: HeroCarouselProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isHovered, setIsHovered] = useState(false);
@@ -41,7 +43,7 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
 
   useEffect(() => {
     if (movies.length <= 1 || isHovered) return;
-    const interval = setInterval(goToNext, 5000);
+    const interval = setInterval(goToNext, HERO_AUTO_ADVANCE_MS);
     return () => clearInterval(interval);
   }, [movies.length, isHovered, goToNext]);
 

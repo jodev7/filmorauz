@@ -23,6 +23,7 @@ const SLOT_HEIGHT: Record<string, string> = {
   inline: "h-[400px]",
   card:   "h-[200px]",
 };
+const AD_ROTATION_INTERVAL_MS = 30000;
 
 export default function WebsiteAdSlot({
   placement,
@@ -75,7 +76,7 @@ export default function WebsiteAdSlot({
     ensurePlacements(placements).catch(() => {});
   }, [ensurePlacements, placements, shouldLoad]);
 
-  // Rotate with weighted random every 5s when multiple ads exist.
+  // Rotate slowly so ad-local state doesn't churn the page every few seconds.
   useEffect(() => {
     if (ads.length <= 1 || !isReady) return;
     const interval = setInterval(() => {
@@ -84,7 +85,7 @@ export default function WebsiteAdSlot({
         const picked = pickWeightedRandomAd(ads, currentAdId);
         return ads.indexOf(picked);
       });
-    }, 5000);
+    }, AD_ROTATION_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [ads, isReady]);
 

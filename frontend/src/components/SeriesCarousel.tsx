@@ -28,7 +28,7 @@ function SeriesCarouselImpl({ series }: SeriesCarouselProps) {
       checkScroll();
       return () => scrollElement.removeEventListener("scroll", checkScroll);
     }
-  }, [series]);
+  }, [series.length]);
 
   const scroll = (direction: "left" | "right") => {
     if (!scrollRef.current) return;

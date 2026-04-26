@@ -35,6 +35,10 @@ function OptimizedImageImpl({
   fallbackSrc = DEFAULT_POSTER_PLACEHOLDER,
 }: OptimizedImageProps) {
   const resolvedImageUrl = useMemo(() => normalizeMediaUrl(src, ""), [src]);
+  const imageStyle = useMemo(
+    () => ({ position: "absolute", inset: 0, width: "100%", height: "100%" } as const),
+    [],
+  );
 
   // Skeleton visibility tracks the inner image's load lifecycle. Reset only
   // when the resolved URL actually changes — never on parent re-renders that
@@ -71,7 +75,7 @@ function OptimizedImageImpl({
         sizes={sizes}
         fallbackSrc={fallbackSrc}
         className="object-cover"
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+        style={imageStyle}
         onLoad={handleLoad}
         onError={handleError}
       />
@@ -82,5 +86,16 @@ function OptimizedImageImpl({
 // Memoize so a parent re-render with the same src does not retrigger the
 // skeleton overlay or churn the underlying <img>. Without this, identical
 // re-renders can flash the skeleton back over a fully-loaded poster.
-const OptimizedImage = memo(OptimizedImageImpl);
+const OptimizedImage = memo(OptimizedImageImpl, (prev, next) => (
+  prev.src === next.src &&
+  prev.alt === next.alt &&
+  prev.className === next.className &&
+  prev.priority === next.priority &&
+  prev.showSkeleton === next.showSkeleton &&
+  prev.aspectRatio === next.aspectRatio &&
+  prev.width === next.width &&
+  prev.height === next.height &&
+  prev.sizes === next.sizes &&
+  prev.fallbackSrc === next.fallbackSrc
+));
 export default OptimizedImage;
