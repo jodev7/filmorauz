@@ -318,6 +318,7 @@ func (b *Bot) lookupMovie(chatID int64, code string) {
 	if posterURL == "" {
 		posterURL = movie.BackdropURL
 	}
+	log.Printf("[MOVIE] raw poster_url before send — title=%q poster_url=%q backdrop_url=%q", movie.Title, movie.PosterURL, movie.BackdropURL)
 
 	// Public URL? Try photo, but never let a broken/slow image hang /code.
 	// Flow: normalize the poster URL → HEAD probe with 5s budget → bounded
@@ -328,7 +329,7 @@ func (b *Bot) lookupMovie(chatID int64, code string) {
 		photoURL := b.resolvePosterURL(posterURL)
 		photoSent := false
 
-		if photoURL != "" {
+		if photoURL != "" && b.isValidPosterURL(photoURL) {
 			reachable, probeStatus, probeErr := b.isPosterReachable(photoURL)
 			if reachable {
 				log.Printf("[MOVIE] Sending photo with caption for: %s (photo_url=%s)", movie.Title, photoURL)
@@ -342,8 +343,8 @@ func (b *Bot) lookupMovie(chatID int64, code string) {
 					movie.Title, photoURL, probeStatus, probeErr)
 			}
 		} else if posterURL != "" {
-			log.Printf("[MOVIE] poster URL could not be resolved — title=%q raw=%s cdn_base=%q",
-				movie.Title, posterURL, b.config.CDNBaseURL)
+			log.Printf("[MOVIE] poster URL invalid or could not be resolved — title=%q raw=%s resolved=%q cdn_base=%q",
+				movie.Title, posterURL, photoURL, b.config.CDNBaseURL)
 		}
 
 		if !photoSent {
@@ -401,6 +402,11 @@ func (b *Bot) resolvePosterURL(raw string) string {
 		}
 	}
 	return cdn + "/" + path
+}
+
+func (b *Bot) isValidPosterURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	return raw != "" && (strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://"))
 }
 
 const (

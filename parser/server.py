@@ -5,15 +5,19 @@ Provides REST API for Go backend to call parsers
 import json
 import logging
 import os
+import random
 import re
+import shutil
 import time
 import urllib.request
 import urllib.error
 import threading
 import socketserver
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 import sys
+import hashlib
 
 
 # Safe string truncation - never raises IndexError
@@ -126,6 +130,285 @@ downloader_service = DownloaderService(DOWNLOAD_DIR)
 # Key: job_id, Value: DownloadState object
 _active_downloads = {}
 _downloads_lock = threading.Lock()
+IG_SESSION_DIR = Path(__file__).parent / "ig_sessions"
+IG_SESSION_DIR.mkdir(exist_ok=True)
+IG_UPLOAD_BACKOFFS = (5, 15, 45)
+IG_PRE_UPLOAD_SLEEP_RANGE = (3, 8)
+IG_UPLOAD_COOLDOWN_SECONDS = int(os.environ.get("IG_UPLOAD_COOLDOWN_SECONDS", "60"))
+_ig_last_upload_times = {}
+_ig_upload_state_lock = threading.Lock()
+
+
+class InstagramUploadError(Exception):
+    """Structured error used by Instagram upload flow."""
+
+    def __init__(self, error_type: str, account: str, message: str, action_required: str):
+        super().__init__(message)
+        self.error_type = error_type
+        self.account = account
+        self.message = message
+        self.action_required = action_required
+
+
+def _ig_action_required(error_type: str, account: str) -> str:
+    actions = {
+        "session_expired": "ig_login.py orqali qayta login qiling",
+        "challenge_required": "Instagram appda challenge/checkpoint ni confirm qiling, keyin ig_login.py orqali qayta login qiling",
+        "action_blocked": "Instagram vaqtincha blok qo'ygan. Biroz kutib qayta urinib ko'ring",
+        "proxy_failed": "Proxy almashtiring yoki o'chirib qayta urinib ko'ring",
+        "upload_failed": "Qayta urinib ko'ring",
+    }
+    return actions.get(error_type, f"{account} account uchun qayta urinib ko'ring")
+
+
+def _ig_raise(error_type: str, account: str, message: str):
+    raise InstagramUploadError(error_type, account, message, _ig_action_required(error_type, account))
+
+
+def _ig_normalize_account_name(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "_", (name or "").strip()).strip("_").lower()
+
+
+def _ig_env_prefix(account: str) -> str:
+    return _ig_normalize_account_name(account).upper()
+
+
+def _ig_mask_proxy(proxy: str) -> str:
+    if not proxy:
+        return ""
+    parsed = urlparse(proxy)
+    if not parsed.scheme or not parsed.netloc:
+        return "***"
+    if "@" not in parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    creds, host = parsed.netloc.rsplit("@", 1)
+    if ":" in creds:
+        user, _ = creds.split(":", 1)
+        creds = f"{user}:***"
+    else:
+        creds = "***"
+    return f"{parsed.scheme}://{creds}@{host}"
+
+
+def _ig_configured_accounts():
+    raw = os.environ.get("IG_ACCOUNTS", "main,backup1")
+    accounts = []
+    for item in raw.split(","):
+        normalized = _ig_normalize_account_name(item)
+        if normalized and normalized not in accounts:
+            accounts.append(normalized)
+    return accounts or ["main", "backup1"]
+
+
+def _ig_accounts_to_try(requested_account: str):
+    configured = _ig_configured_accounts()
+    requested = _ig_normalize_account_name(requested_account)
+    if not requested:
+        return configured
+    if requested == "main":
+        ordered = [requested] + [acc for acc in configured if acc != requested]
+        return ordered
+    return [requested]
+
+
+def _ig_classify_error(err) -> str:
+    text = str(err).lower()
+    if any(token in text for token in ("proxy", "tunnel connection failed", "cannot connect", "connection refused", "connect timeout")):
+        return "proxy_failed"
+    if any(token in text for token in ("challenge_required", "checkpoint_required", "account recovery", "confirm", "verify", "two_factor")):
+        return "challenge_required"
+    if any(token in text for token in ("feedback_required", "please wait", "too many", "spam", "rate limit", "action blocked")):
+        return "action_blocked"
+    if any(token in text for token in ("login_required", "not_authenticated", "not authenticated", "session_expired", "forbidden", "403")):
+        return "session_expired"
+    return "upload_failed"
+
+
+def _ig_maybe_migrate_legacy_session(account: str, username: str, session_file: Path):
+    if session_file.exists() or not username:
+        return
+    legacy_path = IG_SESSION_DIR / f"{hashlib.md5(username.encode()).hexdigest()}.json"
+    if legacy_path.exists():
+        shutil.move(str(legacy_path), str(session_file))
+        logger.info(f"[Instagram] migrated legacy session account={account} path={session_file}")
+
+
+def _ig_get_account_config(account: str, body_username: str = "", body_password: str = ""):
+    normalized = _ig_normalize_account_name(account)
+    env_prefix = _ig_env_prefix(normalized)
+    username = (os.environ.get(f"IG_{env_prefix}_USERNAME", "") or body_username or "").strip()
+    password = (os.environ.get(f"IG_{env_prefix}_PASSWORD", "") or body_password or "").strip()
+    proxy = os.environ.get(f"IG_{env_prefix}_PROXY", "").strip()
+    session_file = IG_SESSION_DIR / f"{normalized}.json"
+    _ig_maybe_migrate_legacy_session(normalized, username, session_file)
+    return {
+        "account": normalized,
+        "username": username,
+        "password": password,
+        "proxy": proxy,
+        "session_file": session_file,
+    }
+
+
+def _ig_create_client(account_config):
+    from instagrapi import Client
+
+    cl = Client()
+    cl.delay_range = [1, 3]
+    proxy = account_config.get("proxy", "")
+    masked_proxy = _ig_mask_proxy(proxy)
+    if proxy:
+        try:
+            cl.set_proxy(proxy)
+        except Exception as exc:
+            _ig_raise(
+                "proxy_failed",
+                account_config["account"],
+                f"Proxy ishlamadi ({masked_proxy}): {exc}",
+            )
+    logger.info(
+        f"[Instagram] account={account_config['account']} proxy={'yes' if proxy else 'no'} "
+        f"session={'loaded' if account_config['session_file'].exists() else 'missing'}"
+    )
+    return cl
+
+
+def _ig_archive_session(session_file: Path, reason: str):
+    if not session_file.exists():
+        return None
+    archived = session_file.with_name(f"{session_file.stem}.{reason}.{int(time.time())}.json")
+    session_file.replace(archived)
+    return archived
+
+
+def _ig_login_and_save(account_config):
+    username = account_config.get("username", "")
+    password = account_config.get("password", "")
+    session_file = account_config["session_file"]
+    if not username or not password:
+        _ig_raise(
+            "session_expired",
+            account_config["account"],
+            f"Instagram credentials topilmadi for account='{account_config['account']}'. "
+            f"IG_{_ig_env_prefix(account_config['account'])}_USERNAME va PASSWORD ni sozlang.",
+        )
+
+    cl = _ig_create_client(account_config)
+    try:
+        cl.login(username, password)
+        cl.dump_settings(session_file)
+        logger.info(f"[Instagram] session saved account={account_config['account']} path={session_file}")
+        return cl
+    except Exception as exc:
+        error_type = _ig_classify_error(exc)
+        _ig_raise(
+            error_type,
+            account_config["account"],
+            f"Instagram login failed for account='{account_config['account']}' username='{username}': {exc}",
+        )
+
+
+def _ig_validate_or_relogin(account_config):
+    session_file = account_config["session_file"]
+    cl = _ig_create_client(account_config)
+    if session_file.exists():
+        try:
+            cl.load_settings(session_file)
+            cl.get_timeline_feed()
+            logger.info(f"[Instagram] session valid account={account_config['account']} path={session_file}")
+            return cl
+        except Exception as exc:
+            error_type = _ig_classify_error(exc)
+            logger.warning(
+                f"[Instagram] session invalid account={account_config['account']} "
+                f"path={session_file} type={error_type}: {exc}"
+            )
+            if error_type in {"session_expired", "challenge_required"}:
+                archived = _ig_archive_session(session_file, "expired")
+                if archived:
+                    logger.info(
+                        f"[Instagram] archived stale session account={account_config['account']} "
+                        f"old_path={archived}"
+                    )
+                return _ig_login_and_save(account_config)
+            _ig_raise(
+                error_type,
+                account_config["account"],
+                f"Instagram session tekshiruvi muvaffaqiyatsiz tugadi for account='{account_config['account']}': {exc}",
+            )
+    logger.info(f"[Instagram] session missing account={account_config['account']} path={session_file}")
+    return _ig_login_and_save(account_config)
+
+
+def _ig_apply_pre_upload_delay(account: str):
+    delay = random.uniform(*IG_PRE_UPLOAD_SLEEP_RANGE)
+    logger.info(f"[Instagram] account={account} pre-upload sleep {delay:.1f}s")
+    time.sleep(delay)
+
+
+def _ig_wait_for_cooldown(account: str):
+    with _ig_upload_state_lock:
+        last_upload_at = _ig_last_upload_times.get(account, 0.0)
+    wait_time = max(0.0, IG_UPLOAD_COOLDOWN_SECONDS - (time.time() - last_upload_at))
+    if wait_time > 0:
+        logger.info(f"[Instagram] account={account} cooldown wait {wait_time:.1f}s")
+        time.sleep(wait_time)
+
+
+def _ig_mark_upload(account: str):
+    with _ig_upload_state_lock:
+        _ig_last_upload_times[account] = time.time()
+
+
+def _ig_upload_once(cl, account_config, video_path: Path, caption: str):
+    media = cl.clip_upload(video_path, caption)
+    _ig_mark_upload(account_config["account"])
+    return media
+
+
+def _ig_upload_for_account(account_config, video_path: Path, caption: str):
+    account = account_config["account"]
+    cl = _ig_validate_or_relogin(account_config)
+    last_error = None
+    relogin_retry_used = False
+
+    for attempt, backoff in enumerate(IG_UPLOAD_BACKOFFS, start=1):
+        logger.info(f"[Instagram] account={account} upload attempt {attempt}/{len(IG_UPLOAD_BACKOFFS)}")
+        _ig_wait_for_cooldown(account)
+        _ig_apply_pre_upload_delay(account)
+        try:
+            media = _ig_upload_once(cl, account_config, video_path, caption)
+            logger.info(f"[Instagram] final success account={account} media_id={media.pk}")
+            return {"status": "success", "account": account, "media_id": str(media.pk)}
+        except Exception as exc:
+            error_type = _ig_classify_error(exc)
+            last_error = InstagramUploadError(
+                error_type,
+                account,
+                f"Instagram upload failed for account='{account}': {exc}",
+                _ig_action_required(error_type, account),
+            )
+            logger.warning(
+                f"[Instagram] account={account} attempt={attempt} failed type={error_type}: {exc}"
+            )
+
+            if error_type in {"session_expired", "challenge_required"} and not relogin_retry_used:
+                archived = _ig_archive_session(account_config["session_file"], "expired")
+                if archived:
+                    logger.info(
+                        f"[Instagram] archived session before relogin account={account} path={archived}"
+                    )
+                cl = _ig_login_and_save(account_config)
+                relogin_retry_used = True
+                continue
+
+            if attempt < len(IG_UPLOAD_BACKOFFS):
+                logger.info(f"[Instagram] account={account} backoff {backoff}s before retry")
+                time.sleep(backoff)
+
+    if last_error:
+        raise last_error
+    _ig_raise("upload_failed", account, f"Instagram upload failed for account='{account}'")
 
 class DownloadState:
     """Represents the state of an active download"""
@@ -2026,198 +2309,74 @@ class ParserHandler(BaseHTTPRequestHandler):
                     return
 
                 account_param = query.get("account", [""])[0].strip()
-                account_name = (
+                requested_account = (
                     account_param
                     or body.get("account_name", "")
                     or body.get("account", "")
-                    or username
+                    or "main"
                 ).strip()
-                account_username_map = {
-                    "main": "filmorauznet",
-                    "backup1": "filmora.uznet",
-                }
-                instagram_username = (
-                    username.strip()
-                    or account_username_map.get(account_name, "").strip()
-                )
 
                 logger.info(
                     f"[Instagram] upload requested account_param={account_param or '-'} "
-                    f"account_name={account_name or '-'} username={instagram_username or '-'} url={video_url}"
+                    f"requested_account={requested_account or '-'} url={video_url}"
                 )
 
                 try:
-                    from instagrapi import Client
+                    from instagrapi import Client  # noqa: F401
                 except ImportError:
                     self._send_error("instagrapi not installed — run: pip install instagrapi", 500)
                     return
 
                 import tempfile, urllib.request as _urlreq
-                from pathlib import Path
-
-                session_dir = Path(__file__).parent / "ig_sessions"
-                session_dir.mkdir(exist_ok=True)
-
-                def _session_candidates(acc_name: str, ig_username: str):
-                    import hashlib
-
-                    candidates = []
-                    seen = set()
-                    for value in (acc_name, ig_username):
-                        value = (value or "").strip()
-                        if not value:
-                            continue
-                        for candidate_name in (
-                            f"{value}.json",
-                            f"{hashlib.md5(value.encode()).hexdigest()}.json",
-                        ):
-                            if candidate_name in seen:
-                                continue
-                            seen.add(candidate_name)
-                            candidates.append(session_dir / candidate_name)
-                    return candidates
-
-                session_candidates = _session_candidates(account_name, instagram_username)
-                existing_session_files = [path for path in session_candidates if path.exists()]
-                session_file = max(existing_session_files, key=lambda p: p.stat().st_mtime) if existing_session_files else (
-                    session_candidates[0] if session_candidates else None
-                )
-                session_exists = bool(session_file and session_file.exists())
-                logger.info(
-                    f"[Instagram] session resolve account_param={account_param or '-'} "
-                    f"username={instagram_username or '-'} "
-                    f"session_file={str(session_file) if session_file else '-'} exists={session_exists}"
-                )
 
                 tmp_path = None
                 try:
-                    cl = Client()
-                    cl.delay_range = [1, 3]
-
-                    # Auth error types that require re-login — password fallback won't help
-                    _AUTH_FAIL_TYPES = {"challenge_required", "checkpoint_required", "session_expired"}
-
-                    def _classify_ig_error(err_str):
-                        e = err_str.lower()
-                        if "challenge_required" in e or "feedback_required" in e:
-                            return "challenge_required"
-                        if "checkpoint_required" in e:
-                            return "checkpoint_required"
-                        if ("email" in e or "phone" in e) and ("send" in e or "verify" in e or "help" in e or "confirm" in e):
-                            return "checkpoint_required"
-                        if "account recovery" in e or "account has been compromised" in e:
-                            return "checkpoint_required"
-                        if "login_required" in e or "not_authenticated" in e or "not authenticated" in e or "login required" in e:
-                            return "session_expired"
-                        # Instagram returns 403 / "forbidden" when the session cookie has been
-                        # invalidated server-side (logout, password change, suspicious activity).
-                        # Treat as session_expired so the operator is told to re-run ig_login.py.
-                        if "403" in e or "forbidden" in e:
-                            return "session_expired"
-                        if "bad_password" in e or ("password" in e and ("incorrect" in e or "wrong" in e)):
-                            return "bad_credentials"
-                        if "please wait" in e or "too many" in e or "spam" in e:
-                            return "rate_limited"
-                        return "publish_failed"
-
-                    if session_exists and session_file is not None:
-                        cl.load_settings(session_file)
-                        logger.info(
-                            f"[Instagram] loaded session account={account_name or '-'} "
-                            f"username={instagram_username or '-'} path={session_file}"
-                        )
-                        # Pre-check: verify session is valid before attempting upload
-                        try:
-                            cl.get_timeline_feed()
-                        except Exception as session_err:
-                            session_err_type = _classify_ig_error(str(session_err))
-                            if session_err_type in _AUTH_FAIL_TYPES:
-                                # Auth error — password fallback cannot fix this; fail immediately
-                                logger.error(
-                                    f"[Instagram] session auth error ({session_err_type}) "
-                                    f"account={account_name or '-'} username={instagram_username or '-'} "
-                                    f"path={session_file}"
-                                )
-                                raise Exception(
-                                    f"session_expired: Saved Instagram session expired for "
-                                    f"account='{account_name}' username='{instagram_username}' "
-                                    f"at '{session_file}'. Re-run ig_login.py and log in again."
-                                )
-                            # Non-auth failure (network, unknown) — try password fallback
-                            if password and instagram_username:
-                                logger.warning(f"[Instagram] session check failed ({session_err}), retrying with password")
-                                cl = Client()
-                                cl.delay_range = [1, 3]
-                                cl.login(instagram_username, password)
-                                cl.dump_settings(session_file)
-                                logger.info(
-                                    f"[Instagram] re-authenticated account={account_name or '-'} "
-                                    f"username={instagram_username or '-'} path={session_file}"
-                                )
-                            else:
-                                raise
-                    else:
-                        if not instagram_username:
-                            raise Exception(
-                                f"no_session: Could not resolve Instagram username for account='{account_name}'. "
-                                f"Pass username explicitly or map the account in parser/server.py."
-                            )
-                        if not password:
-                            expected_files = ", ".join(str(path) for path in session_candidates) or str(session_dir)
-                            raise Exception(
-                                f"no_session: No Instagram session file found for account='{account_name}' "
-                                f"username='{instagram_username}'. Checked: {expected_files}. "
-                                f"Run ig_login.py and log in as {instagram_username}."
-                            )
-                        logger.warning(
-                            f"[Instagram] no session account={account_name or '-'} "
-                            f"username={instagram_username or '-'}, logging in with password"
-                        )
-                        cl.login(instagram_username, password)
-                        if session_file is None:
-                            raise Exception(
-                                f"no_session: Could not determine session file path for account='{account_name}' "
-                                f"username='{instagram_username}'."
-                            )
-                        cl.dump_settings(session_file)
-                        logger.info(
-                            f"[Instagram] session saved account={account_name or '-'} "
-                            f"username={instagram_username or '-'} path={session_file}"
-                        )
-
                     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
                         tmp_path = f.name
                     _urlreq.urlretrieve(video_url, tmp_path)
+                    video_path = Path(tmp_path)
+                    accounts_to_try = _ig_accounts_to_try(requested_account)
+                    last_error = None
 
-                    media = cl.clip_upload(Path(tmp_path), caption)
-                    logger.info(f"[Instagram] upload success media_id={media.pk} account={account_name}")
-                    self._send_json({"status": "success", "media_id": str(media.pk)})
-                except Exception as e:
-                    error_str = str(e)
-                    error_type = _classify_ig_error(error_str)
-                    # Refine: no_session prefix set explicitly above
-                    if "no_session:" in error_str.lower():
-                        error_type = "no_session"
-                    elif "session_expired:" in error_str.lower():
-                        error_type = "session_expired"
-                    _action_map = {
-                        "challenge_required":  "ig_login.py ni ishga tushirib Instagram challenge/checkpoint ni yakunlang",
-                        "checkpoint_required": "ig_login.py ni ishga tushirib Instagram checkpoint ni yakunlang",
-                        "session_expired":     f"ig_login.py ni qayta ishga tushirib {instagram_username or account_name or 'kerakli akkaunt'} uchun yangi sessiya saqlang",
-                        "no_session":          f"ig_login.py ni ishga tushirib {instagram_username or account_name or 'kerakli akkaunt'} uchun sessiya yarating",
-                        "bad_credentials":     "Login va parolni tekshiring",
-                        "rate_limited":        "Bir necha soatdan keyin urinib ko'ring",
-                        "publish_failed":      "Qayta urinib ko'ring",
-                    }
-                    action_required = _action_map.get(error_type, "Qayta urinib ko'ring")
-                    logger.error(f"[Instagram] error account={account_name} type={error_type}: {error_str}",
-                                 exc_info=(error_type == "publish_failed"))
-                    self._send_json({
-                        "status": "failed",
-                        "error": error_str,
-                        "error_type": error_type,
-                        "action_required": action_required,
-                    })
+                    for index, account in enumerate(accounts_to_try):
+                        account_config = _ig_get_account_config(
+                            account,
+                            body_username=username,
+                            body_password=password,
+                        )
+                        logger.info(
+                            f"[Instagram] resolved account={account_config['account']} "
+                            f"username={account_config['username'] or '-'} "
+                            f"session_file={account_config['session_file']} "
+                            f"exists={account_config['session_file'].exists()}"
+                        )
+                        try:
+                            result = _ig_upload_for_account(account_config, video_path, caption)
+                            self._send_json(result)
+                            return
+                        except InstagramUploadError as exc:
+                            last_error = exc
+                            logger.error(
+                                f"[Instagram] final fail account={exc.account} "
+                                f"type={exc.error_type}: {exc.message}"
+                            )
+                            if index < len(accounts_to_try) - 1:
+                                logger.warning(
+                                    f"[Instagram] switching account {account_config['account']} -> "
+                                    f"{accounts_to_try[index + 1]}"
+                                )
+                            else:
+                                self._send_json({
+                                    "status": "failed",
+                                    "account": exc.account,
+                                    "error_type": exc.error_type,
+                                    "action_required": exc.action_required,
+                                    "message": exc.message,
+                                    "error": exc.message,
+                                })
+                                return
+                    if last_error:
+                        raise last_error
                 finally:
                     if tmp_path and os.path.exists(tmp_path):
                         os.unlink(tmp_path)
@@ -2676,5 +2835,3 @@ if __name__ == "__main__":
     logger.info(f"[STARTUP] Binding to   = {args.host}:{args.port}")
 
     run_server(args.host, args.port)
-
-
