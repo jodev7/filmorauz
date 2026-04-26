@@ -5,7 +5,7 @@ import {
   DEFAULT_POSTER_PLACEHOLDER,
   normalizeMediaUrl,
 } from "@/lib/image-utils";
-import MediaImage from "@/components/ui/MediaImage";
+import MediaImage, { isImageUrlLoaded, markImageUrlLoaded } from "@/components/ui/MediaImage";
 
 interface OptimizedImageProps {
   src: string;
@@ -43,13 +43,16 @@ function OptimizedImageImpl({
   // Skeleton visibility tracks the inner image's load lifecycle. Reset only
   // when the resolved URL actually changes — never on parent re-renders that
   // pass an identical src.
-  const [showOverlay, setShowOverlay] = useState(true);
+  const [showOverlay, setShowOverlay] = useState(() => !isImageUrlLoaded(resolvedImageUrl));
 
   useEffect(() => {
-    setShowOverlay(true);
+    setShowOverlay(!isImageUrlLoaded(resolvedImageUrl));
   }, [resolvedImageUrl]);
 
-  const handleLoad = () => setShowOverlay(false);
+  const handleLoad = () => {
+    markImageUrlLoaded(resolvedImageUrl);
+    setShowOverlay(false);
+  };
   const handleError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
     // Drop the skeleton on error so we don't sit on it forever — MediaImage
     // will swap to the fallback src internally.

@@ -14,6 +14,18 @@ interface MediaImageProps
   style?: CSSProperties;
 }
 
+const loadedImageUrls = new Set<string>();
+
+export function isImageUrlLoaded(url?: string | null): boolean {
+  return Boolean(url) && loadedImageUrls.has(url);
+}
+
+export function markImageUrlLoaded(url?: string | null) {
+  if (url) {
+    loadedImageUrls.add(url);
+  }
+}
+
 function areStylesEqual(a?: CSSProperties, b?: CSSProperties) {
   if (a === b) return true;
   if (!a || !b) return !a && !b;
@@ -47,14 +59,14 @@ function MediaImageImpl({
   const [failed, setFailed] = useState(false);
   // Treat empty URLs as already "loaded" so we don't sit on opacity-0
   // forever waiting for an onLoad that will never fire.
-  const [loaded, setLoaded] = useState(() => !resolvedUrl);
+  const [loaded, setLoaded] = useState(() => !resolvedUrl || isImageUrlLoaded(resolvedUrl));
 
   // Reset transient state ONLY when the resolved URL actually changes. No
   // pathname, no Date.now, no random — anything that doesn't change here
   // must not cause the image to fade out.
   useEffect(() => {
     setFailed(false);
-    setLoaded(!resolvedUrl);
+    setLoaded(!resolvedUrl || isImageUrlLoaded(resolvedUrl));
   }, [resolvedUrl]);
 
   const finalSrc = failed ? resolvedFallback : resolvedUrl;
@@ -71,14 +83,16 @@ function MediaImageImpl({
       fetchPriority={fetchPriority}
       decoding="async"
       onLoad={(event) => {
+        markImageUrlLoaded(finalSrc);
         setLoaded(true);
         onLoad?.(event);
       }}
       onError={(event) => {
         if (!failed && resolvedUrl && resolvedUrl !== resolvedFallback) {
           setFailed(true);
-          setLoaded(false);
+          setLoaded(isImageUrlLoaded(resolvedFallback));
         } else {
+          markImageUrlLoaded(resolvedFallback);
           setLoaded(true);
         }
         onError?.(event);
