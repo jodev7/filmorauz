@@ -1,21 +1,18 @@
 "use client";
 
+import { memo } from "react";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { Collection, Movie } from "@/lib/api";
 import MovieCard from "@/components/MovieCard";
 import MediaImage from "@/components/MediaImage";
 import { useI18n } from "@/lib/i18n";
-import {
-  DEFAULT_POSTER_PLACEHOLDER,
-  normalizeMediaUrl,
-} from "@/lib/image-utils";
 
 interface FeaturedCollectionsSectionProps {
   collections: Collection[];
 }
 
-export default function FeaturedCollectionsSection({
+function FeaturedCollectionsSectionImpl({
   collections,
 }: FeaturedCollectionsSectionProps) {
   const { t } = useI18n();
@@ -94,3 +91,8 @@ export default function FeaturedCollectionsSection({
     </section>
   );
 }
+
+const FeaturedCollectionsSection = memo(FeaturedCollectionsSectionImpl);
+FeaturedCollectionsSection.displayName = "FeaturedCollectionsSection";
+
+export default FeaturedCollectionsSection;

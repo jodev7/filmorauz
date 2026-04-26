@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import Link from "next/link";
 import { Play, Clock, Star } from "lucide-react";
 import { Movie } from "@/lib/api";
@@ -15,7 +16,7 @@ interface Props {
   showSkeleton?: boolean; // Allow disabling skeleton if needed
 }
 
-export default function MovieCard({ movie, priority = false, showSkeleton = true }: Props) {
+function MovieCardImpl({ movie, priority = false, showSkeleton = true }: Props) {
   // Get localized metadata based on locale
   const localizedTitle = getLocalizedTitle(movie);
   const localizedGenres = getLocalizedGenres(movie);
@@ -145,3 +146,8 @@ export default function MovieCard({ movie, priority = false, showSkeleton = true
     </Link>
   );
 }
+
+const MovieCard = memo(MovieCardImpl);
+MovieCard.displayName = "MovieCard";
+
+export default MovieCard;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useEffect } from "react";
+import { memo, useRef, useState, useEffect } from "react";
 import { ChevronRight, ChevronLeft } from "lucide-react";
 import { Movie } from "@/lib/api";
 import MovieCard from "./MovieCard";
@@ -15,7 +15,7 @@ interface MovieCarouselProps {
   priorityCount?: number;
 }
 
-export default function MovieCarousel({ movies, priorityCount = 0 }: MovieCarouselProps) {
+function MovieCarouselImpl({ movies, priorityCount = 0 }: MovieCarouselProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(true);
@@ -95,3 +95,8 @@ export default function MovieCarousel({ movies, priorityCount = 0 }: MovieCarous
     </div>
   );
 }
+
+const MovieCarousel = memo(MovieCarouselImpl);
+MovieCarousel.displayName = "MovieCarousel";
+
+export default MovieCarousel;

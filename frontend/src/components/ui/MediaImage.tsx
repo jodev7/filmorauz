@@ -56,7 +56,6 @@ function MediaImageImpl({
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      key={resolvedUrl}
       src={finalSrc || undefined}
       alt={alt}
       loading={loading}
@@ -85,4 +84,5 @@ function MediaImageImpl({
 // the image element. Without this, every parent re-render rebuilds the
 // className string and the inner <img> can churn.
 const MediaImage = memo(MediaImageImpl);
+MediaImage.displayName = "MediaImage";
 export default MediaImage;
