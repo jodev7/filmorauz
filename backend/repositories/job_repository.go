@@ -652,6 +652,9 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 			update["$set"].(bson.M)["downloaded_file_path"] = ""
 			update["$set"].(bson.M)["steps.download"] = false
 		} else {
+			if candidatePath == "" || verifiedPath != candidatePath {
+				log.Printf("[AUTO_RECOVER] job=%s found file=%s -> repaired", id, verifiedPath)
+			}
 			log.Printf("[DOWNLOAD] verified file exists job=%s file=%s", id, verifiedPath)
 			update["$set"].(bson.M)["steps.download"] = true
 			update["$set"].(bson.M)["progress"] = 100

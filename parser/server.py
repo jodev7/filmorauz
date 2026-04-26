@@ -148,6 +148,29 @@ def build_job_output_name(job_id: str, fallback: str = "download") -> str:
     return f"{safe_name}.mp4"
 
 
+def resolve_downloaded_artifact(job_id: str, raw_path: str = "") -> str:
+    candidates = []
+    if raw_path:
+        candidates.append(os.path.abspath(raw_path))
+    base = (job_id or "").strip()
+    if base:
+        candidates.extend([
+            os.path.join(DOWNLOAD_DIR, f"{base}.mp4"),
+            os.path.join(DOWNLOAD_DIR, f"{base}.MUX.mp4"),
+        ])
+        candidates.extend(sorted(Path(DOWNLOAD_DIR).glob(f"{base}*")))
+
+    seen = set()
+    for candidate in candidates:
+        path = str(candidate)
+        if path in seen:
+            continue
+        seen.add(path)
+        if os.path.exists(path) and os.path.isfile(path) and os.path.getsize(path) > 0:
+            return os.path.abspath(path)
+    return ""
+
+
 class InstagramUploadError(Exception):
     """Structured error used by Instagram upload flow."""
 
@@ -1438,8 +1461,8 @@ class ParserHandler(BaseHTTPRequestHandler):
                         self._send_json(response_payload, 500)
                         return
 
-                    local_path = download_result.get("file_path", "")
-                    if not local_path or not os.path.exists(local_path):
+                    local_path = resolve_downloaded_artifact(job_id, download_result.get("file_path", ""))
+                    if not local_path:
                         logger.error(f"[ERROR] file missing at {local_path or '(empty)'}")
                         logger.error(f"[PARSER] download completed without local_path - source={source}, local_path={local_path}")
                         response_payload = create_worker_payload(
@@ -1457,6 +1480,8 @@ class ParserHandler(BaseHTTPRequestHandler):
                         response_payload["download_needed"] = False
                         self._send_json(response_payload, 500)
                         return
+                    if local_path != download_result.get("file_path", ""):
+                        logger.info(f"[AUTO_RECOVER] job={job_id} found file={local_path} -> repaired")
 
                     file_size = os.path.getsize(local_path)
                     if file_size <= 0:
@@ -1631,9 +1656,11 @@ class ParserHandler(BaseHTTPRequestHandler):
                             state.done = True
                         return
                     
-                    local_path = download_result.get("file_path", "")
-                    if not local_path or not os.path.exists(local_path):
-                        raise Exception(f"Downloaded file does not exist: {local_path}")
+                    local_path = resolve_downloaded_artifact(job_id, download_result.get("file_path", ""))
+                    if not local_path:
+                        raise Exception(f"Downloaded file does not exist: {download_result.get('file_path', '')}")
+                    if local_path != download_result.get("file_path", ""):
+                        logger.info(f"[AUTO_RECOVER] job={job_id} found file={local_path} -> repaired")
                     
                     file_size = os.path.getsize(local_path) if local_path else 0
                     if file_size == 0:

@@ -81,6 +81,12 @@ func resolveExistingDownloadedArtifact(jobID, rawPath, downloadDir string) strin
 	if verified := resolveExistingLocalPath(rawPath); verified != "" {
 		return verified
 	}
+	if strings.TrimSpace(downloadDir) == "" {
+		downloadDir = os.Getenv("DOWNLOAD_DIR")
+		if strings.TrimSpace(downloadDir) == "" {
+			downloadDir = "/opt/filmorauz/parser/downloads"
+		}
+	}
 	base := strings.TrimSpace(jobID)
 	if base == "" {
 		return ""
@@ -261,11 +267,30 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 		return nil, err
 	}
 
-	verifiedPath := resolveExistingLocalPath(job.LocalPath)
+	verifiedPath := resolveExistingDownloadedArtifact(job.ID.Hex(), job.LocalPath, "")
 	if verifiedPath == "" {
 		log.Printf("[PROCESS] skipped job=%s reason=missing local_path", job.ID.Hex())
+		if job.Progress >= 100 {
+			log.Printf("[PROCESS] deferred failure job=%s progress=100 waiting for repair", job.ID.Hex())
+			return nil, nil
+		}
 		_ = r.SetError(ctx, job.ID.Hex(), "download completed but local_path missing/file not found")
 		return nil, nil
+	}
+	if verifiedPath != job.LocalPath {
+		log.Printf("[AUTO_RECOVER] job=%s found file=%s -> repaired", job.ID.Hex(), verifiedPath)
+		_, _ = r.collection.UpdateByID(ctx, job.ID, bson.M{
+			"$set": bson.M{
+				"local_path":           verifiedPath,
+				"file_path":            verifiedPath,
+				"downloaded_file_path": verifiedPath,
+				"steps.download":       true,
+				"status":               models.IngestionStatusReadyToProcess,
+				"stage":                "ready_to_process",
+				"error":                "",
+				"updated_at":           time.Now(),
+			},
+		})
 	}
 	job.LocalPath = verifiedPath
 
@@ -378,16 +403,19 @@ func (r *JobRepository) RepairCompletedDownloads(ctx context.Context, downloadDi
 		}
 
 		log.Printf("[DOWNLOAD] completed job=%s file=%s", jobID, localPath)
+		log.Printf("[AUTO_RECOVER] job=%s found file=%s -> repaired", jobID, localPath)
 		log.Printf("[DOWNLOAD] verified file exists job=%s", jobID)
 		_, err = r.collection.UpdateByID(ctx, job.ID, bson.M{
 			"$set": bson.M{
-				"local_path":     localPath,
-				"status":         models.IngestionStatusReadyToProcess,
-				"stage":          "ready_to_process",
-				"steps.download": true,
-				"progress":       100,
-				"updated_at":     now,
-				"error":          "",
+				"local_path":           localPath,
+				"file_path":            localPath,
+				"downloaded_file_path": localPath,
+				"status":               models.IngestionStatusReadyToProcess,
+				"stage":                "ready_to_process",
+				"steps.download":       true,
+				"progress":             100,
+				"updated_at":           now,
+				"error":                "",
 			},
 		})
 		if err != nil {
