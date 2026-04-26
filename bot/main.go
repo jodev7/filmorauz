@@ -395,15 +395,15 @@ func (b *Bot) resolvePosterURL(raw string) string {
 		return ""
 	}
 
-	base := b.telegramMediaBaseURL()
+	base := b.telegramB2FileBaseURL()
 	if base == "" {
 		return ""
 	}
 
 	if strings.HasPrefix(raw, "https://") {
 		if strings.Contains(raw, "/media/images/") {
-			if idx := strings.Index(raw, "/media/"); idx != -1 {
-				return base + raw[idx+len("/media"):]
+			if idx := strings.Index(raw, "/media/images/"); idx != -1 {
+				return base + "/" + raw[idx+len("/media/images/"):]
 			}
 			return raw
 		}
@@ -413,8 +413,8 @@ func (b *Bot) resolvePosterURL(raw string) string {
 		}
 	}
 	if strings.HasPrefix(raw, "http://") {
-		if idx := strings.Index(raw, "/media/"); idx != -1 {
-			return base + raw[idx+len("/media"):]
+		if idx := strings.Index(raw, "/media/images/"); idx != -1 {
+			return base + "/" + raw[idx+len("/media/images/"):]
 		}
 		if idx := strings.Index(raw, "/file/filmorauznet/"); idx != -1 {
 			path := raw[idx+len("/file/filmorauznet/"):]
@@ -439,7 +439,7 @@ func (b *Bot) resolvePosterURL(raw string) string {
 		return base + "/" + path
 	}
 	if strings.HasPrefix(path, "media/images/") {
-		return base + "/" + strings.TrimPrefix(path, "media/")
+		return base + "/" + strings.TrimPrefix(path, "media/images/")
 	}
 	if strings.HasPrefix(path, "backdrops/") || strings.HasPrefix(path, "posters/") || strings.HasPrefix(path, "profile/") || strings.HasPrefix(path, "avatars/") {
 		return b.resolvePosterURL(path)
@@ -452,19 +452,19 @@ func (b *Bot) isValidPosterURL(raw string) bool {
 	return raw != "" && strings.HasPrefix(raw, "https://")
 }
 
-func (b *Bot) telegramMediaBaseURL() string {
+func (b *Bot) telegramB2FileBaseURL() string {
 	cdn := strings.TrimSpace(b.config.CDNBaseURL)
 	if cdn == "" {
-		return "https://cdn.filmorauz.net/media"
+		return "https://cdn.filmorauz.net/file/filmorauznet/images"
 	}
 	cdn = strings.TrimRight(cdn, "/")
 	if idx := strings.Index(cdn, "/file/filmorauznet"); idx != -1 {
-		return cdn[:idx] + "/media"
+		return cdn[:idx] + "/file/filmorauznet/images"
 	}
-	if strings.Contains(cdn, "/media") {
-		return strings.TrimSuffix(cdn, "/")
+	if idx := strings.Index(cdn, "/media"); idx != -1 {
+		return cdn[:idx] + "/file/filmorauznet/images"
 	}
-	return "https://cdn.filmorauz.net/media"
+	return "https://cdn.filmorauz.net/file/filmorauznet/images"
 }
 
 func firstNonEmpty(values ...string) string {
