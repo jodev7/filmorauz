@@ -319,28 +319,160 @@ func (b *Bot) lookupMovie(chatID int64, code string) {
 		posterURL = movie.BackdropURL
 	}
 
-	// Check if URL is valid for Telegram inline button (public URL)
-	if posterURL != "" && keyboards.IsPublicURL(movie.WebsiteURL) {
-		// Send photo with caption (public mode)
-		log.Printf("[MOVIE] Sending photo with caption for: %s", movie.Title)
-		photoMsg := tgbotapi.NewPhoto(chatID, tgbotapi.FileURL(posterURL))
-		photoMsg.Caption = detailsText
-		photoMsg.ParseMode = "HTML"
-		photoMsg.ReplyMarkup = keyboards.BuildMovieFoundKeyboard(movie.WebsiteURL)
-		b.api.Send(photoMsg)
-	} else if keyboards.IsPublicURL(movie.WebsiteURL) {
-		// No poster but public URL - send message with inline button
-		log.Printf("[MOVIE] No poster, sending message with button for: %s", movie.Title)
-		msgText := detailsText + "\n\n" + keyboards.BuildMovieFoundMessageWithBranding(movie.Title, botUsername)
-		msg := tgbotapi.NewMessage(chatID, msgText)
-		msg.ParseMode = "HTML"
-		msg.ReplyMarkup = keyboards.BuildMovieFoundKeyboard(movie.WebsiteURL)
-		b.api.Send(msg)
+	// Public URL? Try photo, but never let a broken/slow image hang /code.
+	// Flow: normalize the poster URL → HEAD probe with 5s budget → bounded
+	// Send. On any failure we fall through to a plain-text response carrying
+	// the same caption and the inline watch button, so the user always gets
+	// an answer.
+	if keyboards.IsPublicURL(movie.WebsiteURL) {
+		photoURL := b.resolvePosterURL(posterURL)
+		photoSent := false
+
+		if photoURL != "" {
+			reachable, probeStatus, probeErr := b.isPosterReachable(photoURL)
+			if reachable {
+				log.Printf("[MOVIE] Sending photo with caption for: %s (photo_url=%s)", movie.Title, photoURL)
+				if sendErr := b.sendMoviePhotoWithTimeout(chatID, photoURL, detailsText, movie.WebsiteURL); sendErr != nil {
+					log.Printf("[MOVIE] photo send failed — title=%q photo_url=%s tg_error=%v", movie.Title, photoURL, sendErr)
+				} else {
+					photoSent = true
+				}
+			} else {
+				log.Printf("[MOVIE] poster unreachable — title=%q photo_url=%s http_status=%d probe_error=%v",
+					movie.Title, photoURL, probeStatus, probeErr)
+			}
+		} else if posterURL != "" {
+			log.Printf("[MOVIE] poster URL could not be resolved — title=%q raw=%s cdn_base=%q",
+				movie.Title, posterURL, b.config.CDNBaseURL)
+		}
+
+		if !photoSent {
+			log.Printf("[MOVIE] falling back to text-only response for: %s", movie.Title)
+			msgText := detailsText + "\n\n" + keyboards.BuildMovieFoundMessageWithBranding(movie.Title, botUsername)
+			msg := tgbotapi.NewMessage(chatID, msgText)
+			msg.ParseMode = "HTML"
+			msg.ReplyMarkup = keyboards.BuildMovieFoundKeyboard(movie.WebsiteURL)
+			if _, err := b.api.Send(msg); err != nil {
+				log.Printf("[MOVIE] fallback text send failed — title=%q tg_error=%v", movie.Title, err)
+			}
+		}
 	} else {
 		// Dev/local mode - URL not publicly accessible
 		log.Printf("[MOVIE] URL is LOCAL (dev) - showing raw URL: %s", movie.WebsiteURL)
 		// Send plain text with raw URL visible (no button) and branding
 		b.sendMessage(chatID, keyboards.BuildMovieFoundMessageWithBrandingAndURL(movie.Title, movie.WebsiteURL, botUsername))
+	}
+}
+
+// legacyPosterPrefixRewrites maps the old DB-stored poster path prefixes onto
+// their canonical /images/* layout in B2. These are applied to relative paths
+// before resolving against the CDN base; legacy values like "posters/x.jpg"
+// would otherwise 404 once the bucket switched layouts.
+var legacyPosterPrefixRewrites = []struct{ from, to string }{
+	{"posters/", "images/posters/"},
+	{"backdrops/", "images/backdrops/"},
+	{"profile/", "images/profile/"},
+	{"avatars/", "images/profile/"},
+}
+
+// resolvePosterURL turns whatever the backend returned in poster_url into an
+// absolute URL Telegram can fetch. Absolute http(s) URLs are returned as-is.
+// Relative paths are resolved against CDNBaseURL after rewriting legacy
+// prefixes. Returns "" when the input is empty or no CDN base is configured.
+func (b *Bot) resolvePosterURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return raw
+	}
+
+	cdn := b.config.CDNBaseURL
+	if cdn == "" {
+		return ""
+	}
+
+	path := strings.TrimPrefix(raw, "/")
+	for _, r := range legacyPosterPrefixRewrites {
+		if strings.HasPrefix(path, r.from) {
+			path = r.to + strings.TrimPrefix(path, r.from)
+			break
+		}
+	}
+	return cdn + "/" + path
+}
+
+const (
+	posterProbeTimeout = 5 * time.Second
+	photoSendTimeout   = 15 * time.Second
+)
+
+// isPosterReachable performs a bounded HEAD (with a ranged-GET fallback for
+// CDNs that reject HEAD) to confirm Telegram will be able to fetch the photo.
+// Returns reachability plus the observed status and error so the caller can
+// log them. The 5s budget keeps a broken image from blocking /code.
+func (b *Bot) isPosterReachable(photoURL string) (bool, int, error) {
+	client := &http.Client{Timeout: posterProbeTimeout}
+
+	headReq, err := http.NewRequest(http.MethodHead, photoURL, nil)
+	if err != nil {
+		return false, 0, err
+	}
+	resp, err := client.Do(headReq)
+	if err != nil {
+		return false, 0, err
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return true, resp.StatusCode, nil
+	}
+
+	// Some CDNs (and B2 in certain configs) reject HEAD with 405/501. Retry
+	// with a 1-byte ranged GET so we don't pay for the full image.
+	if resp.StatusCode != http.StatusMethodNotAllowed && resp.StatusCode != http.StatusNotImplemented {
+		return false, resp.StatusCode, nil
+	}
+	getReq, err := http.NewRequest(http.MethodGet, photoURL, nil)
+	if err != nil {
+		return false, resp.StatusCode, err
+	}
+	getReq.Header.Set("Range", "bytes=0-0")
+	getResp, err := client.Do(getReq)
+	if err != nil {
+		return false, resp.StatusCode, err
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode >= 200 && getResp.StatusCode < 300 {
+		return true, getResp.StatusCode, nil
+	}
+	return false, getResp.StatusCode, nil
+}
+
+// sendMoviePhotoWithTimeout runs the Telegram send-photo call in a bounded
+// goroutine. tgbotapi v5 has no per-call timeout knob, so without this a
+// hung Telegram-side fetch (e.g. unreachable CDN URL accepted by HEAD but
+// stalled by Telegram's egress) would freeze /code indefinitely. On timeout
+// the goroutine is left to drain on its own; the caller falls back to a
+// text response so the user is never left waiting.
+func (b *Bot) sendMoviePhotoWithTimeout(chatID int64, photoURL, caption, websiteURL string) error {
+	photoMsg := tgbotapi.NewPhoto(chatID, tgbotapi.FileURL(photoURL))
+	photoMsg.Caption = caption
+	photoMsg.ParseMode = "HTML"
+	photoMsg.ReplyMarkup = keyboards.BuildMovieFoundKeyboard(websiteURL)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := b.api.Send(photoMsg)
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-time.After(photoSendTimeout):
+		return fmt.Errorf("telegram send photo timed out after %s", photoSendTimeout)
 	}
 }
 

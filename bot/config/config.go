@@ -25,6 +25,11 @@ type Config struct {
 	BotUsername       string // Telegram bot username (without @)
 	RequiredChannels  []models.RequiredChannel
 	BackendBaseURL    string
+	// CDNBaseURL is the absolute prefix used to resolve relative poster paths
+	// (e.g. "posters/x.jpg") returned by the backend before they're handed to
+	// Telegram. Required because B2 bucket visibility flips broke the older
+	// inferred URLs.
+	CDNBaseURL string
 }
 
 // channelEnvPrefix is the prefix for channel env vars
@@ -42,6 +47,14 @@ func Load() *Config {
 	// Load required channels from env
 	channels := loadRequiredChannels()
 
+	// Accept either CDN_BASE_URL (server-side) or NEXT_PUBLIC_CDN_BASE_URL
+	// (shared with frontend) so the bot can reuse the existing prod env.
+	cdnBase := getEnv("CDN_BASE_URL", "")
+	if cdnBase == "" {
+		cdnBase = getEnv("NEXT_PUBLIC_CDN_BASE_URL", "")
+	}
+	cdnBase = strings.TrimRight(strings.TrimSpace(cdnBase), "/")
+
 	cfg := &Config{
 		Mode:              mode,
 		IsDev:             mode == ModeDev,
@@ -50,6 +63,7 @@ func Load() *Config {
 		BotUsername:       getEnv("TG_BOT_USERNAME", ""),
 		RequiredChannels:  channels,
 		BackendBaseURL:    getEnv("BACKEND_BASE_URL", "http://localhost:8080"),
+		CDNBaseURL:        cdnBase,
 	}
 
 	log.Printf("Bot starting in %s mode", cfg.Mode)
