@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { getNotifications, getUnreadNotificationCount, markNotificationAsRead, markAllNotificationsAsRead, Notification } from "@/lib/api";
@@ -12,22 +13,18 @@ export default function NotificationBell() {
   const [showDropdown, setShowDropdown] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [portalReady, setPortalReady] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Initial unread count comes from auth bootstrap; keep a lightweight poll for changes.
   useEffect(() => {
-    if (!token) return;
-
-    const interval = setInterval(async () => {
-      try {
-        const data = await getUnreadNotificationCount(token);
-        setUnreadNotificationCount(data.count);
-      } catch (error) {
-        console.error("Failed to fetch unread count:", error);
-      }
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [token, setUnreadNotificationCount]);
+    const syncViewport = () => setIsMobile(window.innerWidth < 768);
+    syncViewport();
+    setPortalReady(true);
+    window.addEventListener("resize", syncViewport);
+    return () => window.removeEventListener("resize", syncViewport);
+  }, []);
 
   // Fetch notifications when dropdown opens
   useEffect(() => {
@@ -36,6 +33,8 @@ export default function NotificationBell() {
     const fetchNotifications = async () => {
       setLoading(true);
       try {
+        const unread = await getUnreadNotificationCount(token);
+        setUnreadNotificationCount(unread.count);
         const data = await getNotifications(token, { per_page: 10 });
         setNotifications(data.notifications);
       } catch (error) {
@@ -51,7 +50,10 @@ export default function NotificationBell() {
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      const clickedToggle = containerRef.current?.contains(target);
+      const clickedDropdown = dropdownRef.current?.contains(target);
+      if (!clickedToggle && !clickedDropdown) {
         setShowDropdown(false);
       }
     };
@@ -132,8 +134,91 @@ export default function NotificationBell() {
     return null;
   }
 
+  const dropdownContent = (
+    <div
+      ref={dropdownRef}
+      className={
+        isMobile
+          ? "fixed top-[72px] left-1/2 z-[99999] box-border w-[calc(100vw-24px)] max-w-[420px] -translate-x-1/2 overflow-x-hidden overflow-y-auto rounded-xl border border-brand-border bg-brand-card p-3 shadow-2xl max-h-[calc(100vh-90px)]"
+          : "absolute right-0 top-full mt-2 z-[99999] box-border w-[420px] max-w-[calc(100vw-24px)] overflow-x-hidden overflow-y-auto rounded-xl border border-brand-border bg-brand-card p-3 shadow-2xl max-h-[calc(100vh-90px)]"
+      }
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between px-1 py-3 border-b border-brand-border shrink-0">
+        <h3 className="text-white font-medium">Bildirishnomalar</h3>
+        {unreadNotificationCount > 0 && (
+          <button
+            onClick={handleMarkAllAsRead}
+            className="flex items-center gap-1 text-sm text-gray-400 hover:text-white transition-colors"
+          >
+            <CheckCheck className="w-4 h-4" />
+            <span className="hidden sm:inline">Hammasini o'qilgan deb belgilash</span>
+          </button>
+        )}
+      </div>
+
+      {/* Notification List */}
+      <div className="max-h-[calc(100vh-180px)] sm:max-h-96 overflow-y-auto">
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <div className="animate-spin w-6 h-6 border-2 border-brand-red border-t-transparent rounded-full" />
+          </div>
+        ) : notifications.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-8 px-4">
+            <Bell className="w-12 h-12 text-gray-600 mb-3" />
+            <p className="text-gray-400 text-center">Hozircha bildirishnomalar yo'q</p>
+          </div>
+        ) : (
+          notifications.map((notification) => (
+            <div
+              key={notification.id}
+              onClick={() => handleNotificationClick(notification)}
+              className={`flex items-start gap-3 px-1 py-3 hover:bg-brand-dark/50 cursor-pointer transition-colors ${
+                !notification.is_read ? "bg-brand-dark/30" : ""
+              }`}
+            >
+              <div className="flex-shrink-0 mt-1">
+                {getNotificationIcon(notification.type)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className={`text-sm truncate ${!notification.is_read ? "text-white font-medium" : "text-gray-300"}`}>
+                    {notification.title}
+                  </p>
+                  {!notification.is_read && (
+                    <span className="w-2 h-2 bg-brand-red rounded-full flex-shrink-0" />
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{notification.message}</p>
+                <div className="flex items-center gap-1 mt-1">
+                  <Clock className="w-3 h-3 text-gray-500" />
+                  <span className="text-xs text-gray-500">{formatTime(notification.created_at)}</span>
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Footer */}
+      {notifications.length > 0 && (
+        <div className="px-1 py-3 border-t border-brand-border">
+          <button
+            onClick={() => {
+              router.push("/notifications");
+              setShowDropdown(false);
+            }}
+            className="w-full text-center text-sm text-brand-red hover:text-red-400 transition-colors"
+          >
+            Barcha bildirishnomalarni ko'rish
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div className="relative" ref={containerRef}>
       {/* Bell Button */}
       <button
         onClick={() => setShowDropdown(!showDropdown)}
@@ -149,81 +234,8 @@ export default function NotificationBell() {
       </button>
 
       {/* Dropdown */}
-      {showDropdown && (
-        <div className="absolute left-1/2 mt-2 w-[90vw] max-w-[400px] -translate-x-1/2 box-border overflow-hidden rounded-xl border border-brand-border bg-brand-card p-3 shadow-2xl z-[9999] mx-auto right-auto sm:left-auto sm:right-0 sm:w-80 sm:max-w-[20rem] sm:translate-x-0">
-          {/* Header */}
-          <div className="flex items-center justify-between px-1 py-3 border-b border-brand-border shrink-0">
-            <h3 className="text-white font-medium">Bildirishnomalar</h3>
-            {unreadNotificationCount > 0 && (
-              <button
-                onClick={handleMarkAllAsRead}
-                className="flex items-center gap-1 text-sm text-gray-400 hover:text-white transition-colors"
-              >
-                <CheckCheck className="w-4 h-4" />
-                <span className="hidden sm:inline">Hammasini o'qilgan deb belgilash</span>
-              </button>
-            )}
-          </div>
-
-          {/* Notification List */}
-          <div className="max-h-[70vh] sm:max-h-96 overflow-y-auto">
-            {loading ? (
-              <div className="flex items-center justify-center py-8">
-                <div className="animate-spin w-6 h-6 border-2 border-brand-red border-t-transparent rounded-full" />
-              </div>
-            ) : notifications.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-8 px-4">
-                <Bell className="w-12 h-12 text-gray-600 mb-3" />
-                <p className="text-gray-400 text-center">Hozircha bildirishnomalar yo'q</p>
-              </div>
-            ) : (
-              notifications.map((notification) => (
-                <div
-                  key={notification.id}
-                  onClick={() => handleNotificationClick(notification)}
-                  className={`flex items-start gap-3 px-1 py-3 hover:bg-brand-dark/50 cursor-pointer transition-colors ${
-                    !notification.is_read ? "bg-brand-dark/30" : ""
-                  }`}
-                >
-                  <div className="flex-shrink-0 mt-1">
-                    {getNotificationIcon(notification.type)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className={`text-sm truncate ${!notification.is_read ? "text-white font-medium" : "text-gray-300"}`}>
-                        {notification.title}
-                      </p>
-                      {!notification.is_read && (
-                        <span className="w-2 h-2 bg-brand-red rounded-full flex-shrink-0" />
-                      )}
-                    </div>
-                    <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{notification.message}</p>
-                    <div className="flex items-center gap-1 mt-1">
-                      <Clock className="w-3 h-3 text-gray-500" />
-                      <span className="text-xs text-gray-500">{formatTime(notification.created_at)}</span>
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-
-          {/* Footer */}
-          {notifications.length > 0 && (
-            <div className="px-1 py-3 border-t border-brand-border">
-              <button
-                onClick={() => {
-                  router.push("/notifications");
-                  setShowDropdown(false);
-                }}
-                className="w-full text-center text-sm text-brand-red hover:text-red-400 transition-colors"
-              >
-                Barcha bildirishnomalarni ko'rish
-              </button>
-            </div>
-          )}
-        </div>
-      )}
+      {showDropdown && !isMobile && dropdownContent}
+      {showDropdown && isMobile && portalReady && createPortal(dropdownContent, document.body)}
     </div>
   );
 }

@@ -166,27 +166,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [user]);
 
-  // Periodic token validation to prevent session expiry
-  // Refresh user data every 4 hours to keep session alive
-  useEffect(() => {
-    if (!token || !user) return;
-    
-    const refreshInterval = setInterval(() => {
-      getAuthBootstrap(token)
-        .then((response) => {
-          if (response.authenticated && response.user) {
-            setUser(response.user);
-            setUnreadNotificationCount(response.unread_count || 0);
-          }
-        })
-        .catch(() => {
-          // Silently fail on refresh - don't logout on network issues
-        });
-    }, 4 * 60 * 60 * 1000); // 4 hours
-    
-    return () => clearInterval(refreshInterval);
-  }, [token, user]);
-
   const startTelegramAuth = useCallback(async (): Promise<TelegramAuthStartResponse | null> => {
     try {
       const response = await startTelegramLogin();
