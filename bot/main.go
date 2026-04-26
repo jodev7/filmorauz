@@ -403,7 +403,7 @@ func (b *Bot) resolvePosterURL(raw string) string {
 	if strings.HasPrefix(raw, "https://") {
 		if strings.Contains(raw, "/media/images/") {
 			if idx := strings.Index(raw, "/media/images/"); idx != -1 {
-				return base + "/" + raw[idx+len("/media/images/"):]
+				return cleanupPosterURL(base + "/" + raw[idx+len("/media/images/"):])
 			}
 			return raw
 		}
@@ -414,7 +414,7 @@ func (b *Bot) resolvePosterURL(raw string) string {
 	}
 	if strings.HasPrefix(raw, "http://") {
 		if idx := strings.Index(raw, "/media/images/"); idx != -1 {
-			return base + "/" + raw[idx+len("/media/images/"):]
+			return cleanupPosterURL(base + "/" + raw[idx+len("/media/images/"):])
 		}
 		if idx := strings.Index(raw, "/file/filmorauznet/"); idx != -1 {
 			path := raw[idx+len("/file/filmorauznet/"):]
@@ -436,10 +436,10 @@ func (b *Bot) resolvePosterURL(raw string) string {
 		path = strings.TrimPrefix(path, "file/filmorauznet/")
 	}
 	if strings.HasPrefix(path, "images/") {
-		return base + "/" + path
+		return cleanupPosterURL(base + "/" + path)
 	}
 	if strings.HasPrefix(path, "media/images/") {
-		return base + "/" + strings.TrimPrefix(path, "media/images/")
+		return cleanupPosterURL(base + "/" + strings.TrimPrefix(path, "media/images/"))
 	}
 	if strings.HasPrefix(path, "backdrops/") || strings.HasPrefix(path, "posters/") || strings.HasPrefix(path, "profile/") || strings.HasPrefix(path, "avatars/") {
 		return b.resolvePosterURL(path)
@@ -475,6 +475,16 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func cleanupPosterURL(raw string) string {
+	if strings.Contains(raw, "/media/images/") {
+		raw = strings.Replace(raw, "/media/images/", "/file/filmorauznet/images/", 1)
+	}
+	if strings.Contains(raw, "/images/images/") {
+		raw = strings.Replace(raw, "/images/images/", "/images/", 1)
+	}
+	return raw
 }
 
 const (
