@@ -24,9 +24,13 @@ type Clip struct {
 	SeriesID      primitive.ObjectID `bson:"series_id,omitempty" json:"series_id,omitempty"`
 	SeriesTitle   string             `bson:"series_title,omitempty" json:"series_title,omitempty"`
 	SeriesSlug    string             `bson:"series_slug,omitempty" json:"series_slug,omitempty"`
+	SeasonID      primitive.ObjectID `bson:"season_id,omitempty" json:"season_id,omitempty"`
 	SeasonNumber  int                `bson:"season_number,omitempty" json:"season_number,omitempty"`
 	EpisodeNumber int                `bson:"episode_number,omitempty" json:"episode_number,omitempty"`
 	EpisodeID     primitive.ObjectID `bson:"episode_id,omitempty" json:"episode_id,omitempty"`
+	Title         string             `bson:"title,omitempty" json:"title,omitempty"`
+	ClipIndex     int                `bson:"clip_index,omitempty" json:"clip_index,omitempty"`
+	SourceType    string             `bson:"source_type,omitempty" json:"source_type,omitempty"`
 
 	Filename    string    `bson:"filename" json:"filename"`
 	Path        string    `bson:"path" json:"path"`
@@ -42,6 +46,32 @@ type Clip struct {
 	InstagramUploadCount      int        `bson:"instagram_upload_count" json:"instagram_upload_count"`
 	LastInstagramUploadAt     *time.Time `bson:"last_instagram_upload_at,omitempty" json:"last_instagram_upload_at,omitempty"`
 	LastInstagramUploadStatus string     `bson:"last_instagram_upload_status" json:"last_instagram_upload_status"` // "success" | "failed" | ""
+}
+
+func (c *Clip) DisplayTitle() string {
+	if c == nil {
+		return ""
+	}
+	if c.MovieTitle != "" {
+		return c.MovieTitle
+	}
+	if c.Title != "" {
+		return c.Title
+	}
+	if c.SeriesTitle != "" {
+		return c.SeriesTitle
+	}
+	return ""
+}
+
+func (c *Clip) DisplaySlug() string {
+	if c == nil {
+		return ""
+	}
+	if c.MovieSlug != "" {
+		return c.MovieSlug
+	}
+	return c.SeriesSlug
 }
 
 type ClipResult struct {

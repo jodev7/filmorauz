@@ -305,21 +305,50 @@ func (h *SeriesHandler) UpdateSeries(c *gin.Context) {
 }
 
 // DELETE /api/admin/series/:id - Delete series (admin)
+//
+// Cascade deletes the series row, all of its seasons and episodes, every
+// clip linked to the series or any episode, those clips' Instagram
+// schedules and multi-platform publish jobs, plus the related B2 assets
+// (per-episode HLS folders, series/season/episode imagery, clip files).
+// Returns a structured summary so the admin UI can show what was
+// removed and surface partial-failure warnings.
 func (h *SeriesHandler) DeleteSeries(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := primitive.ObjectIDFromHex(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid series id"})
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid series id"})
 		return
 	}
 
-	err = h.seriesService.DeleteSeries(id)
+	result, err := h.seriesService.DeleteSeries(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete series"})
+		payload := gin.H{"success": false, "error": err.Error()}
+		if result != nil {
+			payload["deleted_db"] = seriesDeleteDBSummary(result)
+			payload["deleted_b2"] = result.B2
+		}
+		c.JSON(http.StatusInternalServerError, payload)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "series deleted"})
+	c.JSON(http.StatusOK, gin.H{
+		"success":    true,
+		"message":    "series deleted",
+		"deleted_db": seriesDeleteDBSummary(result),
+		"deleted_b2": result.B2,
+	})
+}
+
+func seriesDeleteDBSummary(r *services.SeriesDeleteResult) gin.H {
+	return gin.H{
+		"series_id":                   r.SeriesID,
+		"title":                       r.Title,
+		"seasons_deleted":             r.SeasonsDeleted,
+		"episodes_deleted":            r.EpisodesDeleted,
+		"clips_deleted":               r.ClipsDeleted,
+		"instagram_schedules_deleted": r.IGSchedulesDeleted,
+		"publish_jobs_deleted":        r.PublishJobsDeleted,
+	}
 }
 
 // POST /api/admin/series/:id/seasons - Create season (admin)

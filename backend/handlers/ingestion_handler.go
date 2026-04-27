@@ -18,6 +18,7 @@ import (
 
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
+	"github.com/filmorauz/backend/services"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -27,6 +28,7 @@ import (
 type IngestionHandler struct {
 	jobRepo    *repositories.JobRepository
 	seriesRepo *repositories.SeriesRepository
+	seriesSvc  *services.SeriesService
 	parserURL  string
 	workerURL  string
 	httpClient *http.Client
@@ -90,7 +92,7 @@ func resolveCompletedDownloadPath(jobID, rawPath string) string {
 }
 
 // NewIngestionHandler creates a new ingestion handler
-func NewIngestionHandler(jobRepo *repositories.JobRepository, seriesRepo *repositories.SeriesRepository, parserURL string, workerURL string) *IngestionHandler {
+func NewIngestionHandler(jobRepo *repositories.JobRepository, seriesRepo *repositories.SeriesRepository, seriesSvc *services.SeriesService, parserURL string, workerURL string) *IngestionHandler {
 	// Create HTTP client with explicit timeout
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
@@ -107,6 +109,7 @@ func NewIngestionHandler(jobRepo *repositories.JobRepository, seriesRepo *reposi
 	return &IngestionHandler{
 		jobRepo:    jobRepo,
 		seriesRepo: seriesRepo,
+		seriesSvc:  seriesSvc,
 		parserURL:  parserURL,
 		workerURL:  workerURL,
 		httpClient: httpClient,

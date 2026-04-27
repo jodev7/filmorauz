@@ -154,6 +154,42 @@ func (r *ClipRepository) DeleteBySeriesID(ctx context.Context, seriesID primitiv
 	return err
 }
 
+// FindByEpisodeID returns clips linked to a single episode. Used during
+// series cascade delete so legacy clip rows that only carry episode_id
+// (no series_id) are still picked up.
+func (r *ClipRepository) FindByEpisodeID(ctx context.Context, episodeID primitive.ObjectID) ([]models.Clip, error) {
+	cursor, err := r.col.Find(ctx, bson.M{"episode_id": episodeID}, options.Find().SetSort(bson.M{"sequence": 1}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var clips []models.Clip
+	if err := cursor.All(ctx, &clips); err != nil {
+		return nil, err
+	}
+	return clips, nil
+}
+
+// DeleteBySeriesAndEpisodeIDs removes every clip whose series_id matches
+// or whose episode_id is in the given list. The OR query catches legacy
+// clip rows that lack a series_id but reference one of the deleted
+// episodes — without it those rows would survive a series delete and
+// keep pointing at vanished content.
+func (r *ClipRepository) DeleteBySeriesAndEpisodeIDs(ctx context.Context, seriesID primitive.ObjectID, episodeIDs []primitive.ObjectID) error {
+	filter := bson.M{"series_id": seriesID}
+	if len(episodeIDs) > 0 {
+		filter = bson.M{
+			"$or": []bson.M{
+				{"series_id": seriesID},
+				{"episode_id": bson.M{"$in": episodeIDs}},
+			},
+		}
+	}
+	_, err := r.col.DeleteMany(ctx, filter)
+	return err
+}
+
 func (r *ClipRepository) CountByMovieID(ctx context.Context, movieID primitive.ObjectID) (int64, error) {
 	return r.col.CountDocuments(ctx, bson.M{"movie_id": movieID})
 }

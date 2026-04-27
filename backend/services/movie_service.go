@@ -106,8 +106,10 @@ type MovieService struct {
 	counterRepo     *repositories.CounterRepository
 	notificationSvc *NotificationService
 	viewEventRepo   *repositories.MovieViewEventRepository
-	clipRepo        *repositories.ClipRepository // optional — enables clip cleanup on delete
-	b2Cleanup       *B2CleanupService            // optional — nil means skip B2 cleanup
+	clipRepo        *repositories.ClipRepository                  // optional — enables clip cleanup on delete
+	igScheduleRepo  *repositories.InstagramScheduleRepository     // optional — clip-linked instagram schedule cleanup
+	publishJobRepo  *repositories.PublishJobRepository            // optional — clip-linked multi-platform publish job cleanup
+	b2Cleanup       *B2CleanupService                             // optional — nil means skip B2 cleanup
 }
 
 func NewMovieService(repo *repositories.MovieRepository, seriesRepo *repositories.SeriesRepository, counterRepo *repositories.CounterRepository, notificationSvc *NotificationService, viewEventRepo *repositories.MovieViewEventRepository) *MovieService {
@@ -115,10 +117,30 @@ func NewMovieService(repo *repositories.MovieRepository, seriesRepo *repositorie
 }
 
 // SetStorageDependencies wires optional cleanup helpers so DeleteMovie can
-// purge B2 assets and clip DB rows. Safe to call with nils (cleanup skipped).
-func (s *MovieService) SetStorageDependencies(clipRepo *repositories.ClipRepository, b2 *B2CleanupService) {
+// purge B2 assets, clip rows, and clip-linked publish/schedule jobs. Each
+// argument is independently optional — nils mean "skip that step".
+func (s *MovieService) SetStorageDependencies(
+	clipRepo *repositories.ClipRepository,
+	igScheduleRepo *repositories.InstagramScheduleRepository,
+	publishJobRepo *repositories.PublishJobRepository,
+	b2 *B2CleanupService,
+) {
 	s.clipRepo = clipRepo
+	s.igScheduleRepo = igScheduleRepo
+	s.publishJobRepo = publishJobRepo
 	s.b2Cleanup = b2
+}
+
+// MovieDeleteResult is the structured outcome of a cascade movie delete.
+// Returned to the handler so the API response can break down what was
+// touched in the DB versus B2 (and what was skipped/failed).
+type MovieDeleteResult struct {
+	MovieID            string            `json:"movie_id"`
+	Title              string            `json:"title"`
+	ClipsDeleted       int               `json:"clips_deleted"`
+	IGSchedulesDeleted int64             `json:"instagram_schedules_deleted"`
+	PublishJobsDeleted int64             `json:"publish_jobs_deleted"`
+	B2                 *B2DeleteSummary  `json:"b2"`
 }
 
 // GetTrendingMovies returns the most popular movies based on recent view events
@@ -581,119 +603,170 @@ func (s *MovieService) UpdateMovie(id string, input *models.MovieInput) (*models
 	return existing, nil
 }
 
-// DeleteMovie removes the movie's B2 assets (HLS folder, poster, backdrop,
-// clips), its clip DB rows, and finally the movie document.
-func (s *MovieService) DeleteMovie(id string) error {
+// DeleteMovie removes a movie and every related asset:
+//   - the movie's HLS/video folder in B2 (when one can be safely derived)
+//   - the movie's poster, backdrop, and any direct video file in B2
+//   - every clip linked to the movie: B2 files first, then DB rows
+//   - every Instagram schedule and multi-platform publish job that
+//     referenced one of the deleted clips
+//   - finally the movie document itself
+//
+// B2 operations route through SafeDeleteKey / SafeDeletePrefix so a
+// derivation bug or stale URL cannot widen the blast radius. Per-asset
+// failures are collected in the returned summary instead of aborting
+// — half-deleted state is more recoverable than losing a movie's row
+// while the bucket still holds gigabytes of orphaned media.
+func (s *MovieService) DeleteMovie(id string) (*MovieDeleteResult, error) {
 	objID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
-		return fmt.Errorf("invalid movie id")
+		return nil, fmt.Errorf("invalid movie id")
 	}
 
 	movie, findErr := s.repo.FindByID(objID)
 	if findErr != nil || movie == nil {
-		return fmt.Errorf("movie not found")
+		return nil, fmt.Errorf("movie not found")
 	}
 
 	log.Printf("[MOVIE DELETE] start — id=%s title=%q code=%s", id, movie.Title, movie.Code)
 
-	if err := s.cleanupMovieStorage(objID, movie); err != nil {
-		log.Printf("[MOVIE DELETE] aborting DB delete id=%s: %v", id, err)
-		return err
+	result := &MovieDeleteResult{
+		MovieID: id,
+		Title:   movie.Title,
+		B2:      NewB2DeleteSummary(),
 	}
+
+	s.cleanupMovieStorage(objID, movie, result)
 
 	if delErr := s.repo.Delete(id); delErr != nil {
 		log.Printf("[MOVIE DELETE] FAILED repo.Delete id=%s: %v", id, delErr)
-		return delErr
+		return result, delErr
 	}
-	log.Printf("[MOVIE DELETE] done — id=%s removed from DB", id)
-	return nil
+	log.Printf("[MOVIE DELETE] done — id=%s removed from DB (b2_files_deleted=%d skipped=%d errors=%d)",
+		id, result.B2.FilesDeleted, len(result.B2.Skipped), len(result.B2.Errors))
+	return result, nil
 }
 
-// cleanupMovieStorage deletes every B2 asset associated with a movie and
-// wipes its clip rows. Any B2 or clip cleanup failure aborts the movie delete.
-func (s *MovieService) cleanupMovieStorage(objID primitive.ObjectID, movie *models.Movie) error {
+// cleanupMovieStorage deletes B2 assets, clip rows, and clip-linked
+// publish/schedule jobs for one movie. Failures are appended to
+// result.B2 instead of being returned as errors — the caller continues
+// to remove the DB row so the movie cannot reappear in the catalog
+// after a partial cleanup.
+func (s *MovieService) cleanupMovieStorage(objID primitive.ObjectID, movie *models.Movie, result *MovieDeleteResult) {
 	if s.b2Cleanup == nil {
 		log.Printf("[MOVIE DELETE] B2 cleanup disabled (no service configured) — skipping storage delete")
 	} else {
 		prefix := s.deriveMovieDeletePrefix(movie)
 		if prefix != "" {
+			// Validate against movie identity (slug / id / source id) BEFORE the
+			// allowlist check — this guarantees the folder being deleted
+			// belongs to *this* movie and not its sibling.
 			if err := validateB2DeletePrefix(prefix, *movie); err != nil {
-				return err
-			}
-			filesCount, err := s.countFilesByPrefix(prefix)
-			log.Printf("[B2_DELETE] movie_id=%s", movie.ID.Hex())
-			log.Printf("[B2_DELETE] title=%q", movie.Title)
-			log.Printf("[B2_DELETE] prefix=%s", prefix)
-			log.Printf("[B2_DELETE] files_count=%d", filesCount)
-			if err != nil {
-				return fmt.Errorf("list b2 prefix %q: %w", prefix, err)
-			}
-			if filesCount > 500 || isUnsafeB2DeletePrefix(prefix) {
-				return fmt.Errorf("unsafe delete prefix")
-			}
-			if _, err := s.b2Cleanup.DeleteByPrefix(prefix); err != nil {
-				return fmt.Errorf("delete b2 prefix %q: %w", prefix, err)
+				result.B2.Skipped = append(result.B2.Skipped,
+					fmt.Sprintf("movie-folder: %q failed identity check: %v", prefix, err))
+				log.Printf("[MOVIE DELETE] folder identity check failed for prefix=%q: %v — skipping", prefix, err)
+			} else {
+				filesCount, err := s.countFilesByPrefix(prefix)
+				log.Printf("[B2_DELETE] movie_id=%s title=%q prefix=%s files_count=%d", movie.ID.Hex(), movie.Title, prefix, filesCount)
+				if err != nil {
+					result.B2.Errors = append(result.B2.Errors,
+						fmt.Sprintf("movie-folder: list %q: %v", prefix, err))
+				} else if filesCount > 500 {
+					result.B2.Skipped = append(result.B2.Skipped,
+						fmt.Sprintf("movie-folder: %q has %d files (>500) — refusing for safety", prefix, filesCount))
+					log.Printf("[MOVIE DELETE] refusing prefix=%q with %d files (>500 safety cap)", prefix, filesCount)
+				} else {
+					s.b2Cleanup.SafeDeletePrefix(prefix, "movie-hls", result.B2)
+				}
 			}
 		} else {
 			log.Printf("[MOVIE DELETE] no safe videos/movies prefix derivable from master=%q video=%q — skipping folder purge",
 				movie.MasterPlaylistURL, movie.VideoURL)
+			result.B2.Skipped = append(result.B2.Skipped,
+				"movie-folder: no safe folder prefix derivable from movie URLs")
 		}
 
-		// 2) Individual video URL if it points outside the folder (e.g. a direct MP4).
-		prefix = normalizeB2DeletePrefix(prefix)
-		if videoKey := s.b2Cleanup.ExtractKeyFromURL(movie.VideoURL); videoKey != "" && !strings.HasPrefix(videoKey, prefix) {
-			if _, err := s.b2Cleanup.DeleteByKey(videoKey); err != nil {
-				return fmt.Errorf("delete movie video key %q: %w", videoKey, err)
+		// 2) Individual video URL if it points outside the folder (e.g. direct MP4).
+		normalizedFolder := normalizeB2DeletePrefix(prefix)
+		if videoKey := s.b2Cleanup.NormalizeKey(movie.VideoURL); videoKey != "" {
+			if normalizedFolder == "" || !strings.HasPrefix(videoKey, normalizedFolder) {
+				s.b2Cleanup.SafeDeleteKey(videoKey, "movie-video", result.B2)
 			}
 		}
 
-		// 3) Poster + backdrop images.
-		for label, u := range map[string]string{
-			"poster":   movie.PosterURL,
-			"backdrop": movie.BackdropURL,
-		} {
-			key := s.b2Cleanup.ExtractKeyFromURL(u)
-			if key == "" {
-				log.Printf("[MOVIE DELETE] %s: no key derivable from url=%q", label, u)
-				continue
-			}
-			if _, err := s.b2Cleanup.DeleteByKey(key); err != nil {
-				return fmt.Errorf("delete movie %s key %q: %w", label, key, err)
-			}
-		}
+		// 3) Poster + backdrop images. Note: these are individual file keys,
+		// each scoped to images/posters/ or images/backdrops/, so they cannot
+		// accidentally take down another movie's poster.
+		s.b2Cleanup.SafeDeleteKey(movie.PosterURL, "movie-poster", result.B2)
+		s.b2Cleanup.SafeDeleteKey(movie.BackdropURL, "movie-backdrop", result.B2)
 	}
 
-	// 4) Clips — delete B2 files then DB rows.
+	// 4) Clips — load first (we need IDs for the schedule/job cleanup),
+	// then delete B2 files, DB rows, and dependent jobs.
 	if s.clipRepo != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+
 		clips, cErr := s.clipRepo.FindByMovieID(ctx, objID)
 		if cErr != nil {
-			return fmt.Errorf("load movie clips: %w", cErr)
-		} else {
-			log.Printf("[MOVIE DELETE] %d clip(s) linked to movie — cleaning up", len(clips))
+			result.B2.Errors = append(result.B2.Errors,
+				fmt.Sprintf("load movie clips: %v", cErr))
+			log.Printf("[MOVIE DELETE] FAILED to load clips: %v", cErr)
+			return
+		}
+		log.Printf("[MOVIE DELETE] %d clip(s) linked to movie — cleaning up", len(clips))
+
+		clipIDs := make([]primitive.ObjectID, 0, len(clips))
+		for _, clip := range clips {
+			clipIDs = append(clipIDs, clip.ID)
 			if s.b2Cleanup != nil {
-				for _, clip := range clips {
-					key := s.b2Cleanup.ExtractKeyFromURL(clip.URL)
-					if key == "" {
-						key = strings.TrimPrefix(clip.Path, "/")
-					}
-					if key == "" {
-						log.Printf("[MOVIE DELETE] clip id=%s: no key derivable, skipping B2 delete", clip.ID.Hex())
-						continue
-					}
-					if _, err := s.b2Cleanup.DeleteByKey(key); err != nil {
-						return fmt.Errorf("delete clip key %q: %w", key, err)
-					}
+				key := s.b2Cleanup.NormalizeKey(clip.URL)
+				if key == "" {
+					key = s.b2Cleanup.NormalizeKey(clip.Path)
 				}
+				if key == "" {
+					result.B2.Skipped = append(result.B2.Skipped,
+						fmt.Sprintf("clip %s: no key derivable", clip.ID.Hex()))
+					continue
+				}
+				s.b2Cleanup.SafeDeleteKey(key, fmt.Sprintf("clip-%s", clip.ID.Hex()), result.B2)
 			}
-			if err := s.clipRepo.DeleteByMovieID(ctx, objID); err != nil {
-				return fmt.Errorf("delete clip rows: %w", err)
-			}
+		}
+
+		if err := s.clipRepo.DeleteByMovieID(ctx, objID); err != nil {
+			result.B2.Errors = append(result.B2.Errors,
+				fmt.Sprintf("delete clip rows: %v", err))
+			log.Printf("[MOVIE DELETE] FAILED to delete clip rows: %v", err)
+		} else {
+			result.ClipsDeleted = len(clips)
 			log.Printf("[MOVIE DELETE] removed %d clip row(s) from DB", len(clips))
 		}
+
+		// 5) Instagram schedules + publish jobs that reference these clips.
+		if len(clipIDs) > 0 {
+			if s.igScheduleRepo != nil {
+				deleted, err := s.igScheduleRepo.DeleteByClipIDs(ctx, clipIDs)
+				if err != nil {
+					result.B2.Errors = append(result.B2.Errors,
+						fmt.Sprintf("delete instagram schedules: %v", err))
+					log.Printf("[MOVIE DELETE] FAILED instagram_schedules cleanup: %v", err)
+				} else {
+					result.IGSchedulesDeleted = deleted
+					log.Printf("[MOVIE DELETE] removed %d instagram_schedule row(s)", deleted)
+				}
+			}
+			if s.publishJobRepo != nil {
+				deleted, err := s.publishJobRepo.DeleteByClipIDs(ctx, clipIDs)
+				if err != nil {
+					result.B2.Errors = append(result.B2.Errors,
+						fmt.Sprintf("delete publish jobs: %v", err))
+					log.Printf("[MOVIE DELETE] FAILED publish_jobs cleanup: %v", err)
+				} else {
+					result.PublishJobsDeleted = deleted
+					log.Printf("[MOVIE DELETE] removed %d publish_job row(s)", deleted)
+				}
+			}
+		}
 	}
-	return nil
 }
 
 func firstNonEmpty(values ...string) string {

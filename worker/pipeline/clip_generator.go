@@ -38,9 +38,13 @@ type ClipInfo struct {
 	SeriesID      string `json:"series_id,omitempty"`
 	SeriesTitle   string `json:"series_title,omitempty"`
 	SeriesSlug    string `json:"series_slug,omitempty"`
+	SeasonID      string `json:"season_id,omitempty"`
 	SeasonNumber  int    `json:"season_number,omitempty"`
 	EpisodeNumber int    `json:"episode_number,omitempty"`
 	EpisodeID     string `json:"episode_id,omitempty"`
+	Title         string `json:"title,omitempty"`
+	ClipIndex     int    `json:"clip_index,omitempty"`
+	SourceType    string `json:"source_type,omitempty"`
 
 	// Per-clip output metadata (identical for both kinds)
 	Filename    string `json:"filename"`
@@ -85,6 +89,8 @@ type clipTarget struct {
 	SeriesID      primitive.ObjectID
 	SeriesTitle   string
 	SeriesSlug    string
+	SeriesCode    string
+	SeasonID      primitive.ObjectID
 	SeasonNumber  int
 	EpisodeNumber int
 	EpisodeID     primitive.ObjectID
@@ -245,13 +251,13 @@ func aiFaceScore(ai *aiVideoData, t, dur float64) float64 {
 // Three passes:
 //  1. silencedetect  — marks silent intervals so they can be avoided.
 //  2. astats/reset   — measures RMS energy per 4-second window. ffmpeg writes
-//                      one "Overall:" block per window to stderr; we split on
-//                      "Overall:" and parse the first "RMS level dB:" in each
-//                      section (the correct stderr format — NOT lavfi metadata).
+//     one "Overall:" block per window to stderr; we split on
+//     "Overall:" and parse the first "RMS level dB:" in each
+//     section (the correct stderr format — NOT lavfi metadata).
 //  3. scene detect   — downscaled frame-diff pass finds visual cut timestamps;
-//                      scene cuts score a bonus as they often mark new action.
+//     scene cuts score a bonus as they often mark new action.
 //
-/// Each selected moment gets a suggested duration based on its score:
+// / Each selected moment gets a suggested duration based on its score:
 // score>10 → 60s, score>6 → 45s, score>2 → 30s, else minClipSeconds (20s).
 func (p *Pipeline) detectEngagingMoments(videoPath string, durationSec float64, want int, ai *aiVideoData) []candidateMoment {
 	log.Printf("[CLIP-ANALYSIS] Analysing %s (%.0fs) for engaging moments", videoPath, durationSec)
@@ -968,9 +974,10 @@ func (p *Pipeline) generateEpisodeClips(ctx context.Context, job *models.Ingesti
 		fmt.Sprintf("episode-%d", job.EpisodeNumber),
 	)
 
-	// Pull the series document to show a human-readable title in the top
-	// overlay. Falls back to the slug if the lookup fails.
+	// Pull the series document to show a human-readable title and the shared
+	// parent series code on episode clips.
 	seriesTitle := job.SeriesSlug
+	seriesCode := ""
 	if p.config.DB != nil && !job.SeriesID.IsZero() {
 		var seriesDoc bson.M
 		lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -979,6 +986,9 @@ func (p *Pipeline) generateEpisodeClips(ctx context.Context, job *models.Ingesti
 		if err == nil {
 			if t, ok := seriesDoc["title"].(string); ok && strings.TrimSpace(t) != "" {
 				seriesTitle = strings.TrimSpace(t)
+			}
+			if c, ok := seriesDoc["code"].(string); ok && strings.TrimSpace(c) != "" {
+				seriesCode = strings.TrimSpace(c)
 			}
 		} else {
 			log.Printf("[CLIP-EPISODE] WARN: could not load series doc %s: %v", job.SeriesID.Hex(), err)
@@ -989,21 +999,23 @@ func (p *Pipeline) generateEpisodeClips(ctx context.Context, job *models.Ingesti
 	if filenameSlug == "" {
 		filenameSlug = "episode"
 	}
+	displayTitle := fmt.Sprintf("%s S%02dE%02d", seriesTitle, job.SeasonNumber, job.EpisodeNumber)
 
-	log.Printf("[CLIP-EPISODE] ===== CLIP GENERATION START =====")
-	log.Printf("[CLIP-EPISODE] series_slug=%s season=%d episode=%d", job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber)
-	log.Printf("[CLIP-EPISODE] series_title=%s episode_id=%s", seriesTitle, job.EpisodeID.Hex())
+	log.Printf("[CLIPS] episode completed, generating clips series_id=%s season_id=%s episode_id=%s title=%q source=%s",
+		job.SeriesID.Hex(), job.SeasonID.Hex(), job.EpisodeID.Hex(), displayTitle, processedMasterPath)
 
 	target := clipTarget{
 		Kind:          "series",
 		FilenameSlug:  filenameSlug,
 		FolderSubpath: folderSubpath,
 		DisplayLabel:  fmt.Sprintf("Series: %s S%02dE%02d", seriesTitle, job.SeasonNumber, job.EpisodeNumber),
-		TopText:       fmt.Sprintf("%s \\- S%d\\:E%d", ffmpegEscapeDrawtext(seriesTitle), job.SeasonNumber, job.EpisodeNumber),
+		TopText:       fmt.Sprintf("Kino kodi\\: %s", firstNonEmptyString(seriesCode, "—")),
 		BottomText:    "Kinoni profildagi botdan toping\\!",
 		SeriesID:      job.SeriesID,
 		SeriesTitle:   seriesTitle,
 		SeriesSlug:    job.SeriesSlug,
+		SeriesCode:    seriesCode,
+		SeasonID:      job.SeasonID,
 		SeasonNumber:  job.SeasonNumber,
 		EpisodeNumber: job.EpisodeNumber,
 		EpisodeID:     job.EpisodeID,
@@ -1284,6 +1296,7 @@ func (p *Pipeline) generateClipsForTarget(ctx context.Context, target clipTarget
 			URL:         clipURL,
 			Duration:    clipDuration,
 			Sequence:    i + 1,
+			ClipIndex:   i + 1,
 			StorageType: map[bool]string{true: "local", false: "b2"}[devMode],
 		}
 
@@ -1312,9 +1325,13 @@ func (p *Pipeline) generateClipsForTarget(ctx context.Context, target clipTarget
 			clipInfo.SeriesID = target.SeriesID.Hex()
 			clipInfo.SeriesTitle = target.SeriesTitle
 			clipInfo.SeriesSlug = target.SeriesSlug
+			clipInfo.SeasonID = target.SeasonID.Hex()
 			clipInfo.SeasonNumber = target.SeasonNumber
 			clipInfo.EpisodeNumber = target.EpisodeNumber
 			clipInfo.EpisodeID = target.EpisodeID.Hex()
+			clipInfo.MovieCode = target.SeriesCode
+			clipInfo.Title = fmt.Sprintf("%s S%02dE%02d", target.SeriesTitle, target.SeasonNumber, target.EpisodeNumber)
+			clipInfo.SourceType = "series_episode"
 		default:
 			return fmt.Errorf("unknown clipTarget.Kind %q", target.Kind)
 		}
@@ -1373,6 +1390,8 @@ func (p *Pipeline) generateClipsForTarget(ctx context.Context, target clipTarget
 	log.Printf("[CLIP] ===== CLIP GENERATION COMPLETE =====")
 	log.Printf("[CLIP] Target: %s", target.DisplayLabel)
 	if target.Kind == "series" {
+		log.Printf("[CLIPS] generated episode clips count=%d series_id=%s season_id=%s episode_id=%s",
+			len(generatedClips), target.SeriesID.Hex(), target.SeasonID.Hex(), target.EpisodeID.Hex())
 		log.Printf("[CLIP-EPISODE] series_slug=%s season=%d episode=%d clips_generated=%d clips_failed=%d",
 			target.SeriesSlug, target.SeasonNumber, target.EpisodeNumber, len(generatedClips), len(failedClips))
 	}
@@ -1442,10 +1461,12 @@ func (p *Pipeline) saveClipsToMongoDB(ctx context.Context, clips []ClipInfo) err
 				"movie_title":  clip.MovieTitle,
 				"movie_slug":   clip.MovieSlug,
 				"movie_code":   clip.MovieCode,
+				"title":        clip.MovieTitle,
 				"filename":     clip.Filename,
 				"path":         clip.Path,
 				"url":          clip.URL,
 				"duration":     clip.Duration,
+				"clip_index":   clip.ClipIndex,
 				"sequence":     clip.Sequence,
 				"storage_type": clip.StorageType,
 				"created_at":   now,
@@ -1462,6 +1483,11 @@ func (p *Pipeline) saveClipsToMongoDB(ctx context.Context, clips []ClipInfo) err
 				log.Printf("[CLIP] ERROR: skipping series clip %s - invalid episode_id %q: %v", clip.Filename, clip.EpisodeID, errE)
 				continue
 			}
+			seasonObjID, errSeason := primitive.ObjectIDFromHex(clip.SeasonID)
+			if errSeason != nil || seasonObjID.IsZero() {
+				log.Printf("[CLIP] ERROR: skipping series clip %s - invalid season_id %q: %v", clip.Filename, clip.SeasonID, errSeason)
+				continue
+			}
 
 			docs = append(docs, bson.M{
 				"_id":            primitive.NewObjectID(),
@@ -1469,14 +1495,19 @@ func (p *Pipeline) saveClipsToMongoDB(ctx context.Context, clips []ClipInfo) err
 				"series_id":      seriesObjID,
 				"series_title":   clip.SeriesTitle,
 				"series_slug":    clip.SeriesSlug,
+				"season_id":      seasonObjID,
 				"season_number":  clip.SeasonNumber,
 				"episode_number": clip.EpisodeNumber,
 				"episode_id":     episodeObjID,
+				"movie_code":     clip.MovieCode,
+				"title":          clip.Title,
 				"filename":       clip.Filename,
 				"path":           clip.Path,
 				"url":            clip.URL,
 				"duration":       clip.Duration,
+				"clip_index":     clip.ClipIndex,
 				"sequence":       clip.Sequence,
+				"source_type":    "series_episode",
 				"storage_type":   clip.StorageType,
 				"created_at":     now,
 			})
@@ -1497,5 +1528,18 @@ func (p *Pipeline) saveClipsToMongoDB(ctx context.Context, clips []ClipInfo) err
 	}
 
 	log.Printf("[CLIP] Saved %d clips to MongoDB", len(result.InsertedIDs))
+	if len(clips) > 0 && clips[0].Kind == "series" {
+		log.Printf("[CLIPS] saved series episode clips count=%d series_id=%s season_id=%s episode_id=%s",
+			len(result.InsertedIDs), clips[0].SeriesID, clips[0].SeasonID, clips[0].EpisodeID)
+	}
 	return nil
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

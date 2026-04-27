@@ -1972,7 +1972,7 @@ func (p *Pipeline) createMovieInDatabase(job *models.IngestionJob, metadata *mod
 	}
 
 	// Generate sequential code for the movie
-	code, err := p.getNextMovieCode(context.Background())
+	code, err := p.getNextContentCode(context.Background())
 	if err != nil {
 		log.Printf("[DIRECT_UPLOAD] ERROR: Failed to generate sequential code: %v", err)
 		return nil, fmt.Errorf("failed to generate movie code: %w", err)
@@ -2092,7 +2092,7 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 	_ = createMovieSlug(enrichedMetadata.Title) // Deprecated: using displaySlug instead
 
 	// Generate sequential code for the movie using atomic counter
-	code, err := p.getNextMovieCode(ctx)
+	code, err := p.getNextContentCode(ctx)
 	if err != nil {
 		log.Printf("[PIPELINE] ERROR: Failed to generate sequential code: %v", err)
 		return nil, fmt.Errorf("failed to generate movie code: %w", err)
@@ -2473,71 +2473,84 @@ func (p *Pipeline) failJobWithStatus(jobID string, status models.IngestionStatus
 }
 
 // cleanupFile removes a temporary file
-// getNextMovieCode gets the next sequential movie code from MongoDB.
-// Finds the highest existing numeric code in the movies collection and returns code+1.
-// Returns zero-padded string (e.g., "0009", "0010", "0100").
-func (p *Pipeline) getNextMovieCode(ctx context.Context) (string, error) {
-	if p.movieCol == nil {
-		return "", fmt.Errorf("movie collection not initialized")
+// getNextContentCode gets the next global sequential content code shared by
+// both movies and series. It scans both collections, finds the highest numeric
+// code, and skips any collision already present in either collection.
+func (p *Pipeline) getNextContentCode(ctx context.Context) (string, error) {
+	if p.config.DB == nil {
+		return "", fmt.Errorf("database not initialized")
 	}
 
-	// Find all existing codes and determine the highest numeric value
-	cursor, err := p.movieCol.Find(ctx, bson.M{})
-	if err != nil {
-		return "", fmt.Errorf("failed to query movies collection: %w", err)
-	}
-	defer cursor.Close(ctx)
-
-	var highestSeq int64 = 0
-	for cursor.Next(ctx) {
-		var doc struct {
-			Code string `bson:"code"`
+	highestSeq := int64(0)
+	for _, collectionName := range []string{"movies", "series"} {
+		cursor, err := p.config.DB.Collection(collectionName).Find(ctx, bson.M{})
+		if err != nil {
+			return "", fmt.Errorf("failed to query %s collection: %w", collectionName, err)
 		}
-		if err := cursor.Decode(&doc); err != nil {
+
+		for cursor.Next(ctx) {
+			var doc struct {
+				Code string `bson:"code"`
+			}
+			if err := cursor.Decode(&doc); err != nil {
+				continue
+			}
+
+			code := strings.TrimSpace(doc.Code)
+			if code == "" {
+				continue
+			}
+
+			var seq int64
+			_, err := fmt.Sscanf(code, "%d", &seq)
+			if err != nil || seq <= 0 {
+				seq = parseNumericCode(code)
+			}
+			if seq > highestSeq {
+				highestSeq = seq
+			}
+		}
+		if err := cursor.Err(); err != nil {
+			cursor.Close(ctx)
+			return "", fmt.Errorf("cursor error while scanning %s codes: %w", collectionName, err)
+		}
+		cursor.Close(ctx)
+	}
+
+	for nextSeq := highestSeq + 1; nextSeq <= 999999; nextSeq++ {
+		formattedCode := formatContentCode(nextSeq)
+		inMovies, err := p.config.DB.Collection("movies").CountDocuments(ctx, bson.M{"code": formattedCode})
+		if err != nil {
+			return "", fmt.Errorf("check movie code exists %s: %w", formattedCode, err)
+		}
+		if inMovies > 0 {
 			continue
 		}
 
-		// Parse code as integer safely
-		code := doc.Code
-		if code == "" {
+		inSeries, err := p.config.DB.Collection("series").CountDocuments(ctx, bson.M{"code": formattedCode})
+		if err != nil {
+			return "", fmt.Errorf("check series code exists %s: %w", formattedCode, err)
+		}
+		if inSeries > 0 {
 			continue
 		}
 
-		// Extract numeric part from code (e.g., "0009" -> 9, "0100" -> 100)
-		var seq int64
-		_, err := fmt.Sscanf(code, "%d", &seq)
-		if err != nil || seq <= 0 {
-			// Try to parse by removing leading zeros
-			seq = parseNumericCode(code)
-		}
-
-		if seq > highestSeq {
-			highestSeq = seq
-		}
+		log.Printf("[PIPELINE] Content code generated: highest_existing=%d next=%d formatted=%s", highestSeq, nextSeq, formattedCode)
+		return formattedCode, nil
 	}
 
-	if err := cursor.Err(); err != nil {
-		return "", fmt.Errorf("cursor error while finding highest code: %w", err)
-	}
+	return "", fmt.Errorf("content code limit exceeded: %d", 999999)
+}
 
-	// Generate next code
-	nextSeq := highestSeq + 1
-
-	// Format with appropriate zero-padding based on magnitude
-	var formattedCode string
+func formatContentCode(seq int64) string {
 	switch {
-	case nextSeq <= 9999:
-		formattedCode = fmt.Sprintf("%04d", nextSeq)
-	case nextSeq <= 99999:
-		formattedCode = fmt.Sprintf("%05d", nextSeq)
-	case nextSeq <= 999999:
-		formattedCode = fmt.Sprintf("%06d", nextSeq)
+	case seq <= 9999:
+		return fmt.Sprintf("%04d", seq)
+	case seq <= 99999:
+		return fmt.Sprintf("%05d", seq)
 	default:
-		return "", fmt.Errorf("movie code limit exceeded: %d", nextSeq)
+		return fmt.Sprintf("%06d", seq)
 	}
-
-	log.Printf("[PIPELINE] Movie code generated: highest_existing=%d, next=%d, formatted=%s", highestSeq, nextSeq, formattedCode)
-	return formattedCode, nil
 }
 
 // parseNumericCode parses a zero-padded code string to its numeric value

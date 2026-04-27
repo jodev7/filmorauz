@@ -25,6 +25,9 @@ import {
 } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
+import CascadeDeleteModal, {
+  formatCascadeWarning,
+} from "@/components/admin/CascadeDeleteModal";
 
 type StatusFilter = "all" | "pending" | "approved" | "rejected";
 
@@ -61,6 +64,7 @@ export default function AdminSeriesPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AdminSeries | null>(null);
   const [approving, setApproving] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
 
@@ -105,20 +109,22 @@ export default function AdminSeriesPage() {
     setFiltered(result);
   }, [search, series, statusFilter]);
 
-  const handleDelete = async (s: AdminSeries) => {
-    if (
-      !confirm(
-        `Haqiqatan ham "${s.title}" serialni o'chirmoqchimisiz? Bu amalni bekor qilib bo'lmaydi.`
-      )
-    )
-      return;
+  const handleDeleteClick = (s: AdminSeries) => {
+    setDeleteTarget(s);
+  };
 
+  const performDelete = async () => {
+    const s = deleteTarget;
+    if (!s || !token) return;
     setDeleting(s.id);
     try {
-      await adminDeleteSeries(token!, s.id);
+      const response = await adminDeleteSeries(token, s.id);
       setSeries((prev) => prev.filter((item) => item.id !== s.id));
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "O'chirishda xato");
+      const warning = formatCascadeWarning(response?.deleted_b2);
+      if (warning) {
+        alert(`"${s.title}" o'chirildi, lekin ba'zi fayllar muammoli:\n\n${warning}`);
+      }
+      setDeleteTarget(null);
     } finally {
       setDeleting(null);
     }
@@ -295,6 +301,9 @@ export default function AdminSeriesPage() {
                     <td className="px-4 py-3">
                       <div>
                         <p className="font-medium text-white">{s.title}</p>
+                        {s.code && (
+                          <p className="text-xs font-mono text-brand-red mt-0.5">#{s.code}</p>
+                        )}
                         <p className="text-sm text-gray-500">/{s.slug}</p>
                         {s.is_premium && (
                           <span className="inline-flex items-center gap-1 text-xs text-yellow-400 mt-0.5">
@@ -382,7 +391,7 @@ export default function AdminSeriesPage() {
 
                         {/* Delete */}
                         <button
-                          onClick={() => handleDelete(s)}
+                          onClick={() => handleDeleteClick(s)}
                           disabled={deleting === s.id}
                           className="p-2 text-gray-400 hover:text-red-400 hover:bg-brand-dark rounded-lg transition-colors disabled:opacity-50"
                           title="O'chirish"
@@ -403,6 +412,16 @@ export default function AdminSeriesPage() {
           </div>
         </div>
       )}
+
+      <CascadeDeleteModal
+        open={deleteTarget !== null}
+        kind="series"
+        title={deleteTarget?.title ?? ""}
+        onConfirm={performDelete}
+        onClose={() => {
+          if (deleting === null) setDeleteTarget(null);
+        }}
+      />
     </div>
   );
 }

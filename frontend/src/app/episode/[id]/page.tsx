@@ -59,6 +59,7 @@ export default async function EpisodePage({ params }: PageProps) {
     country: "",
     duration: episode.duration || 0,
     quality: "",
+    code: series?.series.code || "",
     views: 0,
     rating_avg: 0,
     rating_count: 0,

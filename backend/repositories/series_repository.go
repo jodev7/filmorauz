@@ -140,6 +140,18 @@ func (r *SeriesRepository) GetBySlug(slug string) (*models.Series, error) {
 	return &series, nil
 }
 
+func (r *SeriesRepository) FindByCode(code string) (*models.Series, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var series models.Series
+	if err := r.seriesCol.FindOne(ctx, bson.M{"code": code}).Decode(&series); err != nil {
+		return nil, err
+	}
+	series.Genre = normalizeSeriesGenres(series.Genre)
+	return &series, nil
+}
+
 func (r *SeriesRepository) List(limit, skip int, genre string) ([]models.Series, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -298,6 +310,14 @@ func (r *SeriesRepository) SetSeriesCode(id primitive.ObjectID, code string) err
 		log.Printf("series code backfill skipped missing series: %s", id.Hex())
 	}
 	return nil
+}
+
+func (r *SeriesRepository) CodeExists(code string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	count, err := r.seriesCol.CountDocuments(ctx, bson.M{"code": code})
+	return count > 0, err
 }
 
 func (r *SeriesRepository) Delete(id primitive.ObjectID) error {

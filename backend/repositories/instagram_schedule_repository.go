@@ -163,3 +163,20 @@ func (r *InstagramScheduleRepository) Cancel(id primitive.ObjectID) (bool, error
 	}
 	return res.DeletedCount > 0, nil
 }
+
+// DeleteByClipIDs removes every schedule (regardless of status) whose
+// clip_id is in the given list. Used when a movie or series is deleted
+// — the underlying clip rows are also being removed, so any pending or
+// historical schedule referencing them would be orphaned.
+//
+// Returns the number of documents deleted.
+func (r *InstagramScheduleRepository) DeleteByClipIDs(ctx context.Context, clipIDs []primitive.ObjectID) (int64, error) {
+	if len(clipIDs) == 0 {
+		return 0, nil
+	}
+	res, err := r.col.DeleteMany(ctx, bson.M{"clip_id": bson.M{"$in": clipIDs}})
+	if err != nil {
+		return 0, err
+	}
+	return res.DeletedCount, nil
+}

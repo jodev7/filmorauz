@@ -19,17 +19,34 @@ func getNextContentCode(movieRepo *repositories.MovieRepository, seriesRepo *rep
 		return "", fmt.Errorf("find highest series code: %w", err)
 	}
 
-	nextSeq := movieHighest
-	if seriesHighest > nextSeq {
-		nextSeq = seriesHighest
-	}
-	nextSeq++
-
-	if nextSeq > contentCodeMaxLimit {
-		return "", fmt.Errorf("content code limit exceeded: %d > %d", nextSeq, contentCodeMaxLimit)
+	startSeq := movieHighest
+	if seriesHighest > startSeq {
+		startSeq = seriesHighest
 	}
 
-	return formatContentCode(nextSeq), nil
+	for nextSeq := startSeq + 1; nextSeq <= contentCodeMaxLimit; nextSeq++ {
+		code := formatContentCode(nextSeq)
+
+		movieExists, err := movieRepo.CodeExists(code)
+		if err != nil {
+			return "", fmt.Errorf("check movie code exists %s: %w", code, err)
+		}
+		if movieExists {
+			continue
+		}
+
+		seriesExists, err := seriesRepo.CodeExists(code)
+		if err != nil {
+			return "", fmt.Errorf("check series code exists %s: %w", code, err)
+		}
+		if seriesExists {
+			continue
+		}
+
+		return code, nil
+	}
+
+	return "", fmt.Errorf("content code limit exceeded: %d", contentCodeMaxLimit)
 }
 
 func formatContentCode(seq int64) string {

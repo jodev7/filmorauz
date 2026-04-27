@@ -169,8 +169,8 @@ func main() {
 
 	// Initialize handlers
 	authHandler := handlers.NewAuthHandler(authService, notificationService)
-	movieHandler := handlers.NewMovieHandler(movieService, userRepo)
-	ingestionHandler := handlers.NewIngestionHandler(jobRepo, seriesRepo, parserURL, cfg.WorkerUploadURL)
+	movieHandler := handlers.NewMovieHandler(movieService, seriesService, userRepo)
+	ingestionHandler := handlers.NewIngestionHandler(jobRepo, seriesRepo, seriesService, parserURL, cfg.WorkerUploadURL)
 	uploadHandler := handlers.NewUploadHandler(userRepo, cfg)
 	adminUserHandler := handlers.NewAdminUserHandler(userRepo, movieRepo, seriesRepo, banHistoryRepo, notificationService)
 	userHandler := handlers.NewUserHandler(watchHistoryRepo, favoriteRepo, movieRepo, userRepo)
@@ -259,10 +259,10 @@ func main() {
 		BucketName: cfg.B2Bucket,
 		CDNURL:     cfg.CDNURL,
 	})
-	movieService.SetStorageDependencies(clipRepo, b2Cleanup)
-	seriesService.SetStorageDependencies(clipRepo, b2Cleanup)
 
-	// Instagram schedule repository and handler
+	// Instagram schedule repository and handler.
+	// Initialized before storage wiring so DeleteMovie / DeleteSeries can
+	// cascade into clip-linked schedules and publish jobs.
 	igScheduleRepo := repositories.NewInstagramScheduleRepository(db)
 	if err := igScheduleRepo.EnsureIndexes(); err != nil {
 		log.Printf("Warning: Failed to ensure instagram_schedules indexes: %v", err)
@@ -275,6 +275,9 @@ func main() {
 		log.Printf("Warning: Failed to ensure publish_jobs indexes: %v", err)
 	}
 	publishJobHandler := handlers.NewPublishJobHandler(publishJobRepo, clipRepo, parserURL)
+
+	movieService.SetStorageDependencies(clipRepo, igScheduleRepo, publishJobRepo, b2Cleanup)
+	seriesService.SetStorageDependencies(clipRepo, igScheduleRepo, publishJobRepo, b2Cleanup)
 
 	// Suggestion repository, service, and handler
 	suggestionRepo := repositories.NewSuggestionRepository(db)

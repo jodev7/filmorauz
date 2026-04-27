@@ -213,6 +213,11 @@ func (h *IngestionHandler) upsertSeries(ctx context.Context, title string, paylo
 		return nil, err
 	}
 	series.ID = res.InsertedID.(primitive.ObjectID)
+	if h.seriesSvc != nil {
+		if _, err := h.seriesSvc.EnsureSeriesCodeByID(series.ID); err != nil {
+			return nil, err
+		}
+	}
 	return series, nil
 }
 
@@ -358,6 +363,12 @@ func (h *IngestionHandler) CompleteEpisode(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "episode not found"})
 		return
+	}
+	if h.seriesSvc != nil {
+		if _, err := h.seriesSvc.EnsureSeriesCodeByID(episode.SeriesID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to assign series code"})
+			return
+		}
 	}
 	episode.VideoURL = body.VideoURL
 	episode.SourceType = models.VideoSourceDirectHLS

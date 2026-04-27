@@ -113,14 +113,16 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 		// Non-fatal: the HLS exists, admin can re-run or patch the row.
 	}
 
+	if err := p.updateStatus(jobID, models.IngestionStatusCompleted, 100); err != nil {
+		log.Printf("[EPISODE] WARNING: final status update failed: %v", err)
+	}
+
 	// === Clip generation ===
-	// Must run AFTER the episode's HLS is saved and the backend has been
-	// notified, but BEFORE processed_master.mp4 is cleaned up below —
-	// clip generation consumes processed_master as its source.
-	// This matches the movie pipeline's ordering (see pipeline.go where
-	// generateClips is invoked ahead of the processed-master cleanup).
-	log.Printf("[EPISODE] clip_generation start series_slug=%s season=%d episode=%d processed_master=%s",
-		job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, processedMaster)
+	// Trigger at the episode level only, after the job has been marked
+	// completed, while the processed source still exists on disk.
+	log.Printf("[CLIPS] episode completed → generating clips")
+	log.Printf("[EPISODE] clip_generation start series_slug=%s season=%d episode=%d processed_master=%s local_path=%s",
+		job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, processedMaster, localPath)
 	if clipErr := p.generateEpisodeClips(ctx, job, processedMaster); clipErr != nil {
 		// Non-fatal: episode video is live; surface the failure in logs so
 		// an operator can re-run the clip stage if needed.
@@ -150,9 +152,6 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 		}
 	}
 
-	if err := p.updateStatus(jobID, models.IngestionStatusCompleted, 100); err != nil {
-		log.Printf("[EPISODE] WARNING: final status update failed: %v", err)
-	}
 	log.Printf("[EPISODE] done job=%s series=%s S%02dE%02d streaming=%s",
 		jobID, job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, streamingURL)
 	return nil

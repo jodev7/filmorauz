@@ -23,6 +23,9 @@ import {
 } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
+import CascadeDeleteModal, {
+  formatCascadeWarning,
+} from "@/components/admin/CascadeDeleteModal";
 
 type StatusFilter = "all" | "pending" | "approved" | "rejected";
 
@@ -59,6 +62,7 @@ export default function AdminMoviesPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Movie | null>(null);
   const [approving, setApproving] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
 
@@ -103,20 +107,23 @@ export default function AdminMoviesPage() {
     setFiltered(result);
   }, [search, movies, statusFilter]);
 
-  const handleDelete = async (movie: Movie) => {
-    if (
-      !confirm(
-        `Haqiqatan ham "${movie.title}" filmni o'chirmoqchimisiz? Bu amalni bekor qilib bo'lmaydi.`
-      )
-    )
-      return;
+  const handleDeleteClick = (movie: Movie) => {
+    setDeleteTarget(movie);
+  };
 
+  const performDelete = async () => {
+    const movie = deleteTarget;
+    if (!movie || !token) return;
     setDeleting(movie.id);
     try {
-      await adminDeleteMovie(token!, movie.id);
+      const response = await adminDeleteMovie(token, movie.id);
       setMovies((prev) => prev.filter((m) => m.id !== movie.id));
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "O'chirishda xato");
+      // Surface partial-failure information when B2 cleanup didn't finish cleanly.
+      const warning = formatCascadeWarning(response?.deleted_b2);
+      if (warning) {
+        alert(`"${movie.title}" o'chirildi, lekin ba'zi fayllar muammoli:\n\n${warning}`);
+      }
+      setDeleteTarget(null);
     } finally {
       setDeleting(null);
     }
@@ -380,7 +387,7 @@ export default function AdminMoviesPage() {
 
                         {/* Delete */}
                         <button
-                          onClick={() => handleDelete(movie)}
+                          onClick={() => handleDeleteClick(movie)}
                           disabled={deleting === movie.id}
                           title="O'chirish"
                           className="p-2 text-gray-500 hover:text-red-400 rounded-lg hover:bg-red-400/10 transition-colors disabled:opacity-50"
@@ -401,6 +408,16 @@ export default function AdminMoviesPage() {
           </div>
         </div>
       )}
+
+      <CascadeDeleteModal
+        open={deleteTarget !== null}
+        kind="movie"
+        title={deleteTarget?.title ?? ""}
+        onConfirm={performDelete}
+        onClose={() => {
+          if (deleting === null) setDeleteTarget(null);
+        }}
+      />
     </div>
   );
 }

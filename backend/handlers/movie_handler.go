@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -16,12 +17,13 @@ import (
 
 type MovieHandler struct {
 	movieService    *services.MovieService
+	seriesService   *services.SeriesService
 	userRepo        *repositories.UserRepository
 	telegramService *services.TelegramService
 }
 
-func NewMovieHandler(movieService *services.MovieService, userRepo *repositories.UserRepository) *MovieHandler {
-	return &MovieHandler{movieService: movieService, userRepo: userRepo}
+func NewMovieHandler(movieService *services.MovieService, seriesService *services.SeriesService, userRepo *repositories.UserRepository) *MovieHandler {
+	return &MovieHandler{movieService: movieService, seriesService: seriesService, userRepo: userRepo}
 }
 
 // SetTelegramService wires the Telegram service after initialization.
@@ -234,29 +236,52 @@ func (h *MovieHandler) GetMovieByCode(c *gin.Context) {
 		return
 	}
 
-	// Find by alphanumeric code
 	movie, err := h.movieService.GetMovieByCode(code)
-	if err != nil {
-		c.JSON(http.StatusNotFound, MovieCodeResponse{
-			Found: false,
+	if err == nil && movie != nil {
+		c.JSON(http.StatusOK, MovieCodeResponse{
+			Found: true,
+			Movie: &MovieInfo{
+				Title:       movie.Title,
+				Code:        movie.Code,
+				WebsiteURL:  movie.WebsiteURL,
+				PosterURL:   movie.PosterURL,
+				BackdropURL: movie.BackdropURL,
+				Year:        movie.Year,
+				Genre:       movie.Genre,
+				Quality:     movie.Quality,
+				Description: movie.Description,
+				Duration:    movie.Duration,
+			},
 		})
 		return
 	}
 
-	c.JSON(http.StatusOK, MovieCodeResponse{
-		Found: true,
-		Movie: &MovieInfo{
-			Title:       movie.Title,
-			Code:        movie.Code,
-			WebsiteURL:  movie.WebsiteURL,
-			PosterURL:   movie.PosterURL,
-			BackdropURL: movie.BackdropURL,
-			Year:        movie.Year,
-			Genre:       movie.Genre,
-			Quality:     movie.Quality,
-			Description: movie.Description,
-			Duration:    movie.Duration,
-		},
+	if h.seriesService != nil {
+		series, seriesErr := h.seriesService.GetSeriesByCode(code)
+		if seriesErr == nil && series != nil {
+			websiteBaseURL := os.Getenv("BASE_SITE_URL")
+			if websiteBaseURL == "" {
+				websiteBaseURL = "https://filmorauz.net"
+			}
+			c.JSON(http.StatusOK, MovieCodeResponse{
+				Found: true,
+				Movie: &MovieInfo{
+					Title:       series.Title,
+					Code:        series.Code,
+					WebsiteURL:  strings.TrimRight(websiteBaseURL, "/") + "/series/" + series.Slug,
+					PosterURL:   series.PosterURL,
+					BackdropURL: series.BackdropURL,
+					Year:        series.Year,
+					Genre:       series.Genre,
+					Description: series.Description,
+				},
+			})
+			return
+		}
+	}
+
+	c.JSON(http.StatusNotFound, MovieCodeResponse{
+		Found: false,
 	})
 }
 
@@ -322,15 +347,59 @@ func (h *MovieHandler) UpdateMovie(c *gin.Context) {
 }
 
 // DeleteMovie DELETE /api/admin/movies/:id
+//
+// Cascade deletes the movie row, every clip linked to it, all of those
+// clips' Instagram schedules and multi-platform publish jobs, plus the
+// related B2 assets (HLS folder, poster, backdrop, video file, clip
+// files). Returns a structured summary so the admin UI can show what
+// was actually removed and surface any partial-failure warnings.
+//
+// Status codes:
+//   - 404 when the movie row does not exist
+//   - 400 for invalid IDs
+//   - 200 with deleted_b2.errors populated if B2 cleanup ran into
+//     transient failures (the DB row is still removed in that case)
+//   - 500 only when the DB delete itself fails
 func (h *MovieHandler) DeleteMovie(c *gin.Context) {
 	id := c.Param("id")
 
-	if err := h.movieService.DeleteMovie(id); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	result, err := h.movieService.DeleteMovie(id)
+	if err != nil {
+		switch err.Error() {
+		case "movie not found":
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "movie not found"})
+		case "invalid movie id":
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid movie id"})
+		default:
+			// DB delete failed — return whatever cleanup we managed plus the error.
+			payload := gin.H{"success": false, "error": err.Error()}
+			if result != nil {
+				payload["deleted_db"] = movieDeleteDBSummary(result)
+				payload["deleted_b2"] = result.B2
+			}
+			c.JSON(http.StatusInternalServerError, payload)
+		}
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Movie deleted"})
+	c.JSON(http.StatusOK, gin.H{
+		"success":    true,
+		"message":    "Movie deleted",
+		"deleted_db": movieDeleteDBSummary(result),
+		"deleted_b2": result.B2,
+	})
+}
+
+// movieDeleteDBSummary turns the service-layer result into the
+// JSON-friendly shape the admin UI consumes.
+func movieDeleteDBSummary(r *services.MovieDeleteResult) gin.H {
+	return gin.H{
+		"movie_id":                    r.MovieID,
+		"title":                       r.Title,
+		"clips_deleted":               r.ClipsDeleted,
+		"instagram_schedules_deleted": r.IGSchedulesDeleted,
+		"publish_jobs_deleted":        r.PublishJobsDeleted,
+	}
 }
 
 // GetTrendingMovies GET /api/v1/movies/trending?period=24h&limit=12

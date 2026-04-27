@@ -108,6 +108,16 @@ func resolveClipDownloadURL(clip *models.Clip) string {
 	return raw
 }
 
+func clipCaptionTitle(clip *models.Clip) string {
+	if clip == nil {
+		return ""
+	}
+	if title := strings.TrimSpace(clip.DisplayTitle()); title != "" {
+		return title
+	}
+	return "Klip"
+}
+
 // DownloadClip GET /api/admin/clips/:id/download
 // Streams the clip through backend with attachment headers so the browser downloads it.
 func (h *ClipHandler) DownloadClip(c *gin.Context) {
@@ -279,7 +289,7 @@ func (h *ClipHandler) UploadToInstagram(c *gin.Context) {
 		return
 	}
 
-	caption := fmt.Sprintf("%s\n\nKinoni profildagi bot orqali toping!\nKino Kodi: %s", clip.MovieTitle, clip.MovieCode)
+	caption := fmt.Sprintf("%s\n\nKinoni profildagi bot orqali toping!\nKino Kodi: %s", clipCaptionTitle(clip), clip.MovieCode)
 
 	type accountResult struct {
 		Account        string `json:"account"`

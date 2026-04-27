@@ -1017,18 +1017,57 @@ export async function adminUpdateMovie(
   return json.data;
 }
 
+// CascadeDeleteSummary mirrors the structured response from the
+// admin movie/series delete endpoints. Used by the admin UI to show
+// what was removed and surface partial-failure warnings.
+export interface CascadeDeleteB2Summary {
+  files_deleted: number;
+  prefixes_deleted: string[];
+  skipped: string[];
+  errors: string[];
+}
+
+export interface MovieDeleteResponse {
+  success: boolean;
+  message?: string;
+  deleted_db: {
+    movie_id: string;
+    title: string;
+    clips_deleted: number;
+    instagram_schedules_deleted: number;
+    publish_jobs_deleted: number;
+  };
+  deleted_b2: CascadeDeleteB2Summary;
+}
+
+export interface SeriesDeleteResponse {
+  success: boolean;
+  message?: string;
+  deleted_db: {
+    series_id: string;
+    title: string;
+    seasons_deleted: number;
+    episodes_deleted: number;
+    clips_deleted: number;
+    instagram_schedules_deleted: number;
+    publish_jobs_deleted: number;
+  };
+  deleted_b2: CascadeDeleteB2Summary;
+}
+
 export async function adminDeleteMovie(
   token: string,
   id: string
-): Promise<void> {
+): Promise<MovieDeleteResponse> {
   const res = await fetch(`${API_URL}/admin/movies/${id}`, {
     method: "DELETE",
     headers: authHeaders(token),
   });
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || "Delete failed");
+    throw new Error(json?.error || "Delete failed");
   }
+  return json as MovieDeleteResponse;
 }
 
 export async function adminGetMovies(token: string): Promise<Movie[]> {
@@ -2492,19 +2531,21 @@ export async function adminUpdateSeries(
   return res.json();
 }
 
-// Admin: Delete series
+// Admin: Delete series — cascade delete returns a structured summary so
+// the admin UI can show what was removed and any partial B2 errors.
 export async function adminDeleteSeries(
   token: string,
   id: string
-): Promise<void> {
+): Promise<SeriesDeleteResponse> {
   const res = await fetch(`${API_URL}/admin/series/${id}`, {
     method: "DELETE",
     headers: authHeaders(token),
   });
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || "Failed to delete series");
+    throw new Error(json?.error || "Failed to delete series");
   }
+  return json as SeriesDeleteResponse;
 }
 
 // Admin: Create season

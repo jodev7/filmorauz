@@ -104,8 +104,8 @@ func (h *PublishJobHandler) UploadNow(c *gin.Context) {
 		job := &models.PublishJob{
 			ClipID:      clipID,
 			ClipURL:     clip.URL,
-			MovieTitle:  clip.MovieTitle,
-			MovieSlug:   clip.MovieSlug,
+			MovieTitle:  clip.DisplayTitle(),
+			MovieSlug:   clip.DisplaySlug(),
 			MovieCode:   clip.MovieCode,
 			Platform:    j.Platform,
 			AccountName: j.AccountName,
@@ -203,8 +203,8 @@ func (h *PublishJobHandler) Schedule(c *gin.Context) {
 		jobs = append(jobs, &models.PublishJob{
 			ClipID:       clipID,
 			ClipURL:      clip.URL,
-			MovieTitle:   clip.MovieTitle,
-			MovieSlug:    clip.MovieSlug,
+			MovieTitle:   clip.DisplayTitle(),
+			MovieSlug:    clip.DisplaySlug(),
 			MovieCode:    clip.MovieCode,
 			Platform:     j.Platform,
 			AccountName:  j.AccountName,

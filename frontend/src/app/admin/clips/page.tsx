@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
-import Link from "next/link";
 import {
   Film,
   ExternalLink,
@@ -72,10 +71,21 @@ type Platform = "instagram" | "youtube" | "tiktok";
 
 interface Clip {
   id: string;
+  content_kind?: string;
   movie_id: string;
   movie_title: string;
   movie_slug: string;
   movie_code: string;
+  series_id?: string;
+  series_title?: string;
+  series_slug?: string;
+  season_id?: string;
+  season_number?: number;
+  episode_id?: string;
+  episode_number?: number;
+  title?: string;
+  clip_index?: number;
+  source_type?: string;
   filename: string;
   path: string;
   url: string;
@@ -136,6 +146,30 @@ interface PublishModal {
   scheduledFor: string;
   results: JobResult[] | null;
   scheduledCreated: boolean;
+}
+
+interface EpisodeClipGroup {
+  key: string;
+  title: string;
+  episodeNumber: number;
+  clips: Clip[];
+}
+
+interface SeasonClipGroup {
+  key: string;
+  title: string;
+  seasonNumber: number;
+  episodes: EpisodeClipGroup[];
+}
+
+interface ContentClipGroup {
+  key: string;
+  kind: "movie" | "series";
+  title: string;
+  slug: string;
+  code?: string;
+  clips: Clip[];
+  seasons?: SeasonClipGroup[];
 }
 
 interface PaginationControlsProps {
@@ -337,13 +371,119 @@ function formatDuration(seconds: number) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function groupByMovie(clips: Clip[]): Record<string, Clip[]> {
-  const grouped: Record<string, Clip[]> = {};
-  for (const clip of clips) {
-    if (!grouped[clip.movie_id]) grouped[clip.movie_id] = [];
-    grouped[clip.movie_id].push(clip);
+function padEpisodeNumber(value?: number) {
+  return String(value ?? 0).padStart(2, "0");
+}
+
+function getClipDisplayTitle(clip: Clip): string {
+  if (clip.movie_title?.trim()) return clip.movie_title;
+  if (clip.title?.trim()) return clip.title;
+  if (clip.series_title?.trim()) {
+    return `${clip.series_title} S${padEpisodeNumber(clip.season_number)}E${padEpisodeNumber(clip.episode_number)}`;
   }
-  return grouped;
+  return "Untitled clip";
+}
+
+function getClipSequence(clip: Clip): number {
+  return clip.clip_index || clip.sequence || 0;
+}
+
+function getClipKind(clip: Clip): "movie" | "series" {
+  return clip.content_kind === "series" || clip.source_type === "series_episode" || !!clip.series_id
+    ? "series"
+    : "movie";
+}
+
+function buildClipGroups(clips: Clip[]): ContentClipGroup[] {
+  const movieGroups = new Map<string, ContentClipGroup>();
+  const seriesGroups = new Map<string, {
+    key: string;
+    title: string;
+    slug: string;
+    clips: Clip[];
+    seasons: Map<number, {
+      key: string;
+      title: string;
+      seasonNumber: number;
+      episodes: Map<string, EpisodeClipGroup>;
+    }>;
+  }>();
+
+  for (const clip of clips) {
+    if (getClipKind(clip) === "movie") {
+      const key = clip.movie_id || `movie:${clip.id}`;
+      if (!movieGroups.has(key)) {
+        movieGroups.set(key, {
+          key,
+          kind: "movie",
+          title: clip.movie_title || "Untitled movie",
+          slug: clip.movie_slug || "",
+          code: clip.movie_code || "",
+          clips: [],
+        });
+      }
+      movieGroups.get(key)!.clips.push(clip);
+      continue;
+    }
+
+    const seriesKey = clip.series_id || `series:${clip.id}`;
+    if (!seriesGroups.has(seriesKey)) {
+      seriesGroups.set(seriesKey, {
+        key: seriesKey,
+        title: clip.series_title || "Untitled series",
+        slug: clip.series_slug || "",
+        clips: [],
+        seasons: new Map(),
+      });
+    }
+    const seriesGroup = seriesGroups.get(seriesKey)!;
+    seriesGroup.clips.push(clip);
+
+    const seasonNumber = clip.season_number || 0;
+    if (!seriesGroup.seasons.has(seasonNumber)) {
+      seriesGroup.seasons.set(seasonNumber, {
+        key: `${seriesKey}:season:${seasonNumber}`,
+        title: `Season ${seasonNumber}`,
+        seasonNumber,
+        episodes: new Map(),
+      });
+    }
+    const seasonGroup = seriesGroup.seasons.get(seasonNumber)!;
+    const episodeKey = clip.episode_id || `${seasonGroup.key}:episode:${clip.episode_number || 0}`;
+    if (!seasonGroup.episodes.has(episodeKey)) {
+      seasonGroup.episodes.set(episodeKey, {
+        key: episodeKey,
+        title: clip.title || `${seriesGroup.title} S${padEpisodeNumber(seasonNumber)}E${padEpisodeNumber(clip.episode_number)}`,
+        episodeNumber: clip.episode_number || 0,
+        clips: [],
+      });
+    }
+    seasonGroup.episodes.get(episodeKey)!.clips.push(clip);
+  }
+
+  const movieResults = Array.from(movieGroups.values());
+  const seriesResults: ContentClipGroup[] = Array.from(seriesGroups.values()).map((group) => ({
+    key: group.key,
+    kind: "series",
+    title: group.title,
+    slug: group.slug,
+    clips: group.clips,
+    seasons: Array.from(group.seasons.values())
+      .sort((a, b) => a.seasonNumber - b.seasonNumber)
+      .map((season) => ({
+        key: season.key,
+        title: season.title,
+        seasonNumber: season.seasonNumber,
+        episodes: Array.from(season.episodes.values())
+          .sort((a, b) => a.episodeNumber - b.episodeNumber)
+          .map((episode) => ({
+            ...episode,
+            clips: [...episode.clips].sort((a, b) => getClipSequence(a) - getClipSequence(b)),
+          })),
+      })),
+  }));
+
+  return [...movieResults, ...seriesResults];
 }
 
 function resolveClipDownloadUrl(clip: Clip): string {
@@ -406,20 +546,20 @@ export default function AdminClipsPage() {
   const [modal, setModal] = useState<PublishModal | null>(null);
   const [editingJob, setEditingJob] = useState<{ id: string; value: string } | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
-  const [expandedMovies, setExpandedMovies] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [downloading, setDownloading] = useState<Record<string, boolean>>({});
 
-  const toggleMovie = (movieId: string) =>
-    setExpandedMovies((prev) => {
+  const toggleGroup = (groupKey: string) =>
+    setExpandedGroups((prev) => {
       const next = new Set(prev);
-      next.has(movieId) ? next.delete(movieId) : next.add(movieId);
+      next.has(groupKey) ? next.delete(groupKey) : next.add(groupKey);
       return next;
     });
 
   const expandAll = () =>
-    setExpandedMovies(new Set(clips.map((c) => c.movie_id)));
+    setExpandedGroups(new Set(buildClipGroups(clips).map((group) => group.key)));
 
-  const collapseAll = () => setExpandedMovies(new Set());
+  const collapseAll = () => setExpandedGroups(new Set());
 
   const fetchClips = useCallback(async () => {
     if (!token) return;
@@ -481,8 +621,8 @@ export default function AdminClipsPage() {
   }, [fetchClips, fetchAccounts, fetchJobs]);
 
   useEffect(() => {
-    const totalMovieGroups = Object.keys(groupByMovie(clips)).length;
-    const totalPages = Math.max(1, Math.ceil(totalMovieGroups / clipsPageLimit));
+    const totalGroups = buildClipGroups(clips).length;
+    const totalPages = Math.max(1, Math.ceil(totalGroups / clipsPageLimit));
     if (clipsPage > totalPages) {
       setClipsPage(totalPages);
     }
@@ -648,10 +788,9 @@ export default function AdminClipsPage() {
       });
   };
 
-  const groupedClips = groupByMovie(clips);
-  const groupedClipEntries = Object.entries(groupedClips);
-  const clipsTotalPages = Math.max(1, Math.ceil(groupedClipEntries.length / clipsPageLimit));
-  const pagedGroupedClipEntries = groupedClipEntries.slice(
+  const groupedClips = buildClipGroups(clips);
+  const clipsTotalPages = Math.max(1, Math.ceil(groupedClips.length / clipsPageLimit));
+  const pagedGroupedClips = groupedClips.slice(
     (clipsPage - 1) * clipsPageLimit,
     clipsPage * clipsPageLimit,
   );
@@ -665,7 +804,7 @@ export default function AdminClipsPage() {
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-white">Kliplar</h1>
           <p className="text-gray-500 text-sm mt-1">
-            {Object.keys(groupedClips).length} ta kino · {clips.length} ta klip
+            {groupedClips.length} ta kontent · {clips.length} ta klip
           </p>
         </div>
         {clips.length > 0 && (
@@ -699,7 +838,7 @@ export default function AdminClipsPage() {
           <Film className="mx-auto text-gray-600 mb-4" size={48} />
           <p className="text-gray-500">Hali klip yaratilmagan.</p>
           <p className="text-gray-600 text-sm mt-2">
-            Kinolar qo&apos;shilganda avtomatik ravishda klip yaratiladi.
+            Kino yoki serial episode tayyor bo&apos;lganda klip avtomatik yaratiladi.
           </p>
         </div>
       ) : (
@@ -712,38 +851,41 @@ export default function AdminClipsPage() {
               onNext={() => setClipsPage((prev) => Math.min(clipsTotalPages, prev + 1))}
             />
           </div>
-          {pagedGroupedClipEntries.map(([movieId, movieClips]) => {
-            const isExpanded = expandedMovies.has(movieId);
-            const moviePublishJobs = publishJobs.filter((j) =>
-              movieClips.some((c) => c.id === j.clip_id)
+          {pagedGroupedClips.map((group) => {
+            const isExpanded = expandedGroups.has(group.key);
+            const groupPublishJobs = publishJobs.filter((j) =>
+              group.clips.some((c) => c.id === j.clip_id)
             );
-            // Per-platform upload summary for the movie header
-            const igUploaded = movieClips.filter((c) => c.instagram_upload_count > 0).length;
+            const igUploaded = group.clips.filter((c) => c.instagram_upload_count > 0).length;
             const ytUploaded = new Set(
-              moviePublishJobs
+              groupPublishJobs
                 .filter((j) => j.platform === "youtube" && j.status === "success")
                 .map((j) => j.clip_id)
             ).size;
             const ttUploaded = new Set(
-              moviePublishJobs
+              groupPublishJobs
                 .filter((j) => j.platform === "tiktok" && j.status === "success")
                 .map((j) => j.clip_id)
             ).size;
             const lastUpload = [
-              ...movieClips.map((c) => c.last_instagram_upload_at).filter(Boolean),
-              ...moviePublishJobs
+              ...group.clips.map((c) => c.last_instagram_upload_at).filter(Boolean),
+              ...groupPublishJobs
                 .filter((j) => j.status === "success" && j.executed_at)
                 .map((j) => j.executed_at!),
             ].sort().at(-1);
+            const headerHref = group.slug
+              ? group.kind === "movie"
+                ? `/movies/${group.slug}`
+                : `/series/${group.slug}`
+              : "";
 
             return (
               <div
-                key={movieId}
+                key={group.key}
                 className="bg-brand-card border border-brand-border rounded-xl overflow-hidden"
               >
-                {/* ── Movie header (click to expand/collapse) ─────── */}
                 <button
-                  onClick={() => toggleMovie(movieId)}
+                  onClick={() => toggleGroup(group.key)}
                   className="w-full px-4 sm:px-6 py-4 border-b border-brand-border bg-brand-dark/50 hover:bg-brand-dark/80 transition-colors text-left"
                 >
                   <div className="flex items-center gap-3">
@@ -753,32 +895,37 @@ export default function AdminClipsPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-3 flex-wrap">
                         <span className="text-white font-medium truncate">
-                          {movieClips[0].movie_title}
+                          {group.title}
                         </span>
-                        <span className="text-xs font-mono text-gray-500">
-                          #{movieClips[0].movie_code}
-                        </span>
+                        {group.kind === "movie" && group.code && (
+                          <span className="text-xs font-mono text-gray-500">
+                            #{group.code}
+                          </span>
+                        )}
+                        {group.kind === "series" && (
+                          <span className="text-xs text-amber-300/80">Serial episode clips</span>
+                        )}
                         <span className="text-xs text-gray-600">
-                          {movieClips.length} ta klip
+                          {group.clips.length} ta klip
                         </span>
                       </div>
                       <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                         {igUploaded > 0 && (
                           <span className="inline-flex items-center gap-1 text-[11px] text-pink-400">
                             <Instagram size={10} />
-                            {igUploaded}/{movieClips.length}
+                            {igUploaded}/{group.clips.length}
                           </span>
                         )}
                         {ytUploaded > 0 && (
                           <span className="inline-flex items-center gap-1 text-[11px] text-red-400">
                             <Youtube size={10} />
-                            {ytUploaded}/{movieClips.length}
+                            {ytUploaded}/{group.clips.length}
                           </span>
                         )}
                         {ttUploaded > 0 && (
                           <span className="inline-flex items-center gap-1 text-[11px] text-sky-400">
                             <Music2 size={10} />
-                            {ttUploaded}/{movieClips.length}
+                            {ttUploaded}/{group.clips.length}
                           </span>
                         )}
                         {igUploaded === 0 && ytUploaded === 0 && ttUploaded === 0 && (
@@ -791,110 +938,222 @@ export default function AdminClipsPage() {
                         )}
                       </div>
                     </div>
-                    <a
-                      href={`/movies/${movieClips[0].movie_slug}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                      className="text-gray-600 hover:text-white transition-colors flex-shrink-0"
-                    >
-                      <ExternalLink size={15} />
-                    </a>
+                    {headerHref && (
+                      <a
+                        href={headerHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-gray-600 hover:text-white transition-colors flex-shrink-0"
+                      >
+                        <ExternalLink size={15} />
+                      </a>
+                    )}
                   </div>
                 </button>
 
-                {/* ── Clip rows (collapsible) ──────────────────────── */}
                 {isExpanded && (
                   <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-brand-border text-gray-500 text-xs uppercase tracking-wider">
-                          <th className="text-left px-4 py-3">#</th>
-                          <th className="text-left px-4 py-3">Fayl</th>
-                          <th className="text-left px-4 py-3">Davom</th>
-                          <th className="text-left px-4 py-3">Saxlash</th>
-                          <th className="text-left px-4 py-3">Platformlar</th>
-                          <th className="text-right px-4 py-3">Amallar</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {[...movieClips]
-                          .sort((a, b) => a.sequence - b.sequence)
-                          .map((clip) => {
-                            const clipJobs = publishJobs.filter((j) => j.clip_id === clip.id);
-                            return (
-                              <tr
-                                key={clip.id}
-                                className="border-b border-brand-border/50 last:border-0 hover:bg-brand-border/20 transition-colors"
-                              >
-                                <td className="px-4 py-3 text-gray-500">{clip.sequence}</td>
-                                <td className="px-4 py-3">
-                                  <span className="text-gray-300 font-mono text-xs">{clip.filename}</span>
-                                </td>
-                                <td className="px-4 py-3">
-                                  <div className="flex items-center gap-1.5 text-gray-400">
-                                    <Clock size={14} />
-                                    <span>{formatDuration(clip.duration)}</span>
+                    {group.kind === "movie" ? (
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-brand-border text-gray-500 text-xs uppercase tracking-wider">
+                            <th className="text-left px-4 py-3">#</th>
+                            <th className="text-left px-4 py-3">Fayl</th>
+                            <th className="text-left px-4 py-3">Davom</th>
+                            <th className="text-left px-4 py-3">Saxlash</th>
+                            <th className="text-left px-4 py-3">Platformlar</th>
+                            <th className="text-right px-4 py-3">Amallar</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[...group.clips]
+                            .sort((a, b) => getClipSequence(a) - getClipSequence(b))
+                            .map((clip) => {
+                              const clipJobs = publishJobs.filter((j) => j.clip_id === clip.id);
+                              return (
+                                <tr
+                                  key={clip.id}
+                                  className="border-b border-brand-border/50 last:border-0 hover:bg-brand-border/20 transition-colors"
+                                >
+                                  <td className="px-4 py-3 text-gray-500">{getClipSequence(clip)}</td>
+                                  <td className="px-4 py-3">
+                                    <span className="text-gray-300 font-mono text-xs">{clip.filename}</span>
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <div className="flex items-center gap-1.5 text-gray-400">
+                                      <Clock size={14} />
+                                      <span>{formatDuration(clip.duration)}</span>
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <span
+                                      className={`text-xs px-2 py-0.5 rounded ${
+                                        clip.storage_type === "b2"
+                                          ? "bg-blue-500/20 text-blue-400"
+                                          : "bg-green-500/20 text-green-400"
+                                      }`}
+                                    >
+                                      {clip.storage_type === "b2" ? "B2/CDN" : "Local"}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <PlatformUploadStatuses clip={clip} clipJobs={clipJobs} />
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <div className="flex items-center justify-end gap-2">
+                                      <a
+                                        href={resolveClipOpenUrl(clip)}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-gray-500 hover:text-gray-300 transition-colors"
+                                        title="Klipni ochish"
+                                      >
+                                        <ExternalLink size={14} />
+                                      </a>
+                                      <button
+                                        onClick={() => handleDownloadClip(clip)}
+                                        disabled={!token || downloading[clip.id]}
+                                        title="Klipni yuklab olish"
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      >
+                                        {downloading[clip.id] ? (
+                                          <Loader2 size={12} className="animate-spin" />
+                                        ) : (
+                                          <Download size={12} />
+                                        )}
+                                        {downloading[clip.id] ? "..." : "Download"}
+                                      </button>
+                                      <button
+                                        onClick={() => openModal(clip)}
+                                        disabled={uploading[clip.id]}
+                                        title="Ijtimoiy tarmoqlarga yuklash"
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50"
+                                      >
+                                        {uploading[clip.id] ? (
+                                          <Loader2 size={12} className="animate-spin" />
+                                        ) : (
+                                          <Upload size={12} />
+                                        )}
+                                        {uploading[clip.id] ? "..." : "Publish"}
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <div className="divide-y divide-brand-border/50">
+                        {group.seasons?.map((season) => (
+                          <div key={season.key}>
+                            <div className="px-4 sm:px-6 py-3 bg-white/[0.03] border-b border-brand-border/50">
+                              <p className="text-sm font-medium text-gray-200">{season.title}</p>
+                            </div>
+                            <div className="divide-y divide-brand-border/30">
+                              {season.episodes.map((episode) => (
+                                <div key={episode.key}>
+                                  <div className="px-4 sm:px-6 py-3 bg-white/[0.02]">
+                                    <p className="text-sm text-white">{episode.title}</p>
+                                    <p className="text-xs text-gray-500 mt-1">
+                                      {episode.clips.length} ta klip
+                                    </p>
                                   </div>
-                                </td>
-                                <td className="px-4 py-3">
-                                  <span
-                                    className={`text-xs px-2 py-0.5 rounded ${
-                                      clip.storage_type === "b2"
-                                        ? "bg-blue-500/20 text-blue-400"
-                                        : "bg-green-500/20 text-green-400"
-                                    }`}
-                                  >
-                                    {clip.storage_type === "b2" ? "B2/CDN" : "Local"}
-                                  </span>
-                                </td>
-                                <td className="px-4 py-3">
-                                  <PlatformUploadStatuses clip={clip} clipJobs={clipJobs} />
-                                </td>
-                                <td className="px-4 py-3">
-                                  <div className="flex items-center justify-end gap-2">
-                                    <a
-                                      href={resolveClipOpenUrl(clip)}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-gray-500 hover:text-gray-300 transition-colors"
-                                      title="Klipni ochish"
-                                    >
-                                      <ExternalLink size={14} />
-                                    </a>
-                                    <button
-                                      onClick={() => handleDownloadClip(clip)}
-                                      disabled={!token || downloading[clip.id]}
-                                      title="Klipni yuklab olish"
-                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                      {downloading[clip.id] ? (
-                                        <Loader2 size={12} className="animate-spin" />
-                                      ) : (
-                                        <Download size={12} />
-                                      )}
-                                      {downloading[clip.id] ? "..." : "Download"}
-                                    </button>
-                                    <button
-                                      onClick={() => openModal(clip)}
-                                      disabled={uploading[clip.id]}
-                                      title="Ijtimoiy tarmoqlarga yuklash"
-                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50"
-                                    >
-                                      {uploading[clip.id] ? (
-                                        <Loader2 size={12} className="animate-spin" />
-                                      ) : (
-                                        <Upload size={12} />
-                                      )}
-                                      {uploading[clip.id] ? "..." : "Publish"}
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                      </tbody>
-                    </table>
+                                  <table className="w-full text-sm">
+                                    <thead>
+                                      <tr className="border-y border-brand-border/50 text-gray-500 text-xs uppercase tracking-wider">
+                                        <th className="text-left px-4 py-3">#</th>
+                                        <th className="text-left px-4 py-3">Fayl</th>
+                                        <th className="text-left px-4 py-3">Davom</th>
+                                        <th className="text-left px-4 py-3">Saxlash</th>
+                                        <th className="text-left px-4 py-3">Platformlar</th>
+                                        <th className="text-right px-4 py-3">Amallar</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {episode.clips.map((clip) => {
+                                        const clipJobs = publishJobs.filter((j) => j.clip_id === clip.id);
+                                        return (
+                                          <tr
+                                            key={clip.id}
+                                            className="border-b border-brand-border/30 last:border-0 hover:bg-brand-border/20 transition-colors"
+                                          >
+                                            <td className="px-4 py-3 text-gray-500">{getClipSequence(clip)}</td>
+                                            <td className="px-4 py-3">
+                                              <span className="text-gray-300 font-mono text-xs">{clip.filename}</span>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                              <div className="flex items-center gap-1.5 text-gray-400">
+                                                <Clock size={14} />
+                                                <span>{formatDuration(clip.duration)}</span>
+                                              </div>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                              <span
+                                                className={`text-xs px-2 py-0.5 rounded ${
+                                                  clip.storage_type === "b2"
+                                                    ? "bg-blue-500/20 text-blue-400"
+                                                    : "bg-green-500/20 text-green-400"
+                                                }`}
+                                              >
+                                                {clip.storage_type === "b2" ? "B2/CDN" : "Local"}
+                                              </span>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                              <PlatformUploadStatuses clip={clip} clipJobs={clipJobs} />
+                                            </td>
+                                            <td className="px-4 py-3">
+                                              <div className="flex items-center justify-end gap-2">
+                                                <a
+                                                  href={resolveClipOpenUrl(clip)}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  className="text-gray-500 hover:text-gray-300 transition-colors"
+                                                  title="Klipni ochish"
+                                                >
+                                                  <ExternalLink size={14} />
+                                                </a>
+                                                <button
+                                                  onClick={() => handleDownloadClip(clip)}
+                                                  disabled={!token || downloading[clip.id]}
+                                                  title="Klipni yuklab olish"
+                                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                >
+                                                  {downloading[clip.id] ? (
+                                                    <Loader2 size={12} className="animate-spin" />
+                                                  ) : (
+                                                    <Download size={12} />
+                                                  )}
+                                                  {downloading[clip.id] ? "..." : "Download"}
+                                                </button>
+                                                <button
+                                                  onClick={() => openModal(clip)}
+                                                  disabled={uploading[clip.id]}
+                                                  title="Ijtimoiy tarmoqlarga yuklash"
+                                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50"
+                                                >
+                                                  {uploading[clip.id] ? (
+                                                    <Loader2 size={12} className="animate-spin" />
+                                                  ) : (
+                                                    <Upload size={12} />
+                                                  )}
+                                                  {uploading[clip.id] ? "..." : "Publish"}
+                                                </button>
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1083,7 +1342,7 @@ export default function AdminClipsPage() {
               <div>
                 <h2 className="text-white font-semibold text-sm">Ijtimoiy tarmoqlarga yuklash</h2>
                 <p className="text-gray-500 text-xs mt-0.5 truncate max-w-[220px]">
-                  {modal.clip.movie_title} — klip #{modal.clip.sequence}
+                  {getClipDisplayTitle(modal.clip)} — klip #{getClipSequence(modal.clip)}
                 </p>
               </div>
               <button
