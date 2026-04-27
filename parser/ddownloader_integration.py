@@ -30,6 +30,7 @@ import logging
 import time
 import requests
 import threading
+import shutil
 from urllib.parse import quote
 from dataclasses import dataclass
 from typing import Optional
@@ -120,12 +121,14 @@ class DDownloaderIntegration:
         self._n_m3u8dl_path = self._find_n_m3u8dl_re()
         self._aria2c_path = self._find_aria2c()
         self._ffmpeg_path = self._find_ffmpeg()
+        self._ffprobe_path = self._find_ffprobe()
         
         # Log initialization status
         logger.info(f"[DDOWNLOADER] Initialized with download_dir={self.download_dir}")
         logger.info(f"[DDOWNLOADER] N_m3u8DL-RE: {self._n_m3u8dl_path}")
         logger.info(f"[DDOWNLOADER] aria2c: {self._aria2c_path}")
         logger.info(f"[DDOWNLOADER] ffmpeg: {self._ffmpeg_path}")
+        logger.info(f"[DDOWNLOADER] ffprobe: {self._ffprobe_path}")
     
     def _find_bin_directory(self) -> str:
         """Find the DDownloader bin directory"""
@@ -204,6 +207,22 @@ class DDownloaderIntegration:
                 return common_path
         
         return 'ffmpeg'  # Let it fail naturally if not found
+
+    def _find_ffprobe(self) -> str:
+        ffprobe_name = 'ffprobe.exe' if os.name == 'nt' else 'ffprobe'
+        if self._ffmpeg_path:
+            sibling = os.path.join(os.path.dirname(self._ffmpeg_path), ffprobe_name)
+            if os.path.exists(sibling):
+                return sibling
+
+        result = subprocess.run(['which', 'ffprobe'], capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.strip()
+
+        for common_path in ['/usr/bin/ffprobe', '/usr/local/bin/ffprobe']:
+            if os.path.exists(common_path):
+                return common_path
+        return ""
     
     def detect_url_type(self, url: str) -> str:
         """
@@ -320,6 +339,127 @@ class DDownloaderIntegration:
         
         logger.info(f"[VALIDATE] File valid: {path} ({file_size} bytes)")
         return True, ""
+
+    def validate_final_video_file(self, path: str, min_size: int = 10 * 1024 * 1024) -> tuple[bool, str]:
+        is_valid, error_msg = self.validate_downloaded_file(path, min_size=min_size)
+        if not is_valid:
+            return False, error_msg
+
+        if not self._ffprobe_path:
+            return True, ""
+
+        try:
+            result = subprocess.run(
+                [
+                    self._ffprobe_path,
+                    "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+        except Exception as exc:
+            logger.warning(f"[VALIDATE] ffprobe failed for {path}: {exc}")
+            return True, ""
+
+        if result.returncode != 0:
+            logger.warning(f"[VALIDATE] ffprobe returned {result.returncode} for {path}: {result.stderr[:200]}")
+            return True, ""
+
+        try:
+            duration_seconds = float((result.stdout or "").strip())
+        except ValueError:
+            return True, ""
+
+        if duration_seconds <= 10:
+            return False, f"video duration too short ({duration_seconds:.2f}s): {path}"
+        return True, ""
+
+    def _detect_final_download_file(self, save_dir: str, output_name: str) -> str:
+        stem = os.path.splitext(output_name)[0]
+        files = sorted(os.listdir(save_dir)) if os.path.isdir(save_dir) else []
+        logger.info(f"[DOWNLOAD FILES] job_id={stem} files={files}")
+
+        exact_mp4 = os.path.abspath(os.path.join(save_dir, f"{stem}.mp4"))
+        exact_mux = os.path.abspath(os.path.join(save_dir, f"{stem}.MUX.mp4"))
+
+        def valid(path: str) -> bool:
+            return os.path.exists(path) and os.path.isfile(path) and os.path.getsize(path) > 0
+
+        candidates = []
+        if valid(exact_mp4):
+            candidates.append(exact_mp4)
+        if valid(exact_mux):
+            candidates.append(exact_mux)
+
+        for name in files:
+            full = os.path.abspath(os.path.join(save_dir, name))
+            if not name.startswith(stem) or not valid(full):
+                continue
+            if name.endswith(".MUX.mp4"):
+                candidates.append(full)
+        for name in files:
+            full = os.path.abspath(os.path.join(save_dir, name))
+            if not name.startswith(stem) or not valid(full):
+                continue
+            if name.endswith(".mp4"):
+                candidates.append(full)
+
+        matching_files = []
+        for name in files:
+            full = os.path.abspath(os.path.join(save_dir, name))
+            if name.startswith(stem) and valid(full):
+                matching_files.append(full)
+        if matching_files:
+            candidates.append(max(matching_files, key=os.path.getsize))
+
+        seen = set()
+        ordered = []
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            ordered.append(candidate)
+
+        if not ordered:
+            raise DDdownloaderIntegrationError(
+                f"N_m3u8DL-RE reported success but output file not found for stem={stem}"
+            )
+
+        final_path = ordered[0]
+        if final_path.endswith(".MUX.mp4") and final_path != exact_mp4:
+            logger.info(f"[DOWNLOAD RENAME] from={final_path} to={exact_mp4}")
+            if os.path.exists(exact_mp4):
+                os.remove(exact_mp4)
+            os.replace(final_path, exact_mp4)
+            final_path = exact_mp4
+
+        logger.info(f"[DOWNLOAD FINAL DETECTED] job_id={stem} final={final_path}")
+        return final_path
+
+    def _cleanup_download_artifacts(self, save_dir: str, output_name: str, final_path: str):
+        stem = os.path.splitext(output_name)[0]
+        if not os.path.isdir(save_dir):
+            return
+        for name in os.listdir(save_dir):
+            if not name.startswith(stem):
+                continue
+            path = os.path.abspath(os.path.join(save_dir, name))
+            if path == os.path.abspath(final_path):
+                continue
+            if os.path.isdir(path):
+                if name.endswith(".tmp") or name.endswith(".cache"):
+                    shutil.rmtree(path, ignore_errors=True)
+                continue
+            if name.endswith((".ts", ".m4s", ".tmp", ".part", ".aria2", ".MUX.mp4")):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
     
     def _download_with_ddownloader(
         self,
@@ -406,6 +546,7 @@ class DDownloaderIntegration:
         # Single-line investigation marker. Pairs with the [DOWNLOAD START]
         # log emitted by the outer downloader so a 0%-stuck job's full
         # request shape (URL + Referer + Origin) is grep-able from one place.
+        logger.info(f"[DOWNLOAD START] job_id={os.path.splitext(output_name)[0]} url={url}")
         logger.info(f"[DOWNLOAD] url={url}")
         logger.info(f"[HEADERS] referer={referer or '<none>'} origin={origin or '<none>'}")
         logger.info(f"[DDOWNLOADER] Executing: {' '.join(cmd[:6])}...")
@@ -567,25 +708,17 @@ class DDownloaderIntegration:
                     f"manifest probably unreachable or returned non-HLS content"
                 )
 
+            logger.info(f"[DOWNLOAD DONE] job_id={os.path.splitext(output_name)[0]} exit_code={process.returncode}")
+
             if process.returncode != 0:
                 stderr_preview = stderr[:500] if stderr else "No stderr"
                 logger.error(f"[DDOWNLOADER] N_m3u8DL-RE failed: {stderr_preview}")
                 raise DDdownloaderIntegrationError(f"N_m3u8DL-RE failed with code {process.returncode}: {stderr_preview}")
 
             logger.info(f"[DDOWNLOADER] N_m3u8DL-RE completed successfully")
-
-            # Find the output file (N_m3u8DL-RE outputs with .mp4 extension)
-            expected_output = os.path.join(save_dir, f"{output_name}.mp4")
-            
-            if os.path.exists(expected_output):
-                return expected_output
-            
-            # Try to find any new mp4 in the directory
-            for f in os.listdir(save_dir):
-                if f.endswith('.mp4') and f.startswith(output_name):
-                    return os.path.join(save_dir, f)
-            
-            raise DDdownloaderIntegrationError(f"N_m3u8DL-RE reported success but output file not found: {expected_output}")
+            final_path = self._detect_final_download_file(save_dir, output_name)
+            self._cleanup_download_artifacts(save_dir, output_name, final_path)
+            return final_path
             
         except subprocess.TimeoutExpired:
             logger.error("[DDOWNLOADER] Download timed out")
@@ -1631,7 +1764,7 @@ class DDownloaderIntegration:
                     raise DDdownloaderIntegrationError(f"Unsupported stream type: {stream_type}")
                 
                 # Validate downloaded file
-                is_valid, error_msg = self.validate_downloaded_file(path)
+                is_valid, error_msg = self.validate_final_video_file(path)
                 if not is_valid:
                     raise DDdownloaderIntegrationError(f"Validation failed: {error_msg}")
                 
@@ -1639,6 +1772,7 @@ class DDownloaderIntegration:
                 file_size = os.path.getsize(path)
                 download_duration = time.time() - start_time
                 
+                logger.info(f"[DOWNLOAD VALIDATED] job_id={os.path.splitext(output_name)[0]} size={file_size}")
                 logger.info(f"[DDOWNLOADER] Download validated successfully: {path} ({file_size} bytes)")
                 path = os.path.abspath(path)
                 

@@ -33,6 +33,22 @@ type IngestionHandler struct {
 }
 
 func resolveCompletedDownloadPath(jobID, rawPath string) string {
+	canonicalize := func(path string) string {
+		if !strings.HasSuffix(path, ".MUX.mp4") {
+			return path
+		}
+		canonical := strings.TrimSuffix(path, ".MUX.mp4") + ".mp4"
+		if _, err := os.Stat(path); err == nil {
+			if _, dstErr := os.Stat(canonical); dstErr != nil {
+				log.Printf("[DOWNLOAD RENAME] from=%s to=%s", path, canonical)
+				if renameErr := os.Rename(path, canonical); renameErr == nil {
+					return canonical
+				}
+			}
+		}
+		return path
+	}
+
 	candidates := []string{}
 	if strings.TrimSpace(rawPath) != "" {
 		candidates = append(candidates, rawPath)
@@ -67,7 +83,7 @@ func resolveCompletedDownloadPath(jobID, rawPath string) string {
 		}
 		seen[absPath] = struct{}{}
 		if info, statErr := os.Stat(absPath); statErr == nil && !info.IsDir() && info.Size() > 0 {
-			return absPath
+			return canonicalize(absPath)
 		}
 	}
 	return ""
@@ -941,11 +957,12 @@ func (h *IngestionHandler) UpdateJobProgress(c *gin.Context) {
 					"file_path":            resolvedPath,
 					"downloaded_file_path": resolvedPath,
 					"status":               models.IngestionStatusReadyToProcess,
-					"stage":                "ready_to_process",
-					"progress":             100,
+					"stage":                "processing",
+					"progress":             progressValue,
 					"updated_at":           time.Now(),
 					"error":                "",
 					"steps.download":       true,
+					"steps.process":        false,
 				},
 				"$unset": bson.M{
 					"completed_at": "",

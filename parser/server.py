@@ -149,6 +149,20 @@ def build_job_output_name(job_id: str, fallback: str = "download") -> str:
 
 
 def resolve_downloaded_artifact(job_id: str, raw_path: str = "") -> str:
+    def _canonicalize(path: str) -> str:
+        path = os.path.abspath(path)
+        if not path.endswith(".MUX.mp4"):
+            return path
+        canonical = path[:-8] + ".mp4"
+        try:
+            if os.path.exists(path) and (not os.path.exists(canonical) or os.path.getsize(canonical) <= 0):
+                logger.info(f"[DOWNLOAD RENAME] from={path} to={canonical}")
+                os.replace(path, canonical)
+                return canonical
+        except OSError:
+            pass
+        return path
+
     candidates = []
     if raw_path:
         candidates.append(os.path.abspath(raw_path))
@@ -167,7 +181,7 @@ def resolve_downloaded_artifact(job_id: str, raw_path: str = "") -> str:
             continue
         seen.add(path)
         if os.path.exists(path) and os.path.isfile(path) and os.path.getsize(path) > 0:
-            return os.path.abspath(path)
+            return _canonicalize(path)
     return ""
 
 

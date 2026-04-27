@@ -426,6 +426,20 @@ def _with_path_aliases(payload: dict, file_path: str) -> dict:
 
 
 def _resolve_completed_download_path(job_id: str, candidate_path: str, download_dir: str) -> str:
+    def _canonicalize(path: str) -> str:
+        path = _ensure_absolute_file_path(path)
+        if not path.endswith(".MUX.mp4"):
+            return path
+        canonical = path[:-8] + ".mp4"
+        try:
+            if os.path.exists(path) and (not os.path.exists(canonical) or os.path.getsize(canonical) <= 0):
+                logger.info(f"[DOWNLOAD RENAME] from={path} to={canonical}")
+                os.replace(path, canonical)
+                return canonical
+        except OSError:
+            pass
+        return path
+
     candidates = []
     if candidate_path:
         candidates.append(_ensure_absolute_file_path(candidate_path))
@@ -443,7 +457,7 @@ def _resolve_completed_download_path(job_id: str, candidate_path: str, download_
             continue
         seen.add(path)
         if os.path.exists(path) and os.path.isfile(path) and os.path.getsize(path) > 0:
-            return path
+            return _canonicalize(path)
     return ""
 
 
@@ -479,12 +493,17 @@ def _send_final_download_updates(job_id: str, local_path: str, file_size: int):
 
     report_progress_to_backend(job_id, _with_path_aliases({
         "stage": "processing",
-        "status": "processing",
-        "progress": 100,
+        "status": "ready_to_process",
+        "progress": 0,
         "downloaded_bytes": file_size,
         "total_bytes": file_size,
+        "speed_mbps": 0,
+        "eta_seconds": 0,
+        "steps_download": True,
+        "steps_process": False,
         "message": "Download finished, starting processing",
     }, resolved_path))
+    logger.info(f"[DOWNLOAD DB UPDATE] job_id={job_id} status=ready_to_process local_path={resolved_path}")
 
 
 def report_progress_to_backend(job_id: str, progress_data: dict):

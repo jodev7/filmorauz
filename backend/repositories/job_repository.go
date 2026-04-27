@@ -35,8 +35,24 @@ func resolveExistingLocalPath(path string) string {
 }
 
 func resolveExistingDownloadedArtifact(jobID, rawPath string) string {
+	canonicalize := func(path string) string {
+		if !strings.HasSuffix(path, ".MUX.mp4") {
+			return path
+		}
+		canonical := strings.TrimSuffix(path, ".MUX.mp4") + ".mp4"
+		if _, err := os.Stat(path); err == nil {
+			if _, dstErr := os.Stat(canonical); dstErr != nil {
+				log.Printf("[DOWNLOAD RENAME] from=%s to=%s", path, canonical)
+				if renameErr := os.Rename(path, canonical); renameErr == nil {
+					return canonical
+				}
+			}
+		}
+		return path
+	}
+
 	if verified := resolveExistingLocalPath(rawPath); verified != "" {
-		return verified
+		return canonicalize(verified)
 	}
 
 	downloadDir := os.Getenv("DOWNLOAD_DIR")
@@ -55,14 +71,14 @@ func resolveExistingDownloadedArtifact(jobID, rawPath string) string {
 	}
 	for _, candidate := range preferred {
 		if verified := resolveExistingLocalPath(candidate); verified != "" {
-			return verified
+			return canonicalize(verified)
 		}
 	}
 
 	matches, _ := filepath.Glob(filepath.Join(downloadDir, base+"*"))
 	for _, match := range matches {
 		if verified := resolveExistingLocalPath(match); verified != "" {
-			return verified
+			return canonicalize(verified)
 		}
 	}
 	return ""
@@ -657,12 +673,13 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 			}
 			log.Printf("[DOWNLOAD] verified file exists job=%s file=%s", id, verifiedPath)
 			update["$set"].(bson.M)["steps.download"] = true
-			update["$set"].(bson.M)["progress"] = 100
+			update["$set"].(bson.M)["progress"] = normalizedProgress
 			update["$set"].(bson.M)["status"] = string(models.IngestionStatusReadyToProcess)
-			update["$set"].(bson.M)["stage"] = string(models.IngestionStatusReadyToProcess)
+			update["$set"].(bson.M)["stage"] = "processing"
 			update["$set"].(bson.M)["local_path"] = verifiedPath
 			update["$set"].(bson.M)["file_path"] = verifiedPath
 			update["$set"].(bson.M)["downloaded_file_path"] = verifiedPath
+			update["$set"].(bson.M)["steps.process"] = false
 			update["$set"].(bson.M)["error"] = ""
 			log.Printf("[DOWNLOAD] moved to ready_to_process job=%s file=%s", id, verifiedPath)
 		}
