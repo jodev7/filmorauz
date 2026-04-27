@@ -24,6 +24,23 @@ func telegramMediaArgs(mediaURL, mediaType string) (imageURL, videoURL string) {
 	return mediaURL, ""
 }
 
+// sanitizeAdMediaURL strips the legacy "/media/" prefix from path-only URLs
+// so the value stored in MongoDB matches the canonical form (/images/..., /videos/...).
+// Absolute URLs (http/https) and empty strings pass through unchanged.
+func sanitizeAdMediaURL(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return value
+	}
+	if strings.HasPrefix(value, "/media/") {
+		return "/" + strings.TrimPrefix(value, "/media/")
+	}
+	return value
+}
+
 type AdHandler struct {
 	adRepo          *repositories.AdRepository
 	telegram        *services.TelegramService
@@ -129,8 +146,8 @@ func (h *AdHandler) AdminCreateAd(c *gin.Context) {
 	ad := &models.Ad{
 		Title:                  req.Title,
 		Description:            req.Description,
-		ImageURL:               req.ImageURL,
-		VideoURL:               req.VideoURL,
+		ImageURL:               sanitizeAdMediaURL(req.ImageURL),
+		VideoURL:               sanitizeAdMediaURL(req.VideoURL),
 		TargetURL:              req.TargetURL,
 		CallToAction:           req.CallToAction,
 		Placements:             req.Placements,
@@ -140,17 +157,17 @@ func (h *AdHandler) AdminCreateAd(c *gin.Context) {
 		DurationDays:           req.DurationDays,
 		Price:                  req.Price,
 		Priority:               req.Priority,
-		BannerMediaURL:         req.BannerMediaURL,
+		BannerMediaURL:         sanitizeAdMediaURL(req.BannerMediaURL),
 		BannerMediaType:        req.BannerMediaType,
-		InlineMediaURL:         req.InlineMediaURL,
+		InlineMediaURL:         sanitizeAdMediaURL(req.InlineMediaURL),
 		InlineMediaType:        req.InlineMediaType,
-		FixedBottomMediaURL:    req.FixedBottomMediaURL,
+		FixedBottomMediaURL:    sanitizeAdMediaURL(req.FixedBottomMediaURL),
 		FixedBottomMediaType:   req.FixedBottomMediaType,
-		PopupMediaURL:          req.PopupMediaURL,
+		PopupMediaURL:          sanitizeAdMediaURL(req.PopupMediaURL),
 		PopupMediaType:         req.PopupMediaType,
-		PlayerOverlayMediaURL:  req.PlayerOverlayMediaURL,
+		PlayerOverlayMediaURL:  sanitizeAdMediaURL(req.PlayerOverlayMediaURL),
 		PlayerOverlayMediaType: req.PlayerOverlayMediaType,
-		TelegramMediaURL:       req.TelegramMediaURL,
+		TelegramMediaURL:       sanitizeAdMediaURL(req.TelegramMediaURL),
 		TelegramMediaType:      req.TelegramMediaType,
 		TelegramChannels:       req.TelegramChannels,
 		TelegramBotEnabled:     req.TelegramBotEnabled,
@@ -215,8 +232,8 @@ func (h *AdHandler) AdminUpdateAd(c *gin.Context) {
 		update["title"] = req.Title
 	}
 	update["description"] = req.Description
-	update["image_url"] = req.ImageURL
-	update["video_url"] = req.VideoURL
+	update["image_url"] = sanitizeAdMediaURL(req.ImageURL)
+	update["video_url"] = sanitizeAdMediaURL(req.VideoURL)
 	if req.TargetURL != "" {
 		update["target_url"] = req.TargetURL
 	}
@@ -233,17 +250,17 @@ func (h *AdHandler) AdminUpdateAd(c *gin.Context) {
 	if req.Priority != nil {
 		update["priority"] = *req.Priority
 	}
-	update["banner_media_url"] = req.BannerMediaURL
+	update["banner_media_url"] = sanitizeAdMediaURL(req.BannerMediaURL)
 	update["banner_media_type"] = req.BannerMediaType
-	update["inline_media_url"] = req.InlineMediaURL
+	update["inline_media_url"] = sanitizeAdMediaURL(req.InlineMediaURL)
 	update["inline_media_type"] = req.InlineMediaType
-	update["fixed_bottom_media_url"] = req.FixedBottomMediaURL
+	update["fixed_bottom_media_url"] = sanitizeAdMediaURL(req.FixedBottomMediaURL)
 	update["fixed_bottom_media_type"] = req.FixedBottomMediaType
-	update["popup_media_url"] = req.PopupMediaURL
+	update["popup_media_url"] = sanitizeAdMediaURL(req.PopupMediaURL)
 	update["popup_media_type"] = req.PopupMediaType
-	update["player_overlay_media_url"] = req.PlayerOverlayMediaURL
+	update["player_overlay_media_url"] = sanitizeAdMediaURL(req.PlayerOverlayMediaURL)
 	update["player_overlay_media_type"] = req.PlayerOverlayMediaType
-	update["telegram_media_url"] = req.TelegramMediaURL
+	update["telegram_media_url"] = sanitizeAdMediaURL(req.TelegramMediaURL)
 	update["telegram_media_type"] = req.TelegramMediaType
 	if req.TelegramChannels != nil {
 		update["telegram_channels"] = req.TelegramChannels

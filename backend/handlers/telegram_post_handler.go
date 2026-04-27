@@ -224,7 +224,11 @@ func normalizeTelegramPostImageURL(raw string) string {
 	if value == "" {
 		return ""
 	}
-	if strings.HasPrefix(value, "/media/") || strings.HasPrefix(value, "/uploads/") {
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return value
+	}
+	value = stripMediaPrefix(value)
+	if strings.HasPrefix(value, "/uploads/") {
 		return value
 	}
 
@@ -232,10 +236,7 @@ func normalizeTelegramPostImageURL(raw string) string {
 	if !ok {
 		return value
 	}
-	if strings.HasPrefix(mediaPath, "/telegram-posts/") || strings.HasPrefix(mediaPath, "/images/telegram-posts/") {
-		return "/media" + mediaPath
-	}
-	return value
+	return mediaPath
 }
 
 func absoluteTelegramPostImageURL(raw string) string {
@@ -246,18 +247,25 @@ func absoluteTelegramPostImageURL(raw string) string {
 	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
 		return value
 	}
-	if strings.HasPrefix(value, "/uploads/") {
-		cfg := config.Current()
-		if cfg != nil {
-			return strings.TrimSuffix(cfg.GetBaseURL(), "/") + strings.TrimPrefix(value, "/uploads")
-		}
+	value = stripMediaPrefix(value)
+	cfg := config.Current()
+	if cfg == nil {
 		return value
 	}
+	if strings.HasPrefix(value, "/uploads/") {
+		return strings.TrimSuffix(cfg.GetBaseURL(), "/") + strings.TrimPrefix(value, "/uploads")
+	}
+	if strings.HasPrefix(value, "/") {
+		return cfg.GetCDNFileURL(strings.TrimPrefix(value, "/"))
+	}
+	return value
+}
+
+// stripMediaPrefix removes a leading "/media/" segment from a path-only URL.
+// Used to clean legacy values that were saved with the deprecated protected-media prefix.
+func stripMediaPrefix(value string) string {
 	if strings.HasPrefix(value, "/media/") {
-		cfg := config.Current()
-		if cfg != nil && strings.TrimSpace(cfg.BaseSiteURL) != "" {
-			return strings.TrimSuffix(cfg.BaseSiteURL, "/") + value
-		}
+		return "/" + strings.TrimPrefix(value, "/media/")
 	}
 	return value
 }

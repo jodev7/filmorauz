@@ -196,6 +196,19 @@ func main() {
 		log.Printf("Warning: Failed to ensure ad indexes: %v", err)
 	}
 
+	// One-shot migration: strip legacy "/media/" prefix from stored image/video URLs
+	// so API responses match the canonical "/images/..." form the frontend expects.
+	if migrated, err := adRepo.StripLegacyMediaPrefix(); err != nil {
+		log.Printf("Warning: ad /media/ prefix migration failed: %v", err)
+	} else if migrated > 0 {
+		log.Printf("[MIGRATION] Stripped legacy /media/ prefix from %d ad media URL(s)", migrated)
+	}
+	if migrated, err := telegramPostRepo.StripLegacyMediaPrefix(); err != nil {
+		log.Printf("Warning: telegram_posts /media/ prefix migration failed: %v", err)
+	} else if migrated > 0 {
+		log.Printf("[MIGRATION] Stripped legacy /media/ prefix from %d telegram post image_url(s)", migrated)
+	}
+
 	// Notification handler
 	notificationHandler := handlers.NewNotificationHandler(notificationService)
 

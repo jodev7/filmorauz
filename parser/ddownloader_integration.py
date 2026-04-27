@@ -47,6 +47,15 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 DEFAULT_TIMEOUT = 60
 PARALLEL_CONNECTIONS = 16  # For aria2c
 
+# Stuck-state watchdog window for manifest downloads (N_m3u8DL-RE / ffmpeg HLS).
+# If no bytes are written to the save dir / output file within this many
+# seconds of the process starting, the attempt is killed so the strategy
+# loop can move on to the next fallback. Configurable so ops can tune it
+# without redeploying. Default is intentionally aggressive — manifests that
+# haven't produced a single byte in N seconds are almost always blocked at
+# the network layer (TLS handshake stuck, 403 returned as HTML, etc.).
+M3U8_STUCK_TIMEOUT_SECONDS = int(os.environ.get("M3U8_STUCK_TIMEOUT_SECONDS", "10"))
+
 
 class StreamType(Enum):
     """Supported stream types"""
@@ -371,25 +380,34 @@ class DDownloaderIntegration:
             "--log-level", "INFO",  # Enable logging for progress
         ]
         
-        # Add referer header if provided
+        # Build the full CDN header set (Referer + Origin + UA + Accept).
+        # Origin is derived from referer's scheme+host so freekino /
+        # asilmedia / etc. all work without a per-domain branch — the
+        # uzmovi-only "if 'uzmovi' in referer" check left every other CDN
+        # serving 0 bytes / 403.
+        origin = ""
         if referer:
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(referer)
+                if parsed.scheme and parsed.netloc:
+                    origin = f"{parsed.scheme}://{parsed.netloc}"
+            except Exception:
+                origin = ""
             cmd.extend(["-H", f"Referer: {referer}"])
-            # Also add Origin header for CORS
-            if "uzmovi" in referer.lower():
-                cmd.extend(["-H", f"Origin: {referer.rstrip('/')}"])
-        
-        # Add headers for common scenarios
+            if origin:
+                cmd.extend(["-H", f"Origin: {origin}"])
+
         cmd.extend(["-H", f"User-Agent: {USER_AGENT}"])
-        
-        # Add Accept header
         cmd.extend(["-H", "Accept: */*"])
-        
-        # Add Accept-Language header
         cmd.extend(["-H", "Accept-Language: en-US,en;q=0.9"])
-        
-        # Add Connection header
         cmd.extend(["-H", "Connection: keep-alive"])
-        
+
+        # Single-line investigation marker. Pairs with the [DOWNLOAD START]
+        # log emitted by the outer downloader so a 0%-stuck job's full
+        # request shape (URL + Referer + Origin) is grep-able from one place.
+        logger.info(f"[DOWNLOAD] url={url}")
+        logger.info(f"[HEADERS] referer={referer or '<none>'} origin={origin or '<none>'}")
         logger.info(f"[DDOWNLOADER] Executing: {' '.join(cmd[:6])}...")
         
         # Progress tracking for N_m3u8DL-RE downloads
@@ -407,11 +425,61 @@ class DDownloaderIntegration:
                 bufsize=1,  # Line buffered
                 cwd=save_dir
             )
-            
+
             downloaded_bytes = 0
             total_bytes = 0
             last_progress_reported = -1
-            
+
+            # === Stuck-at-0 watchdog ===
+            # Polls save_dir every second and tracks the largest segment file.
+            # If no bytes appear within M3U8_STUCK_TIMEOUT_SECONDS, kill
+            # N_m3u8DL-RE so the outer strategy loop tries the next fallback
+            # (m3u8 ffmpeg, alternative direct mp4) instead of sitting at 0%.
+            _stop_watchdog = threading.Event()
+            _killed_for_stuck = threading.Event()
+
+            def _watchdog():
+                start = time.time()
+                while not _stop_watchdog.is_set():
+                    if _stop_watchdog.wait(timeout=1):
+                        break
+                    try:
+                        sizes = []
+                        if os.path.isdir(save_dir):
+                            for entry in os.listdir(save_dir):
+                                # Look at any file the downloader is writing —
+                                # tmp segments, partial mp4, etc.
+                                if entry.startswith(output_name) or entry.endswith(('.ts', '.m4s', '.tmp', '.mp4')):
+                                    full = os.path.join(save_dir, entry)
+                                    try:
+                                        sizes.append(os.path.getsize(full))
+                                    except OSError:
+                                        pass
+                        max_size = max(sizes) if sizes else 0
+                    except OSError:
+                        max_size = 0
+
+                    if max_size > 0:
+                        # Bytes are flowing — let the download run to completion;
+                        # other timeouts (curl --speed-time analogues, ffmpeg
+                        # exit) handle later stalls.
+                        return
+
+                    if time.time() - start >= M3U8_STUCK_TIMEOUT_SECONDS:
+                        logger.warning(
+                            f"[DDOWNLOADER] N_m3u8DL-RE produced 0 bytes after "
+                            f"{M3U8_STUCK_TIMEOUT_SECONDS}s — killing process"
+                        )
+                        _killed_for_stuck.set()
+                        try:
+                            process.kill()
+                        except Exception:
+                            pass
+                        return
+
+            watchdog_thread = threading.Thread(target=_watchdog, daemon=True)
+            watchdog_thread.start()
+
             # Parse stderr for progress information
             import re
             size_pattern = re.compile(r'(\d+(?:\.\d+)?)\s*(B|KB|MB|GB)', re.IGNORECASE)
@@ -490,14 +558,22 @@ class DDownloaderIntegration:
             
             # Wait for process to complete
             stdout, stderr = process.communicate()
-            
+            _stop_watchdog.set()
+            watchdog_thread.join(timeout=2)
+
+            if _killed_for_stuck.is_set():
+                raise DDdownloaderIntegrationError(
+                    f"N_m3u8DL-RE stalled at 0 bytes for {M3U8_STUCK_TIMEOUT_SECONDS}s — "
+                    f"manifest probably unreachable or returned non-HLS content"
+                )
+
             if process.returncode != 0:
                 stderr_preview = stderr[:500] if stderr else "No stderr"
                 logger.error(f"[DDOWNLOADER] N_m3u8DL-RE failed: {stderr_preview}")
                 raise DDdownloaderIntegrationError(f"N_m3u8DL-RE failed with code {process.returncode}: {stderr_preview}")
-            
+
             logger.info(f"[DDOWNLOADER] N_m3u8DL-RE completed successfully")
-            
+
             # Find the output file (N_m3u8DL-RE outputs with .mp4 extension)
             expected_output = os.path.join(save_dir, f"{output_name}.mp4")
             
@@ -569,15 +645,29 @@ class DDownloaderIntegration:
             "-loglevel", "info",
         ]
         
-        # Add headers if referer is provided
+        # ffmpeg requires every custom header in a single -headers blob.
+        # Origin is derived from any referer (not just uzmovi) so other
+        # CDNs that gate playback on Origin will also serve bytes.
+        origin = ""
+        header_lines = []
         if referer:
-            cmd.extend(["-headers", f"Referer: {referer}\r\n"])
-            if "uzmovi" in referer.lower():
-                cmd.extend(["-headers", f"Origin: {referer.rstrip('/')}\r\n"])
-        
-        # Add User-Agent header
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(referer)
+                if parsed.scheme and parsed.netloc:
+                    origin = f"{parsed.scheme}://{parsed.netloc}"
+            except Exception:
+                origin = ""
+            header_lines.append(f"Referer: {referer}")
+            if origin:
+                header_lines.append(f"Origin: {origin}")
+        header_lines.append("Accept: */*")
+        cmd.extend(["-headers", "\r\n".join(header_lines) + "\r\n"])
         cmd.extend(["-user_agent", USER_AGENT])
-        
+
+        logger.info(f"[DOWNLOAD] url={url}")
+        logger.info(f"[HEADERS] referer={referer or '<none>'} origin={origin or '<none>'}")
+
         # Input URL (use encoded URL to handle spaces)
         cmd.extend(["-i", encoded_url])
         
@@ -615,16 +705,49 @@ class DDownloaderIntegration:
                 bufsize=1,
                 cwd=output_dir
             )
-            
+
+            # === Stuck-at-0 watchdog ===
+            # ffmpeg writes the output mp4 incrementally; if it never grows,
+            # the manifest fetch failed silently (TLS hang, redirect loop).
+            # Kill after M3U8_STUCK_TIMEOUT_SECONDS so the next strategy fires.
+            _stop_watchdog = threading.Event()
+            _killed_for_stuck = threading.Event()
+
+            def _watchdog():
+                start = time.time()
+                while not _stop_watchdog.is_set():
+                    if _stop_watchdog.wait(timeout=1):
+                        break
+                    try:
+                        size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+                    except OSError:
+                        size = 0
+                    if size > 0:
+                        return
+                    if time.time() - start >= M3U8_STUCK_TIMEOUT_SECONDS:
+                        logger.warning(
+                            f"[FFMPEG] HLS produced 0 bytes after "
+                            f"{M3U8_STUCK_TIMEOUT_SECONDS}s — killing ffmpeg"
+                        )
+                        _killed_for_stuck.set()
+                        try:
+                            process.kill()
+                        except Exception:
+                            pass
+                        return
+
+            watchdog_thread = threading.Thread(target=_watchdog, daemon=True)
+            watchdog_thread.start()
+
             # Read stderr line by line while process runs
             while True:
                 line = process.stderr.readline()
                 if not line and process.poll() is not None:
                     break
-                
+
                 if line:
                     line = line.strip()
-                    
+
                     # Parse total duration from ffmpeg
                     duration_match = duration_pattern.search(line)
                     if duration_match:
@@ -666,16 +789,24 @@ class DDownloaderIntegration:
             
             # Wait for process to complete
             stdout, stderr = process.communicate()
-            
+            _stop_watchdog.set()
+            watchdog_thread.join(timeout=2)
+
+            if _killed_for_stuck.is_set():
+                raise DDdownloaderIntegrationError(
+                    f"ffmpeg HLS stalled at 0 bytes for {M3U8_STUCK_TIMEOUT_SECONDS}s — "
+                    f"manifest unreachable or returned non-HLS body"
+                )
+
             if process.returncode != 0:
                 stderr_preview = stderr[:1000] if stderr else "No stderr"
                 logger.error(f"[FFMPEG] ffmpeg failed: {stderr_preview}")
                 raise DDdownloaderIntegrationError(f"ffmpeg failed with code {process.returncode}: {stderr_preview}")
-            
+
             # Verify output file exists
             if not os.path.exists(output_path):
                 raise DDdownloaderIntegrationError(f"ffmpeg reported success but output file not found: {output_path}")
-            
+
             logger.info(f"[FFMPEG] Download completed: {output_path}")
             
             # Report completion

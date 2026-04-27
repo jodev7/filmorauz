@@ -60,6 +60,177 @@ g_total_bytes = 0
 g_start_time = 0
 
 
+# Default request/validation timeouts (seconds).
+# These prevent indefinitely hanging connections — every outbound HEAD/GET we
+# make for *validation* must give up quickly so the next strategy can fire.
+URL_PROBE_TIMEOUT = int(os.environ.get("URL_PROBE_TIMEOUT", "12"))
+
+# Stuck-state watchdog window for manifest downloads. If no bytes are written
+# to the output / save dir within this window, the running attempt is killed
+# so the strategy loop can move on. Configurable via env to allow operations
+# to tune without redeploying.
+M3U8_STUCK_TIMEOUT_SECONDS = int(os.environ.get("M3U8_STUCK_TIMEOUT_SECONDS", "10"))
+
+
+def _build_stream_headers(referer: str | None) -> dict:
+    """Return the header bag uzmovi/freekino/asilmedia CDNs require to serve
+    m3u8 manifests *and* the .ts segments that follow.
+
+    Without these headers (especially Referer + Origin), the origin returns
+    0 bytes / 403 / an HTML decoy page and the downloader sits at 0%. Origin
+    is derived from the referer URL so any source page works without a
+    per-domain branch.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "keep-alive",
+    }
+    referer = (referer or "").strip()
+    if referer:
+        headers["Referer"] = referer
+        try:
+            parsed = urlparse(referer)
+            if parsed.scheme and parsed.netloc:
+                headers["Origin"] = f"{parsed.scheme}://{parsed.netloc}"
+        except Exception:
+            pass
+    return headers
+
+
+def _http_variant(url: str) -> str | None:
+    """Return the http:// equivalent of an https:// URL, or None if not applicable.
+
+    Used as a last-ditch fallback when an HTTPS fetch fails (TLS handshake
+    failures, expired/self-signed certs on origin CDNs, sources that only
+    expose HTTP — uzmovi/freekino are common offenders).
+    """
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        return None
+    return "http://" + parsed.netloc + (parsed.path or "") + (
+        ("?" + parsed.query) if parsed.query else ""
+    ) + (("#" + parsed.fragment) if parsed.fragment else "")
+
+
+def _validate_m3u8_url(url: str, referer: str | None = None,
+                       timeout: int = URL_PROBE_TIMEOUT) -> tuple[bool, str, str]:
+    """Probe an m3u8 URL and confirm the body starts with #EXTM3U.
+
+    Returns (ok, status, error_msg).
+    - ok=True  — playlist looks like a valid HLS manifest.
+    - status   — short tag for logs/DB ("ok", "http_NNN", "no_extm3u",
+                 "ssl_error", "connect_error", "timeout", "other").
+    - error_msg — empty on success, concrete reason on failure.
+
+    Failure modes are differentiated so callers can decide whether to retry
+    with the http:// variant (TLS / connect errors), re-extract the URL
+    (no_extm3u / 404 / 403), or surface the error directly.
+    """
+    if not url:
+        return False, "other", "empty url"
+
+    headers = _build_stream_headers(referer)
+
+    try:
+        # stream=True so we can stop after the first chunk; many m3u8
+        # playlists are tiny but some master playlists can be larger.
+        resp = http_session.get(url, headers=headers, stream=True,
+                                timeout=timeout, allow_redirects=True)
+        try:
+            if resp.status_code != 200:
+                return False, f"http_{resp.status_code}", f"playlist returned status {resp.status_code}"
+
+            chunk = next(resp.iter_content(chunk_size=4096), b"") or b""
+            head = chunk.lstrip()  # tolerate BOM / leading whitespace
+            if not head.startswith(b"#EXTM3U"):
+                preview = head[:120].decode("utf-8", errors="replace")
+                return False, "no_extm3u", f"missing #EXTM3U marker (got: {preview!r})"
+            return True, "ok", ""
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+    except requests.exceptions.SSLError as e:
+        return False, "ssl_error", f"ssl error: {e}"
+    except requests.exceptions.ConnectionError as e:
+        return False, "connect_error", f"connect error: {e}"
+    except requests.exceptions.Timeout as e:
+        return False, "timeout", f"timeout after {timeout}s: {e}"
+    except requests.exceptions.RequestException as e:
+        return False, "other", f"request failed: {e}"
+
+
+def _resolve_stream_url(url: str, stream_type: str,
+                        referer: str | None = None) -> tuple[str, str]:
+    """Validate the stream URL and, if needed, fall back to its http:// variant.
+
+    Returns (working_url, validation_note). For non-HLS streams we don't
+    parse the body — just probe the original URL and accept any 2xx.
+    Raises DownloadError if neither variant is reachable so the strategy
+    loop sees a concrete failure ("m3u8 fetch failed: <reason>") instead of
+    silently sitting at 0%.
+    """
+    if not url:
+        raise DownloadError("empty stream URL")
+
+    if stream_type == "hls":
+        ok, status, err = _validate_m3u8_url(url, referer=referer)
+        if ok:
+            return url, "primary_https_ok" if url.startswith("https://") else "primary_ok"
+
+        # Network-layer failure on https → try the http variant before giving up.
+        retry_statuses = {"ssl_error", "connect_error", "timeout"}
+        if status in retry_statuses:
+            alt = _http_variant(url)
+            if alt:
+                logger.warning(
+                    f"[RESOLVE] m3u8 https probe failed ({status}: {err}); retrying with http variant"
+                )
+                ok2, status2, err2 = _validate_m3u8_url(alt, referer=referer)
+                if ok2:
+                    logger.info(f"[RESOLVE] m3u8 http fallback succeeded: {alt[:80]}")
+                    return alt, f"http_fallback_after_{status}"
+                err = f"https {status}: {err}; http {status2}: {err2}"
+
+        raise DownloadError(f"m3u8 fetch failed: {err}")
+
+    # mp4 / dash / ism — light HEAD probe, with http fallback for TLS/connect errors.
+    headers = {"User-Agent": "Mozilla/5.0"}
+    if referer:
+        headers["Referer"] = referer
+    try:
+        resp = http_session.head(url, headers=headers, timeout=URL_PROBE_TIMEOUT, allow_redirects=True)
+        if 200 <= resp.status_code < 400:
+            return url, "head_ok"
+        head_err = f"head returned status {resp.status_code}"
+    except (requests.exceptions.SSLError,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout) as e:
+        head_err = str(e)
+        alt = _http_variant(url)
+        if alt:
+            logger.warning(f"[RESOLVE] {stream_type} https probe failed ({e}); retrying with http variant")
+            try:
+                resp = http_session.head(alt, headers=headers, timeout=URL_PROBE_TIMEOUT, allow_redirects=True)
+                if 200 <= resp.status_code < 400:
+                    return alt, "http_fallback"
+                head_err = f"http fallback returned {resp.status_code}"
+            except requests.exceptions.RequestException as e2:
+                head_err = f"https: {e}; http: {e2}"
+    except requests.exceptions.RequestException as e:
+        head_err = str(e)
+
+    # Probe failed but downloaders are sometimes more lenient than HEAD —
+    # don't block here. Just log and pass the original URL through.
+    logger.warning(f"[RESOLVE] {stream_type} URL probe inconclusive: {head_err} (continuing with original URL)")
+    return url, f"probe_failed:{head_err[:120]}"
+
+
 def _check_range_support(url: str, headers: dict) -> tuple[bool, int]:
     """
     Check if server supports HTTP Range requests.
@@ -927,28 +1098,38 @@ class DownloaderService:
                 "message": "Starting HLS download with ffmpeg..."
             })
         
-        # Build ffmpeg command for HLS download
-        # Use -i for input, -c copy for fast re-mux (no re-encoding)
-        # -bsf:a aac_adtstoasc fixes some AAC issues
-        # -y to overwrite output file
-        cmd = [
-            "ffmpeg",
-            "-y",  # Overwrite output
-            "-i", url,  # Input URL
-            "-c", "copy",  # Copy streams without re-encoding (fast)
+        # Headers required by uzmovi/freekino/asilmedia CDNs. Without
+        # Referer + Origin the manifest *and* every .ts segment come back
+        # 0 bytes / 403, which is exactly the "stuck at 0%" symptom.
+        # ffmpeg applies -headers/-user_agent to both the manifest fetch
+        # and the inner segment fetches, so a single set covers the whole
+        # HLS download.
+        stream_headers = _build_stream_headers(referer)
+        ua = stream_headers.pop("User-Agent")
+        headers_str = "".join(f"{k}: {v}\r\n" for k, v in stream_headers.items())
+
+        logger.info(f"[DOWNLOAD] url={url}")
+        logger.info(
+            f"[HEADERS] referer={stream_headers.get('Referer', '<none>')} "
+            f"origin={stream_headers.get('Origin', '<none>')} ua={ua[:40]}..."
+        )
+
+        cmd = ["ffmpeg", "-y"]
+        cmd.extend(["-user_agent", ua])
+        if headers_str:
+            cmd.extend(["-headers", headers_str])
+        cmd.extend([
+            "-i", url,                # Input URL
+            "-c", "copy",             # Copy streams without re-encoding (fast)
             "-bsf:a", "aac_adtstoasc",  # Fix AAC bitstream filter
-            "-progress", "pipe:1",  # Output progress to stdout
-            "-nostats",  # Suppress default stats
-            output_path  # Output file
-        ]
-        
-        # Add referer header if provided
+            "-progress", "pipe:1",    # Output progress to stdout
+            "-nostats",               # Suppress default stats
+            output_path,              # Output file
+        ])
+
+        # Inherit env unchanged — headers go through ffmpeg flags now, not env.
         env = os.environ.copy()
-        if referer:
-            # ffmpeg doesn't support -headers directly in all versions
-            # Use environment variable approach
-            logger.info(f"[DOWNLOAD] Using referer: {referer[:50]}...")
-        
+
         try:
             logger.info(f"[DOWNLOAD] Starting ffmpeg HLS download: {output_path}")
             logger.info(f"[DOWNLOAD] FFmpeg command: {' '.join(cmd[:5])}...")
@@ -976,6 +1157,38 @@ class DownloaderService:
 
             stderr_thread = threading.Thread(target=consume_stderr, daemon=True)
             stderr_thread.start()
+
+            # Stuck-at-0 watchdog: kill ffmpeg if the output file hasn't grown
+            # past 0 bytes within M3U8_STUCK_TIMEOUT_SECONDS so the strategy
+            # loop can move on instead of waiting on a hung TLS handshake.
+            _stop_watchdog = threading.Event()
+            _killed_for_stuck = threading.Event()
+
+            def _watchdog():
+                start = time.time()
+                while not _stop_watchdog.is_set():
+                    if _stop_watchdog.wait(timeout=1):
+                        break
+                    try:
+                        size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+                    except OSError:
+                        size = 0
+                    if size > 0:
+                        return
+                    if time.time() - start >= M3U8_STUCK_TIMEOUT_SECONDS:
+                        logger.warning(
+                            f"[DOWNLOAD] FFmpeg HLS produced 0 bytes after "
+                            f"{M3U8_STUCK_TIMEOUT_SECONDS}s — killing process"
+                        )
+                        _killed_for_stuck.set()
+                        try:
+                            process.kill()
+                        except Exception:
+                            pass
+                        return
+
+            watchdog_thread = threading.Thread(target=_watchdog, daemon=True)
+            watchdog_thread.start()
             
             # Track progress by parsing ffmpeg output
             total_size = 0
@@ -1039,11 +1252,19 @@ class DownloaderService:
             
             # Wait for process to complete
             return_code = process.wait()
+            _stop_watchdog.set()
+            watchdog_thread.join(timeout=2)
             stderr_thread.join(timeout=2)
-            
+
             download_duration = time.time() - download_start_time
             logger.info(f"[DOWNLOAD] FFmpeg exited with code {return_code} after {download_duration:.1f}s")
-            
+
+            if _killed_for_stuck.is_set():
+                raise DownloadError(
+                    f"m3u8 fetch failed: ffmpeg HLS stalled at 0 bytes for {M3U8_STUCK_TIMEOUT_SECONDS}s "
+                    f"(manifest unreachable or returned non-HLS content)"
+                )
+
             stderr_output = "\n".join(stderr_lines).strip()
             if return_code != 0:
                 logger.error(f"[DOWNLOAD] FFmpeg stderr (full):\n{stderr_output or '(empty)'}")
@@ -1401,12 +1622,37 @@ class DownloaderService:
             raise DownloadError(error_msg)
         
         logger.info(f"[DOWNLOADER] URL validation passed: {url[:80]}...")
-        
+
         # Detect stream type before using it
         stream_type = self.detect_url_type(url)
         logger.info(f"[DOWNLOADER] Detected stream type: {stream_type}")
         logger.info(f"[DOWNLOADER] Starting download: url_type={stream_type}, referer={referer[:50] if referer else 'None'}...")
-        
+
+        # Resolve the stream URL: validates the playlist and, if the https
+        # origin is broken (TLS / unreachable), falls back to the http variant
+        # so HTTP-only sources (uzmovi, freekino) still download. Resolving
+        # *before* building strategy_builders means every strategy reuses the
+        # working URL — we only re-probe once.
+        original_url = url
+        try:
+            url, resolve_note = _resolve_stream_url(url, stream_type, referer=referer)
+            if url != original_url:
+                logger.info(f"[DOWNLOADER] URL rewritten by resolver: {original_url[:60]} -> {url[:60]} ({resolve_note})")
+            else:
+                logger.info(f"[DOWNLOADER] URL resolver: {resolve_note}")
+        except DownloadError as resolve_err:
+            # Surface the real reason instead of a generic "all strategies failed".
+            logger.error(f"[DOWNLOADER] URL resolution failed: {resolve_err}")
+            if backend_job_id:
+                report_progress_to_backend(backend_job_id, {
+                    "stage": "download",
+                    "status": "failed",
+                    "progress": 0,
+                    "message": str(resolve_err),
+                    "error": str(resolve_err),
+                })
+            raise
+
         # Log URL type detection details
         if stream_type == "hls":
             logger.info(f"[DOWNLOADER] Will use N_m3u8DL-RE for HLS download")
@@ -1416,7 +1662,7 @@ class DownloaderService:
             logger.info(f"[DOWNLOADER] Will use direct HTTP download for MP4")
         else:
             logger.warning(f"[DOWNLOADER] Unknown stream type: {stream_type}, attempting download anyway")
-        
+
         output_path = os.path.join(self.download_dir, output_name)
         logger.info(f"[DOWNLOADER] Downloading to {output_path}")
         
@@ -1489,6 +1735,14 @@ class DownloaderService:
                 for strategy_name, strategy in strategy_builders:
                     try:
                         logger.info(f"[DOWNLOADER] Attempt {attempt}/{max_retries} using strategy={strategy_name}")
+                        # Single, easy-to-grep marker that always carries the
+                        # actual stream URL the downloader will hit. If we ever
+                        # see "stuck at 0%" again, this line answers
+                        # "did the request even leave the box?" instantly.
+                        logger.info(
+                            f"[DOWNLOAD START] job={backend_job_id or job_id or '-'} "
+                            f"strategy={strategy_name} url={url}"
+                        )
                         if backend_job_id:
                             report_progress_to_backend(backend_job_id, {
                                 "stage": "download",
@@ -1502,9 +1756,28 @@ class DownloaderService:
                     except DownloadError as strategy_err:
                         per_attempt_errors.append(f"{strategy_name}: {strategy_err}")
                         logger.error(f"[DOWNLOADER] Strategy {strategy_name} failed on attempt {attempt}: {strategy_err}")
+                        # Surface the concrete cause for this strategy in the
+                        # backend job — operators want "m3u8 fetch failed: 403"
+                        # not just "Download attempt 2/3 via m3u8_primary...".
+                        if backend_job_id:
+                            report_progress_to_backend(backend_job_id, {
+                                "stage": "download",
+                                "status": "retrying" if attempt < max_retries else "failed",
+                                "progress": 0,
+                                "message": f"{strategy_name} failed: {strategy_err}",
+                                "error": f"{strategy_name}: {strategy_err}",
+                            })
                     except Exception as strategy_err:
                         per_attempt_errors.append(f"{strategy_name}: unexpected error: {strategy_err}")
                         logger.error(f"[DOWNLOADER] Strategy {strategy_name} unexpected failure on attempt {attempt}: {strategy_err}")
+                        if backend_job_id:
+                            report_progress_to_backend(backend_job_id, {
+                                "stage": "download",
+                                "status": "retrying" if attempt < max_retries else "failed",
+                                "progress": 0,
+                                "message": f"{strategy_name} unexpected error: {strategy_err}",
+                                "error": f"{strategy_name}: {strategy_err}",
+                            })
 
                 if not path:
                     raise DownloadError("; ".join(per_attempt_errors) or "all download strategies failed")

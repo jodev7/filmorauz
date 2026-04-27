@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -301,6 +302,49 @@ func (r *AdRepository) IncrementClick(id primitive.ObjectID) error {
 
 	_, err := r.col.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$inc": bson.M{"clicks": 1}})
 	return err
+}
+
+// StripLegacyMediaPrefix rewrites every "/media/<rest>" value in the ads collection
+// to "/<rest>". Frontend now assumes a clean path and prepends its own base URL,
+// so the deprecated "/media/" prefix would otherwise produce broken links.
+func (r *AdRepository) StripLegacyMediaPrefix() (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	fields := []string{
+		"image_url", "video_url",
+		"banner_media_url", "inline_media_url",
+		"fixed_bottom_media_url", "popup_media_url",
+		"player_overlay_media_url", "telegram_media_url",
+	}
+
+	total := 0
+	for _, field := range fields {
+		filter := bson.M{field: bson.M{"$regex": "^/media/"}}
+		cursor, err := r.col.Find(ctx, filter)
+		if err != nil {
+			return total, err
+		}
+		var docs []bson.M
+		if err := cursor.All(ctx, &docs); err != nil {
+			cursor.Close(ctx)
+			return total, err
+		}
+		cursor.Close(ctx)
+
+		for _, doc := range docs {
+			value, _ := doc[field].(string)
+			if !strings.HasPrefix(value, "/media/") {
+				continue
+			}
+			cleaned := "/" + strings.TrimPrefix(value, "/media/")
+			if _, err := r.col.UpdateOne(ctx, bson.M{"_id": doc["_id"]}, bson.M{"$set": bson.M{field: cleaned}}); err != nil {
+				return total, err
+			}
+			total++
+		}
+	}
+	return total, nil
 }
 
 // GetStats returns aggregate stats across all ads
