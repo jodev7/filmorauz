@@ -25,6 +25,7 @@ export type VideoSourceType =
 
 export interface Movie {
   id: string;
+  _id?: string;
   code: string;
   title: string;
   description: string;

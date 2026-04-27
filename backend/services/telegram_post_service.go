@@ -72,14 +72,13 @@ func (s *TelegramService) SendPostWithImageToChannel(channelTarget, text, imageU
 		return AdPostResult{Target: channelTarget, Status: "failed", Error: err.Error()}
 	}
 
-	media, mode, resolveErr := resolveMedia(imageURL)
-	if resolveErr != nil {
-		log.Printf("[TELEGRAM POST] FAILED channel=%s resolve error: %v", channelTarget, resolveErr)
-		return AdPostResult{Target: channelTarget, Status: "failed", Error: resolveErr.Error()}
+	preparedMedia, preparedMode, prepErr := s.prepareTelegramPhoto(imageURL, "image_url")
+	if prepErr != nil {
+		return AdPostResult{Target: channelTarget, Status: "failed", Error: prepErr.Error()}
 	}
 
-	log.Printf("[TELEGRAM POST] channel=%s method=sendPhoto mode=%s", channelTarget, mode)
-	msg := tgbotapi.NewPhotoToChannel(channelTarget, media)
+	log.Printf("[TELEGRAM POST] channel=%s method=sendPhoto mode=%s", channelTarget, preparedMode)
+	msg := tgbotapi.NewPhotoToChannel(channelTarget, preparedMedia)
 	msg.Caption = text
 	msg.ParseMode = "HTML"
 
@@ -108,14 +107,13 @@ func (s *TelegramService) SendPostWithImageToBot(chatID int64, text, imageURL st
 		return AdPostResult{Target: target, Status: "failed", Error: err.Error()}
 	}
 
-	media, mode, resolveErr := resolveMedia(imageURL)
-	if resolveErr != nil {
-		log.Printf("[TELEGRAM POST] FAILED bot chat_id=%d resolve error: %v", chatID, resolveErr)
-		return AdPostResult{Target: target, Status: "failed", Error: resolveErr.Error()}
+	preparedMedia, preparedMode, prepErr := s.prepareTelegramPhoto(imageURL, "image_url")
+	if prepErr != nil {
+		return AdPostResult{Target: target, Status: "failed", Error: prepErr.Error()}
 	}
 
-	log.Printf("[TELEGRAM POST] bot chat_id=%d method=sendPhoto mode=%s", chatID, mode)
-	msg := tgbotapi.NewPhoto(chatID, media)
+	log.Printf("[TELEGRAM POST] bot chat_id=%d method=sendPhoto mode=%s", chatID, preparedMode)
+	msg := tgbotapi.NewPhoto(chatID, preparedMedia)
 	msg.Caption = text
 	msg.ParseMode = "HTML"
 
@@ -159,11 +157,11 @@ func (s *TelegramService) SendPostWithImageAndButtonToChannel(channelTarget, tex
 	if err != nil {
 		return AdPostResult{Target: channelTarget, Status: "failed", Error: err.Error()}
 	}
-	media, _, resolveErr := resolveMedia(imageURL)
-	if resolveErr != nil {
-		return AdPostResult{Target: channelTarget, Status: "failed", Error: resolveErr.Error()}
+	preparedMedia, _, prepErr := s.prepareTelegramPhoto(imageURL, "image_url")
+	if prepErr != nil {
+		return AdPostResult{Target: channelTarget, Status: "failed", Error: prepErr.Error()}
 	}
-	msg := tgbotapi.NewPhotoToChannel(channelTarget, media)
+	msg := tgbotapi.NewPhotoToChannel(channelTarget, preparedMedia)
 	msg.Caption = text
 	msg.ParseMode = "HTML"
 	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
@@ -214,11 +212,11 @@ func (s *TelegramService) SendPostWithImageAndButtonToBot(chatID int64, text, im
 	if err != nil {
 		return AdPostResult{Target: target, Status: "failed", Error: err.Error()}
 	}
-	media, _, resolveErr := resolveMedia(imageURL)
-	if resolveErr != nil {
-		return AdPostResult{Target: target, Status: "failed", Error: resolveErr.Error()}
+	preparedMedia, _, prepErr := s.prepareTelegramPhoto(imageURL, "image_url")
+	if prepErr != nil {
+		return AdPostResult{Target: target, Status: "failed", Error: prepErr.Error()}
 	}
-	msg := tgbotapi.NewPhoto(chatID, media)
+	msg := tgbotapi.NewPhoto(chatID, preparedMedia)
 	msg.Caption = text
 	msg.ParseMode = "HTML"
 	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(

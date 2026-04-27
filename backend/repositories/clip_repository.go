@@ -135,6 +135,25 @@ func (r *ClipRepository) DeleteByMovieID(ctx context.Context, movieID primitive.
 	return err
 }
 
+func (r *ClipRepository) FindBySeriesID(ctx context.Context, seriesID primitive.ObjectID) ([]models.Clip, error) {
+	cursor, err := r.col.Find(ctx, bson.M{"series_id": seriesID}, options.Find().SetSort(bson.M{"sequence": 1}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var clips []models.Clip
+	if err := cursor.All(ctx, &clips); err != nil {
+		return nil, err
+	}
+	return clips, nil
+}
+
+func (r *ClipRepository) DeleteBySeriesID(ctx context.Context, seriesID primitive.ObjectID) error {
+	_, err := r.col.DeleteMany(ctx, bson.M{"series_id": seriesID})
+	return err
+}
+
 func (r *ClipRepository) CountByMovieID(ctx context.Context, movieID primitive.ObjectID) (int64, error) {
 	return r.col.CountDocuments(ctx, bson.M{"movie_id": movieID})
 }

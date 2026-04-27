@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/filmorauz/backend/config"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
@@ -237,13 +240,22 @@ func (s *TelegramService) postToChannel(movie *TelegramMovieData, channel Telegr
 	}
 
 	// Send photo with caption
-	photoMsg := tgbotapi.NewPhoto(channel.ID, tgbotapi.FileURL(posterURL))
+	media, _, prepErr := s.prepareTelegramPhoto(posterURL, "poster_url")
+	if prepErr != nil {
+		log.Printf("[TG_POST] photo failed, fallback text-only, error=%v", prepErr)
+		msg := tgbotapi.NewMessage(channel.ID, caption)
+		msg.ParseMode = "HTML"
+		_, err := api.Send(msg)
+		return err == nil
+	}
+	photoMsg := tgbotapi.NewPhoto(channel.ID, media)
 	photoMsg.Caption = caption
 	photoMsg.ParseMode = "HTML"
 
 	_, err = api.Send(photoMsg)
 	if err != nil {
 		log.Printf("[TELEGRAM] Failed to send photo to channel %s: %v", channel.Title, err)
+		log.Printf("[TG_POST] photo failed, fallback text-only, error=%v", err)
 		// Fallback to text message
 		msg := tgbotapi.NewMessage(channel.ID, caption)
 		msg.ParseMode = "HTML"
@@ -275,11 +287,18 @@ func (s *TelegramService) postToDefaultChannel(movie *TelegramMovieData) bool {
 	channelIdentifier := "@" + s.channelUsername
 
 	if posterURL != "" {
-		photoMsg := tgbotapi.NewPhotoToChannel(channelIdentifier, tgbotapi.FileURL(posterURL))
-		photoMsg.Caption = caption
-		photoMsg.ParseMode = "HTML"
-		_, err = api.Send(photoMsg)
-	} else {
+		media, _, prepErr := s.prepareTelegramPhoto(posterURL, "poster_url")
+		if prepErr != nil {
+			log.Printf("[TG_POST] photo failed, fallback text-only, error=%v", prepErr)
+			posterURL = ""
+		} else {
+			photoMsg := tgbotapi.NewPhotoToChannel(channelIdentifier, media)
+			photoMsg.Caption = caption
+			photoMsg.ParseMode = "HTML"
+			_, err = api.Send(photoMsg)
+		}
+	}
+	if posterURL == "" {
 		msg := tgbotapi.NewMessageToChannel(channelIdentifier, caption)
 		msg.ParseMode = "HTML"
 		_, err = api.Send(msg)
@@ -447,6 +466,114 @@ func resolveTelegramMediaSource(mediaURL string) (tgbotapi.RequestFileData, stri
 	return tgbotapi.FileURL(mediaURL), "public_url", nil
 }
 
+func NormalizeTelegramImageURL(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		if strings.Contains(value, "/media/") {
+			return strings.Replace(value, "/media/", "/file/filmorauznet/", 1)
+		}
+		return value
+	}
+
+	if strings.HasPrefix(value, "/media/") {
+		value = "/" + strings.TrimPrefix(value, "/media/")
+	}
+	if strings.HasPrefix(value, "/file/filmorauznet/") {
+		value = "/" + strings.TrimPrefix(value, "/file/filmorauznet/")
+	}
+	if strings.HasPrefix(value, "media/") {
+		value = "/" + strings.TrimPrefix(value, "media/")
+	}
+	if !strings.HasPrefix(value, "/") && value != "" {
+		value = "/" + value
+	}
+
+	if strings.HasPrefix(value, "/uploads/") {
+		cfg := config.Current()
+		if cfg == nil {
+			return value
+		}
+		return strings.TrimSuffix(cfg.GetBaseURL(), "/") + strings.TrimPrefix(value, "/uploads")
+	}
+
+	cdnBase := "https://cdn.filmorauz.net/file/filmorauznet"
+	if cfg := config.Current(); cfg != nil {
+		cdnBase = strings.TrimSuffix(cfg.CDNBaseURL, "/")
+		if cdnBase == "" {
+			cdnBase = strings.TrimSuffix(cfg.GetCDNFileURL(""), "/")
+		}
+	}
+	return strings.TrimSuffix(cdnBase, "/") + value
+}
+
+func isLocalTelegramMediaURL(mediaURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(mediaURL))
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || (host == "" && strings.HasPrefix(u.Path, "/uploads/"))
+}
+
+func (s *TelegramService) probeTelegramPhotoURL(photoURL string) (string, error) {
+	var lastErr error
+	var lastStatus string
+	for _, method := range []string{http.MethodHead, http.MethodGet} {
+		req, err := http.NewRequest(method, photoURL, nil)
+		if err != nil {
+			return "", fmt.Errorf("create %s request: %w", method, err)
+		}
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("%s %s: %w", method, photoURL, err)
+			continue
+		}
+		lastStatus = strconv.Itoa(resp.StatusCode)
+		if method == http.MethodGet {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1))
+		}
+		resp.Body.Close()
+
+		contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
+		if resp.StatusCode == http.StatusOK && strings.HasPrefix(contentType, "image/") {
+			return lastStatus, nil
+		}
+		lastErr = fmt.Errorf("%s %s returned status=%d content-type=%q", method, photoURL, resp.StatusCode, contentType)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("photo probe failed for %s", photoURL)
+	}
+	return lastStatus, lastErr
+}
+
+func (s *TelegramService) prepareTelegramPhoto(rawURL, fieldName string) (tgbotapi.RequestFileData, string, error) {
+	log.Printf("[TG_POST] raw %s=%s", fieldName, rawURL)
+	normalized := NormalizeTelegramImageURL(rawURL)
+	log.Printf("[TG_POST] normalized photo_url=%s", normalized)
+	if normalized == "" {
+		return nil, "", fmt.Errorf("empty normalized photo URL")
+	}
+	if !isLocalTelegramMediaURL(normalized) {
+		status, err := s.probeTelegramPhotoURL(normalized)
+		log.Printf("[TG_POST] photo probe status=%s", status)
+		if err != nil {
+			log.Printf("[TG_POST] photo probe failed url=%s error=%v", normalized, err)
+			return nil, "", err
+		}
+	} else {
+		log.Printf("[TG_POST] photo probe status=skipped_local_file")
+	}
+	media, mode, err := resolveMedia(normalized)
+	if err != nil {
+		return nil, "", err
+	}
+	return media, mode, nil
+}
+
 // resolveMedia is kept as an internal alias so existing call-sites compile unchanged.
 func resolveMedia(mediaURL string) (tgbotapi.RequestFileData, string, error) {
 	return resolveTelegramMediaSource(mediaURL)
@@ -501,10 +628,10 @@ func (s *TelegramService) SendAdToChannel(channelTarget, title, description, ima
 
 	switch {
 	case imageURL != "":
-		media, mode, resolveErr := resolveMedia(imageURL)
-		if resolveErr != nil {
-			log.Printf("[TELEGRAM AD] FAILED channel=%s resolve error: %v", channelTarget, resolveErr)
-			return AdPostResult{Target: channelTarget, Status: "failed", Error: resolveErr.Error()}
+		media, mode, prepErr := s.prepareTelegramPhoto(imageURL, "image_url")
+		if prepErr != nil {
+			log.Printf("[TELEGRAM AD] FAILED channel=%s resolve error: %v", channelTarget, prepErr)
+			return AdPostResult{Target: channelTarget, Status: "failed", Error: prepErr.Error()}
 		}
 		log.Printf("[TELEGRAM AD] channel=%s method=sendPhoto mode=%s", channelTarget, mode)
 		msg := tgbotapi.NewPhotoToChannel(channelTarget, media)
@@ -573,10 +700,10 @@ func (s *TelegramService) SendAdToBot(chatID int64, title, description, imageURL
 
 	switch {
 	case imageURL != "":
-		media, mode, resolveErr := resolveMedia(imageURL)
-		if resolveErr != nil {
-			log.Printf("[TELEGRAM AD] FAILED bot chat_id=%d resolve error: %v", chatID, resolveErr)
-			return AdPostResult{Target: target, Status: "failed", Error: resolveErr.Error()}
+		media, mode, prepErr := s.prepareTelegramPhoto(imageURL, "image_url")
+		if prepErr != nil {
+			log.Printf("[TELEGRAM AD] FAILED bot chat_id=%d resolve error: %v", chatID, prepErr)
+			return AdPostResult{Target: target, Status: "failed", Error: prepErr.Error()}
 		}
 		log.Printf("[TELEGRAM AD] bot chat_id=%d method=sendPhoto mode=%s", chatID, mode)
 		msg := tgbotapi.NewPhoto(chatID, media)
@@ -672,7 +799,7 @@ func (s *TelegramService) PostContentApproval(data *TelegramMovieData, isSerial 
 			return
 		}
 		log.Printf("[TELEGRAM APPROVE] posting to %s", target)
-		sendErr := s.sendApprovalToChannel(api, target, caption, data.PosterURL, keyboard)
+		sendErr := s.sendApprovalToChannel(api, target, caption, data.Title, data.PosterURL, isSerial, keyboard)
 		if sendErr != nil {
 			log.Printf("[TELEGRAM APPROVE] FAILED target=%s err=%v", target, sendErr)
 			return
@@ -710,18 +837,29 @@ func (s *TelegramService) PostContentApproval(data *TelegramMovieData, isSerial 
 // sendApprovalToChannel sends the rendered caption (with optional poster
 // and inline button) to a single channel identifier. Falls back to a
 // text-only message when the poster send fails.
-func (s *TelegramService) sendApprovalToChannel(api *tgbotapi.BotAPI, target, caption, posterURL string, keyboard *tgbotapi.InlineKeyboardMarkup) error {
+func (s *TelegramService) sendApprovalToChannel(api *tgbotapi.BotAPI, target, caption, title, posterURL string, isSerial bool, keyboard *tgbotapi.InlineKeyboardMarkup) error {
 	if posterURL != "" {
-		msg := tgbotapi.NewPhotoToChannel(target, tgbotapi.FileURL(posterURL))
-		msg.Caption = caption
-		msg.ParseMode = "HTML"
-		if keyboard != nil {
-			msg.ReplyMarkup = keyboard
-		}
-		if _, sendErr := api.Send(msg); sendErr == nil {
-			return nil
+		media, _, prepErr := s.prepareTelegramPhoto(posterURL, "poster_url")
+		if prepErr != nil {
+			log.Printf("[TG_POST] photo failed, fallback text-only, error=%v", prepErr)
 		} else {
-			log.Printf("[TELEGRAM APPROVE] photo send failed target=%s (%v), falling back to text", target, sendErr)
+			contentType := "movie"
+			if isSerial {
+				contentType = "series"
+			}
+			log.Printf("[TG_POST] sending photo for %s=%s", contentType, title)
+			msg := tgbotapi.NewPhotoToChannel(target, media)
+			msg.Caption = caption
+			msg.ParseMode = "HTML"
+			if keyboard != nil {
+				msg.ReplyMarkup = keyboard
+			}
+			if _, sendErr := api.Send(msg); sendErr == nil {
+				return nil
+			} else {
+				log.Printf("[TG_POST] photo failed, fallback text-only, error=%v", sendErr)
+				log.Printf("[TELEGRAM APPROVE] photo send failed target=%s (%v), falling back to text", target, sendErr)
+			}
 		}
 	}
 	txt := tgbotapi.NewMessageToChannel(target, caption)

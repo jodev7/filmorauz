@@ -776,7 +776,7 @@ func (h *SeriesHandler) ApproveSeries(c *gin.Context) {
 				Year:        series.Year,
 				Genres:      series.Genre,
 				Country:     series.Country,
-				PosterURL:   series.PosterURL,
+				PosterURL:   firstNonEmpty(series.PosterURL, series.BackdropURL),
 				Description: series.Description,
 				Slug:        series.Slug,
 				MovieURL:    watchURL,

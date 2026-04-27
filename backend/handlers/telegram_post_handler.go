@@ -65,8 +65,8 @@ func (h *TelegramPostHandler) SendPost(c *gin.Context) {
 		return
 	}
 
-	req.ImageURL = normalizeTelegramPostImageURL(req.ImageURL)
-	publicTelegramImageURL := absoluteTelegramPostImageURL(req.ImageURL)
+	req.ImageURL = services.NormalizeTelegramImageURL(req.ImageURL)
+	publicTelegramImageURL := req.ImageURL
 
 	hasButton := strings.TrimSpace(req.InlineButtonText) != "" || strings.TrimSpace(req.InlineButtonURL) != ""
 	if hasButton {

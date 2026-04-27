@@ -582,10 +582,7 @@ func (s *MovieService) UpdateMovie(id string, input *models.MovieInput) (*models
 }
 
 // DeleteMovie removes the movie's B2 assets (HLS folder, poster, backdrop,
-// clips), its clip DB rows, and the movie document. B2/clip cleanup runs
-// best-effort: a missing file or transient delete error is logged but does
-// not abort the flow — the DB record is always removed at the end so the
-// admin UI never gets stuck on a half-deleted movie.
+// clips), its clip DB rows, and finally the movie document.
 func (s *MovieService) DeleteMovie(id string) error {
 	objID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
@@ -594,15 +591,15 @@ func (s *MovieService) DeleteMovie(id string) error {
 
 	movie, findErr := s.repo.FindByID(objID)
 	if findErr != nil || movie == nil {
-		// Movie already gone — still try the final DeleteOne so the caller
-		// sees a consistent response.
-		log.Printf("[MOVIE DELETE] id=%s not found in DB (err=%v), attempting repo.Delete anyway", id, findErr)
-		return s.repo.Delete(id)
+		return fmt.Errorf("movie not found")
 	}
 
 	log.Printf("[MOVIE DELETE] start — id=%s title=%q code=%s", id, movie.Title, movie.Code)
 
-	s.cleanupMovieStorage(objID, movie)
+	if err := s.cleanupMovieStorage(objID, movie); err != nil {
+		log.Printf("[MOVIE DELETE] aborting DB delete id=%s: %v", id, err)
+		return err
+	}
 
 	if delErr := s.repo.Delete(id); delErr != nil {
 		log.Printf("[MOVIE DELETE] FAILED repo.Delete id=%s: %v", id, delErr)
@@ -613,32 +610,40 @@ func (s *MovieService) DeleteMovie(id string) error {
 }
 
 // cleanupMovieStorage deletes every B2 asset associated with a movie and
-// wipes its clip rows. Every step is best-effort + logged.
-func (s *MovieService) cleanupMovieStorage(objID primitive.ObjectID, movie *models.Movie) {
+// wipes its clip rows. Any B2 or clip cleanup failure aborts the movie delete.
+func (s *MovieService) cleanupMovieStorage(objID primitive.ObjectID, movie *models.Movie) error {
 	if s.b2Cleanup == nil {
 		log.Printf("[MOVIE DELETE] B2 cleanup disabled (no service configured) — skipping storage delete")
 	} else {
-		// 1) HLS folder: wipe videos/<folder>/ recursively so master.m3u8,
-		//    quality subfolders, and all .ts segments are removed in one pass.
-		prefix := firstNonEmpty(
-			s.b2Cleanup.DeriveVideoFolderPrefix(movie.MasterPlaylistURL),
-			s.b2Cleanup.DeriveVideoFolderPrefix(movie.VideoURL),
-		)
+		prefix := s.deriveMovieDeletePrefix(movie)
 		if prefix != "" {
-			log.Printf("[MOVIE DELETE] HLS prefix to purge: %s", prefix)
+			if err := validateB2DeletePrefix(prefix, *movie); err != nil {
+				return err
+			}
+			filesCount, err := s.countFilesByPrefix(prefix)
+			log.Printf("[B2_DELETE] movie_id=%s", movie.ID.Hex())
+			log.Printf("[B2_DELETE] title=%q", movie.Title)
+			log.Printf("[B2_DELETE] prefix=%s", prefix)
+			log.Printf("[B2_DELETE] files_count=%d", filesCount)
+			if err != nil {
+				return fmt.Errorf("list b2 prefix %q: %w", prefix, err)
+			}
+			if filesCount > 500 || isUnsafeB2DeletePrefix(prefix) {
+				return fmt.Errorf("unsafe delete prefix")
+			}
 			if _, err := s.b2Cleanup.DeleteByPrefix(prefix); err != nil {
-				log.Printf("[MOVIE DELETE] HLS prefix delete failed (continuing): %v", err)
+				return fmt.Errorf("delete b2 prefix %q: %w", prefix, err)
 			}
 		} else {
-			log.Printf("[MOVIE DELETE] no videos/ prefix derivable from master=%q video=%q — skipping HLS folder purge",
+			log.Printf("[MOVIE DELETE] no safe videos/movies prefix derivable from master=%q video=%q — skipping folder purge",
 				movie.MasterPlaylistURL, movie.VideoURL)
 		}
 
-		// 2) Individual video URL if it points outside the HLS folder (e.g.
-		//    an .mp4 upload that lives in temp/videos/…). Safe if already covered.
+		// 2) Individual video URL if it points outside the folder (e.g. a direct MP4).
+		prefix = normalizeB2DeletePrefix(prefix)
 		if videoKey := s.b2Cleanup.ExtractKeyFromURL(movie.VideoURL); videoKey != "" && !strings.HasPrefix(videoKey, prefix) {
 			if _, err := s.b2Cleanup.DeleteByKey(videoKey); err != nil {
-				log.Printf("[MOVIE DELETE] video key delete failed key=%s err=%v", videoKey, err)
+				return fmt.Errorf("delete movie video key %q: %w", videoKey, err)
 			}
 		}
 
@@ -653,7 +658,7 @@ func (s *MovieService) cleanupMovieStorage(objID primitive.ObjectID, movie *mode
 				continue
 			}
 			if _, err := s.b2Cleanup.DeleteByKey(key); err != nil {
-				log.Printf("[MOVIE DELETE] %s delete failed key=%s err=%v", label, key, err)
+				return fmt.Errorf("delete movie %s key %q: %w", label, key, err)
 			}
 		}
 	}
@@ -664,7 +669,7 @@ func (s *MovieService) cleanupMovieStorage(objID primitive.ObjectID, movie *mode
 		defer cancel()
 		clips, cErr := s.clipRepo.FindByMovieID(ctx, objID)
 		if cErr != nil {
-			log.Printf("[MOVIE DELETE] FindByMovieID failed (continuing): %v", cErr)
+			return fmt.Errorf("load movie clips: %w", cErr)
 		} else {
 			log.Printf("[MOVIE DELETE] %d clip(s) linked to movie — cleaning up", len(clips))
 			if s.b2Cleanup != nil {
@@ -678,17 +683,17 @@ func (s *MovieService) cleanupMovieStorage(objID primitive.ObjectID, movie *mode
 						continue
 					}
 					if _, err := s.b2Cleanup.DeleteByKey(key); err != nil {
-						log.Printf("[MOVIE DELETE] clip delete failed key=%s err=%v", key, err)
+						return fmt.Errorf("delete clip key %q: %w", key, err)
 					}
 				}
 			}
 			if err := s.clipRepo.DeleteByMovieID(ctx, objID); err != nil {
-				log.Printf("[MOVIE DELETE] clipRepo.DeleteByMovieID failed (continuing): %v", err)
-			} else {
-				log.Printf("[MOVIE DELETE] removed %d clip row(s) from DB", len(clips))
+				return fmt.Errorf("delete clip rows: %w", err)
 			}
+			log.Printf("[MOVIE DELETE] removed %d clip row(s) from DB", len(clips))
 		}
 	}
+	return nil
 }
 
 func firstNonEmpty(values ...string) string {
@@ -698,6 +703,142 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (s *MovieService) countFilesByPrefix(prefix string) (int, error) {
+	prefix = normalizeB2DeletePrefix(prefix)
+	if prefix == "" {
+		return 0, nil
+	}
+	pages, err := s.b2Cleanup.listByPrefix(prefix)
+	if err != nil {
+		return 0, err
+	}
+	total := 0
+	for _, page := range pages {
+		for _, file := range page.Files {
+			if file.Action == "folder" {
+				continue
+			}
+			total++
+		}
+	}
+	return total, nil
+}
+
+func (s *MovieService) deriveMovieDeletePrefix(movie *models.Movie) string {
+	if movie == nil || s.b2Cleanup == nil {
+		return ""
+	}
+	for _, raw := range []string{movie.MasterPlaylistURL, movie.VideoURL} {
+		key := strings.TrimSpace(s.b2Cleanup.ExtractKeyFromURL(raw))
+		if key == "" {
+			continue
+		}
+		if prefix := movieDeletePrefixFromKey(key); prefix != "" {
+			return prefix
+		}
+	}
+	return ""
+}
+
+func movieDeletePrefixFromKey(key string) string {
+	key = strings.Trim(strings.TrimSpace(key), "/")
+	if key == "" {
+		return ""
+	}
+	parts := strings.Split(key, "/")
+	if len(parts) < 4 {
+		return ""
+	}
+	if parts[0] != "videos" || parts[1] != "movies" || strings.TrimSpace(parts[2]) == "" {
+		return ""
+	}
+	return strings.Join(parts[:3], "/") + "/"
+}
+
+func validateB2DeletePrefix(prefix string, movie models.Movie) error {
+	prefix = normalizeB2DeletePrefix(prefix)
+	if isUnsafeB2DeletePrefix(prefix) {
+		return fmt.Errorf("unsafe delete prefix")
+	}
+	if !strings.HasPrefix(prefix, "videos/movies/") {
+		return fmt.Errorf("unsafe delete prefix")
+	}
+	parts := strings.Split(strings.Trim(prefix, "/"), "/")
+	if len(parts) != 3 {
+		return fmt.Errorf("unsafe delete prefix")
+	}
+	folder := parts[2]
+	if folder == "" {
+		return fmt.Errorf("unsafe delete prefix")
+	}
+
+	var tokens []string
+	tokens = append(tokens, strings.ToLower(strings.TrimSpace(movie.Slug)))
+	tokens = append(tokens, strings.ToLower(movie.ID.Hex()))
+	if movie.Source != nil {
+		tokens = append(tokens, strings.ToLower(strings.TrimSpace(movie.Source.SourceID)))
+	}
+	folderLower := strings.ToLower(folder)
+	for _, token := range tokens {
+		if token != "" && strings.Contains(folderLower, token) {
+			return nil
+		}
+	}
+	return fmt.Errorf("unsafe delete prefix")
+}
+
+func validateB2DeletePrefixForSeries(prefix string, series models.Series) error {
+	prefix = normalizeB2DeletePrefix(prefix)
+	if prefix == "" || strings.HasPrefix(prefix, "/") {
+		return fmt.Errorf("unsafe delete prefix")
+	}
+	if !strings.HasPrefix(prefix, "videos/serials/") {
+		return fmt.Errorf("unsafe delete prefix")
+	}
+	parts := strings.Split(strings.Trim(prefix, "/"), "/")
+	if len(parts) != 3 {
+		return fmt.Errorf("unsafe delete prefix")
+	}
+	folder := strings.ToLower(parts[2])
+	allowed := []string{
+		strings.ToLower(strings.TrimSpace(series.Slug)),
+		strings.ToLower(series.ID.Hex()),
+	}
+	for _, token := range allowed {
+		if token != "" && strings.Contains(folder, token) {
+			return nil
+		}
+	}
+	return fmt.Errorf("unsafe delete prefix")
+}
+
+func firstNonEmptyTrimmed(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func dedupeKeys(keys []string) []string {
+	seen := make(map[string]struct{}, len(keys))
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+	return out
 }
 
 // MarkTelegramPostedOnApproval flips telegram_posted_on_approval=true so the

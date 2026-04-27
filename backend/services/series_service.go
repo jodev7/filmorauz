@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"regexp"
@@ -22,6 +23,8 @@ func isValidSeriesSlug(slug string) bool {
 type SeriesService struct {
 	seriesRepo *repositories.SeriesRepository
 	movieRepo  *repositories.MovieRepository
+	clipRepo   *repositories.ClipRepository
+	b2Cleanup  *B2CleanupService
 }
 
 func NewSeriesService(seriesRepo *repositories.SeriesRepository, movieRepo *repositories.MovieRepository) *SeriesService {
@@ -29,6 +32,11 @@ func NewSeriesService(seriesRepo *repositories.SeriesRepository, movieRepo *repo
 		seriesRepo: seriesRepo,
 		movieRepo:  movieRepo,
 	}
+}
+
+func (s *SeriesService) SetStorageDependencies(clipRepo *repositories.ClipRepository, b2 *B2CleanupService) {
+	s.clipRepo = clipRepo
+	s.b2Cleanup = b2
 }
 
 // normalizeGenres trims, lowercases, and dedupes genre strings.
@@ -230,9 +238,143 @@ func (s *SeriesService) BackfillSeriesCodes() {
 	log.Printf("Backfill: series complete")
 }
 
-// DeleteSeries deletes a series
+// DeleteSeries deletes a series and its B2-backed assets.
 func (s *SeriesService) DeleteSeries(id primitive.ObjectID) error {
+	series, err := s.seriesRepo.GetByID(id)
+	if err != nil {
+		return err
+	}
+	if err := s.cleanupSeriesStorage(series); err != nil {
+		return err
+	}
 	return s.seriesRepo.Delete(id)
+}
+
+func (s *SeriesService) cleanupSeriesStorage(series *models.Series) error {
+	if series == nil {
+		return nil
+	}
+
+	if s.b2Cleanup != nil {
+		episodes, err := s.seriesRepo.GetEpisodesBySeriesID(series.ID)
+		if err != nil {
+			return fmt.Errorf("load series episodes: %w", err)
+		}
+		seasons, err := s.seriesRepo.GetSeasonsBySeriesID(series.ID)
+		if err != nil {
+			return fmt.Errorf("load series seasons: %w", err)
+		}
+
+		prefix := s.deriveSeriesDeletePrefix(series, episodes)
+		if prefix != "" {
+			if err := validateB2DeletePrefixForSeries(prefix, *series); err != nil {
+				return err
+			}
+			filesCount, err := s.countFilesByPrefix(prefix)
+			log.Printf("[B2_DELETE] movie_id=%s", series.ID.Hex())
+			log.Printf("[B2_DELETE] title=%q", series.Title)
+			log.Printf("[B2_DELETE] prefix=%s", prefix)
+			log.Printf("[B2_DELETE] files_count=%d", filesCount)
+			if err != nil {
+				return fmt.Errorf("list b2 prefix %q: %w", prefix, err)
+			}
+			if filesCount > 500 || isUnsafeB2DeletePrefix(prefix) {
+				return fmt.Errorf("unsafe delete prefix")
+			}
+			if _, err := s.b2Cleanup.DeleteByPrefix(prefix); err != nil {
+				return fmt.Errorf("delete series b2 prefix %q: %w", prefix, err)
+			}
+		}
+
+		keys := []string{
+			s.b2Cleanup.ExtractKeyFromURL(series.PosterURL),
+			s.b2Cleanup.ExtractKeyFromURL(series.BackdropURL),
+		}
+		for _, season := range seasons {
+			keys = append(keys, s.b2Cleanup.ExtractKeyFromURL(season.PosterURL))
+		}
+		for _, episode := range episodes {
+			videoKey := s.b2Cleanup.ExtractKeyFromURL(episode.VideoURL)
+			if prefix == "" || !strings.HasPrefix(videoKey, normalizeB2DeletePrefix(prefix)) {
+				keys = append(keys, videoKey)
+			}
+			keys = append(keys, s.b2Cleanup.ExtractKeyFromURL(episode.ThumbnailURL))
+		}
+		for _, key := range dedupeKeys(keys) {
+			if _, err := s.b2Cleanup.DeleteByKey(key); err != nil {
+				return fmt.Errorf("delete series asset key %q: %w", key, err)
+			}
+		}
+	}
+
+	if s.clipRepo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		clips, err := s.clipRepo.FindBySeriesID(ctx, series.ID)
+		if err != nil {
+			return fmt.Errorf("load series clips: %w", err)
+		}
+		if s.b2Cleanup != nil {
+			for _, clip := range clips {
+				key := firstNonEmptyTrimmed(s.b2Cleanup.ExtractKeyFromURL(clip.URL), strings.TrimPrefix(clip.Path, "/"))
+				if key == "" {
+					continue
+				}
+				if _, err := s.b2Cleanup.DeleteByKey(key); err != nil {
+					return fmt.Errorf("delete series clip key %q: %w", key, err)
+				}
+			}
+		}
+		if err := s.clipRepo.DeleteBySeriesID(ctx, series.ID); err != nil {
+			return fmt.Errorf("delete series clip rows: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *SeriesService) deriveSeriesDeletePrefix(series *models.Series, episodes []models.Episode) string {
+	if s.b2Cleanup == nil || series == nil {
+		return ""
+	}
+	for _, episode := range episodes {
+		key := strings.TrimSpace(s.b2Cleanup.ExtractKeyFromURL(episode.VideoURL))
+		if key == "" {
+			continue
+		}
+		parts := strings.Split(strings.Trim(key, "/"), "/")
+		if len(parts) < 4 || parts[0] != "videos" || parts[1] != "serials" || parts[2] == "" {
+			continue
+		}
+		prefix := strings.Join(parts[:3], "/") + "/"
+		if validateB2DeletePrefixForSeries(prefix, *series) == nil {
+			return prefix
+		}
+	}
+	return ""
+}
+
+func (s *SeriesService) countFilesByPrefix(prefix string) (int, error) {
+	if s.b2Cleanup == nil {
+		return 0, nil
+	}
+	prefix = normalizeB2DeletePrefix(prefix)
+	if prefix == "" {
+		return 0, nil
+	}
+	pages, err := s.b2Cleanup.listByPrefix(prefix)
+	if err != nil {
+		return 0, err
+	}
+	total := 0
+	for _, page := range pages {
+		for _, file := range page.Files {
+			if file.Action == "folder" {
+				continue
+			}
+			total++
+		}
+	}
+	return total, nil
 }
 
 // CreateSeason creates a new season

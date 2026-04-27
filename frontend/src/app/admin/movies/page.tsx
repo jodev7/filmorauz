@@ -141,12 +141,13 @@ export default function AdminMoviesPage() {
   };
 
   const handleReject = async (movie: Movie) => {
-    setRejecting(movie.id);
+    const movieId = movie._id || movie.id;
+    setRejecting(movieId);
     try {
-      await rejectMovie(token!, movie.id);
+      await rejectMovie(token!, movieId);
       setMovies((prev) =>
         prev.map((m) =>
-          m.id === movie.id
+          (m._id || m.id) === movieId
             ? { ...m, approval_status: "rejected", is_published: false }
             : m
         )

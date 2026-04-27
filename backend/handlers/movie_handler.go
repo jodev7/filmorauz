@@ -11,6 +11,7 @@ import (
 	"github.com/filmorauz/backend/repositories"
 	"github.com/filmorauz/backend/services"
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type MovieHandler struct {
@@ -600,7 +601,7 @@ func (h *MovieHandler) ApproveMovie(c *gin.Context) {
 				Country:     movie.Country,
 				CountriesUz: movie.CountriesUz,
 				Code:        movie.Code,
-				PosterURL:   movie.PosterURL,
+				PosterURL:   firstNonEmpty(movie.PosterURL, movie.BackdropURL),
 				Quality:     movie.Quality,
 				Description: movie.Description,
 				Slug:        movie.Slug,
@@ -627,9 +628,20 @@ func (h *MovieHandler) ApproveMovie(c *gin.Context) {
 // RejectMovie PATCH /api/admin/movies/:id/reject
 func (h *MovieHandler) RejectMovie(c *gin.Context) {
 	id := c.Param("id")
+	log.Println("Reject movie:", id)
+
+	if _, err := primitive.ObjectIDFromHex(id); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
 	byUserID := c.GetString("user_id")
 
 	if err := h.movieService.SetMovieApprovalStatus(id, "rejected", byUserID); err != nil {
+		if err == primitive.ErrInvalidHex {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+			return
+		}
 		if err.Error() == "movie not found" {
 			c.JSON(http.StatusNotFound, gin.H{"error": "movie not found"})
 			return
@@ -647,4 +659,13 @@ func extractMovieGenres(movies []models.Movie) [][]string {
 		out = append(out, m.Genre)
 	}
 	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

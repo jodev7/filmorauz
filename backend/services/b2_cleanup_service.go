@@ -24,6 +24,17 @@ import (
 	"time"
 )
 
+var broadB2DeletePrefixes = map[string]struct{}{
+	"":               {},
+	"/":              {},
+	"videos":         {},
+	"videos/":        {},
+	"videos/movies":  {},
+	"videos/movies/": {},
+	"movies":         {},
+	"movies/":        {},
+}
+
 // B2CleanupService deletes files from a Backblaze B2 bucket.
 // Zero value is not usable — create via NewB2CleanupService.
 type B2CleanupService struct {
@@ -297,13 +308,12 @@ func (s *B2CleanupService) DeleteByKey(key string) (skipped bool, err error) {
 // A missing prefix (0 matches) is logged and returned as {0, 0, 0} with no error.
 func (s *B2CleanupService) DeleteByPrefix(prefix string) (B2DeleteStats, error) {
 	stats := B2DeleteStats{}
-	prefix = strings.TrimSpace(prefix)
+	prefix = normalizeB2DeletePrefix(prefix)
 	if prefix == "" {
 		return stats, nil
 	}
-	// B2 prefix matching: a trailing slash scopes to the folder.
-	if !strings.HasSuffix(prefix, "/") {
-		prefix = prefix + "/"
+	if isUnsafeB2DeletePrefix(prefix) {
+		return stats, fmt.Errorf("unsafe delete prefix")
 	}
 	pages, err := s.listByPrefix(prefix)
 	if err != nil {
@@ -388,15 +398,41 @@ func (s *B2CleanupService) DeriveVideoFolderPrefix(videoURL string) string {
 	if key == "" {
 		return ""
 	}
-	// Everything up to and including the first segment after "videos/".
 	if !strings.HasPrefix(key, "videos/") {
-		// Not a standard videos key — caller should still try DeleteByKey
-		// on the exact URL to handle direct uploads.
 		return ""
 	}
-	parts := strings.SplitN(key, "/", 3) // ["videos", "<folder>", "rest…"]
-	if len(parts) < 2 {
+	parts := strings.Split(key, "/")
+	if len(parts) < 3 {
 		return ""
 	}
-	return parts[0] + "/" + parts[1] + "/"
+	if parts[1] == "movies" || parts[1] == "serials" {
+		if len(parts) < 4 {
+			return ""
+		}
+		return strings.Join(parts[:3], "/") + "/"
+	}
+	return strings.Join(parts[:2], "/") + "/"
+}
+
+func normalizeB2DeletePrefix(prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return ""
+	}
+	prefix = strings.TrimPrefix(prefix, "/")
+	if prefix == "" {
+		return "/"
+	}
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	return prefix
+}
+
+func isUnsafeB2DeletePrefix(prefix string) bool {
+	prefix = normalizeB2DeletePrefix(prefix)
+	if _, blocked := broadB2DeletePrefixes[prefix]; blocked {
+		return true
+	}
+	return false
 }

@@ -260,6 +260,7 @@ func main() {
 		CDNURL:     cfg.CDNURL,
 	})
 	movieService.SetStorageDependencies(clipRepo, b2Cleanup)
+	seriesService.SetStorageDependencies(clipRepo, b2Cleanup)
 
 	// Instagram schedule repository and handler
 	igScheduleRepo := repositories.NewInstagramScheduleRepository(db)
