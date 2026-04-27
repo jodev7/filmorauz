@@ -1640,6 +1640,7 @@ class DDownloaderIntegration:
                 download_duration = time.time() - start_time
                 
                 logger.info(f"[DDOWNLOADER] Download validated successfully: {path} ({file_size} bytes)")
+                path = os.path.abspath(path)
                 
                 return DownloadResult(
                     success=True,

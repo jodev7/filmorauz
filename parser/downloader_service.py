@@ -463,6 +463,30 @@ def _report_download_complete(job_id: str, candidate_path: str, download_dir: st
     }, resolved_path))
 
 
+def _send_final_download_updates(job_id: str, local_path: str, file_size: int):
+    resolved_path = _ensure_absolute_file_path(local_path)
+    if not job_id or not resolved_path or not os.path.exists(resolved_path) or file_size <= 0:
+        return
+
+    report_progress_to_backend(job_id, _with_path_aliases({
+        "stage": "download",
+        "status": "completed",
+        "progress": 100,
+        "downloaded_bytes": file_size,
+        "total_bytes": file_size,
+        "message": "Download completed",
+    }, resolved_path))
+
+    report_progress_to_backend(job_id, _with_path_aliases({
+        "stage": "processing",
+        "status": "processing",
+        "progress": 100,
+        "downloaded_bytes": file_size,
+        "total_bytes": file_size,
+        "message": "Download finished, starting processing",
+    }, resolved_path))
+
+
 def report_progress_to_backend(job_id: str, progress_data: dict):
     """Send progress update to backend API - best-effort only, retries on failure"""
     import time
@@ -1403,8 +1427,11 @@ class DownloaderService:
         
         if not result.success:
             raise DownloadError(f"aria2c download failed: {result.error}")
-        
-        return result.local_path
+
+        local_path = _resolve_completed_download_path(job_id or "", result.local_path or "", self.download_dir)
+        if not local_path:
+            raise DownloadError("aria2c completed but local_path is empty")
+        return local_path
 
     def _download_manifest_with_ddownloader(
         self,
@@ -1463,8 +1490,10 @@ class DownloaderService:
         
         if not result.success:
             raise DownloadError(f"DDownloader failed: {result.error}")
-
-        return result.local_path
+        local_path = _resolve_completed_download_path(job_id or "", result.local_path or "", self.download_dir)
+        if not local_path:
+            raise DownloadError("DDownloader completed but local_path is empty")
+        return local_path
 
     def _download_youtube(
         self,
@@ -1796,12 +1825,17 @@ class DownloaderService:
                     logger.warning(f"[DOWNLOADER] File too small ({file_size} bytes), may be corrupted")
                     # Don't fail on small files - some short videos might be legitimate
                 
+                path = _ensure_absolute_file_path(path)
                 logger.info(f"[DOWNLOADER] Download validated successfully: {path} ({file_size} bytes)")
-                
+
+                if backend_job_id:
+                    _send_final_download_updates(backend_job_id, path, file_size)
+
                 return {
                     "success": True,
                     "type": stream_type,
                     "file_path": path,
+                    "local_path": path,
                     "file_name": output_name,
                     "file_size": file_size,
                 }
