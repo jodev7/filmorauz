@@ -725,7 +725,9 @@ function CatalogTab({
         source_id: result.source_id,
         detail_url: result.detail_url,
         title: result.title,
-        type: (result as any).type || "movie",
+        // Pass detected type from search; if the parser couldn't classify,
+        // leave empty so backend re-detects via /details and rejects unknown.
+        type: ((result as any).type || (result as any).content_type || "") as "movie" | "serial",
       });
       onImportSuccess();
     } catch (err) {
@@ -747,12 +749,16 @@ function CatalogTab({
         source_id: "",
         detail_url: directUrl.trim(),
         title: "",
-        type: "movie",
+        // Empty type → backend hits /details, parser detects movie/serial.
+        // Backend rejects with "Content type could not be detected" if unknown.
+        type: "" as unknown as "movie" | "serial",
       });
       onImportSuccess();
       setDirectUrl("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Havola orqali import xatosiz");
+      const msg = err instanceof Error ? err.message : "Havola orqali import xatosiz";
+      // Surface backend's structured "Content type could not be detected" error verbatim
+      setError(msg);
     } finally {
       setDirectImporting(false);
     }
@@ -881,9 +887,21 @@ function CatalogTab({
                   )}
                   <div className="flex-1 min-w-0">
                     <h4 className="font-semibold text-white text-sm line-clamp-2">{result.title}</h4>
-                    {result.year && result.year !== 0 && (
-                      <p className="text-xs text-gray-400 mt-1">{result.year}</p>
-                    )}
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      {result.year && result.year !== 0 && (
+                        <span className="text-xs text-gray-400">{result.year}</span>
+                      )}
+                      {(() => {
+                        const t = ((result as any).type || (result as any).content_type || "").toLowerCase();
+                        if (t === "serial" || t === "series") {
+                          return <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-600 text-white">Serial</span>;
+                        }
+                        if (t === "movie") {
+                          return <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-600 text-white">Movie</span>;
+                        }
+                        return <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-600 text-white">Unknown</span>;
+                      })()}
+                    </div>
                     <button
                       onClick={() => handleImportSearch(result)}
                       disabled={importing === result.source_id}

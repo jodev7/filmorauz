@@ -565,11 +565,16 @@ _download_queue_lock = threading.Lock()
 def _report_backend_failure(job_id: str, message: str):
     if not job_id or not BACKEND_URL:
         return
+    # Mark job failed cleanly: stage=failed, status=failed, progress=0,
+    # error/message carry the parser reason. Backend's UpdateProgress
+    # persists status/stage; error is also set when status=failed.
     report_progress_to_backend(job_id, {
-        "stage": "download",
+        "stage": "failed",
         "status": "failed",
         "progress": 0,
+        "progress_percent": 0,
         "message": message,
+        "error": message,
     })
 
 
@@ -602,15 +607,48 @@ def _resolve_claimed_job_video(job: dict, parser_base_url: str) -> tuple[str, st
             params["backdrop_url"] = metadata["backdrop"]
 
     response = requests.get(f"{parser_base_url}/details", params=params, timeout=180)
+
+    # Try to decode JSON regardless of status, so we can surface parser reasons
+    # for 4xx responses (e.g. freekino 403 → /details 422 video_url_not_found).
+    try:
+        payload = response.json()
+    except Exception:
+        payload = {}
+
+    if response.status_code in (422, 400, 403, 500, 502, 503):
+        reason = (
+            payload.get("reason")
+            or payload.get("manual_reason")
+            or payload.get("error")
+            or f"parser /details http {response.status_code}"
+        )
+        src = payload.get("source") or job.get("source", "")
+        sid = payload.get("source_id") or job.get("source_id", "")
+        durl = payload.get("detail_url") or job.get("detail_url", "")
+        raise RuntimeError(
+            f"parser /details failed http={response.status_code} "
+            f"source={src} source_id={sid} detail_url={durl} reason={reason}"
+        )
+
     response.raise_for_status()
-    payload = response.json()
 
     if payload.get("error"):
-        raise RuntimeError(payload["error"])
+        src = payload.get("source") or job.get("source", "")
+        sid = payload.get("source_id") or job.get("source_id", "")
+        durl = payload.get("detail_url") or job.get("detail_url", "")
+        reason = payload.get("reason") or payload.get("manual_reason") or payload["error"]
+        raise RuntimeError(
+            f"parser /details error source={src} source_id={sid} detail_url={durl} reason={reason}"
+        )
 
     video_url = (payload.get("video_url") or "").strip()
     if not video_url:
-        raise RuntimeError("parser details did not return video_url")
+        src = job.get("source", "")
+        sid = job.get("source_id", "")
+        durl = job.get("detail_url", "")
+        raise RuntimeError(
+            f"video_url_not_found source={src} source_id={sid} detail_url={durl}"
+        )
 
     referer = (payload.get("video_page_url") or referer or job.get("detail_url") or "").strip()
     return video_url, referer
@@ -655,7 +693,13 @@ def _download_queue_worker(slot: int, parser_base_url: str):
             try:
                 _run_claimed_download(job, parser_base_url)
             except Exception as exc:
-                logger.error(f"[QUEUE] slot={slot} job_id={job.get('job_id')} failed: {exc}", exc_info=True)
+                logger.error(
+                    f"[QUEUE] parser failed -> job failed slot={slot} "
+                    f"job_id={job.get('job_id')} source={job.get('source')} "
+                    f"source_id={job.get('source_id')} detail_url={job.get('detail_url')} "
+                    f"error={exc}",
+                    exc_info=True,
+                )
                 _report_backend_failure(job.get("job_id", ""), str(exc))
         except Exception as exc:
             logger.warning(f"[QUEUE] slot={slot} claim error: {exc}")
@@ -1392,17 +1436,29 @@ class ParserHandler(BaseHTTPRequestHandler):
                     logger.error(f"[PARSER] video_url_not_found for source={source}, id={source_id}")
                     logger.error(f"[PARSER] Checked {len(video_urls_list)} video URLs, types found: {found_types}")
                     logger.error(f"[PARSER] Player URL fallback: {player_url_found or 'none'}")
-                    # Detect likely blocked/anti-bot responses
-                    if player_url_found and ('://' in player_url_found and 
+
+                    # Surface specific reason from parser (e.g. freekino_403)
+                    parser_error = details.get('error', '') if isinstance(details, dict) else ''
+                    parser_reason = details.get('error_reason', '') if isinstance(details, dict) else ''
+                    http_status = details.get('http_status', 0) if isinstance(details, dict) else 0
+
+                    if parser_error == 'freekino_403' or http_status == 403:
+                        manual_reason = "Freekino blocked request / 403 Forbidden"
+                        error_type = "video_url_not_found"
+                    elif parser_error:
+                        manual_reason = parser_reason or parser_error
+                        error_type = "video_url_not_found"
+                    elif player_url_found and ('://' in player_url_found and
                         any(bad in player_url_found.lower() for bad in ['blocked', 'captcha', 'cloudflare', '403', 'denied'])):
                         manual_reason = "site_blocked"
+                        error_type = "video_url_not_found"
                         logger.error(f"[PARSER] DETECTED: Site likely blocked (player_url={player_url_found})")
                     else:
-                        manual_reason = "video_url_not_found"
-                    error_type = "needs_manual"
-                    # Return explicit error - NEVER return empty video_url silently
+                        manual_reason = "403 Forbidden or no video urls"
+                        error_type = "video_url_not_found"
+
                     page_url = detail_url if detail_url else source_id
-                    
+
                     response_payload = create_worker_payload(
                         source=source,
                         source_url=source_base_url,
@@ -1415,8 +1471,18 @@ class ParserHandler(BaseHTTPRequestHandler):
                     response_payload["success"] = False
                     response_payload["error"] = error_type
                     response_payload["manual_reason"] = manual_reason
+                    response_payload["reason"] = manual_reason
+                    response_payload["source"] = source
+                    response_payload["source_id"] = source_id
+                    response_payload["detail_url"] = detail_url or ""
                     response_payload["video_found"] = False
                     response_payload["download_needed"] = False
+                    if http_status:
+                        response_payload["http_status"] = http_status
+                    logger.error(
+                        f"[PARSER] /details -> 422 source={source} source_id={source_id} "
+                        f"detail_url={detail_url or ''} reason={manual_reason}"
+                    )
                     self._send_json(response_payload, 422)
                     return
                 

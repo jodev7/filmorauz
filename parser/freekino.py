@@ -173,13 +173,65 @@ class FreekinoParser:
     
     IMAGE_SELECTORS = ["img[data-src]", "img[data-lazy-src]", "img[src]"]
     
+    BROWSER_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,"
+            "image/avif,image/webp,*/*;q=0.8"
+        ),
+        "Accept-Language": "uz-UZ,uz;q=0.9,ru;q=0.8,en-US;q=0.7,en;q=0.6",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer": "https://freekino.net/",
+        "Origin": "https://freekino.net",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+    }
+
     def __init__(self):
         self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "text/html,application/xhtml+xml",
-            "Referer": "https://freekino.net/",
-        })
+        self.session.headers.update(self.BROWSER_HEADERS)
+
+    def _fetch_browserlike(self, url: str, timeout: int = 30, retries: int = 3):
+        """Fetch a URL with browser-like headers and bounded retries.
+
+        Returns the final response (last attempt). Logs status code at each step.
+        """
+        import time as _time
+        last_response = None
+        last_exc = None
+        backoff = 1.0
+        for attempt in range(1, retries + 1):
+            try:
+                resp = self.session.get(
+                    url,
+                    timeout=timeout,
+                    allow_redirects=True,
+                    headers=self.BROWSER_HEADERS,
+                )
+                logger.info(
+                    f"[FREEKINO] fetch detail status code = {resp.status_code} "
+                    f"(attempt {attempt}/{retries}) url={url}"
+                )
+                last_response = resp
+                if resp.status_code != 403:
+                    return resp
+            except requests.RequestException as e:
+                last_exc = e
+                logger.warning(f"[FREEKINO] fetch error attempt {attempt}/{retries}: {e}")
+            if attempt < retries:
+                _time.sleep(backoff)
+                backoff *= 2
+        if last_response is not None:
+            return last_response
+        raise last_exc if last_exc else requests.RequestException("freekino fetch failed")
     
     def _is_valid_title(self, title: str) -> bool:
         """
@@ -453,6 +505,12 @@ class FreekinoParser:
                 if match:
                     source_id = f"freekino_{match.group(1)}"
         
+        from helpers import detect_content_type as _detect_ct
+        ct, ct_reason = _detect_ct(link, "freekino")
+        if ct == "unknown":
+            ct = "movie"
+        logger.info(f"[SEARCH] source=freekino result={link[:80]} content_type={ct} reason={ct_reason}")
+
         return {
             "source": "freekino",
             "title": title,
@@ -462,6 +520,7 @@ class FreekinoParser:
             "quality": quality,
             "source_id": source_id,
             "detail_url": link,
+            "type": ct,
         }
     
     def get_detail(self, url: str) -> Dict[str, Any]:
@@ -479,8 +538,33 @@ class FreekinoParser:
         }
 
         try:
-            response = self.session.get(url, timeout=30)
-            response.raise_for_status()
+            try:
+                response = self._fetch_browserlike(url, timeout=30, retries=3)
+            except requests.RequestException as e:
+                logger.error(f"[FREEKINO] detail fetch failed (network): {e} url={url}")
+                result["error"] = "freekino_fetch_failed"
+                result["error_reason"] = f"network error: {e}"
+                return result
+
+            status = response.status_code
+            if status == 403:
+                logger.error(
+                    f"[FREEKINO] detail returned 403 Forbidden after retries url={url}"
+                )
+                logger.warning(f"[FREEKINO] selected video_url: NOT FOUND (blocked 403)")
+                result["error"] = "freekino_403"
+                result["error_reason"] = "Freekino blocked request / 403 Forbidden"
+                result["http_status"] = 403
+                return result
+            if status >= 400:
+                logger.error(
+                    f"[FREEKINO] detail returned HTTP {status} url={url}"
+                )
+                result["error"] = "freekino_http_error"
+                result["error_reason"] = f"HTTP {status}"
+                result["http_status"] = status
+                return result
+
             logger.info(f"[FREEKINO] page fetched - url={response.url}, bytes={len(response.text)}")
             soup = BeautifulSoup(response.text, "lxml")
 
@@ -510,9 +594,14 @@ class FreekinoParser:
             genre_elems = soup.select(".genres a, .genre a, [class*='genre'] a")
             result["genres"] = [clean_text(g.get_text()) for g in genre_elems if g.get_text()]
 
-            # Type
-            if "/serial/" in url:
-                result["type"] = "serial"
+            # Type via shared detector (URL + soup signals)
+            from helpers import detect_content_type as _detect_ct
+            ct, ct_reason = _detect_ct(url, "freekino", soup=soup)
+            if ct == "unknown":
+                ct = "serial" if "/serial/" in url else "movie"
+                ct_reason = "fallback by url"
+            result["type"] = ct
+            logger.info(f"[PARSER] detected content_type={ct} reason={ct_reason} url={url}")
 
             # Video — extract all quality variants
             all_entries, quality_urls = self._extract_video(soup, response.url)
@@ -543,11 +632,13 @@ class FreekinoParser:
                 qualities_summary = [e.get("quality", "?") for e in all_entries]
                 logger.info(f"[FREEKINO] qualities extracted: {qualities_summary}")
                 logger.info(
-                    f"[FREEKINO] chosen video_url: quality={best.get('quality','?')}, "
+                    f"[FREEKINO] selected video_url: quality={best.get('quality','?')}, "
                     f"type={best.get('type','?')}, url={best['url'][:120]}"
                 )
             else:
-                logger.warning(f"[FREEKINO] No valid video URL found for {url}")
+                logger.warning(f"[FREEKINO] selected video_url: NOT FOUND for {url}")
+                result["error"] = "video_url_not_found"
+                result["error_reason"] = "no playable video URL found on detail page"
 
         except Exception as e:
             logger.error(f"[FREEKINO] Detail error: {e}")

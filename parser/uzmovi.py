@@ -141,12 +141,20 @@ class UzmoviParser(BaseParser):
               "description": r.description, "source": r.source} for r in results],
             key="link"
         )
+        from helpers import detect_content_type as _detect_ct
+
+        def _with_ct(link):
+            ct, reason = _detect_ct(link, "uzmovi")
+            logger.info(f"[SEARCH] source=uzmovi result={link[:80]} content_type={ct} reason={reason}")
+            return ct if ct != "unknown" else "movie"
+
         results = [SearchResult(
             title=r["title"], year=r["year"], poster=r["poster"],
             description=r["description"], source_id=r["source_id"],
-            detail_url=r["link"], source=r["source"], content_type="movie"
+            detail_url=r["link"], source=r["source"],
+            content_type=_with_ct(r["link"])
         ) for r in results]
-        
+
         # Filter and rank by relevance
         if query and results:
             dict_results = [r.to_dict() for r in results]
@@ -154,7 +162,8 @@ class UzmoviParser(BaseParser):
             results = [SearchResult(
                 title=r["title"], year=r["year"], poster=r["poster"],
                 description=r["description"], source_id=r["source_id"],
-                detail_url=r["detail_url"], source=r["source"], content_type="movie"
+                detail_url=r["detail_url"], source=r["source"],
+                content_type=r.get("type") or _with_ct(r["detail_url"])
             ) for r in dict_results]
         
         if DEBUG:
@@ -385,10 +394,14 @@ class UzmoviParser(BaseParser):
         # Extract source_id
         source_id = extract_source_id(url)
         
-        # Determine type
-        movie_type = "movie"
-        if "/serial/" in url or "/tv-series/" in url:
-            movie_type = "serial"
+        # Determine type via shared detector (URL + soup signals)
+        from helpers import detect_content_type as _detect_ct
+        movie_type, _ct_reason = _detect_ct(url, "uzmovi", soup=soup)
+        if movie_type == "unknown":
+            # Conservative legacy fallback for previously-working uzmovi flow
+            movie_type = "serial" if ("/serial/" in url or "/tv-series/" in url) else "movie"
+            _ct_reason = "fallback by legacy url heuristic"
+        logger.info(f"[PARSER] detected content_type={movie_type} reason={_ct_reason} url={url}")
         
         return MovieDetails(
             title=title,
@@ -589,10 +602,14 @@ class UzmoviParser(BaseParser):
         # Extract source_id
         source_id = extract_source_id(url)
         
-        # Determine type
-        movie_type = "movie"
-        if "/serial/" in url or "/tv-series/" in url:
-            movie_type = "serial"
+        # Determine type via shared detector (URL + soup signals)
+        from helpers import detect_content_type as _detect_ct
+        movie_type, _ct_reason = _detect_ct(url, "uzmovi", soup=soup)
+        if movie_type == "unknown":
+            # Conservative legacy fallback for previously-working uzmovi flow
+            movie_type = "serial" if ("/serial/" in url or "/tv-series/" in url) else "movie"
+            _ct_reason = "fallback by legacy url heuristic"
+        logger.info(f"[PARSER] detected content_type={movie_type} reason={_ct_reason} url={url}")
         
         return MovieDetails(
             title=title,

@@ -426,11 +426,19 @@ class AsilmediaParser(BaseParser):
                              "poster": r.poster, "source_id": r.source_id,
                              "description": r.description, "source": r.source} for r in results]
             dict_results = deduplicate_results(dict_results, key="link")
-            results = [SearchResult(
-                title=r["title"], year=r["year"], poster=r["poster"],
-                description=r["description"], source_id=r["source_id"],
-                detail_url=r["link"], source=r["source"], content_type="movie"
-            ) for r in dict_results]
+            from helpers import detect_content_type as _detect_ct
+            new_results = []
+            for r in dict_results:
+                ct, reason = _detect_ct(r["link"], "asilmedia")
+                if ct == "unknown":
+                    ct = "movie"
+                logger.info(f"[SEARCH] source=asilmedia result={r['link'][:80]} content_type={ct} reason={reason}")
+                new_results.append(SearchResult(
+                    title=r["title"], year=r["year"], poster=r["poster"],
+                    description=r["description"], source_id=r["source_id"],
+                    detail_url=r["link"], source=r["source"], content_type=ct
+                ))
+            results = new_results
 
         return results
     
@@ -508,6 +516,12 @@ class AsilmediaParser(BaseParser):
                     if year:
                         break
         
+        from helpers import detect_content_type as _detect_ct
+        ct, reason = _detect_ct(detail_url, "asilmedia")
+        if ct == "unknown":
+            ct = "movie"
+        logger.info(f"[SEARCH] source=asilmedia result={detail_url[:80]} content_type={ct} reason={reason}")
+
         return SearchResult(
             title=title,
             year=year,
@@ -516,7 +530,7 @@ class AsilmediaParser(BaseParser):
             source_id=source_id,
             detail_url=detail_url,
             source=self.source_name,
-            content_type="movie"
+            content_type=ct
         )
     
     def _is_movie_link(self, href: str) -> bool:
@@ -696,6 +710,13 @@ class AsilmediaParser(BaseParser):
             for v in video_urls:
                 logger.info(f"[ASILMEDIA DLE]   - type={v['type']}, url={v['url'][:80]}")
         
+        from helpers import detect_content_type as _detect_ct
+        ct, ct_reason = _detect_ct(url, "asilmedia", soup=soup)
+        if ct == "unknown":
+            ct = "movie"
+            ct_reason = "fallback default movie (no signals)"
+        logger.info(f"[PARSER] detected content_type={ct} reason={ct_reason} url={url}")
+
         return MovieDetails(
             title=title,
             year=year or 0,
@@ -710,7 +731,8 @@ class AsilmediaParser(BaseParser):
             detail_url=url,
             source=self.source_name,
             video_page_url=url,
-            video_urls=video_urls
+            video_urls=video_urls,
+            type=ct
         )
     
     def _extract_video_urls(self, soup, page_url: str) -> List[Dict[str, str]]:

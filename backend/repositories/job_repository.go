@@ -547,6 +547,7 @@ type ProgressUpdate struct {
 	SpeedMBps          float64 `json:"speed_mbps"`
 	EtaSeconds         int     `json:"eta_seconds"`
 	Message            string  `json:"message"`
+	Error              string  `json:"error"`
 	StepsDownload      bool    `json:"steps_download"`
 	FilePath           string  `json:"file_path"` // NEW: Local file path after download completes
 	LocalPath          string  `json:"local_path"`
@@ -689,6 +690,24 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 
 	if progress.Message != "" {
 		update["$set"].(bson.M)["message"] = progress.Message
+	}
+
+	// When the job is marked failed, persist an error string so the UI/admin can
+	// see the parser reason instead of a perpetual "downloading 0%". Prefer the
+	// explicit Error field; fall back to Message.
+	if effectiveStatus == string(models.IngestionStatusFailed) || progress.Stage == "failed" {
+		errStr := progress.Error
+		if errStr == "" {
+			errStr = progress.Message
+		}
+		if errStr != "" {
+			update["$set"].(bson.M)["error"] = errStr
+		}
+		// Ensure progress is pinned to 0 on failure so spinners stop.
+		update["$set"].(bson.M)["progress"] = 0
+		update["$set"].(bson.M)["status"] = string(models.IngestionStatusFailed)
+		update["$set"].(bson.M)["stage"] = "failed"
+		log.Printf("[JOB REPO] marking job %s FAILED error=%q", id, errStr)
 	}
 
 	log.Printf("[JOB REPO] Calling UpdateOne with filter: _id=%s", objID.Hex())

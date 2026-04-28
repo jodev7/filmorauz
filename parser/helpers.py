@@ -275,6 +275,104 @@ def create_debug_summary(
     }
 
 
+def detect_content_type(url: str, source: str, soup=None) -> tuple:
+    """Detect movie vs serial.
+
+    Returns: (content_type, reason) where content_type is "movie" | "serial" | "unknown"
+    and reason is a short string explaining the decision (used in logs).
+
+    Order:
+      1) URL pattern (cheap, reliable for our 3 sources).
+      2) DOM/soup hints if a soup is supplied (seasons/episodes blocks).
+    """
+    u = (url or "").lower()
+    src = (source or "").lower()
+
+    # Source-specific URL patterns. Be explicit per source to avoid false positives.
+    if src == "uzmovi":
+        # Serials: /serialar/, /serial/, /seriallar/, /uzbek-serial/, /turk-serial/, etc.
+        if any(seg in u for seg in (
+            "/serialar/", "/seriallar/", "/serial/", "/uzbek-serial",
+            "/turk-serial", "/korea-serial", "/koreya-serial", "/hind-serial",
+            "/yapon-serial", "/multserial",
+        )):
+            return ("serial", "uzmovi url path matches serial segment")
+        # Movies: /tarjima-kinolar/, /kinolar/, /film/
+        if any(seg in u for seg in (
+            "/tarjima-kinolar/", "/tarjima-kino", "/kinolar/", "/film/",
+            "/uzbek-kino", "/hind-kino", "/turk-kino", "/multfilm",
+        )):
+            return ("movie", "uzmovi url path matches movie segment")
+
+    elif src == "freekino":
+        # /serial/<id>-... → serial. /movie/<id>-... or /film/ → movie.
+        if "/serial/" in u or "/seriallar" in u:
+            return ("serial", "freekino url contains /serial/")
+        if "/movie/" in u or "/film/" in u:
+            return ("movie", "freekino url contains /movie/ or /film/")
+
+    elif src == "asilmedia":
+        # asilmedia.org uses /films/<category>/<id>-...html for everything,
+        # but category slug carries the type: /films/seriallar/, /serial/.
+        if any(seg in u for seg in (
+            "/seriallar/", "/serial/", "/uzbek-seriallar", "/hind-seriallar",
+            "/turk-seriallar", "/korea-seriallar", "/multseriallar",
+        )):
+            return ("serial", "asilmedia url path contains serial category")
+        if any(seg in u for seg in (
+            "/kinolar/", "/film/", "/films/", "/multfilmlar/",
+            "/uzbek-kinolari", "/hind-kinolari", "/turk-kinolari",
+        )):
+            # Films category is the generic listing — fall through to soup
+            # if nothing else gives us a stronger signal below.
+            url_hint = ("movie", "asilmedia url path matches movie category")
+        else:
+            url_hint = None
+    else:
+        url_hint = None
+
+    if 'url_hint' not in locals():
+        url_hint = None
+
+    # Page/DOM heuristics (only if soup supplied)
+    if soup is not None:
+        try:
+            text_lower = soup.get_text(" ", strip=True).lower() if soup else ""
+        except Exception:
+            text_lower = ""
+
+        # Strong serial signals: explicit episode/season blocks or playerjs
+        # multi-file lists labeled "Episode N" / "Qism N" / "Seriya N".
+        serial_dom_signals = [
+            "qism", "qismi", "qisim",            # uz "episode"
+            "серия", "серии", "сезон",           # ru "episode/season"
+            "epizod", "episode", "season",
+        ]
+        if text_lower:
+            hits = [s for s in serial_dom_signals if s in text_lower]
+            # require at least 2 distinct signals (e.g. "qism" and "sezon"),
+            # OR a single very explicit one combined with a list of episodes
+            if len(hits) >= 2:
+                return ("serial", f"page text mentions serial signals: {hits[:3]}")
+
+        # Episode/season DOM blocks
+        for sel in (
+            ".series-list", ".episodes", ".episode-list", ".seasons", ".season-list",
+            "[class*='episode']", "[class*='season']",
+            "ul.serii", "ol.episodes",
+        ):
+            try:
+                if soup.select_one(sel):
+                    return ("serial", f"page has DOM block matching {sel}")
+            except Exception:
+                pass
+
+    if url_hint:
+        return url_hint
+
+    return ("unknown", "no url or page signal matched")
+
+
 def is_youtube_url(url: str) -> bool:
     """Return True if url is a YouTube watch/shorts/youtu.be link."""
     if not url:

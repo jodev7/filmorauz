@@ -1477,34 +1477,73 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 		return
 	}
 
-	// For direct URL import mode: if source_id not provided but detail_url is, fetch details from parser first
-	if input.SourceID == "" && input.DetailURL != "" {
+	// For direct URL import mode: if source_id or type missing but detail_url is provided,
+	// fetch details from parser first so we can route movie/series correctly.
+	if input.DetailURL != "" && (input.SourceID == "" || input.Type == "") {
 		detailsURL := fmt.Sprintf("%s/details?source=%s&url=%s", h.parserURL, input.Source, url.QueryEscape(input.DetailURL))
+		log.Printf("[DIRECT_IMPORT] fetching details url=%s source=%s", input.DetailURL, input.Source)
 		resp, err := h.httpClient.Get(detailsURL)
-		if err == nil && resp.StatusCode == 200 {
+		if err == nil && resp != nil {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
 			var details map[string]interface{}
-			if body, err := io.ReadAll(resp.Body); err == nil {
+			if len(body) > 0 {
 				json.Unmarshal(body, &details)
-				// Extract source_id from details
-				if sid, ok := details["source_id"].(string); ok && sid != "" {
+			}
+			// Treat 200 and 422 alike for metadata pickup — 422 still contains
+			// title/source_id/type when the parser couldn't resolve a video URL.
+			if resp.StatusCode == 200 || resp.StatusCode == 422 {
+				if sid, ok := details["source_id"].(string); ok && sid != "" && input.SourceID == "" {
 					input.SourceID = sid
 				}
-				// Extract title if not provided
 				if input.Title == "" {
 					if t, ok := details["title"].(string); ok {
 						input.Title = t
 					}
 				}
-				// Extract type if not provided
 				if input.Type == "" {
 					if t, ok := details["type"].(string); ok {
 						input.Type = t
 					}
 				}
+			} else {
+				log.Printf("[DIRECT_IMPORT] parser /details returned status=%d", resp.StatusCode)
+			}
+		} else if err != nil {
+			log.Printf("[DIRECT_IMPORT] parser /details request failed: %v", err)
+			if resp != nil {
+				resp.Body.Close()
 			}
 		}
-		resp.Body.Close()
 	}
+
+	// Reject when content_type is unknown — never silently default to "movie".
+	normalizedType := strings.ToLower(strings.TrimSpace(input.Type))
+	if normalizedType == "series" {
+		normalizedType = "serial"
+	}
+	if normalizedType != "" && normalizedType != "movie" && normalizedType != "serial" {
+		log.Printf("[DIRECT_IMPORT] unsupported content_type=%q url=%s", input.Type, input.DetailURL)
+		c.JSON(http.StatusUnprocessableEntity, gin.H{
+			"error":        "Content type could not be detected",
+			"reason":       fmt.Sprintf("parser returned unsupported type: %q", input.Type),
+			"detail_url":   input.DetailURL,
+			"source":       input.Source,
+		})
+		return
+	}
+	if normalizedType == "" {
+		log.Printf("[DIRECT_IMPORT] missing content_type for url=%s source=%s", input.DetailURL, input.Source)
+		c.JSON(http.StatusUnprocessableEntity, gin.H{
+			"error":      "Content type could not be detected",
+			"reason":     "parser did not return a movie/serial classification",
+			"detail_url": input.DetailURL,
+			"source":     input.Source,
+		})
+		return
+	}
+	input.Type = normalizedType
+	log.Printf("[DIRECT_IMPORT] url=%s source=%s content_type=%s", input.DetailURL, input.Source, input.Type)
 
 	// If still no source_id, generate from detail_url
 	if input.SourceID == "" && input.DetailURL != "" {
@@ -1542,7 +1581,8 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 		return
 	}
 
-	// Create job
+	// Create job — content_type comes from detection above (movie at this point;
+	// the serial branch returned earlier).
 	job := &models.IngestionJob{
 		Title:       input.Title,
 		Source:      input.Source,
@@ -1553,7 +1593,7 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 		Progress:    0,
 		Steps:       models.JobSteps{},
 		Logs:        []models.IngestionLog{},
-		ContentType: "movie",
+		ContentType: input.Type,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
