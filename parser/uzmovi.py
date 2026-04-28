@@ -21,7 +21,6 @@ from helpers import (
     extract_duration,
     extract_source_id,
     deduplicate_results,
-    filter_and_rank_results,
     isValidStreamUrl,
     select_best_stream_url
 )
@@ -105,10 +104,120 @@ class UzmoviParser(BaseParser):
     @property
     def base_url(self) -> str:
         return self.BASE_URL
+
+    def _detect_uzmovi_type(self, detail_url: str = "", title: str = "", soup=None, card=None) -> str:
+        """Detect movie vs serial using Uzmovi page/content signals first, URL second."""
+        title_lower = clean_text(title).lower() if title else ""
+        signal_text = title_lower
+
+        nodes = []
+        if card is not None:
+            nodes.append(card)
+        if soup is not None:
+            nodes.append(soup)
+
+        for node in nodes:
+            try:
+                node_text = clean_text(node.get_text(" ", strip=True)).lower()
+            except Exception:
+                node_text = ""
+            if node_text:
+                signal_text = f"{signal_text} {node_text}".strip()
+
+        strong_title_signals = (
+            "barcha qismlari",
+            " serial",
+            "serial ",
+            "сериал",
+        )
+        if any(sig in signal_text for sig in strong_title_signals):
+            return "serial"
+
+        episode_patterns = (
+            r'\b\d+\s*-\s*qism\b',
+            r'\b\d+-qism\b',
+            r'\b\d+\s*qism\b',
+            r'\bepisode\s*\d+\b',
+            r'\bseriya\s*\d+\b',
+            r'\bсерия\s*\d+\b',
+        )
+        if any(re.search(pattern, signal_text, re.IGNORECASE) for pattern in episode_patterns):
+            return "serial"
+
+        page_signals = (
+            "qismlardan tanlash",
+            "barcha qismlari",
+            "episode list",
+            "episode grid",
+            "serial",
+            "сериал",
+        )
+        if any(sig in signal_text for sig in page_signals):
+            return "serial"
+
+        serial_selectors = (
+            ".batcoh-list",
+            ".batcoh-item",
+            "a[href*='/episode/']",
+            "a[title*='-qism']",
+            "a[title*='qism']",
+            "[class*='episode']",
+            "[class*='serial']",
+        )
+        for node in nodes:
+            for selector in serial_selectors:
+                try:
+                    if node.select_one(selector):
+                        return "serial"
+                except Exception:
+                    continue
+
+        genre_selectors = (
+            ".finfo a",
+            ".finfo-text a",
+            ".genre a",
+            ".genres a",
+            "[class*='genre'] a",
+            "a[title='Serial']",
+        )
+        for node in nodes:
+            for selector in genre_selectors:
+                try:
+                    for el in node.select(selector):
+                        genre_text = clean_text(el.get_text()).lower()
+                        if genre_text in ("serial", "сериал") or " serial " in f" {genre_text} ":
+                            return "serial"
+                except Exception:
+                    continue
+
+        detail_lower = (detail_url or "").lower()
+        if any(seg in detail_lower for seg in (
+            "/serialar/", "/seriallar/", "/serial/", "/tv-series/", "/episode/",
+            "/uzbek-serial", "/turk-serial", "/korea-serial", "/koreya-serial",
+            "/hind-serial", "/multserial",
+        )):
+            return "serial"
+        return "movie"
     
     def search(self, query: str) -> List[SearchResult]:
-        """Search for movies on uzmovi.tv"""
-        return self._try_search_endpoints(query, self._extract_search_results)
+        """Search for movies on uzmovi.tv using the site's real search form."""
+        results: List[SearchResult] = []
+        search_url = f"{self.BASE_URL}/search.html"
+        params = {
+            "do": "search",
+            "subaction": "search",
+            "story": query,
+        }
+        try:
+            response = self.session.get(search_url, params=params, timeout=30, allow_redirects=True)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, "lxml")
+            results = self._extract_search_results(soup, query)
+        except Exception as e:
+            logger.warning(f"[UZMOVI] search failed query={query!r}: {e}")
+            results = []
+        logger.info(f"[SEARCH] source=uzmovi query={query} items_found={len(results)}")
+        return results
     
     def _extract_search_results(self, soup, query: str = "") -> List[SearchResult]:
         """Extract search results from parsed HTML"""
@@ -138,33 +247,22 @@ class UzmoviParser(BaseParser):
         results = deduplicate_results(
             [{"title": r.title, "link": r.detail_url, "year": r.year, 
               "poster": r.poster, "source_id": r.source_id, 
-              "description": r.description, "source": r.source} for r in results],
+              "description": r.description, "source": r.source,
+              "type": r.content_type} for r in results],
             key="link"
         )
-        from helpers import detect_content_type as _detect_ct
-
-        def _with_ct(link):
-            ct, reason = _detect_ct(link, "uzmovi")
-            logger.info(f"[SEARCH] source=uzmovi result={link[:80]} content_type={ct} reason={reason}")
-            return ct if ct != "unknown" else "movie"
 
         results = [SearchResult(
             title=r["title"], year=r["year"], poster=r["poster"],
             description=r["description"], source_id=r["source_id"],
             detail_url=r["link"], source=r["source"],
-            content_type=_with_ct(r["link"])
+            content_type=r.get("type") or self._detect_uzmovi_type(
+                detail_url=r["link"], title=r["title"]
+            )
         ) for r in results]
 
-        # Filter and rank by relevance
-        if query and results:
-            dict_results = [r.to_dict() for r in results]
-            dict_results = filter_and_rank_results(dict_results, query)
-            results = [SearchResult(
-                title=r["title"], year=r["year"], poster=r["poster"],
-                description=r["description"], source_id=r["source_id"],
-                detail_url=r["detail_url"], source=r["source"],
-                content_type=r.get("type") or _with_ct(r["detail_url"])
-            ) for r in dict_results]
+        for r in results:
+            logger.info(f"[SEARCH] source=uzmovi result={r.detail_url[:80]} content_type={r.content_type}")
         
         if DEBUG:
             logger.info(f"[UZMOVI] Returning {len(results)} results")
@@ -260,7 +358,8 @@ class UzmoviParser(BaseParser):
             description="",
             source_id=source_id,
             detail_url=detail_url,
-            source=self.source_name
+            source=self.source_name,
+            content_type=self._detect_uzmovi_type(detail_url=detail_url, title=title, card=card),
         )
     
     def get_details(self, url: str) -> MovieDetails:
@@ -394,14 +493,8 @@ class UzmoviParser(BaseParser):
         # Extract source_id
         source_id = extract_source_id(url)
         
-        # Determine type via shared detector (URL + soup signals)
-        from helpers import detect_content_type as _detect_ct
-        movie_type, _ct_reason = _detect_ct(url, "uzmovi", soup=soup)
-        if movie_type == "unknown":
-            # Conservative legacy fallback for previously-working uzmovi flow
-            movie_type = "serial" if ("/serial/" in url or "/tv-series/" in url) else "movie"
-            _ct_reason = "fallback by legacy url heuristic"
-        logger.info(f"[PARSER] detected content_type={movie_type} reason={_ct_reason} url={url}")
+        movie_type = self._detect_uzmovi_type(detail_url=url, title=title, soup=soup)
+        logger.info(f"[PARSER] detected content_type={movie_type} url={url}")
         
         return MovieDetails(
             title=title,
@@ -2438,7 +2531,7 @@ class UzmoviParser(BaseParser):
                 quality = clean_text(el.get_text())
                 break
 
-        item_type = "serial" if ("/serial/" in detail_url or "/tv-series/" in detail_url) else "movie"
+        item_type = self._detect_uzmovi_type(detail_url=detail_url, title=title, card=card)
 
         return {
             "source_id": source_id,

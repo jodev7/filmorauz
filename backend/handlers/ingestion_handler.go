@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +33,184 @@ type IngestionHandler struct {
 	parserURL  string
 	workerURL  string
 	httpClient *http.Client
+}
+
+func parserRawPrefix(body []byte, limit int) string {
+	if limit <= 0 {
+		limit = 300
+	}
+	raw := string(body)
+	if len(raw) > limit {
+		return raw[:limit]
+	}
+	return raw
+}
+
+func parserValueAsString(v interface{}) string {
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	case float64:
+		if t == float64(int(t)) {
+			return strconv.Itoa(int(t))
+		}
+		return fmt.Sprintf("%v", t)
+	case int:
+		return strconv.Itoa(t)
+	case int32:
+		return strconv.Itoa(int(t))
+	case int64:
+		return strconv.FormatInt(t, 10)
+	case json.Number:
+		return t.String()
+	default:
+		if t == nil {
+			return ""
+		}
+		return strings.TrimSpace(fmt.Sprintf("%v", t))
+	}
+}
+
+func parserValueAsInt(v interface{}) int {
+	switch t := v.(type) {
+	case float64:
+		return int(t)
+	case float32:
+		return int(t)
+	case int:
+		return t
+	case int32:
+		return int(t)
+	case int64:
+		return int(t)
+	case json.Number:
+		if i, err := t.Int64(); err == nil {
+			return int(i)
+		}
+	case string:
+		if t == "" {
+			return 0
+		}
+		if i, err := strconv.Atoi(strings.TrimSpace(t)); err == nil {
+			return i
+		}
+	}
+	return 0
+}
+
+func parserValueAsStringSlice(v interface{}) []string {
+	items, ok := v.([]interface{})
+	if !ok {
+		return []string{}
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		s := parserValueAsString(item)
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func parserMapToCatalogItem(raw map[string]interface{}) CatalogItem {
+	itemType := parserValueAsString(raw["type"])
+	if itemType == "" {
+		itemType = parserValueAsString(raw["content_type"])
+	}
+	if itemType == "series" {
+		itemType = "serial"
+	}
+
+	poster := parserValueAsString(raw["poster"])
+	if poster == "" {
+		poster = parserValueAsString(raw["poster_url"])
+	}
+	if poster == "" {
+		poster = parserValueAsString(raw["img"])
+	}
+
+	return CatalogItem{
+		SourceID:    parserValueAsString(raw["source_id"]),
+		Title:       parserValueAsString(raw["title"]),
+		Year:        parserValueAsInt(raw["year"]),
+		Type:        itemType,
+		Poster:      poster,
+		Description: parserValueAsString(raw["description"]),
+		Genres:      parserValueAsStringSlice(raw["genres"]),
+		DetailURL:   parserValueAsString(raw["detail_url"]),
+	}
+}
+
+func parseCatalogResponseFlexible(body []byte, page int, limit int) (CatalogResponse, error) {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return CatalogResponse{}, err
+	}
+
+	result := CatalogResponse{
+		Items:      []CatalogItem{},
+		Page:       page,
+		Limit:      limit,
+		Total:      0,
+		TotalPages: 0,
+		HasMore:    false,
+	}
+
+	if v := parserValueAsInt(payload["page"]); v > 0 {
+		result.Page = v
+	}
+	if v := parserValueAsInt(payload["limit"]); v > 0 {
+		result.Limit = v
+	}
+	if v := parserValueAsInt(payload["total"]); v > 0 {
+		result.Total = v
+	}
+	if v := parserValueAsInt(payload["total_pages"]); v > 0 {
+		result.TotalPages = v
+	}
+	if hasMore, ok := payload["has_more"].(bool); ok {
+		result.HasMore = hasMore
+	}
+
+	var rawItems []interface{}
+	if items, ok := payload["items"].([]interface{}); ok {
+		rawItems = items
+	} else if results, ok := payload["results"].([]interface{}); ok {
+		rawItems = results
+	}
+
+	for _, rawItem := range rawItems {
+		itemMap, ok := rawItem.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		item := parserMapToCatalogItem(itemMap)
+		if item.SourceID == "" && item.DetailURL == "" && item.Title == "" {
+			continue
+		}
+		result.Items = append(result.Items, item)
+	}
+
+	if result.Total == 0 {
+		result.Total = len(result.Items)
+	}
+
+	return result, nil
+}
+
+func normalizeSearchResponse(body []byte) (map[string]interface{}, error) {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	if _, ok := payload["results"]; ok {
+		return payload, nil
+	}
+	if items, ok := payload["items"]; ok {
+		payload["results"] = items
+	}
+	return payload, nil
 }
 
 func resolveCompletedDownloadPath(jobID, rawPath string) string {
@@ -243,6 +422,10 @@ func (h *IngestionHandler) SearchSource(c *gin.Context) {
 	}
 	log.Printf("[INGESTION] SEARCH: response_body_sample=%s", bodySample)
 
+	if source == "freekino" {
+		log.Printf("[FREEKINO] parser status=%d raw_len=%d", resp.StatusCode, len(body))
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		bodyStr := string(body)
 		if len(bodyStr) > 500 {
@@ -267,16 +450,16 @@ func (h *IngestionHandler) SearchSource(c *gin.Context) {
 		return
 	}
 
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		bodyStr := string(body)
-		if len(bodyStr) > 200 {
-			bodyStr = bodyStr[:200] + "..."
+	result, err := normalizeSearchResponse(body)
+	if err != nil {
+		if source == "freekino" {
+			log.Printf("[FREEKINO] parse error raw_prefix=%s", parserRawPrefix(body, 300))
 		}
-		log.Printf("[INGESTION] SEARCH: ERROR decoding JSON - %v, body: %s", err, bodyStr)
+		log.Printf("[INGESTION] SEARCH: ERROR decoding JSON - %v, body: %s", err, parserRawPrefix(body, 200))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "failed to parse parser response",
 			"details": fmt.Sprintf("JSON decode error: %v", err),
+			"status":  resp.StatusCode,
 		})
 		return
 	}
@@ -1268,6 +1451,10 @@ func (h *IngestionHandler) ListCatalog(c *gin.Context) {
 		return
 	}
 
+	if source == "freekino" {
+		log.Printf("[FREEKINO] parser status=%d raw_len=%d", resp.StatusCode, len(body))
+	}
+
 	if len(body) == 0 {
 		c.JSON(http.StatusOK, CatalogResponse{
 			Items:      []CatalogItem{},
@@ -1280,10 +1467,18 @@ func (h *IngestionHandler) ListCatalog(c *gin.Context) {
 		return
 	}
 
-	var result CatalogResponse
-	if err := json.Unmarshal(body, &result); err != nil {
+	result, err := parseCatalogResponseFlexible(body, page, limit)
+	if err != nil {
+		if source == "freekino" {
+			log.Printf("[FREEKINO] parse error raw_prefix=%s", parserRawPrefix(body, 300))
+		}
 		log.Printf("[INGESTION] CATALOG: ERROR decoding JSON - %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse parser response"})
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error":   "failed to parse parser response",
+			"details": fmt.Sprintf("JSON decode error: %v", err),
+			"status":  resp.StatusCode,
+			"raw":     parserRawPrefix(body, 300),
+		})
 		return
 	}
 

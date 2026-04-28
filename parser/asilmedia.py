@@ -19,7 +19,6 @@ from helpers import (
     extract_duration,
     extract_source_id,
     deduplicate_results,
-    filter_and_rank_results
 )
 from media_extractor import (
     is_valid_media_url,
@@ -149,7 +148,7 @@ class AsilmediaParser(BaseParser):
         return self.BASE_URL
     
     def search(self, query: str) -> List[SearchResult]:
-        """Search for movies using DLE GET form with query relevance filtering"""
+        """Search for movies using the real DLE endpoint with tolerant matching."""
         
         # Debug log: incoming query and source info
         logger.info(f"[ASILMEDIA] search - source=asilmedia, method=GET, query='{query}'")
@@ -171,21 +170,20 @@ class AsilmediaParser(BaseParser):
             results = self._category_search(query)
             logger.info(f"[ASILMEDIA] Category search returned {len(results)} raw results")
 
-        # Apply query relevance filtering
         if results and query:
-            # Debug log: raw result count
             logger.info(f"[ASILMEDIA] Before filtering: {len(results)} results")
-            results = self._filter_by_query_relevance(results, query)
-            # Debug log: filtered result count
+            tolerant = self._filter_by_query_relevance(results, query)
+            if tolerant:
+                results = tolerant
             logger.info(f"[ASILMEDIA] After filtering: {len(results)} results")
 
-        logger.info(f"[ASILMEDIA] Final search results: {len(results)}")
+        logger.info(f"[SEARCH] source=asilmedia query={query} items_found={len(results)}")
         return results
     
     def _filter_by_query_relevance(self, results: List[SearchResult], query: str) -> List[SearchResult]:
         """
-        Filter results by query relevance with strong matching.
-        Returns only results where title contains the query terms.
+        Filter results by tolerant partial matching.
+        Returns parsed items when matching would otherwise remove everything.
         """
         if not results or not query:
             return results
@@ -193,21 +191,14 @@ class AsilmediaParser(BaseParser):
         # Normalize query with better noise removal
         query_normalized = self._normalize_for_match(query)
         
-        # Alias mapping for common transliterations
-        aliases = {
-            "forsaj": ["fast", "furious", "форсаж", "forsazh", "forsage"],
-            "interstellar": ["interstellar"],
-            "avatar": ["avatar", "avatarr"],
-            "iron": ["iron", "ayron"],
-            "spider": ["spider", "spayder"],
-            "batman": ["batman", "betmen"],
-            "superman": ["superman", "syuper men"],
-            "transformers": ["transformers", "transformer"],
-        }
         alias_expansions = []
+        aliases = {
+            "breaking bad": ["breaking", "bad", "mashaqqatlar", "sari", "во все тяжкие"],
+            "mashaqqatlar sari": ["mashaqqatlar", "sari", "breaking", "bad"],
+        }
         if query_normalized in aliases:
             alias_expansions = aliases[query_normalized]
-        
+
         query_words = query_normalized.split()
         all_query_terms = query_words + alias_expansions
         
@@ -220,19 +211,14 @@ class AsilmediaParser(BaseParser):
             title = r.title or ""
             title_normalized = self._normalize_for_match(title)
             
-            # Calculate relevance score with more granular scoring
             score = 0
-            
-            # Exact match (full query in title) - 100 points
+
             if query_normalized in title_normalized:
                 score = 100
-            # Any alias in title - 90 points
             elif any(alias in title_normalized for alias in alias_expansions):
                 score = 90
-            # All query words match - 80 points
             elif all(word in title_normalized for word in query_words if len(word) >= 2):
                 score = 80
-            # Any significant word in title - partial match
             else:
                 matches = 0
                 for word in all_query_terms:
@@ -240,6 +226,11 @@ class AsilmediaParser(BaseParser):
                         matches += 1
                 if matches > 0:
                     score = min(70, matches * 20)
+
+            if score == 0 and title_normalized and query_words:
+                joined = " ".join(query_words)
+                if joined.replace(" ", "") in title_normalized.replace(" ", ""):
+                    score = 60
             
             scored.append((score, r))
             
@@ -249,28 +240,41 @@ class AsilmediaParser(BaseParser):
         # Sort by score descending
         scored.sort(key=lambda x: x[0], reverse=True)
         
-        # Keep results with score >= 20 (very loose to catch partial matches)
         filtered = [r for score, r in scored if score >= 20]
-        
+
+        if not filtered and results:
+            return results
+
         if DEBUG:
             logger.info(f"[ASILMEDIA DLE] Final results: {len(filtered)} (kept score >= 20)")
         
         return filtered
     
     def _normalize_for_match(self, text: str) -> str:
-        """Normalize text for matching: lowercase, trim, collapse whitespace, remove noise"""
+        """Normalize text for tolerant matching."""
         if not text:
             return ""
-        import re
-        # Lowercase
         text = text.lower()
-        # Remove quality prefixes like "1080p", "720p", "480p", "+56", etc.
         text = re.sub(r'^\+?\d+\s*', '', text)  # Remove leading +number or number
         text = re.sub(r'(\d{3,4}p)\s*', '', text)  # Remove quality like 1080p, 720p
         text = re.sub(r'\d{4}\s*', '', text)  # Remove year numbers at start
-        # Remove common noise characters
-        text = re.sub(r'[/|,|-]', ' ', text)  # Replace separators with spaces
-        # Remove extra whitespace
+        text = text.replace("-", " ").replace("_", " ")
+        text = re.sub(r'[/|,]', ' ', text)
+        translit_map = str.maketrans({
+            "қ": "q", "ғ": "g", "ў": "o", "ҳ": "h",
+            "Қ": "q", "Ғ": "g", "Ў": "o", "Ҳ": "h",
+            "ё": "e", "ж": "j", "ч": "ch", "ш": "sh", "ю": "yu", "я": "ya",
+            "Ё": "e", "Ж": "j", "Ч": "ch", "Ш": "sh", "Ю": "yu", "Я": "ya",
+            "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "з": "z",
+            "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+            "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "x",
+            "ц": "s", "ы": "i", "э": "e", "ь": "", "ъ": "",
+            "А": "a", "Б": "b", "В": "v", "Г": "g", "Д": "d", "Е": "e", "З": "z",
+            "И": "i", "Й": "y", "К": "k", "Л": "l", "М": "m", "Н": "n", "О": "o",
+            "П": "p", "Р": "r", "С": "s", "Т": "t", "У": "u", "Ф": "f", "Х": "x",
+            "Ц": "s", "Ы": "i", "Э": "e", "Ь": "", "Ъ": "",
+        })
+        text = text.translate(translit_map)
         text = re.sub(r'\s+', ' ', text)
         return text.strip()
     
@@ -292,11 +296,10 @@ class AsilmediaParser(BaseParser):
             # Establish session cookies first
             self.session.get(self.BASE_URL, timeout=30)
 
-            logger.info(f"[ASILMEDIA] GET search url={self.SEARCH_URL} query='{query}'")
+            logger.info(f"[ASILMEDIA] GET search url={self.BASE_URL}/index.php query='{query}'")
 
-            # Use GET request (site moved from POST to GET)
             response = self.session.get(
-                self.SEARCH_URL,
+                self.BASE_URL + "/index.php",
                 params=search_params,
                 timeout=30,
                 allow_redirects=True,
@@ -588,10 +591,10 @@ class AsilmediaParser(BaseParser):
             logger.info(f"[ASILMEDIA DLE] === CATEGORY FALLBACK (query: {query}) ===")
         
         all_results = []
-        query_lower = query.lower()
+        query_normalized = self._normalize_for_match(query)
         
         # Browse catalog pages to find matching titles
-        max_pages = 30  # Search through 30 pages (~360 movies)
+        max_pages = 12  # Keep fallback bounded; real search endpoint should handle most cases.
         for page in range(1, max_pages + 1):
             try:
                 cat_result = self.list_catalog(page=page, limit=20)
@@ -602,8 +605,16 @@ class AsilmediaParser(BaseParser):
                 
                 for item in items:
                     title = item.get('title', '')
-                    # Check if query is in title (case-insensitive partial match)
-                    if title and query_lower in title.lower():
+                    title_normalized = self._normalize_for_match(title)
+                    query_words = [w for w in query_normalized.split() if len(w) >= 2]
+                    matched = (
+                        not query_normalized
+                        or query_normalized in title_normalized
+                        or title_normalized in query_normalized
+                        or all(word in title_normalized for word in query_words)
+                        or any(word in title_normalized for word in query_words)
+                    )
+                    if title and matched:
                         all_results.append(SearchResult(
                             title=title,
                             year=item.get('year', 0),
@@ -616,7 +627,7 @@ class AsilmediaParser(BaseParser):
                         ))
                         
                 # Stop early if we found matches
-                if all_results and len(all_results) >= 5:
+                if all_results and len(all_results) >= 3:
                     break
                     
             except Exception as e:
