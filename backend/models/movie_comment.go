@@ -35,7 +35,9 @@ type MovieComment struct {
 	CreatedAt      time.Time           `bson:"created_at" json:"created_at"`
 	UpdatedAt      time.Time           `bson:"updated_at" json:"updated_at"`
 	// Snapshot of author premium status at comment creation time (for priority sorting)
-	IsPremiumUser bool `bson:"is_premium_user" json:"is_premium_user"`
+	IsPremiumUser bool                 `bson:"is_premium_user" json:"is_premium_user"`
+	LikedBy       []primitive.ObjectID `bson:"liked_by,omitempty" json:"liked_by,omitempty"`
+	LikesCount    int                  `bson:"likes_count" json:"likes_count"`
 }
 
 // CommentWithUser combines comment with user info for API responses
@@ -64,6 +66,10 @@ type CommentWithUser struct {
 	TargetTitle string `json:"target_title,omitempty"`
 	// Replies count (for top-level comments)
 	RepliesCount int `json:"replies_count,omitempty"`
+	// Like data
+	LikesCount int                  `json:"likes_count"`
+	LikedByMe  bool                 `json:"liked_by_me"`
+	LikedBy    []primitive.ObjectID `json:"-"`
 }
 
 // CommentModerationSettings holds global moderation settings

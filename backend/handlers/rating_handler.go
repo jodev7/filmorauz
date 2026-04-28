@@ -142,6 +142,66 @@ func (h *RatingHandler) DeleteRating(c *gin.Context) {
 	})
 }
 
+// GetEpisodeRatingSummary GET /api/v1/episodes/:id/rating-summary
+func (h *RatingHandler) GetEpisodeRatingSummary(c *gin.Context) {
+	episodeID := c.Param("id")
+	if episodeID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "episode id is required"})
+		return
+	}
+	var userID *string
+	if v, ok := c.Get("user_id"); ok {
+		s := v.(string)
+		userID = &s
+	}
+	summary, err := h.ratingService.GetEpisodeRatingSummary(episodeID, userID)
+	if err != nil {
+		log.Printf("[RATING HANDLER] GetEpisodeRatingSummary failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get rating summary"})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
+}
+
+// SetEpisodeRating POST /api/v1/episodes/:id/rating
+func (h *RatingHandler) SetEpisodeRating(c *gin.Context) {
+	v, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+		return
+	}
+	userID := v.(string)
+	episodeID := c.Param("id")
+	var req RatingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "rating must be 1-5"})
+		return
+	}
+	if err := h.ratingService.SetEpisodeRating(episodeID, userID, req.Rating); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	summary, _ := h.ratingService.GetEpisodeRatingSummary(episodeID, &userID)
+	c.JSON(http.StatusOK, gin.H{"message": "rating saved", "data": summary})
+}
+
+// DeleteEpisodeRating DELETE /api/v1/episodes/:id/rating
+func (h *RatingHandler) DeleteEpisodeRating(c *gin.Context) {
+	v, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+		return
+	}
+	userID := v.(string)
+	episodeID := c.Param("id")
+	if err := h.ratingService.DeleteEpisodeRating(episodeID, userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	summary, _ := h.ratingService.GetEpisodeRatingSummary(episodeID, &userID)
+	c.JSON(http.StatusOK, gin.H{"message": "rating removed", "data": summary})
+}
+
 // RatingSummaryResponse is used for backward compatibility with frontend
 type RatingSummaryResponse struct {
 	RatingAvg   float64 `json:"ratingAvg"`

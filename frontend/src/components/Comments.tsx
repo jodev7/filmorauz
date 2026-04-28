@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight, MessageCircle, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, MessageCircle, Trash2, Heart } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
   getMovieComments,
@@ -12,6 +12,7 @@ import {
   createTargetComment,
   createReply,
   deleteComment,
+  toggleCommentLike,
   Comment,
   CommentWithReplies,
 } from "@/lib/comments-api";
@@ -59,17 +60,15 @@ export default function CommentsSection({
   const loadComments = async () => {
     try {
       setLoading(true);
-      // Use episode comments API if targetType is episode
+      const tk = token || undefined;
       if (targetType === "episode" && targetId) {
-        const data = await getEpisodeComments(targetId);
+        const data = await getEpisodeComments(targetId, 1, 20, tk);
         setComments(data.data || []);
       } else if (targetType && targetId) {
-        // Generic target comments
-        const data = await getTargetComments(targetType, targetId);
+        const data = await getTargetComments(targetType, targetId, 1, 20, tk);
         setComments(data.data || []);
       } else if (movieId) {
-        // Backward compatibility - movie comments
-        const data = await getMovieComments(movieId);
+        const data = await getMovieComments(movieId, 1, 20, tk);
         setComments(data.data || []);
       }
     } catch (err) {
@@ -131,6 +130,25 @@ export default function CommentsSection({
       setError(err.message);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleToggleLike = async (commentId: string) => {
+    if (!token || !isAuthenticated) return;
+    try {
+      const res = await toggleCommentLike(token, commentId);
+      const patch = (c: Comment): Comment =>
+        c.id === commentId
+          ? { ...c, liked_by_me: res.liked, likes_count: res.likes_count }
+          : { ...c, replies: c.replies?.map(patch) };
+      setComments((prev) =>
+        prev.map((item) => ({
+          comment: patch(item.comment),
+          replies: item.replies?.map(patch) || [],
+        }))
+      );
+    } catch (err: any) {
+      setError(err.message);
     }
   };
 
@@ -240,6 +258,7 @@ export default function CommentsSection({
               replyingTo={replyTo}
               submitting={submitting}
               onDelete={handleDeleteComment}
+              onLike={handleToggleLike}
               tt={tt}
               expandedThreads={expandedThreads}
               onToggleThread={toggleThread}
@@ -269,6 +288,7 @@ function CommentThread({
   replyingTo,
   submitting,
   onDelete,
+  onLike,
   tt,
   expandedThreads,
   onToggleThread,
@@ -289,6 +309,7 @@ function CommentThread({
   replyingTo: string | null;
   submitting: boolean;
   onDelete: (id: string) => void;
+  onLike: (id: string) => void;
   tt: any;
   expandedThreads: Set<string>;
   onToggleThread: (id: string) => void;
@@ -402,6 +423,18 @@ function CommentThread({
 
         {/* Action row: Reply button + toggle for replies */}
         <div className="flex items-center gap-4">
+          {/* Like button */}
+          <button
+            onClick={() => isAuthenticated && onLike(comment.id)}
+            disabled={!isAuthenticated}
+            className={`text-sm flex items-center gap-1 transition-colors ${
+              comment.liked_by_me ? "text-brand-red" : "text-gray-400 hover:text-brand-red"
+            } ${!isAuthenticated ? "cursor-not-allowed" : ""}`}
+          >
+            <Heart size={14} fill={comment.liked_by_me ? "currentColor" : "none"} />
+            <span>{comment.likes_count ?? 0}</span>
+          </button>
+
           {/* Reply button */}
           {isAuthenticated && (
             <button
@@ -486,6 +519,7 @@ function CommentThread({
               replyingTo={replyingTo}
               submitting={submitting}
               onDelete={onDelete}
+              onLike={onLike}
               tt={tt}
               expandedThreads={expandedThreads}
               onToggleThread={onToggleThread}

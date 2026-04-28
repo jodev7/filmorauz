@@ -301,6 +301,30 @@ func (s *NotificationService) NotifyCommentReply(ctx context.Context, commentOwn
 	})
 }
 
+// NotifyCommentLike sends a notification to the comment owner when their comment is liked.
+func (s *NotificationService) NotifyCommentLike(ctx context.Context, commentOwnerID, likerID primitive.ObjectID, likerName, movieID, movieSlug, commentID, actionURL string) error {
+	if s.notificationRepo == nil {
+		return nil
+	}
+	if commentOwnerID == likerID {
+		return nil
+	}
+	return s.CreateNotification(ctx, &models.NotificationCreateRequest{
+		UserID:    commentOwnerID,
+		Type:      models.NotificationCommentLike,
+		Title:     "Izohingizga like bosildi",
+		Message:   fmt.Sprintf("%s sizning commentingizga like bosdi", likerName),
+		ActionURL: actionURL,
+		Data: map[string]interface{}{
+			"liker_id":   likerID.Hex(),
+			"liker_name": likerName,
+			"comment_id": commentID,
+			"movie_id":   movieID,
+			"movie_slug": movieSlug,
+		},
+	})
+}
+
 // GetUserNotifications retrieves notifications for a user
 func (s *NotificationService) GetUserNotifications(ctx context.Context, userID primitive.ObjectID, page, perPage int) (*models.NotificationResponse, error) {
 	if s.notificationRepo == nil {

@@ -24,6 +24,8 @@ export interface Comment {
   user_is_premium_active?: boolean;
   replies_count?: number;
   replies?: Comment[]; // Nested replies
+  likes_count?: number;
+  liked_by_me?: boolean;
   user?: {
     id: string;
     display_name?: string;
@@ -92,12 +94,16 @@ function authHeaders(token: string) {
 export async function getMovieComments(
   movieId: string,
   page: number = 1,
-  limit: number = 20
+  limit: number = 20,
+  token?: string
 ): Promise<CommentListResponse> {
+  const headers: HeadersInit = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(
     `${API_URL}/v1/movies/${movieId}/comments?page=${page}&limit=${limit}`,
     {
       cache: "no-store",
+      headers,
     }
   );
   if (!res.ok) throw new Error("Failed to fetch comments");
@@ -109,12 +115,16 @@ export async function getTargetComments(
   targetType: string,
   targetId: string,
   page: number = 1,
-  limit: number = 20
+  limit: number = 20,
+  token?: string
 ): Promise<CommentListResponse> {
+  const headers: HeadersInit = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(
     `${API_URL}/v1/comments?target_type=${targetType}&target_id=${targetId}&page=${page}&limit=${limit}`,
     {
       cache: "no-store",
+      headers,
     }
   );
   if (!res.ok) throw new Error("Failed to fetch comments");
@@ -125,9 +135,10 @@ export async function getTargetComments(
 export async function getEpisodeComments(
   episodeId: string,
   page: number = 1,
-  limit: number = 20
+  limit: number = 20,
+  token?: string
 ): Promise<CommentListResponse> {
-  return getTargetComments("episode", episodeId, page, limit);
+  return getTargetComments("episode", episodeId, page, limit, token);
 }
 
 // Create a comment (authenticated)
@@ -185,6 +196,22 @@ export async function createReply(
   const json = await res.json();
   if (!res.ok) {
     throw new Error(json.error || "Failed to create reply");
+  }
+  return json;
+}
+
+// Toggle like on a comment (authenticated)
+export async function toggleCommentLike(
+  token: string,
+  commentId: string
+): Promise<{ liked: boolean; likes_count: number }> {
+  const res = await fetch(`${API_URL}/v1/comments/${commentId}/like`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+  const json = await res.json();
+  if (!res.ok) {
+    throw new Error(json.error || "Failed to toggle like");
   }
   return json;
 }

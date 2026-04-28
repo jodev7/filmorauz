@@ -231,6 +231,8 @@ func (r *CommentRepository) GetReplies(parentID primitive.ObjectID) ([]models.Co
 			UserRole:            getUserRole(user),
 			UserIsPremium:       getUserIsPremium(user),
 			UserIsPremiumActive: getUserIsPremiumActive(user),
+			LikesCount:          c.LikesCount,
+			LikedBy:             c.LikedBy,
 		})
 	}
 
@@ -249,6 +251,19 @@ func (r *CommentRepository) CountReplies(parentID primitive.ObjectID) (int, erro
 
 	count, err := r.col.CountDocuments(ctx, filter)
 	return int(count), err
+}
+
+// commentLikedByViewer reports whether viewerID (if non-nil and non-zero) liked the comment.
+func commentLikedByViewer(c *models.MovieComment, viewerID *primitive.ObjectID) bool {
+	if viewerID == nil || viewerID.IsZero() {
+		return false
+	}
+	for _, id := range c.LikedBy {
+		if id == *viewerID {
+			return true
+		}
+	}
+	return false
 }
 
 // GetAllApprovedByMovieID returns all approved comments for a movie (no parent filter)
@@ -366,6 +381,8 @@ func (r *CommentRepository) GetByStatus(status string, page, limit int) ([]model
 			UserRole:            getUserRole(user),
 			UserIsPremium:       getUserIsPremium(user),
 			UserIsPremiumActive: getUserIsPremiumActive(user),
+			LikesCount:          c.LikesCount,
+			LikedBy:             c.LikedBy,
 		})
 		_ = movieTitle // Could be added to response if needed
 	}
@@ -516,6 +533,49 @@ func (r *CommentRepository) GetCommentDepth(commentID primitive.ObjectID) (int, 
 
 var upsertOpt = options.Update().SetUpsert(true)
 
+// ToggleLike adds or removes a user's like on a comment.
+// Returns (liked, likeCount, commentOwnerID, err). `liked` is true if the user now likes it.
+func (r *CommentRepository) ToggleLike(commentID, userID primitive.ObjectID) (bool, int, primitive.ObjectID, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var comment models.MovieComment
+	if err := r.col.FindOne(ctx, bson.M{"_id": commentID}).Decode(&comment); err != nil {
+		return false, 0, primitive.NilObjectID, err
+	}
+
+	already := false
+	for _, id := range comment.LikedBy {
+		if id == userID {
+			already = true
+			break
+		}
+	}
+
+	var update bson.M
+	if already {
+		update = bson.M{
+			"$pull": bson.M{"liked_by": userID},
+			"$inc":  bson.M{"likes_count": -1},
+		}
+	} else {
+		update = bson.M{
+			"$addToSet": bson.M{"liked_by": userID},
+			"$inc":      bson.M{"likes_count": 1},
+		}
+	}
+
+	if _, err := r.col.UpdateOne(ctx, bson.M{"_id": commentID}, update); err != nil {
+		return false, 0, primitive.NilObjectID, err
+	}
+
+	// Re-read for accurate count
+	if err := r.col.FindOne(ctx, bson.M{"_id": commentID}).Decode(&comment); err != nil {
+		return false, 0, primitive.NilObjectID, err
+	}
+	return !already, comment.LikesCount, comment.UserID, nil
+}
+
 // getUserByID retrieves user by ID
 func (r *CommentRepository) getUserByID(userID primitive.ObjectID) (*models.User, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -659,6 +719,8 @@ func (r *CommentRepository) GetByTarget(targetType models.CommentTargetType, tar
 			UserIsPremiumActive: getUserIsPremiumActive(user),
 			TargetTitle:         targetTitle,
 			RepliesCount:        repliesCount,
+			LikesCount:          c.LikesCount,
+			LikedBy:             c.LikedBy,
 		})
 	}
 
@@ -735,6 +797,8 @@ func (r *CommentRepository) GetAllApprovedByTarget(targetType models.CommentTarg
 			UserIsPremiumActive: getUserIsPremiumActive(user),
 			TargetTitle:         targetTitle,
 			RepliesCount:        repliesCount,
+			LikesCount:          c.LikesCount,
+			LikedBy:             c.LikedBy,
 		})
 	}
 
@@ -792,6 +856,8 @@ func (r *CommentRepository) GetRepliesByTarget(parentID primitive.ObjectID, targ
 			UserRole:            getUserRole(user),
 			UserIsPremium:       getUserIsPremium(user),
 			UserIsPremiumActive: getUserIsPremiumActive(user),
+			LikesCount:          c.LikesCount,
+			LikedBy:             c.LikedBy,
 		})
 	}
 

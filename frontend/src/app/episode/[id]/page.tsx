@@ -1,6 +1,8 @@
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import WatchPageClient from "@/components/watch/WatchPageClient";
+import Comments from "@/components/Comments";
+import StarRating from "@/components/StarRating";
 import { getEpisode, getSeriesBySlug, Episode, EpisodeLink, SeriesWithSeasons } from "@/lib/series-api";
 import { Metadata } from "next";
 import Link from "next/link";
@@ -83,6 +85,15 @@ export default async function EpisodePage({ params }: PageProps) {
               nextEpisode,
             }}
           />
+          <section className="max-w-6xl mx-auto px-3 sm:px-4 pb-6">
+            <div className="flex items-center gap-3 mt-4">
+              <h3 className="text-white font-display text-lg">Bahoyingiz</h3>
+              <StarRating episodeId={episode.id} />
+            </div>
+          </section>
+          <section className="max-w-6xl mx-auto px-3 sm:px-4 pb-12">
+            <Comments targetType="episode" targetId={episode.id} />
+          </section>
         </>
       ) : (
         <main className="min-h-screen pt-20 flex items-center justify-center">

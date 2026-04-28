@@ -9,18 +9,20 @@ import (
 )
 
 type RatingService struct {
-	ratingRepo     *repositories.MovieRatingRepository
-	seriesRatingRepo *repositories.SeriesRatingRepository
-	movieRepo      *repositories.MovieRepository
-	seriesRepo     *repositories.SeriesRepository
+	ratingRepo        *repositories.MovieRatingRepository
+	seriesRatingRepo  *repositories.SeriesRatingRepository
+	episodeRatingRepo *repositories.EpisodeRatingRepository
+	movieRepo         *repositories.MovieRepository
+	seriesRepo        *repositories.SeriesRepository
 }
 
-func NewRatingService(ratingRepo *repositories.MovieRatingRepository, seriesRatingRepo *repositories.SeriesRatingRepository, movieRepo *repositories.MovieRepository, seriesRepo *repositories.SeriesRepository) *RatingService {
+func NewRatingService(ratingRepo *repositories.MovieRatingRepository, seriesRatingRepo *repositories.SeriesRatingRepository, episodeRatingRepo *repositories.EpisodeRatingRepository, movieRepo *repositories.MovieRepository, seriesRepo *repositories.SeriesRepository) *RatingService {
 	return &RatingService{
-		ratingRepo:       ratingRepo,
-		seriesRatingRepo: seriesRatingRepo,
-		movieRepo:        movieRepo,
-		seriesRepo:       seriesRepo,
+		ratingRepo:        ratingRepo,
+		seriesRatingRepo:  seriesRatingRepo,
+		episodeRatingRepo: episodeRatingRepo,
+		movieRepo:         movieRepo,
+		seriesRepo:        seriesRepo,
 	}
 }
 
@@ -195,7 +197,10 @@ func (s *RatingService) DeleteSeriesRating(seriesID, userID string) error {
 	return nil
 }
 
-// GetSeriesRatingSummary returns the rating summary for a series, optionally including user's rating
+// GetSeriesRatingSummary returns the aggregate rating for a series. The aggregate
+// is computed from all per-episode ratings rather than the legacy series_ratings
+// collection — series no longer rate as a single unit; the score reflects the
+// average of every rating across every episode in the series.
 func (s *RatingService) GetSeriesRatingSummary(seriesID string, userID *string) (*models.RatingSummary, error) {
 	// Parse series ID
 	seriesOID, err := primitive.ObjectIDFromHex(seriesID)
@@ -203,8 +208,7 @@ func (s *RatingService) GetSeriesRatingSummary(seriesID string, userID *string) 
 		return nil, fmt.Errorf("invalid series id")
 	}
 
-	// Get rating summary from repository
-	avg, count, err := s.seriesRatingRepo.GetRatingSummary(seriesOID)
+	avg, count, err := s.episodeRatingRepo.GetSeriesRatingFromEpisodes(seriesOID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rating summary: %w", err)
 	}
@@ -214,16 +218,57 @@ func (s *RatingService) GetSeriesRatingSummary(seriesID string, userID *string) 
 		RatingCount: count,
 	}
 
-	// If user ID is provided, get user's rating
+	_ = userID // Series no longer carry per-user ratings; episode-level rating provides that.
+
+	return summary, nil
+}
+
+// SetEpisodeRating creates or updates a user's rating for an episode.
+func (s *RatingService) SetEpisodeRating(episodeID, userID string, rating int) error {
+	if rating < 1 || rating > 5 {
+		return fmt.Errorf("rating must be between 1 and 5")
+	}
+	episodeOID, err := primitive.ObjectIDFromHex(episodeID)
+	if err != nil {
+		return fmt.Errorf("invalid episode id")
+	}
+	userOID, err := primitive.ObjectIDFromHex(userID)
+	if err != nil {
+		return fmt.Errorf("invalid user id")
+	}
+	return s.episodeRatingRepo.UpsertRating(userOID, episodeOID, rating)
+}
+
+// DeleteEpisodeRating removes a user's rating for an episode.
+func (s *RatingService) DeleteEpisodeRating(episodeID, userID string) error {
+	episodeOID, err := primitive.ObjectIDFromHex(episodeID)
+	if err != nil {
+		return fmt.Errorf("invalid episode id")
+	}
+	userOID, err := primitive.ObjectIDFromHex(userID)
+	if err != nil {
+		return fmt.Errorf("invalid user id")
+	}
+	return s.episodeRatingRepo.DeleteRating(userOID, episodeOID)
+}
+
+// GetEpisodeRatingSummary returns aggregate rating for an episode plus the viewer's own rating.
+func (s *RatingService) GetEpisodeRatingSummary(episodeID string, userID *string) (*models.RatingSummary, error) {
+	episodeOID, err := primitive.ObjectIDFromHex(episodeID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid episode id")
+	}
+	avg, count, err := s.episodeRatingRepo.GetRatingSummary(episodeOID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get rating summary: %w", err)
+	}
+	summary := &models.RatingSummary{RatingAvg: avg, RatingCount: count}
 	if userID != nil && *userID != "" {
-		userOID, err := primitive.ObjectIDFromHex(*userID)
-		if err == nil {
-			userRating, err := s.seriesRatingRepo.GetUserRating(userOID, seriesOID)
-			if err == nil && userRating != nil {
-				summary.UserRating = userRating
+		if userOID, err := primitive.ObjectIDFromHex(*userID); err == nil {
+			if r, err := s.episodeRatingRepo.GetUserRating(userOID, episodeOID); err == nil && r != nil {
+				summary.UserRating = r
 			}
 		}
 	}
-
 	return summary, nil
 }

@@ -49,6 +49,7 @@ func main() {
 	// Rating repository
 	ratingRepo := repositories.NewMovieRatingRepository(db)
 	seriesRatingRepo := repositories.NewSeriesRatingRepository(db)
+	episodeRatingRepo := repositories.NewEpisodeRatingRepository(db)
 
 	// Share repository
 	shareRepo := repositories.NewShareRepository(db)
@@ -79,6 +80,9 @@ func main() {
 	if err := seriesRatingRepo.EnsureIndexes(); err != nil {
 		log.Printf("Warning: Failed to ensure series rating indexes: %v", err)
 	}
+	if err := episodeRatingRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure episode rating indexes: %v", err)
+	}
 	if err := shareRepo.EnsureIndexes(); err != nil {
 		log.Printf("Warning: Failed to ensure share indexes: %v", err)
 	}
@@ -107,7 +111,7 @@ func main() {
 	seriesService := services.NewSeriesService(seriesRepo, movieRepo)
 
 	// Rating service
-	ratingService := services.NewRatingService(ratingRepo, seriesRatingRepo, movieRepo, seriesRepo)
+	ratingService := services.NewRatingService(ratingRepo, seriesRatingRepo, episodeRatingRepo, movieRepo, seriesRepo)
 
 	// Share service
 	shareService := services.NewShareService(shareRepo, movieRepo, userRepo, cfg.BaseSiteURL)

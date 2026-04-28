@@ -973,6 +973,46 @@ export async function deleteSeriesRating(token: string, seriesId: string): Promi
   return json.data || json;
 }
 
+// ── Episode Rating API ───────────────────────────────────────
+
+export async function getEpisodeRatingSummary(episodeId: string, token?: string): Promise<RatingSummary> {
+  const headers: HeadersInit = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${API_URL}/v1/episodes/${episodeId}/rating-summary`, {
+    headers,
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch episode rating summary");
+  return res.json();
+}
+
+export async function setEpisodeRating(token: string, episodeId: string, rating: number): Promise<RatingSummary> {
+  const res = await fetch(`${API_URL}/v1/episodes/${episodeId}/rating`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ rating }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Failed to set rating" }));
+    throw new Error(err.error || "Failed to set rating");
+  }
+  const json = await res.json();
+  return json.data || json;
+}
+
+export async function deleteEpisodeRating(token: string, episodeId: string): Promise<RatingSummary> {
+  const res = await fetch(`${API_URL}/v1/episodes/${episodeId}/rating`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Failed to delete rating" }));
+    throw new Error(err.error || "Failed to delete rating");
+  }
+  const json = await res.json();
+  return json.data || json;
+}
+
 // ── Admin API (JWT required) ──────────────────────────────────
 
 function authHeaders(token: string) {

@@ -32,6 +32,8 @@ type CommentWithUserDTO struct {
 	UserIsPremiumActive bool                 `json:"user_is_premium_active"`
 	RepliesCount        int                  `json:"replies_count,omitempty"`
 	Replies             []CommentWithUserDTO `json:"replies,omitempty"`
+	LikesCount          int                  `json:"likes_count"`
+	LikedByMe           bool                 `json:"liked_by_me"`
 }
 
 type CommentService struct {
@@ -310,6 +312,11 @@ func (s *CommentService) GetCommentByID(commentID primitive.ObjectID) (*models.M
 	}
 
 	return s.commentRepo.GetByID(commentID)
+}
+
+// ToggleLike toggles a user's like on a comment.
+func (s *CommentService) ToggleLike(commentID, userID primitive.ObjectID) (bool, int, primitive.ObjectID, error) {
+	return s.commentRepo.ToggleLike(commentID, userID)
 }
 
 // Admin: GetCommentsByStatus returns comments by status

@@ -134,6 +134,15 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 		// Series rating summary (public - optional auth to get user rating)
 		v1.GET("/series/:id/rating-summary", middleware.OptionalAuth(authService), ratingHandler.GetSeriesRatingSummary)
 
+		// Episode rating
+		v1.GET("/episodes/:id/rating-summary", middleware.OptionalAuth(authService), ratingHandler.GetEpisodeRatingSummary)
+		episodeRating := v1.Group("/episodes/:id/rating")
+		episodeRating.Use(middleware.RequireAuth(authService))
+		{
+			episodeRating.POST("", ratingHandler.SetEpisodeRating)
+			episodeRating.DELETE("", ratingHandler.DeleteEpisodeRating)
+		}
+
 		// Series rating (auth required)
 		seriesRating := v1.Group("/series/:id/rating")
 		seriesRating.Use(middleware.RequireAuth(authService))
@@ -293,10 +302,10 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	v1Comments := api.Group("/v1")
 	{
 		// Public - get comments by target (movie or episode)
-		v1Comments.GET("/comments", commentHandler.GetCommentsByTarget)
+		v1Comments.GET("/comments", middleware.OptionalAuth(authService), commentHandler.GetCommentsByTarget)
 
 		// Public - get movie comments (backward compatibility)
-		v1Comments.GET("/movies/:id/comments", commentHandler.GetComments)
+		v1Comments.GET("/movies/:id/comments", middleware.OptionalAuth(authService), commentHandler.GetComments)
 
 		// Auth required - create comment, reply, edit, delete
 		comments := v1Comments.Group("/movies/:id/comments")
@@ -310,6 +319,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 		replies.Use(middleware.RequireAuth(authService))
 		{
 			replies.POST("/:id/replies", commentHandler.CreateReply)
+			replies.POST("/:id/like", commentHandler.ToggleCommentLike)
 			replies.PUT("/:id", commentHandler.UpdateComment)
 			replies.DELETE("/:id", commentHandler.DeleteComment)
 		}

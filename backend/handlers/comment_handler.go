@@ -87,6 +87,8 @@ func (h *CommentHandler) GetComments(c *gin.Context) {
 		return
 	}
 
+	applyLikedByMe(allComments, extractViewerID(c))
+
 	// Build tree structure and convert to response
 	tree := buildCommentTree(allComments)
 
@@ -106,9 +108,8 @@ func (h *CommentHandler) GetComments(c *gin.Context) {
 
 // commentToDTO converts a CommentWithUser to CommentWithUserDTO
 func commentToDTO(c models.CommentWithUser) services.CommentWithUserDTO {
-	return services.CommentWithUserDTO{
+	dto := services.CommentWithUserDTO{
 		ID:                  c.ID.Hex(),
-		MovieID:             c.MovieID.Hex(),
 		UserID:              c.UserID.Hex(),
 		ParentID:            pointerToString(c.ParentID),
 		Content:             c.Content,
@@ -123,7 +124,51 @@ func commentToDTO(c models.CommentWithUser) services.CommentWithUserDTO {
 		UserIsPremium:       c.UserIsPremium,
 		UserIsPremiumActive: c.UserIsPremiumActive,
 		RepliesCount:        c.RepliesCount,
+		LikesCount:          c.LikesCount,
+		LikedByMe:           c.LikedByMe,
 	}
+	if !c.MovieID.IsZero() {
+		dto.MovieID = c.MovieID.Hex()
+	}
+	if c.TargetType != "" {
+		dto.TargetType = string(c.TargetType)
+	}
+	if !c.TargetID.IsZero() {
+		dto.TargetID = c.TargetID.Hex()
+	}
+	return dto
+}
+
+// applyLikedByMe stamps liked_by_me on comments based on viewer id
+func applyLikedByMe(comments []models.CommentWithUser, viewerID *primitive.ObjectID) {
+	if viewerID == nil || viewerID.IsZero() {
+		return
+	}
+	for i := range comments {
+		for _, id := range comments[i].LikedBy {
+			if id == *viewerID {
+				comments[i].LikedByMe = true
+				break
+			}
+		}
+	}
+}
+
+// extractViewerID returns the authenticated user's ObjectID if present.
+func extractViewerID(c *gin.Context) *primitive.ObjectID {
+	v, ok := c.Get("user_id")
+	if !ok {
+		return nil
+	}
+	s, ok := v.(string)
+	if !ok || s == "" {
+		return nil
+	}
+	oid, err := primitive.ObjectIDFromHex(s)
+	if err != nil {
+		return nil
+	}
+	return &oid
 }
 
 // convertRepliesToTree converts children to DTOs with their nested replies
@@ -195,6 +240,8 @@ func (h *CommentHandler) GetCommentsByTarget(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get comments"})
 		return
 	}
+
+	applyLikedByMe(allComments, extractViewerID(c))
 
 	// Build tree structure and convert to response
 	tree := buildCommentTree(allComments)
@@ -618,6 +665,97 @@ func (h *CommentHandler) AdminUpdateCommentSettings(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, existing)
+}
+
+// ToggleCommentLike godoc
+// POST /api/v1/comments/:id/like — toggles like and returns updated count.
+func (h *CommentHandler) ToggleCommentLike(c *gin.Context) {
+	userIDVal, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+		return
+	}
+	userID, _ := userIDVal.(string)
+	userOID, err := primitive.ObjectIDFromHex(userID)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user id"})
+		return
+	}
+
+	commentID, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid comment id"})
+		return
+	}
+
+	comment, err := h.commentService.GetCommentByID(commentID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "comment not found"})
+		return
+	}
+
+	liked, count, ownerID, err := h.commentService.ToggleLike(commentID, userOID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to toggle like"})
+		return
+	}
+
+	// Notify on new like (not unlike) and not on own comment
+	if liked && ownerID != userOID && h.notificationService != nil {
+		// Resolve liker name and action URL
+		likerName := "Foydalanuvchi"
+		if h.userRepo != nil {
+			if u, err := h.userRepo.FindByID(userID); err == nil && u != nil {
+				if u.DisplayName != "" {
+					likerName = u.DisplayName
+				} else if u.FirstName != "" {
+					likerName = u.FirstName
+				} else if u.TelegramUser != "" {
+					likerName = u.TelegramUser
+				}
+			}
+		}
+
+		actionURL := ""
+		movieIDStr := ""
+		movieSlug := ""
+		if comment.TargetType == models.CommentTargetEpisode && !comment.TargetID.IsZero() {
+			actionURL = fmt.Sprintf("/episode/%s#comment-%s", comment.TargetID.Hex(), commentID.Hex())
+		} else if h.movieRepo != nil {
+			targetMovieID := comment.TargetID
+			if targetMovieID.IsZero() {
+				targetMovieID = comment.MovieID
+			}
+			if !targetMovieID.IsZero() {
+				movieIDStr = targetMovieID.Hex()
+				if movie, err := h.movieRepo.FindByIDHex(targetMovieID.Hex()); err == nil && movie != nil {
+					movieSlug = movie.Slug
+					actionURL = fmt.Sprintf("/movies/%s#comment-%s", movieSlug, commentID.Hex())
+				}
+			}
+		}
+		if actionURL == "" {
+			actionURL = fmt.Sprintf("/#comment-%s", commentID.Hex())
+		}
+
+		go func() {
+			_ = h.notificationService.NotifyCommentLike(
+				c.Request.Context(),
+				ownerID,
+				userOID,
+				likerName,
+				movieIDStr,
+				movieSlug,
+				commentID.Hex(),
+				actionURL,
+			)
+		}()
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"liked":       liked,
+		"likes_count": count,
+	})
 }
 
 // AdminGetComments godoc

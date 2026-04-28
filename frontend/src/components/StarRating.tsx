@@ -2,26 +2,30 @@
 
 import { useState, useEffect } from "react";
 import { Star } from "lucide-react";
-import { setRating, deleteRating, getRatingSummary, RatingSummary, setSeriesRating, deleteSeriesRating, getSeriesRatingSummary } from "@/lib/api";
+import { setRating, deleteRating, getRatingSummary, RatingSummary, setSeriesRating, deleteSeriesRating, getSeriesRatingSummary, setEpisodeRating, deleteEpisodeRating, getEpisodeRatingSummary } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
 interface StarRatingProps {
   movieId?: string;
   seriesId?: string;
+  episodeId?: string;
   initialData?: RatingSummary;
   onRatingChange?: (summary: RatingSummary) => void;
+  readOnly?: boolean;
 }
 
-export default function StarRating({ movieId, seriesId, initialData, onRatingChange }: StarRatingProps) {
+export default function StarRating({ movieId, seriesId, episodeId, initialData, onRatingChange, readOnly }: StarRatingProps) {
   const { token, isAuthenticated } = useAuth();
   const [rating, setRatingState] = useState<number>(0);
   const [hoverRating, setHoverRating] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [summary, setSummary] = useState<RatingSummary | null>(initialData || null);
 
-  // Determine if this is for a series or movie
-  const isSeries = !!seriesId;
-  const targetId = seriesId || movieId;
+  // Determine kind
+  const isEpisode = !!episodeId;
+  const isSeries = !!seriesId && !isEpisode;
+  const targetId = episodeId || seriesId || movieId;
+  const canInteract = isAuthenticated && !readOnly;
 
   useEffect(() => {
     if (initialData) {
@@ -30,8 +34,9 @@ export default function StarRating({ movieId, seriesId, initialData, onRatingCha
         setRatingState(initialData.user_rating);
       }
     } else if (targetId) {
-      // Fetch rating summary from API with user token if available
-      const fetchRating = isSeries 
+      const fetchRating = isEpisode
+        ? getEpisodeRatingSummary(targetId, token || undefined)
+        : isSeries
         ? getSeriesRatingSummary(targetId, token || undefined)
         : getRatingSummary(targetId, token || undefined);
       
@@ -44,23 +49,26 @@ export default function StarRating({ movieId, seriesId, initialData, onRatingCha
         })
         .catch(console.error);
     }
-  }, [targetId, initialData, token, isSeries]);
+  }, [targetId, initialData, token, isSeries, isEpisode]);
 
   const handleClick = async (value: number) => {
-    if (!isAuthenticated || !token || loading || !targetId) return;
+    if (!canInteract || !token || loading || !targetId) return;
 
     setLoading(true);
     try {
-      // If clicking on the same rating, remove the rating
       if (value === rating) {
-        const data = isSeries 
+        const data = isEpisode
+          ? await deleteEpisodeRating(token, targetId)
+          : isSeries
           ? await deleteSeriesRating(token, targetId)
           : await deleteRating(token, targetId);
         setRatingState(0);
         setSummary(data);
         onRatingChange?.(data);
       } else {
-        const data = isSeries 
+        const data = isEpisode
+          ? await setEpisodeRating(token, targetId, value)
+          : isSeries
           ? await setSeriesRating(token, targetId, value)
           : await setRating(token, targetId, value);
         setRatingState(value);
@@ -83,12 +91,12 @@ export default function StarRating({ movieId, seriesId, initialData, onRatingCha
           <button
             key={value}
             type="button"
-            disabled={!isAuthenticated || loading}
+            disabled={!canInteract || loading}
             onClick={() => handleClick(value)}
-            onMouseEnter={() => isAuthenticated && setHoverRating(value)}
+            onMouseEnter={() => canInteract && setHoverRating(value)}
             onMouseLeave={() => setHoverRating(0)}
             className={`transition-transform ${
-              isAuthenticated ? "cursor-pointer hover:scale-110" : "cursor-not-allowed"
+              canInteract ? "cursor-pointer hover:scale-110" : "cursor-not-allowed"
             }`}
             aria-label={`Rate ${value} stars`}
           >
