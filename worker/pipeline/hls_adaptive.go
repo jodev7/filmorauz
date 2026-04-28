@@ -75,7 +75,10 @@ func DefaultRenditions() []RenditionConfig {
 // streaming segment uploads so segments and playlists land in the same B2
 // path. A nested value is required for serial episodes — deriving it from
 // filepath.Base(outputDir) would flatten nested serial paths.
-func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir, hlsFolderName string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int), maxConcurrentRenditions int, segmentUploadWorkers int, segmentUploadRetries int) (masterPlaylistPath, processedMasterPath string, generatedQualities []string, err error) {
+func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir, hlsFolderName, b2Root string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int), maxConcurrentRenditions int, segmentUploadWorkers int, segmentUploadRetries int) (masterPlaylistPath, processedMasterPath string, generatedQualities []string, err error) {
+	if b2Root == "" {
+		b2Root = B2VideoRootMovies
+	}
 	log.Printf("[HLS] Starting adaptive HLS generation for job %s", jobID)
 	log.Printf("[CHECKPOINT] hls_raw_input_path: %s", inputPath)
 	log.Printf("[HLS] Output directory: %s", outputDir)
@@ -147,7 +150,7 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir, hlsFolderName
 	}
 	log.Printf("[HLS] Streaming uploader folder (segment root): %s (outputDir=%s, jobID=%s)", hlsFolderName, outputDir, jobID)
 
-	streamingUploader := newStreamingUploader(p.storage, hlsFolderName, renditions, segmentUploadWorkers, segmentUploadRetries, outputDir)
+	streamingUploader := newStreamingUploader(p.storage, b2Root, hlsFolderName, renditions, segmentUploadWorkers, segmentUploadRetries, outputDir)
 	streamingUploader.start()
 	log.Printf("[STAGE] streaming_upload start — folder: %s, renditions: %d, workers: %d, retries: %d", hlsFolderName, len(renditions), segmentUploadWorkers, segmentUploadRetries)
 
@@ -789,7 +792,14 @@ func (p *Pipeline) createMasterPlaylist(masterPath string, renditions []Renditio
 //	videos/movies/<folder>/<quality>/segment_*.ts   (uploaded by streaming uploader)
 func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir string, folderName string) (string, error) {
 	jobID := job.ID.Hex()
-	log.Printf("[HLS] Uploading adaptive HLS files for job %s from %s", jobID, hlsDir)
+	b2Root := B2VideoRoot(job)
+	contentLabel := JobContentTypeLabel(job)
+	log.Printf("[HLS] Uploading adaptive HLS files for job %s from %s (b2_root=%s)", jobID, hlsDir, b2Root)
+	if rootedFolder, err := BuildVideoB2Path(b2Root, folderName); err != nil {
+		return "", err
+	} else {
+		LogB2Path(contentLabel, rootedFolder+"/")
+	}
 
 	// Update progress to show uploading is in progress
 	if err := p.updateStatus(jobID, models.IngestionStatusUploading, 75); err != nil {
@@ -824,7 +834,7 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 			}
 
 			relPath, _ := filepath.Rel(hlsDir, path)
-			remotePath := filepath.Join("videos", "movies", folderName, relPath)
+			remotePath := filepath.ToSlash(filepath.Join(b2Root, folderName, relPath))
 			log.Printf("[HLS] Walked local file: %s (rel=%s)", path, relPath)
 
 			// .ts segments are streamed directly to B2 by the segment uploader
@@ -894,7 +904,7 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 			if r.Err != nil {
 				log.Printf("[HLS] Upload failed for %s: %v", r.RemotePath, r.Err)
 			}
-			if r.RemotePath == "videos/movies/"+folderName+"/master.m3u8" || strings.HasSuffix(r.RemotePath, "/master.m3u8") {
+			if r.RemotePath == b2Root+"/"+folderName+"/master.m3u8" || strings.HasSuffix(r.RemotePath, "/master.m3u8") {
 				streamingURL = r.URL
 				log.Printf("[HLS] Master playlist URL: %s", streamingURL)
 			}
@@ -915,7 +925,12 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 		// DEVELOPMENT: Save locally
 		log.Printf("[HLS] Development mode: copying files locally...")
 
-		targetDir := filepath.Join(p.config.StorageConfig.LocalPath, "movies", folderName)
+		// Mirror the B2 root in local dev so /stream/<kind>/<folder>/ matches.
+		kind := strings.TrimPrefix(b2Root, "videos/")
+		if kind == "" {
+			kind = "movies"
+		}
+		targetDir := filepath.Join(p.config.StorageConfig.LocalPath, kind, folderName)
 
 		// Create target directory
 		if err := os.MkdirAll(targetDir, 0755); err != nil {
@@ -971,7 +986,7 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 
 			// Track master playlist URL
 			if relPath == "master.m3u8" {
-				streamingURL = p.config.StorageConfig.BaseURL + "/stream/movies/" + folderName + "/master.m3u8"
+				streamingURL = p.config.StorageConfig.BaseURL + "/stream/" + kind + "/" + folderName + "/master.m3u8"
 				log.Printf("[HLS] Master playlist URL: %s", streamingURL)
 			}
 

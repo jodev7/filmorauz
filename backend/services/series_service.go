@@ -27,7 +27,14 @@ type SeriesService struct {
 	clipRepo       *repositories.ClipRepository
 	igScheduleRepo *repositories.InstagramScheduleRepository
 	publishJobRepo *repositories.PublishJobRepository
+	jobRepo        *repositories.JobRepository
 	b2Cleanup      *B2CleanupService
+}
+
+// SetJobRepository wires the ingestion-jobs repository so DeleteSeries
+// can cascade-purge job rows. Optional.
+func (s *SeriesService) SetJobRepository(jobRepo *repositories.JobRepository) {
+	s.jobRepo = jobRepo
 }
 
 func NewSeriesService(seriesRepo *repositories.SeriesRepository, movieRepo *repositories.MovieRepository) *SeriesService {
@@ -54,14 +61,16 @@ func (s *SeriesService) SetStorageDependencies(
 
 // SeriesDeleteResult is the structured outcome of a cascade series delete.
 type SeriesDeleteResult struct {
-	SeriesID           string            `json:"series_id"`
-	Title              string            `json:"title"`
-	SeasonsDeleted     int               `json:"seasons_deleted"`
-	EpisodesDeleted    int               `json:"episodes_deleted"`
-	ClipsDeleted       int               `json:"clips_deleted"`
-	IGSchedulesDeleted int64             `json:"instagram_schedules_deleted"`
-	PublishJobsDeleted int64             `json:"publish_jobs_deleted"`
-	B2                 *B2DeleteSummary  `json:"b2"`
+	SeriesID             string           `json:"series_id"`
+	Title                string           `json:"title"`
+	SeasonsDeleted       int              `json:"seasons_deleted"`
+	EpisodesDeleted      int              `json:"episodes_deleted"`
+	ClipsDeleted         int              `json:"clips_deleted"`
+	IngestionJobsDeleted int64            `json:"ingestion_jobs_deleted"`
+	IGSchedulesDeleted   int64            `json:"instagram_schedules_deleted"`
+	PublishJobsDeleted   int64            `json:"publish_jobs_deleted"`
+	Partial              bool             `json:"partial"`
+	B2                   *B2DeleteSummary `json:"b2"`
 }
 
 // normalizeGenres trims, lowercases, and dedupes genre strings.
@@ -325,6 +334,9 @@ func (s *SeriesService) DeleteSeries(id primitive.ObjectID) (*SeriesDeleteResult
 	}
 
 	s.cleanupSeriesStorage(series, result)
+	if len(result.B2.Errors) > 0 {
+		result.Partial = true
+	}
 
 	if err := s.seriesRepo.Delete(id); err != nil {
 		log.Printf("[SERIES DELETE] FAILED repo.Delete id=%s: %v", id.Hex(), err)
@@ -399,12 +411,24 @@ func (s *SeriesService) cleanupSeriesStorage(series *models.Series, result *Seri
 				if err != nil {
 					result.B2.Errors = append(result.B2.Errors,
 						fmt.Sprintf("series-folder: list %q: %v", seriesPrefix, err))
-				} else if filesCount > 5000 {
+				} else if filesCount > seriesB2FileCap {
 					result.B2.Skipped = append(result.B2.Skipped,
-						fmt.Sprintf("series-folder: %q has %d files (>5000) — refusing for safety", seriesPrefix, filesCount))
-					log.Printf("[SERIES DELETE] refusing prefix=%q with %d files (>5000 safety cap)", seriesPrefix, filesCount)
+						fmt.Sprintf("series-folder: %q has %d files (>%d) — refusing for safety", seriesPrefix, filesCount, seriesB2FileCap))
+					log.Printf("[SERIES DELETE] refusing prefix=%q with %d files (>%d safety cap)", seriesPrefix, filesCount, seriesB2FileCap)
+					result.Partial = true
 				} else {
 					s.b2Cleanup.SafeDeletePrefix(seriesPrefix, "series-folder", result.B2)
+				}
+			}
+
+			// Legacy backward-compat: pre-fix uploads landed under
+			// videos/movies/serials/<series-folder>/. If a row in this series
+			// still references that path, walk and remove it. Identity is
+			// proven by reusing the same series-folder token.
+			if seriesPrefix != "" {
+				legacyPrefix := strings.Replace(seriesPrefix, "videos/serials/", "videos/movies/serials/", 1)
+				if legacyPrefix != seriesPrefix {
+					s.b2Cleanup.SafeDeletePrefix(legacyPrefix, "series-folder-legacy", result.B2)
 				}
 			}
 		}
@@ -473,6 +497,29 @@ func (s *SeriesService) cleanupSeriesStorage(series *models.Series, result *Seri
 			s.b2Cleanup.SafeDeleteKey(key, fmt.Sprintf("clip-%s", clip.ID.Hex()), result.B2)
 		}
 
+		// Aggregate clips folder under videos/clips/<series-folder>/ —
+		// a defensive sweep so any orphan files left behind by partial
+		// runs are also removed. Identity is gated on series slug/id.
+		if s.b2Cleanup != nil {
+			if seriesFolder := seriesFolderTokenFromPrefix(s.deriveSeriesDeletePrefix(series, episodes)); seriesFolder != "" {
+				clipsPrefix := "videos/clips/" + seriesFolder + "/"
+				if validateClipsDeletePrefixForSeries(clipsPrefix, *series) == nil {
+					filesCount, listErr := s.countFilesByPrefix(clipsPrefix)
+					log.Printf("[B2_DELETE] series_id=%s clips_prefix=%s files_count=%d", series.ID.Hex(), clipsPrefix, filesCount)
+					if listErr != nil {
+						result.B2.Errors = append(result.B2.Errors,
+							fmt.Sprintf("series-clips-folder: list %q: %v", clipsPrefix, listErr))
+					} else if filesCount > clipsB2FileCap {
+						result.B2.Skipped = append(result.B2.Skipped,
+							fmt.Sprintf("series-clips-folder: %q has %d files (>%d) — refusing for safety", clipsPrefix, filesCount, clipsB2FileCap))
+						result.Partial = true
+					} else if filesCount > 0 {
+						s.b2Cleanup.SafeDeletePrefix(clipsPrefix, "series-clips-folder", result.B2)
+					}
+				}
+			}
+		}
+
 		// Delete clip DB rows. Use the union (series_id + episode_id list) so
 		// no clip linked to this content survives.
 		if err := s.clipRepo.DeleteBySeriesAndEpisodeIDs(ctx, series.ID, episodeIDsFromEpisodes(episodes)); err != nil {
@@ -507,6 +554,70 @@ func (s *SeriesService) cleanupSeriesStorage(series *models.Series, result *Seri
 			}
 		}
 	}
+
+	// 6) Ingestion-jobs cascade. series_id is primary; episode_id list
+	// catches legacy episode jobs without series_id linkage; (source,
+	// source_id) catches any series-level metadata fetch job that ran
+	// before linkage was stamped.
+	if s.jobRepo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		var totalJobs int64
+		if deleted, err := s.jobRepo.DeleteBySeriesID(ctx, series.ID); err != nil {
+			result.B2.Errors = append(result.B2.Errors, fmt.Sprintf("delete ingestion jobs by series_id: %v", err))
+			log.Printf("[SERIES DELETE] FAILED ingestion_jobs by series_id: %v", err)
+		} else {
+			totalJobs += deleted
+		}
+		if epIDs := episodeIDsFromEpisodes(episodes); len(epIDs) > 0 {
+			if deleted, err := s.jobRepo.DeleteByEpisodeIDs(ctx, epIDs); err != nil {
+				result.B2.Errors = append(result.B2.Errors, fmt.Sprintf("delete ingestion jobs by episode_id: %v", err))
+				log.Printf("[SERIES DELETE] FAILED ingestion_jobs by episode_id: %v", err)
+			} else {
+				totalJobs += deleted
+			}
+		}
+		result.IngestionJobsDeleted = totalJobs
+		log.Printf("[SERIES DELETE] removed %d ingestion_job row(s)", totalJobs)
+	}
+}
+
+// seriesFolderTokenFromPrefix returns the series-folder segment of a
+// videos/serials/<folder>/ prefix.
+func seriesFolderTokenFromPrefix(prefix string) string {
+	prefix = strings.Trim(prefix, "/")
+	if prefix == "" {
+		return ""
+	}
+	parts := strings.Split(prefix, "/")
+	if len(parts) != 3 || parts[0] != "videos" || parts[1] != "serials" {
+		return ""
+	}
+	return parts[2]
+}
+
+// validateClipsDeletePrefixForSeries is the series-side analogue of
+// validateClipsDeletePrefix.
+func validateClipsDeletePrefixForSeries(prefix string, series models.Series) error {
+	prefix = normalizeB2DeletePrefix(prefix)
+	if !strings.HasPrefix(prefix, "videos/clips/") {
+		return fmt.Errorf("unsafe delete prefix")
+	}
+	parts := strings.Split(strings.Trim(prefix, "/"), "/")
+	if len(parts) != 3 {
+		return fmt.Errorf("unsafe delete prefix")
+	}
+	folder := strings.ToLower(parts[2])
+	tokens := []string{
+		strings.ToLower(strings.TrimSpace(series.Slug)),
+		strings.ToLower(series.ID.Hex()),
+	}
+	for _, token := range tokens {
+		if token != "" && strings.Contains(folder, token) {
+			return nil
+		}
+	}
+	return fmt.Errorf("unsafe delete prefix")
 }
 
 func episodeIDsFromEpisodes(episodes []models.Episode) []primitive.ObjectID {

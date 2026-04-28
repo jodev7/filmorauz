@@ -109,6 +109,7 @@ type MovieService struct {
 	clipRepo        *repositories.ClipRepository                  // optional — enables clip cleanup on delete
 	igScheduleRepo  *repositories.InstagramScheduleRepository     // optional — clip-linked instagram schedule cleanup
 	publishJobRepo  *repositories.PublishJobRepository            // optional — clip-linked multi-platform publish job cleanup
+	jobRepo         *repositories.JobRepository                   // optional — ingestion job cascade cleanup
 	b2Cleanup       *B2CleanupService                             // optional — nil means skip B2 cleanup
 }
 
@@ -131,17 +132,38 @@ func (s *MovieService) SetStorageDependencies(
 	s.b2Cleanup = b2
 }
 
+// SetJobRepository wires the ingestion-jobs repository so DeleteMovie /
+// DeleteSeries can cascade-purge job rows. Optional — kept on its own
+// setter so callers that have not been wired yet keep compiling.
+func (s *MovieService) SetJobRepository(jobRepo *repositories.JobRepository) {
+	s.jobRepo = jobRepo
+}
+
 // MovieDeleteResult is the structured outcome of a cascade movie delete.
 // Returned to the handler so the API response can break down what was
 // touched in the DB versus B2 (and what was skipped/failed).
 type MovieDeleteResult struct {
-	MovieID            string            `json:"movie_id"`
-	Title              string            `json:"title"`
-	ClipsDeleted       int               `json:"clips_deleted"`
-	IGSchedulesDeleted int64             `json:"instagram_schedules_deleted"`
-	PublishJobsDeleted int64             `json:"publish_jobs_deleted"`
-	B2                 *B2DeleteSummary  `json:"b2"`
+	MovieID              string           `json:"movie_id"`
+	Title                string           `json:"title"`
+	ClipsDeleted         int              `json:"clips_deleted"`
+	IngestionJobsDeleted int64            `json:"ingestion_jobs_deleted"`
+	IGSchedulesDeleted   int64            `json:"instagram_schedules_deleted"`
+	PublishJobsDeleted   int64            `json:"publish_jobs_deleted"`
+	Partial              bool             `json:"partial"`
+	B2                   *B2DeleteSummary `json:"b2"`
 }
+
+// B2 file-count safety caps for cascade delete. The previous 500-file cap
+// blocked real movie HLS folders (a single 1080p+720p+480p+360p movie can
+// emit 1000–3000 segments) and forced operators to clean B2 by hand. New
+// caps are sized to the actual upper bound of legitimate content, while
+// still refusing the catastrophic "wipe everything" case (which is also
+// blocked separately by the allowlist + per-content identity validator).
+const (
+	movieB2FileCap  = 10000
+	seriesB2FileCap = 50000
+	clipsB2FileCap  = 5000
+)
 
 // GetTrendingMovies returns the most popular movies based on recent view events
 func (s *MovieService) GetTrendingMovies(period string, limit int) ([]models.TrendingMovie, error) {
@@ -636,6 +658,9 @@ func (s *MovieService) DeleteMovie(id string) (*MovieDeleteResult, error) {
 	}
 
 	s.cleanupMovieStorage(objID, movie, result)
+	if len(result.B2.Errors) > 0 {
+		result.Partial = true
+	}
 
 	if delErr := s.repo.Delete(id); delErr != nil {
 		log.Printf("[MOVIE DELETE] FAILED repo.Delete id=%s: %v", id, delErr)
@@ -670,10 +695,11 @@ func (s *MovieService) cleanupMovieStorage(objID primitive.ObjectID, movie *mode
 				if err != nil {
 					result.B2.Errors = append(result.B2.Errors,
 						fmt.Sprintf("movie-folder: list %q: %v", prefix, err))
-				} else if filesCount > 500 {
+				} else if filesCount > movieB2FileCap {
 					result.B2.Skipped = append(result.B2.Skipped,
-						fmt.Sprintf("movie-folder: %q has %d files (>500) — refusing for safety", prefix, filesCount))
-					log.Printf("[MOVIE DELETE] refusing prefix=%q with %d files (>500 safety cap)", prefix, filesCount)
+						fmt.Sprintf("movie-folder: %q has %d files (>%d) — refusing for safety", prefix, filesCount, movieB2FileCap))
+					log.Printf("[MOVIE DELETE] refusing prefix=%q with %d files (>%d safety cap)", prefix, filesCount, movieB2FileCap)
+					result.Partial = true
 				} else {
 					s.b2Cleanup.SafeDeletePrefix(prefix, "movie-hls", result.B2)
 				}
@@ -732,6 +758,30 @@ func (s *MovieService) cleanupMovieStorage(objID primitive.ObjectID, movie *mode
 			}
 		}
 
+		// Bulk-delete the clips folder so any orphan B2 files (e.g. a clip
+		// whose DB row was already gone, or a re-run that wrote a new
+		// segment count) are not left behind. The folder name mirrors the
+		// movie HLS folder, so we reuse the validated movie folder token.
+		if s.b2Cleanup != nil {
+			if movieFolder := movieFolderTokenFromPrefix(s.deriveMovieDeletePrefix(movie)); movieFolder != "" {
+				clipsPrefix := "videos/clips/" + movieFolder + "/"
+				if validateClipsDeletePrefix(clipsPrefix, *movie) == nil {
+					filesCount, listErr := s.countFilesByPrefix(clipsPrefix)
+					log.Printf("[B2_DELETE] movie_id=%s clips_prefix=%s files_count=%d", movie.ID.Hex(), clipsPrefix, filesCount)
+					if listErr != nil {
+						result.B2.Errors = append(result.B2.Errors,
+							fmt.Sprintf("movie-clips-folder: list %q: %v", clipsPrefix, listErr))
+					} else if filesCount > clipsB2FileCap {
+						result.B2.Skipped = append(result.B2.Skipped,
+							fmt.Sprintf("movie-clips-folder: %q has %d files (>%d) — refusing for safety", clipsPrefix, filesCount, clipsB2FileCap))
+						result.Partial = true
+					} else if filesCount > 0 {
+						s.b2Cleanup.SafeDeletePrefix(clipsPrefix, "movie-clips-folder", result.B2)
+					}
+				}
+			}
+		}
+
 		if err := s.clipRepo.DeleteByMovieID(ctx, objID); err != nil {
 			result.B2.Errors = append(result.B2.Errors,
 				fmt.Sprintf("delete clip rows: %v", err))
@@ -767,6 +817,77 @@ func (s *MovieService) cleanupMovieStorage(objID primitive.ObjectID, movie *mode
 			}
 		}
 	}
+
+	// 6) Ingestion-jobs cascade. Match by movie_id (primary), then by
+	// (source, source_id) tuple so legacy jobs that never had movie_id
+	// stamped — or jobs that errored before linkage — are not left behind.
+	if s.jobRepo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		var totalJobs int64
+		if deleted, err := s.jobRepo.DeleteByMovieID(ctx, objID); err != nil {
+			result.B2.Errors = append(result.B2.Errors, fmt.Sprintf("delete ingestion jobs by movie_id: %v", err))
+			log.Printf("[MOVIE DELETE] FAILED ingestion_jobs by movie_id: %v", err)
+		} else {
+			totalJobs += deleted
+		}
+		if movie.Source != nil {
+			if deleted, err := s.jobRepo.DeleteBySourceID(ctx, movie.Source.Provider, movie.Source.SourceID); err != nil {
+				result.B2.Errors = append(result.B2.Errors, fmt.Sprintf("delete ingestion jobs by source: %v", err))
+				log.Printf("[MOVIE DELETE] FAILED ingestion_jobs by source: %v", err)
+			} else {
+				totalJobs += deleted
+			}
+		}
+		result.IngestionJobsDeleted = totalJobs
+		log.Printf("[MOVIE DELETE] removed %d ingestion_job row(s)", totalJobs)
+	}
+}
+
+// movieFolderTokenFromPrefix returns the last path segment of a
+// `videos/movies/<folder>/` prefix. Empty when the prefix is not in that
+// shape — callers must treat empty as "skip".
+func movieFolderTokenFromPrefix(prefix string) string {
+	prefix = strings.Trim(prefix, "/")
+	if prefix == "" {
+		return ""
+	}
+	parts := strings.Split(prefix, "/")
+	if len(parts) != 3 || parts[0] != "videos" || parts[1] != "movies" {
+		return ""
+	}
+	return parts[2]
+}
+
+// validateClipsDeletePrefix is the videos/clips/<folder>/ analogue of
+// validateB2DeletePrefix: the folder token must contain the movie's
+// slug, ID, or source ID before we will issue a bulk prefix delete.
+func validateClipsDeletePrefix(prefix string, movie models.Movie) error {
+	prefix = normalizeB2DeletePrefix(prefix)
+	if !strings.HasPrefix(prefix, "videos/clips/") {
+		return fmt.Errorf("unsafe delete prefix")
+	}
+	parts := strings.Split(strings.Trim(prefix, "/"), "/")
+	if len(parts) != 3 {
+		return fmt.Errorf("unsafe delete prefix")
+	}
+	folder := strings.ToLower(parts[2])
+	if folder == "" {
+		return fmt.Errorf("unsafe delete prefix")
+	}
+	tokens := []string{
+		strings.ToLower(strings.TrimSpace(movie.Slug)),
+		strings.ToLower(movie.ID.Hex()),
+	}
+	if movie.Source != nil {
+		tokens = append(tokens, strings.ToLower(strings.TrimSpace(movie.Source.SourceID)))
+	}
+	for _, token := range tokens {
+		if token != "" && strings.Contains(folder, token) {
+			return nil
+		}
+	}
+	return fmt.Errorf("unsafe delete prefix")
 }
 
 func firstNonEmpty(values ...string) string {

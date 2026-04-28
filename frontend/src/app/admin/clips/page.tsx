@@ -388,10 +388,29 @@ function getClipSequence(clip: Clip): number {
   return clip.clip_index || clip.sequence || 0;
 }
 
+// Returns true if value is a non-empty, non-zero MongoDB ObjectID string.
+// `primitive.ObjectID` json-marshals zero values as "000000000000000000000000",
+// which would otherwise be truthy and misclassify movie clips as series clips.
+function hasId(value?: string): boolean {
+  if (!value) return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (/^0+$/.test(trimmed)) return false;
+  return true;
+}
+
+function normalizeClipType(clip: Clip): "movie" | "series_episode" {
+  if (clip.source_type === "series_episode") return "series_episode";
+  if (clip.source_type === "movie") return "movie";
+  if (clip.content_kind === "series") return "series_episode";
+  if (clip.content_kind === "movie") return "movie";
+  if (hasId(clip.episode_id) || hasId(clip.series_id)) return "series_episode";
+  if (hasId(clip.movie_id)) return "movie";
+  return "movie";
+}
+
 function getClipKind(clip: Clip): "movie" | "series" {
-  return clip.content_kind === "series" || clip.source_type === "series_episode" || !!clip.series_id
-    ? "series"
-    : "movie";
+  return normalizeClipType(clip) === "series_episode" ? "series" : "movie";
 }
 
 function buildClipGroups(clips: Clip[]): ContentClipGroup[] {
@@ -411,12 +430,16 @@ function buildClipGroups(clips: Clip[]): ContentClipGroup[] {
 
   for (const clip of clips) {
     if (getClipKind(clip) === "movie") {
-      const key = clip.movie_id || `movie:${clip.id}`;
+      const key = hasId(clip.movie_id)
+        ? `movie:${clip.movie_id}`
+        : clip.movie_slug
+          ? `movie:slug:${clip.movie_slug}`
+          : `movie:clip:${clip.id}`;
       if (!movieGroups.has(key)) {
         movieGroups.set(key, {
           key,
           kind: "movie",
-          title: clip.movie_title || "Untitled movie",
+          title: clip.movie_title?.trim() || clip.title?.trim() || "Untitled movie",
           slug: clip.movie_slug || "",
           code: clip.movie_code || "",
           clips: [],
@@ -426,11 +449,15 @@ function buildClipGroups(clips: Clip[]): ContentClipGroup[] {
       continue;
     }
 
-    const seriesKey = clip.series_id || `series:${clip.id}`;
+    const seriesKey = hasId(clip.series_id)
+      ? `series:${clip.series_id}`
+      : clip.series_slug
+        ? `series:slug:${clip.series_slug}`
+        : `series:clip:${clip.id}`;
     if (!seriesGroups.has(seriesKey)) {
       seriesGroups.set(seriesKey, {
         key: seriesKey,
-        title: clip.series_title || "Untitled series",
+        title: clip.series_title?.trim() || clip.title?.trim() || "Untitled series",
         slug: clip.series_slug || "",
         clips: [],
         seasons: new Map(),
@@ -902,7 +929,9 @@ export default function AdminClipsPage() {
                             #{group.code}
                           </span>
                         )}
-                        {group.kind === "series" && (
+                        {group.kind === "movie" ? (
+                          <span className="text-xs text-emerald-300/80">Movie clips</span>
+                        ) : (
                           <span className="text-xs text-amber-300/80">Serial episode clips</span>
                         )}
                         <span className="text-xs text-gray-600">

@@ -383,7 +383,8 @@ func (h *MovieHandler) DeleteMovie(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"success":    true,
+		"success":    !result.Partial,
+		"partial":    result.Partial,
 		"message":    "Movie deleted",
 		"deleted_db": movieDeleteDBSummary(result),
 		"deleted_b2": result.B2,
@@ -397,6 +398,7 @@ func movieDeleteDBSummary(r *services.MovieDeleteResult) gin.H {
 		"movie_id":                    r.MovieID,
 		"title":                       r.Title,
 		"clips_deleted":               r.ClipsDeleted,
+		"ingestion_jobs_deleted":      r.IngestionJobsDeleted,
 		"instagram_schedules_deleted": r.IGSchedulesDeleted,
 		"publish_jobs_deleted":        r.PublishJobsDeleted,
 	}

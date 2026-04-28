@@ -278,6 +278,8 @@ func main() {
 
 	movieService.SetStorageDependencies(clipRepo, igScheduleRepo, publishJobRepo, b2Cleanup)
 	seriesService.SetStorageDependencies(clipRepo, igScheduleRepo, publishJobRepo, b2Cleanup)
+	movieService.SetJobRepository(jobRepo)
+	seriesService.SetJobRepository(jobRepo)
 
 	// Suggestion repository, service, and handler
 	suggestionRepo := repositories.NewSuggestionRepository(db)

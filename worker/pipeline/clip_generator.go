@@ -1090,7 +1090,8 @@ func (p *Pipeline) generateClipsForTarget(ctx context.Context, target clipTarget
 	// naturally nest under serials/<slug>/season-N/episode-M/.
 	outDir = filepath.Join(baseDir, "uploads", "movies", "clips", target.FolderSubpath)
 	baseURL = p.config.StorageConfig.BaseURL
-	storagePath = fmt.Sprintf("videos/clips/%s", target.FolderSubpath)
+	storagePath = fmt.Sprintf("%s/%s", B2VideoRootClips, target.FolderSubpath)
+	LogB2Path(ContentTypeClip, storagePath+"/")
 
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		log.Printf("[CLIP] ERROR: failed to create output dir: %v", err)

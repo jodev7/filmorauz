@@ -332,7 +332,8 @@ func (h *SeriesHandler) DeleteSeries(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"success":    true,
+		"success":    !result.Partial,
+		"partial":    result.Partial,
 		"message":    "series deleted",
 		"deleted_db": seriesDeleteDBSummary(result),
 		"deleted_b2": result.B2,
@@ -346,6 +347,7 @@ func seriesDeleteDBSummary(r *services.SeriesDeleteResult) gin.H {
 		"seasons_deleted":             r.SeasonsDeleted,
 		"episodes_deleted":            r.EpisodesDeleted,
 		"clips_deleted":               r.ClipsDeleted,
+		"ingestion_jobs_deleted":      r.IngestionJobsDeleted,
 		"instagram_schedules_deleted": r.IGSchedulesDeleted,
 		"publish_jobs_deleted":        r.PublishJobsDeleted,
 	}

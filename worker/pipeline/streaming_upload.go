@@ -24,6 +24,7 @@ const (
 
 type segmentUploader struct {
 	storage    storage.Storage
+	b2Root     string
 	folderName string
 	rendition  string
 
@@ -42,12 +43,16 @@ type segmentUploader struct {
 	wg      sync.WaitGroup
 }
 
-func newSegmentUploader(storage storage.Storage, folderName, rendition string, workers int, retries int) *segmentUploader {
+func newSegmentUploader(storage storage.Storage, b2Root, folderName, rendition string, workers int, retries int) *segmentUploader {
 	if retries <= 0 {
 		retries = SegmentRetryMax
 	}
+	if b2Root == "" {
+		b2Root = B2VideoRootMovies
+	}
 	return &segmentUploader{
 		storage:    storage,
+		b2Root:     b2Root,
 		folderName: folderName,
 		rendition:  rendition,
 		pending:    make(chan string, 100),
@@ -74,7 +79,7 @@ func (u *segmentUploader) worker(id int) {
 }
 
 func (u *segmentUploader) uploadSegment(path string) {
-	remotePath := fmt.Sprintf("videos/movies/%s/%s/%s", u.folderName, u.rendition, filepath.Base(path))
+	remotePath := fmt.Sprintf("%s/%s/%s/%s", u.b2Root, u.folderName, u.rendition, filepath.Base(path))
 
 	if _, ok := u.uploaded.Load(remotePath); ok {
 		log.Printf("[STREAM_UPLOAD] Skipping already uploaded: %s", remotePath)
@@ -319,10 +324,13 @@ type streamingUploader struct {
 	watcher   *fileWatcher
 }
 
-func newStreamingUploader(storage storage.Storage, folderName string, renditions []RenditionConfig, workers int, retries int, outputDir string) *streamingUploader {
+func newStreamingUploader(storage storage.Storage, b2Root, folderName string, renditions []RenditionConfig, workers int, retries int, outputDir string) *streamingUploader {
+	if b2Root == "" {
+		b2Root = B2VideoRootMovies
+	}
 	uploaders := make(map[string]*segmentUploader)
 	for _, r := range renditions {
-		uploaders[r.Name] = newSegmentUploader(storage, folderName, r.Name, workers, retries)
+		uploaders[r.Name] = newSegmentUploader(storage, b2Root, folderName, r.Name, workers, retries)
 	}
 
 	watchDirs := make([]string, 0, len(renditions))

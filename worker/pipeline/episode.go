@@ -56,14 +56,15 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 		return fmt.Errorf("episode update_status processing: %w", err)
 	}
 
-	// Folder layout: serials/<slug>/season-N/episode-M
-	// Nested under serial → season → episode so master.m3u8 and the rendition
-	// folders (1080p/, 720p/, …) live together at the episode root in B2 as:
+	// Folder layout under the videos/serials/ B2 root:
 	//   videos/serials/<slug>/season-N/episode-M/master.m3u8
 	//   videos/serials/<slug>/season-N/episode-M/<quality>/index.m3u8
 	//   videos/serials/<slug>/season-N/episode-M/<quality>/segment_*.ts
+	// The "videos/serials" root is supplied by B2VideoRoot(job) at upload time,
+	// so this folder name must NOT include any "serials/" prefix — doing so
+	// would land assets at videos/serials/serials/... or, before this fix,
+	// at videos/movies/serials/...
 	folderName := filepath.Join(
-		"serials",
 		job.SeriesSlug,
 		fmt.Sprintf("season-%d", job.SeasonNumber),
 		fmt.Sprintf("episode-%d", job.EpisodeNumber),
@@ -87,7 +88,7 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	if err != nil {
 		return fmt.Errorf("episode uploadProcessedFiles failed: %w", err)
 	}
-	log.Printf("[EPISODE] b2_root=videos/%s master_b2_key=videos/%s/master.m3u8", folderName, folderName)
+	log.Printf("[EPISODE] b2_root=%s/%s master_b2_key=%s/%s/master.m3u8", B2VideoRootSerials, folderName, B2VideoRootSerials, folderName)
 	log.Printf("[EPISODE] streamingURL=%s", streamingURL)
 
 	mode := p.config.StorageConfig.Mode
@@ -96,7 +97,7 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	if mode != "prod" && mode != "production" {
 		outputMode = "development"
 		baseDir, _ := os.Getwd()
-		finalPath = filepath.Join(baseDir, "uploads", "movies", folderName)
+		finalPath = filepath.Join(baseDir, "uploads", "serials", folderName)
 	} else {
 		outputMode = "production"
 	}

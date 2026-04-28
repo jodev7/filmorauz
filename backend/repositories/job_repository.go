@@ -905,3 +905,62 @@ func (r *JobRepository) UpdateQualityInfo(ctx context.Context, id, sourceQuality
 	_, err = r.collection.UpdateByID(ctx, objID, update)
 	return err
 }
+
+// DeleteByMovieID removes every ingestion_job whose movie_id equals the
+// given ID. Used by movie cascade delete so the job history does not
+// outlive the movie row that produced it.
+func (r *JobRepository) DeleteByMovieID(ctx context.Context, movieID primitive.ObjectID) (int64, error) {
+	if movieID.IsZero() {
+		return 0, nil
+	}
+	res, err := r.collection.DeleteMany(ctx, bson.M{"movie_id": movieID})
+	if err != nil {
+		return 0, err
+	}
+	return res.DeletedCount, nil
+}
+
+// DeleteBySeriesID removes every ingestion_job whose series_id equals
+// the given ID. Used by series cascade delete.
+func (r *JobRepository) DeleteBySeriesID(ctx context.Context, seriesID primitive.ObjectID) (int64, error) {
+	if seriesID.IsZero() {
+		return 0, nil
+	}
+	res, err := r.collection.DeleteMany(ctx, bson.M{"series_id": seriesID})
+	if err != nil {
+		return 0, err
+	}
+	return res.DeletedCount, nil
+}
+
+// DeleteByEpisodeIDs removes every ingestion_job whose episode_id is in
+// the given list. Used by series cascade delete to catch legacy episode
+// jobs that predate series_id linkage.
+func (r *JobRepository) DeleteByEpisodeIDs(ctx context.Context, episodeIDs []primitive.ObjectID) (int64, error) {
+	if len(episodeIDs) == 0 {
+		return 0, nil
+	}
+	res, err := r.collection.DeleteMany(ctx, bson.M{"episode_id": bson.M{"$in": episodeIDs}})
+	if err != nil {
+		return 0, err
+	}
+	return res.DeletedCount, nil
+}
+
+// DeleteBySourceID removes every ingestion_job that was originally
+// created from the given (source, source_id) tuple. Used as a fallback
+// when neither movie_id nor series_id linkage exists on a job — the
+// (source, source_id) pair is unique (see NewJobRepository indexes), so
+// at most one job is removed per call.
+func (r *JobRepository) DeleteBySourceID(ctx context.Context, source, sourceID string) (int64, error) {
+	source = strings.TrimSpace(source)
+	sourceID = strings.TrimSpace(sourceID)
+	if source == "" || sourceID == "" {
+		return 0, nil
+	}
+	res, err := r.collection.DeleteMany(ctx, bson.M{"source": source, "source_id": sourceID})
+	if err != nil {
+		return 0, err
+	}
+	return res.DeletedCount, nil
+}
