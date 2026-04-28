@@ -137,18 +137,25 @@ class FreekinoParser:
     
     # Container selectors (strict first)
     CONTAINER_SELECTORS = [
+        "#tab-movies",
+        "#tab-serials",
+        "div[id^='tab-']",
         ".search_results",
         ".search-results",
         ".xsearch",
         ".results",
         ".movie-list",
         ".film-list",
+        "main",
         "#content",
         ".content",
     ]
     
     # Card selectors (strict first)
     CARD_SELECTORS = [
+        ".swiper-slide",
+        "article[itemtype]",
+        "article",
         ".shortstory",
         ".shortstory-item",
         ".shortstoryItem",
@@ -156,8 +163,8 @@ class FreekinoParser:
         ".movie-item",
         ".moviebox",
         ".item",
-        "article[class]",
         ".movie-item",
+        "article[class]",
         "article.shortstory",
         ".search-result",
         ".movie-card",
@@ -171,7 +178,13 @@ class FreekinoParser:
         ".movie-title a", ".short-title a", "a[title]"
     ]
     
-    IMAGE_SELECTORS = ["img[data-src]", "img[data-lazy-src]", "img[src]"]
+    IMAGE_SELECTORS = [
+        "img[itemprop='image']",
+        "img[data-src]",
+        "img[data-lazy-src]",
+        "img[data-original]",
+        "img[src]",
+    ]
     
     BROWSER_HEADERS = {
         "User-Agent": (
@@ -184,7 +197,7 @@ class FreekinoParser:
             "image/avif,image/webp,*/*;q=0.8"
         ),
         "Accept-Language": "uz-UZ,uz;q=0.9,ru;q=0.8,en-US;q=0.7,en;q=0.6",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Encoding": "gzip, deflate",
         "Referer": "https://freekino.net/",
         "Origin": "https://freekino.net",
         "Connection": "keep-alive",
@@ -232,6 +245,48 @@ class FreekinoParser:
         if last_response is not None:
             return last_response
         raise last_exc if last_exc else requests.RequestException("freekino fetch failed")
+
+    def _extract_source_id(self, detail_url: str) -> str:
+        if not detail_url:
+            return ""
+        match = re.search(r'/(?:movie|film|serial)/(?:genre/|country/|year/)?(\d+)(?:[-/]|$)', detail_url)
+        if match:
+            return match.group(1)
+        slug = detail_url.rstrip("/").split("/")[-1]
+        slug = slug.replace(".html", "").replace(".htm", "")
+        return slug
+
+    def _normalize_content_type(self, detail_url: str) -> str:
+        from helpers import detect_content_type as _detect_ct
+        ct, _ = _detect_ct(detail_url, "freekino")
+        return "series" if ct == "serial" else "movie"
+
+    def _build_result_payload(self, title: str, detail_url: str, poster_url: str, year: Any) -> Optional[Dict[str, Any]]:
+        detail_url = normalize_url(self.BASE_URL, detail_url)
+        source_id = self._extract_source_id(detail_url)
+        if not title or not detail_url or not source_id:
+            return None
+
+        content_type = self._normalize_content_type(detail_url)
+        item_type = "serial" if content_type == "series" else "movie"
+        poster_url = normalize_url(self.BASE_URL, poster_url) if poster_url else ""
+        year_value = str(year) if year else ""
+
+        logger.info(f"[FREEKINO] item title={title!r} detail_url={detail_url} content_type={item_type}")
+
+        return {
+            "source": "freekino",
+            "source_id": source_id,
+            "title": title,
+            "link": detail_url,
+            "detail_url": detail_url,
+            "img": poster_url,
+            "poster": poster_url,
+            "poster_url": poster_url,
+            "year": year_value,
+            "type": item_type,
+            "content_type": item_type,
+        }
     
     def _is_valid_title(self, title: str) -> bool:
         """
@@ -299,7 +354,7 @@ class FreekinoParser:
             logger.info(f"[FREEKINO] STAGE 1: Query encoded = {quote(query)}")
             
             # === STAGE 2: HTTP request ===
-            response = self.session.get(search_url, timeout=30, allow_redirects=True)
+            response = self._fetch_browserlike(search_url, timeout=30, retries=3)
             final_url = response.url
             status = response.status_code
             
@@ -344,7 +399,10 @@ class FreekinoParser:
                 logger.warning(f"[FREEKINO] STAGE 4: No cards found with strict selectors")
                 # Fallback: any film links
                 all_links = container.find_all("a", href=True)
-                cards = [a for a in all_links if "/film/" in a.get("href", "")]
+                cards = [
+                    a for a in all_links
+                    if re.search(r'/(?:movie|film|serial)/\d+', a.get("href", ""))
+                ]
                 logger.info(f"[FREEKINO] STAGE 4: Fallback links = {len(cards)}")
             
             logger.info(f"[FREEKINO] STAGE 4: Total cards = {len(cards)}")
@@ -400,6 +458,7 @@ class FreekinoParser:
                 results = extracted_cards
             
             logger.info(f"[FREEKINO] FINAL: Returning {len(results)} results")
+            logger.info(f"[FREEKINO] search query={query!r} status={status} items_count={len(results)}")
             
         except requests.RequestException as e:
             logger.error(f"[FREEKINO] HTTP error: {e}")
@@ -443,7 +502,6 @@ class FreekinoParser:
                         raw_title = a.get_text()
                     raw_title = clean_text(raw_title)
                     # Clean common prefixes
-                    import re
                     raw_title = re.sub(r'^(Watch |Смотреть |Watch online |Смотреть онлайн )', '', raw_title, flags=re.IGNORECASE)
                     # Validate title in fallback too
                     if raw_title and self._is_valid_title(raw_title):
@@ -455,7 +513,6 @@ class FreekinoParser:
 
         # Also clean title in main path
         if title and title.startswith("Watch "):
-            import re
             title = re.sub(r'^(Watch |Смотреть |Watch online |Смотреть онлайн )', '', title, flags=re.IGNORECASE)
 
         link = normalize_url(self.BASE_URL, link)
@@ -469,59 +526,30 @@ class FreekinoParser:
                 if img:
                     break
         
-        if img:
-            img = normalize_url(self.BASE_URL, img)
-        
-        # Year: Try to extract from title attribute (e.g., "Watch Interstellar (2014)")
-        # Fall back to card text only if title attr doesn't have year
         year = ""
-        film_link = card.select_one("a[href*='/movie/'], a[href*='/film/']")
+        film_link = card.select_one("a[href*='/movie/'], a[href*='/film/'], a[href*='/serial/']")
         if film_link:
             title_attr = film_link.get("title", "")
-            import re
             year_match = re.search(r'\((\d{4})\)', title_attr)
             if year_match:
                 year = year_match.group(1)
-        
-        # Only use card text as fallback if we couldn't get from title attr
+
+        if not year:
+            date_published = card.select_one("meta[itemprop='datePublished']")
+            if date_published:
+                year_match = re.search(r'\b(19|20)\d{2}\b', date_published.get("content", ""))
+                if year_match:
+                    year = year_match.group(0)
+
         if not year:
             card_text = card.get_text()
             extracted_year = extract_year(card_text)
             year = str(extracted_year) if extracted_year else ""
-        
-        quality = extract_quality(card.get_text()) if not year else ""
-        
-        # Extract source_id from the link
-        # e.g., "https://freekino.net/movie/2631-interstellar" -> "2631"
-        source_id = ""
-        if link:
-            import re
-            match = re.search(r'/movie/(\d+)-', link)
-            if match:
-                source_id = f"freekino_{match.group(1)}"
-            else:
-                # Fallback: use the numeric ID if found
-                match = re.search(r'/(\d+)/?', link)
-                if match:
-                    source_id = f"freekino_{match.group(1)}"
-        
-        from helpers import detect_content_type as _detect_ct
-        ct, ct_reason = _detect_ct(link, "freekino")
-        if ct == "unknown":
-            ct = "movie"
-        logger.info(f"[SEARCH] source=freekino result={link[:80]} content_type={ct} reason={ct_reason}")
 
-        return {
-            "source": "freekino",
-            "title": title,
-            "link": link,
-            "img": img,
-            "year": year,  # Empty string if no year found - frontend handles this
-            "quality": quality,
-            "source_id": source_id,
-            "detail_url": link,
-            "type": ct,
-        }
+        result = self._build_result_payload(title=title, detail_url=link, poster_url=img, year=year)
+        if result:
+            result["quality"] = extract_quality(card.get_text()) if not year else ""
+        return result
     
     def get_detail(self, url: str) -> Dict[str, Any]:
         """Get movie detail — returns video_urls list (for server) + quality_urls dict."""
@@ -1048,9 +1076,7 @@ class FreekinoParser:
     def list_categories(self):
         """Scrape genre/category links from freekino.net navigation."""
         try:
-            response = self.session.get(self.BASE_URL + "/", timeout=20, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            })
+            response = self._fetch_browserlike(self.BASE_URL + "/", timeout=20, retries=3)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "lxml")
         except Exception as e:
@@ -1058,13 +1084,14 @@ class FreekinoParser:
             return []
 
         import re as _re
-        skip_re = _re.compile(r'(?:login|register|lostpassword|account|profile|search|rss|feed|logout)', _re.IGNORECASE)
+        skip_re = _re.compile(r'(?:login|register|lostpassword|account|profile|search|rss|feed|logout|privacy|terms|dmca|reklama|news|main)', _re.IGNORECASE)
+        allow_re = _re.compile(r'/(?:movie|serial)(?:/(?:genre|country|year))?/', _re.IGNORECASE)
         categories = []
         seen_urls = set()
 
         for sel in [".genres a", ".genre-list a", ".categories a", ".category-list a",
                     "nav a", ".nav a", ".menu a", "#menu a", ".main-menu a", ".top-menu a",
-                    ".navigation a", ".header-menu a"]:
+                    ".navigation a", ".header-menu a", "a[href]"]:
             links = soup.select(sel)
             for a in links:
                 href = a.get("href", "").strip()
@@ -1076,6 +1103,8 @@ class FreekinoParser:
                 full_url = normalize_url(self.BASE_URL, href)
                 if not full_url or full_url.rstrip("/") == self.BASE_URL.rstrip("/"):
                     continue
+                if not allow_re.search(full_url):
+                    continue
                 if skip_re.search(href) or skip_re.search(name):
                     continue
                 if full_url in seen_urls:
@@ -1083,8 +1112,6 @@ class FreekinoParser:
                 seen_urls.add(full_url)
                 slug = full_url.rstrip("/").split("/")[-1]
                 categories.append({"name": name, "url": full_url, "slug": slug})
-            if categories:
-                break
 
         logger.info(f"[FREEKINO] list_categories: found {len(categories)} categories")
         return categories
@@ -1138,12 +1165,11 @@ class FreekinoParser:
             candidate_urls = [f"{base}{sep}page={page}"]
 
         soup = None
+        last_status = 0
         for url in candidate_urls:
-            logger.info(f"[FREEKINO] list_catalog: fetching {url}")
             try:
-                response = self.session.get(url, timeout=30, headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                })
+                response = self._fetch_browserlike(url, timeout=30, retries=3)
+                last_status = response.status_code
                 response.raise_for_status()
                 soup = BeautifulSoup(response.text, "lxml")
                 break
@@ -1218,7 +1244,9 @@ class FreekinoParser:
         
         if len(items) >= 10 and not has_more:
             has_more = True
-        
+
+        logger.info(f"[FREEKINO] catalog url={candidate_urls[0]} status={last_status} items_count={len(items[:limit])}")
+
         return {
             "items": items[:limit],
             "page": page,
@@ -1257,36 +1285,26 @@ class FreekinoParser:
         if not title:
             return None
         
-        # Poster
         poster = ""
         for sel in self.IMAGE_SELECTORS:
             img = card.select_one(sel)
             if img:
-                poster = img.get("data-src") or img.get("data-lazy-src") or img.get("src", "")
-                if poster:
-                    poster = normalize_url(self.BASE_URL, poster)
+                poster = img.get("data-src") or img.get("data-lazy-src") or img.get("data-original") or img.get("src", "")
                 break
-        
-        # Year
-        year = extract_year(card.get_text()) or 0
-        
-        # Source ID from URL
-        source_id = ""
-        if detail_url:
-            import re as _re
-            # Try numeric ID first (e.g., /movie/2631-title -> "2631")
-            m = _re.search(r'/(?:movie|film|serial)/(\d+)', detail_url)
-            if m:
-                source_id = m.group(1)
-            else:
-                # Fallback: use last path segment as slug
-                slug = detail_url.rstrip('/').split('/')[-1]
-                slug = slug.replace('.html', '').replace('.htm', '')
-                if slug:
-                    source_id = slug
 
-        if not source_id:
-            return None  # Skip items with no identifiable source_id
+        year = ""
+        date_published = card.select_one("meta[itemprop='datePublished']")
+        if date_published:
+            year_match = re.search(r'\b(19|20)\d{2}\b', date_published.get("content", ""))
+            if year_match:
+                year = year_match.group(0)
+        if not year:
+            extracted_year = extract_year(card.get_text())
+            year = str(extracted_year) if extracted_year else ""
+
+        payload = self._build_result_payload(title=title, detail_url=detail_url, poster_url=poster, year=year)
+        if not payload:
+            return None
 
         # Description
         desc = ""
@@ -1296,18 +1314,11 @@ class FreekinoParser:
                 desc = clean_text(el.get_text())[:200]
                 break
 
-        item_type = "serial" if "/serial/" in detail_url else "movie"
-
-        return {
-            "source_id": source_id,
-            "title": title,
-            "year": year,
-            "type": item_type,
-            "poster": poster,
+        payload.update({
             "description": desc,
             "genres": [],
-            "detail_url": detail_url,
-        }
+        })
+        return payload
 
 
 if __name__ == "__main__":
