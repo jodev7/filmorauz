@@ -19,6 +19,7 @@ import Hls from "hls.js";
 import { VideoSourceType } from "@/lib/api";
 import { PremiumBadge, isUserPremium } from "@/components/PremiumComponents";
 import { useAuth } from "@/lib/auth-context";
+import { logger } from "@/lib/logger";
 
 interface Props {
   videoUrl: string;
@@ -269,7 +270,7 @@ function HLSPlayer({
     setQualities([]);
     setSelectedQuality(-1);
 
-    console.log("[HLSPlayer] initializing with src:", src);
+    logger.debug("[HLSPlayer] initializing");
 
     if (!src) {
       setError("Video manbasi mavjud emas.");
@@ -323,14 +324,7 @@ function HLSPlayer({
       const MAX_NETWORK_RETRIES = 2;
 
       hls.on(Hls.Events.ERROR, (_, data) => {
-        console.error("[HLSPlayer] error event:", {
-          type: data.type,
-          details: data.details,
-          fatal: data.fatal,
-          url: (data as unknown as { url?: string }).url,
-          responseCode: (data as unknown as { response?: { code?: number } }).response?.code,
-          src,
-        });
+        logger.error("[HLSPlayer] error", data.type, data.details, data.fatal);
         if (!data.fatal) return;
 
         const respCode = (data as unknown as { response?: { code?: number } }).response?.code;
@@ -339,7 +333,7 @@ function HLSPlayer({
           case Hls.ErrorTypes.NETWORK_ERROR:
             if (networkRetries < MAX_NETWORK_RETRIES) {
               networkRetries += 1;
-              console.warn(`[HLSPlayer] network error — retry ${networkRetries}/${MAX_NETWORK_RETRIES}`);
+              logger.warn("[HLSPlayer] network error retry", networkRetries);
               hls.startLoad();
               return;
             }
@@ -355,7 +349,7 @@ function HLSPlayer({
             hls.destroy();
             break;
           case Hls.ErrorTypes.MEDIA_ERROR:
-            console.warn("[HLSPlayer] media error — attempting recover");
+            logger.warn("[HLSPlayer] media error — recovering");
             hls.recoverMediaError();
             break;
           default:
@@ -374,7 +368,7 @@ function HLSPlayer({
       video.src = src;
       const onVideoError = () => {
         const code = video.error?.code;
-        console.error("[HLSPlayer] native video error:", code, video.error?.message, "src:", src);
+        logger.error("[HLSPlayer] native video error", code);
         if (code === 4) {
           setError("Video manbasi qo'llab-quvvatlanmaydi yoki topilmadi.");
         } else {
@@ -826,16 +820,6 @@ export default function VideoPlayer({
 
   const effectiveUrl = getEffectiveUrl();
 
-  useEffect(() => {
-    console.log("[VideoPlayer] source fields:", {
-      sourceType,
-      effectiveSourceType,
-      videoUrl: selectedVideoUrl,
-      premiumStreamUrl,
-      embedUrl,
-      effectiveUrl,
-    });
-  }, [sourceType, effectiveSourceType, selectedVideoUrl, premiumStreamUrl, embedUrl, effectiveUrl]);
 
   const handlePlay = () => {
     if (onPlayIntent) {

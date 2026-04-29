@@ -10,6 +10,7 @@ import { pickWeightedRandomAd } from "@/lib/ads-utils";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
 import { isMoviePremium, isUserPremium, PremiumLockOverlay, PremiumButton } from "@/components/PremiumComponents";
 import { getLocalizedTitle, getLocalizedDescription, getLocalizedGenres, getLocalizedCountry } from "@/lib/localization";
 import { formatDuration } from "@/lib/movie-utils";
@@ -316,7 +317,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
 
     if (MEDIA_ACCESS_MODE !== "protected") {
       const publicSrc = resolvePublicPlaybackUrl(movie);
-      console.log("[player-src]", publicSrc);
+      logger.debug("[player-src] resolved");
       setResolvedPlaybackUrl(publicSrc || null);
       return;
     }
@@ -335,8 +336,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
         if (!response.protected || !finalSrc.includes("/media/")) {
           throw new Error("Protected playback URL is invalid");
         }
-        console.log("[media-token]", response.playback_url);
-        console.log("[player-src]", finalSrc);
+        logger.debug("[media-token] resolved");
         if (!cancelled) {
           setResolvedPlaybackUrl(finalSrc);
         }
@@ -443,20 +443,6 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
       autoNextIntervalRef.current = null;
     };
   }, [episodeNavigation?.nextEpisode, router, showAutoNextCountdown]);
-
-  // One-time diagnostic: log exactly which playback fields the movie API returned.
-  // These are the same values passed to <VideoPlayer />, so any missing/wrong URL
-  // shows up immediately next to the player error in the console.
-  useEffect(() => {
-    console.log("[WatchPage] movie playback fields:", {
-      id: movie.id,
-      slug: movie.slug,
-      source_type: movie.source_type,
-      video_url: movie.video_url,
-      embed_url: movie.embed_url,
-      master_playlist_url: (movie as unknown as { master_playlist_url?: string }).master_playlist_url,
-    });
-  }, [movie.id, movie.slug, movie.source_type, movie.video_url, movie.embed_url]);
 
   // Record view and watch history on mount
   useEffect(() => {

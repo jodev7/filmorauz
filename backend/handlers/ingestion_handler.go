@@ -274,12 +274,13 @@ func resolveCompletedDownloadPath(jobID, rawPath string) string {
 func NewIngestionHandler(jobRepo *repositories.JobRepository, seriesRepo *repositories.SeriesRepository, seriesSvc *services.SeriesService, parserURL string, workerURL string) *IngestionHandler {
 	// Create HTTP client with explicit timeout
 	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
-		// Transport with connection settings
+		// Large series (e.g. Dexter ~90 episodes) take well over 30s to
+		// scrape from the parser. Allow up to 3 minutes per call.
+		Timeout: 180 * time.Second,
 		Transport: &http.Transport{
 			MaxIdleConns:        10,
 			MaxIdleConnsPerHost: 5,
-			IdleConnTimeout:     30 * time.Second,
+			IdleConnTimeout:     90 * time.Second,
 		},
 	}
 

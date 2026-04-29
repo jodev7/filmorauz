@@ -19,6 +19,7 @@ import {
   TelegramAuthStartResponse,
   TelegramAuthStatusResponse,
 } from "@/lib/api";
+import { logger } from "@/lib/logger";
 
 interface BanInfo {
   is_banned: boolean;
@@ -123,7 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               const refreshResult = await refreshAuthToken(token);
               if (refreshResult.authenticated && refreshResult.token) {
                 // Token refreshed successfully - update token and retry fetch
-                console.log("[Auth] Token refreshed successfully");
+                logger.debug("[Auth] Token refreshed");
                 Cookies.set("auth_token", refreshResult.token, { expires: 7 });
                 setTokenState(refreshResult.token);
                 
@@ -136,13 +137,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               }
             } catch {
               // Refresh failed - clear auth
-              console.warn("[Auth] Token refresh failed, logging out");
+              logger.warn("[Auth] Token refresh failed");
               Cookies.remove("auth_token");
               setTokenState(null);
             }
           } else {
             // Network error or 5xx - keep user logged in, they'll try again
-            console.warn("[Auth] User fetch failed (non-auth), keeping session:", status);
+            logger.warn("[Auth] User fetch failed", status);
           }
         })
         .finally(() => {

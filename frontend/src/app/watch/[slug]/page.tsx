@@ -27,16 +27,13 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
 export default async function WatchPage({ params }: PageProps) {
   const { slug } = params;
-  console.log("[WatchPage] Rendering for slug:", slug);
   let movie = null;
-  
+
   try {
     movie = await getMovie(slug);
-  } catch (error) {
-    console.error("[WatchPage] Failed to fetch movie for slug:", slug, error);
+  } catch {
+    // fall through to notFound
   }
-
-  console.log("[WatchPage] Movie result for slug:", slug, movie ? `found (${movie.id})` : "null");
 
   if (!movie) {
     notFound();

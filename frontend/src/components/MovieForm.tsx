@@ -5,6 +5,7 @@ import { Loader2, Plus, X, Info, Upload, CheckCircle, AlertCircle } from "lucide
 import { MovieInput, VideoSourceType, directB2Upload, backendUploadMovieImage, createDirectUploadJob, DirectUploadInput, IngestionJob, UploadProgressInfo } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
+import { logger } from "@/lib/logger";
 
 const QUALITIES = ["480p", "720p", "1080p", "1080p Ultra", "4K"];
 const GENRE_OPTIONS = [
@@ -152,7 +153,7 @@ export default function MovieForm({
       return;
     }
 
-    console.log("[MovieForm] file chosen:", { type, name: file.name, size: file.size, contentType: file.type });
+    logger.debug("[MovieForm] file chosen", { type, size: file.size });
 
     setUploads(prev => ({
       ...prev,
@@ -181,7 +182,7 @@ export default function MovieForm({
           ? await directB2Upload(token, file, type, onUploadProgress)
           : await backendUploadMovieImage(token, file, type, onUploadProgress);
 
-      console.log("[MovieForm] upload success:", { type, url: result.url, file_key: result.file_key });
+      logger.debug("[MovieForm] upload success", { type });
 
       setUploads(prev => ({
         ...prev,
@@ -196,7 +197,7 @@ export default function MovieForm({
         setTempFileKey(result.file_key);
       }
     } catch (err) {
-      console.error("[MovieForm] upload failed:", { type, error: err });
+      logger.error("[MovieForm] upload failed", type);
       setUploads(prev => ({
         ...prev,
         [type]: {
@@ -347,20 +348,7 @@ export default function MovieForm({
       return;
     }
 
-    console.log("[MovieForm] submitting:", {
-      title: form.title,
-      genre: form.genre,
-      poster_url: form.poster_url,
-      backdrop_url: form.backdrop_url,
-      video_url: form.video_url,
-      embed_url: form.embed_url,
-      source_type: form.source_type,
-      uploadStatus: {
-        poster: uploads.poster.status,
-        backdrop: uploads.backdrop.status,
-        video: uploads.video.status,
-      },
-    });
+    logger.debug("[MovieForm] submitting");
 
     setLoading(true);
     try {
@@ -368,12 +356,11 @@ export default function MovieForm({
       const normalizedGenres = form.genre
         .map((g: string) => normalizeGenreValue(g))
         .filter((g: string, i: number, arr: string[]) => g && arr.indexOf(g) === i);
-      
+
       const submitData = { ...form, genre: normalizedGenres };
-      console.log("[MovieForm] submitting with normalized genres:", submitData.genre);
       await onSubmit(submitData);
     } catch (err: unknown) {
-      console.error("[MovieForm] submit failed:", err);
+      logger.error("[MovieForm] submit failed");
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setLoading(false);

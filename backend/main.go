@@ -162,6 +162,18 @@ func main() {
 		if len(origins) == 0 {
 			log.Fatal("ALLOWED_ORIGIN is empty after parsing")
 		}
+		// Always allow the canonical prod origin so a misconfigured
+		// ALLOWED_ORIGIN can't lock the frontend out of the API.
+		hasCanonical := false
+		for _, o := range origins {
+			if o == "https://filmorauz.net" {
+				hasCanonical = true
+				break
+			}
+		}
+		if !hasCanonical {
+			origins = append(origins, "https://filmorauz.net")
+		}
 		corsConfig.AllowOrigins = origins
 		log.Printf("CORS allowing origins: %v", origins)
 	}

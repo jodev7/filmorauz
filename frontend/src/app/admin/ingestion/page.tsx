@@ -116,8 +116,6 @@ function compareGroupsStable(a: JobGroup, b: JobGroup): number {
 
 // Group jobs by serial - serials are identified by season_number or episode_number being set
 function groupJobsBySerial(jobs: IngestionJob[]): JobGroup[] {
-  console.log(`[groupJobsBySerial] INPUT: ${jobs.length} jobs`);
-  
   // Map: seriesKey -> Map: seasonNumber -> episodes[]
   const seriesMap = new Map<string, Map<number, IngestionJob[]>>();
   const singles: IngestionJob[] = [];
@@ -173,11 +171,6 @@ function groupJobsBySerial(jobs: IngestionJob[]): JobGroup[] {
     }
   }
   
-  console.log(`[groupJobsBySerial] SERIAL GROUPS: ${seriesMap.size}, SINGLE JOBS: ${singles.length}`);
-  seriesMap.forEach((_, key) => {
-    console.log(`[groupJobsBySerial] Serial key: "${key}"`);
-  });
-  
   // Convert to JobGroup array
   const groups: JobGroup[] = [];
   
@@ -214,7 +207,6 @@ function groupJobsBySerial(jobs: IngestionJob[]): JobGroup[] {
   // Keep list order stable across 1s polling updates.
   groups.sort(compareGroupsStable);
 
-  console.log(`[groupJobsBySerial] OUTPUT: ${groups.length} groups (${seriesMap.size} serial, ${singles.length} single)`);
   return groups;
 }
 
@@ -629,15 +621,12 @@ function CatalogTab({
   // Fetch categories once on mount (non-blocking)
   useEffect(() => {
     setCategoriesLoading(true);
-    console.log(`[CatalogTab] fetching categories for source=${source.id}`);
     listCatalogCategories(source.id)
       .then((res) => {
         const cats = res.categories || [];
-        console.log(`[CatalogTab] categories loaded for ${source.id}: ${cats.length} items`, cats);
         setCategories(cats);
       })
-      .catch((err) => {
-        console.warn(`[CatalogTab] categories fetch failed for ${source.id}:`, err);
+      .catch(() => {
         setCategories([]);
       })
       .finally(() => setCategoriesLoading(false));
@@ -655,8 +644,6 @@ function CatalogTab({
       };
       if (typeFilter) params.type = typeFilter;
       if (selectedCategory) params.category_url = selectedCategory;
-
-      console.log(`[CatalogTab] fetching catalog source=${source.id} page=${pageNum} type=${typeFilter || "(all)"} category=${selectedCategory || "(default)"}`);
 
       const result = await listCatalog(source.id, params);
       setCatalog(prev => append ? [...prev, ...result.items] : result.items);
