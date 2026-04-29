@@ -255,35 +255,96 @@ function isTerminalJobStatus(status: string | undefined): boolean {
 
 const STUCK_THRESHOLD_MS = 30 * 60 * 1000;
 
-function formatElapsedTime(job: IngestionJob, now: number): string {
-  // Elapsed must only count once a worker actually starts the job. Falling
-  // back to created_at would make pending jobs appear to "run" while still
-  // in the queue. If no started_at is set (job is still pending), show 00:00.
-  const startedAt =
-    getJobTime(job, "importStartedAt") ||
-    getJobTime(job, "import_started_at") ||
-    getJobTime(job, "startedAt") ||
-    getJobTime(job, "started_at");
-
-  if (!startedAt) return "00:00";
-
-  const startMs = new Date(startedAt).getTime();
-  if (!Number.isFinite(startMs)) return "00:00";
-
-  const endedAt = isTerminalJobStatus(job.status)
-    ? job.completed_at || job.updated_at
-    : undefined;
-  const endMs = endedAt ? new Date(endedAt).getTime() : now;
-  const totalSeconds = Math.max(0, Math.floor((endMs - startMs) / 1000));
+function formatHMS(totalSeconds: number): string {
+  totalSeconds = Math.max(0, Math.floor(totalSeconds));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  const pad = (value: number) => String(value).padStart(2, "0");
-
-  if (hours > 0) {
-    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
-  }
+  const pad = (v: number) => String(v).padStart(2, "0");
+  if (hours > 0) return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
   return `${pad(minutes)}:${pad(seconds)}`;
+}
+
+function pickJobTime(job: IngestionJob, ...keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = getJobTime(job, k);
+    if (v) return v;
+  }
+  return undefined;
+}
+
+// Phase-aware elapsed time. Each pipeline phase (download / queue-wait /
+// processing) gets its own clock so a job that sat 31h waiting for a process
+// slot does not appear to have been "processing" for 31h.
+//
+// downloading        → now - download_started_at
+// ready_to_process   → now - queued_for_processing_at (queue wait)
+// processing/upload  → now - processing_started_at
+// completed/failed   → frozen processing duration if available, else download
+//
+// Legacy jobs without the new timestamps fall back to started_at.
+type ElapsedKind = "download" | "queue" | "processing" | "total";
+
+function computeElapsed(job: IngestionJob, now: number): { kind: ElapsedKind; text: string } {
+  const status = String(job.status || "");
+  const stage = String((job as unknown as { stage?: string }).stage || "");
+
+  const downloadStart = pickJobTime(job, "download_started_at", "started_at");
+  const downloadEnd = pickJobTime(job, "download_finished_at");
+  const queuedAt = pickJobTime(job, "queued_for_processing_at", "download_finished_at");
+  const procStart = pickJobTime(job, "processing_started_at");
+  const procEnd = pickJobTime(job, "processing_finished_at", "completed_at");
+
+  const ms = (s?: string) => (s ? new Date(s).getTime() : NaN);
+
+  if (status === "downloading" || stage === "download" || stage === "downloading") {
+    const start = ms(downloadStart);
+    if (Number.isFinite(start)) return { kind: "download", text: formatHMS((now - start) / 1000) };
+  }
+
+  if (status === "ready_to_process" || status === "downloaded" || stage === "ready_to_process") {
+    const start = ms(queuedAt);
+    if (Number.isFinite(start)) return { kind: "queue", text: formatHMS((now - start) / 1000) };
+  }
+
+  if (
+    status === "processing" || status === "uploading" ||
+    status === "hls_processing" || status === "finalizing_storage" ||
+    stage === "processing" || stage === "uploading" || stage === "hls_processing"
+  ) {
+    const start = ms(procStart) || ms(pickJobTime(job, "started_at"));
+    if (Number.isFinite(start)) return { kind: "processing", text: formatHMS((now - start) / 1000) };
+  }
+
+  if (isTerminalJobStatus(status)) {
+    const ps = ms(procStart);
+    const pe = ms(procEnd);
+    if (Number.isFinite(ps) && Number.isFinite(pe) && pe >= ps) {
+      return { kind: "processing", text: formatHMS((pe - ps) / 1000) };
+    }
+    const ds = ms(downloadStart);
+    const de = ms(downloadEnd);
+    if (Number.isFinite(ds) && Number.isFinite(de) && de >= ds) {
+      return { kind: "download", text: formatHMS((de - ds) / 1000) };
+    }
+    const start = ms(pickJobTime(job, "started_at"));
+    const end = ms(job.completed_at || job.updated_at);
+    if (Number.isFinite(start) && Number.isFinite(end)) {
+      return { kind: "total", text: formatHMS((end - start) / 1000) };
+    }
+  }
+
+  // Fallback: legacy started_at -> now (or freeze if terminal)
+  const fallbackStart = ms(pickJobTime(job, "started_at"));
+  if (!Number.isFinite(fallbackStart)) return { kind: "total", text: "00:00" };
+  const endMs = isTerminalJobStatus(status)
+    ? ms(job.completed_at || job.updated_at) || now
+    : now;
+  return { kind: "total", text: formatHMS((endMs - fallbackStart) / 1000) };
+}
+
+function formatElapsedTime(job: IngestionJob, now: number): string {
+  return computeElapsed(job, now).text;
 }
 
 // Series elapsed time: span from the earliest episode start to the latest
@@ -1395,7 +1456,15 @@ function JobsTab({
       episode_number: job.episode_number,
     };
 
-    const elapsedTime = formatElapsedTime(job, now);
+    const elapsedInfo = computeElapsed(job, now);
+    const elapsedTime = elapsedInfo.text;
+    const elapsedLabel = elapsedInfo.kind === "queue"
+      ? "Process navbatida"
+      : elapsedInfo.kind === "download"
+        ? "Download"
+        : elapsedInfo.kind === "processing"
+          ? "Processing"
+          : "Elapsed";
     const lastUpdateAge = getLastUpdateAgeMs(job, now);
     const lastUpdateText = formatDurationShort(lastUpdateAge);
     const stuck = isStuckJob(job, now);
@@ -1512,7 +1581,7 @@ function JobsTab({
               {statusSummary}
             </p>
             <p className="text-xs text-gray-500">
-              Elapsed: {elapsedTime} • Last update: {lastUpdateText} ago • Retry: {safeJob.retry_count}
+              {elapsedLabel}: {elapsedTime} • Last update: {lastUpdateText} ago • Retry: {safeJob.retry_count}
             </p>
             {stuck && (
               <p className="mt-1 flex items-center gap-1 text-xs text-orange-400">

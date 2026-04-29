@@ -1138,22 +1138,29 @@ func (h *IngestionHandler) UpdateJobProgress(c *gin.Context) {
 				return
 			}
 
-			update := bson.M{
-				"$set": bson.M{
-					"local_path":           resolvedPath,
-					"file_path":            resolvedPath,
-					"downloaded_file_path": resolvedPath,
-					"status":               models.IngestionStatusReadyToProcess,
-					"stage":                "processing",
-					"progress":             progressValue,
-					"updated_at":           time.Now(),
-					"error":                "",
-					"steps.download":       true,
-					"steps.process":        false,
+			now := time.Now()
+			// Aggregation pipeline lets us only stamp download_finished_at /
+			// queued_for_processing_at once (first real download->ready
+			// transition). Status sync polling that re-hits this endpoint
+			// should not reset them.
+			update := bson.A{
+				bson.M{
+					"$set": bson.M{
+						"local_path":               resolvedPath,
+						"file_path":                resolvedPath,
+						"downloaded_file_path":     resolvedPath,
+						"status":                   models.IngestionStatusReadyToProcess,
+						"stage":                    "ready_to_process",
+						"progress":                 progressValue,
+						"updated_at":               now,
+						"error":                    "",
+						"steps.download":           true,
+						"steps.process":            false,
+						"download_finished_at":     bson.M{"$ifNull": bson.A{"$download_finished_at", now}},
+						"queued_for_processing_at": bson.M{"$ifNull": bson.A{"$queued_for_processing_at", now}},
+					},
 				},
-				"$unset": bson.M{
-					"completed_at": "",
-				},
+				bson.M{"$unset": "completed_at"},
 			}
 
 			result, updErr := h.jobRepo.GetCollection().UpdateByID(ctx, objID, update)

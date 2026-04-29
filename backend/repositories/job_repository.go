@@ -262,10 +262,11 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 	// we re-stamp it so each attempt has its own timer.
 	update := bson.M{
 		"$set": bson.M{
-			"status":     models.IngestionStatusDownloading,
-			"stage":      "download",
-			"updated_at": now,
-			"started_at": now,
+			"status":              models.IngestionStatusDownloading,
+			"stage":               "download",
+			"updated_at":          now,
+			"started_at":          now,
+			"download_started_at": now,
 		},
 	}
 
@@ -300,10 +301,15 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 	update := bson.A{
 		bson.M{
 			"$set": bson.M{
-				"status":     models.IngestionStatusProcessing,
-				"stage":      "processing",
-				"updated_at": now,
-				"started_at": bson.M{"$ifNull": bson.A{"$started_at", now}},
+				"status":                "processing",
+				"stage":                 "processing",
+				"updated_at":            now,
+				"started_at":            bson.M{"$ifNull": bson.A{"$started_at", now}},
+				"processing_started_at": now,
+				// download_finished_at / queued_for_processing_at fall back to now
+				// for legacy jobs that transitioned before these fields existed.
+				"download_finished_at":     bson.M{"$ifNull": bson.A{"$download_finished_at", now}},
+				"queued_for_processing_at": bson.M{"$ifNull": bson.A{"$queued_for_processing_at", now}},
 			},
 		},
 	}
@@ -352,6 +358,7 @@ func (r *JobRepository) UpdateStatus(ctx context.Context, id string, status mode
 	if status == models.IngestionStatusCompleted || status == models.IngestionStatusFailed {
 		completedAt := time.Now()
 		update["$set"].(bson.M)["completed_at"] = completedAt
+		update["$set"].(bson.M)["processing_finished_at"] = completedAt
 	} else {
 		update["$unset"] = bson.M{"completed_at": ""}
 	}

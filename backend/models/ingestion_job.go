@@ -74,6 +74,18 @@ type IngestionJob struct {
 	StartedAt   *time.Time `bson:"started_at,omitempty" json:"started_at,omitempty"`
 	CompletedAt *time.Time `bson:"completed_at,omitempty" json:"completed_at,omitempty"`
 
+	// Phase-specific timestamps for accurate elapsed-time reporting in the UI.
+	// download_started_at / download_finished_at bracket the download stage.
+	// queued_for_processing_at marks when the job entered the ready_to_process
+	// queue. processing_started_at / processing_finished_at bracket the ffmpeg
+	// stage so jobs that wait hours for a process slot do not show inflated
+	// "processing elapsed" numbers.
+	DownloadStartedAt     *time.Time `bson:"download_started_at,omitempty" json:"download_started_at,omitempty"`
+	DownloadFinishedAt    *time.Time `bson:"download_finished_at,omitempty" json:"download_finished_at,omitempty"`
+	QueuedForProcessingAt *time.Time `bson:"queued_for_processing_at,omitempty" json:"queued_for_processing_at,omitempty"`
+	ProcessingStartedAt   *time.Time `bson:"processing_started_at,omitempty" json:"processing_started_at,omitempty"`
+	ProcessingFinishedAt  *time.Time `bson:"processing_finished_at,omitempty" json:"processing_finished_at,omitempty"`
+
 	// Real-time download progress fields
 	Stage           string  `bson:"stage,omitempty" json:"stage,omitempty"`
 	Message         string  `bson:"message,omitempty" json:"message,omitempty"` // Human-readable message

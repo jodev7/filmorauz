@@ -192,10 +192,11 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 	// does not run while the job is sitting in the pending queue.
 	update := bson.M{
 		"$set": bson.M{
-			"status":     models.IngestionStatusDownloading,
-			"stage":      "download",
-			"updated_at": now,
-			"started_at": now,
+			"status":              models.IngestionStatusDownloading,
+			"stage":               "download",
+			"updated_at":          now,
+			"started_at":          now,
+			"download_started_at": now,
 		},
 	}
 
@@ -241,10 +242,14 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 	update := bson.A{
 		bson.M{
 			"$set": bson.M{
-				"status":     models.IngestionStatusProcessing,
-				"stage":      "processing",
-				"updated_at": now,
-				"started_at": bson.M{"$ifNull": bson.A{"$started_at", now}},
+				"status":                "processing",
+				"stage":                 "processing",
+				"updated_at":            now,
+				"started_at":            bson.M{"$ifNull": bson.A{"$started_at", now}},
+				"processing_started_at": now,
+				// Backfill phase markers for legacy jobs that arrived without them.
+				"download_finished_at":     bson.M{"$ifNull": bson.A{"$download_finished_at", now}},
+				"queued_for_processing_at": bson.M{"$ifNull": bson.A{"$queued_for_processing_at", now}},
 			},
 		},
 	}
@@ -405,17 +410,21 @@ func (r *JobRepository) RepairCompletedDownloads(ctx context.Context, downloadDi
 		log.Printf("[DOWNLOAD] completed job=%s file=%s", jobID, localPath)
 		log.Printf("[AUTO_RECOVER] job=%s found file=%s -> repaired", jobID, localPath)
 		log.Printf("[DOWNLOAD] verified file exists job=%s", jobID)
-		_, err = r.collection.UpdateByID(ctx, job.ID, bson.M{
-			"$set": bson.M{
-				"local_path":           localPath,
-				"file_path":            localPath,
-				"downloaded_file_path": localPath,
-				"status":               models.IngestionStatusReadyToProcess,
-				"stage":                "ready_to_process",
-				"steps.download":       true,
-				"progress":             100,
-				"updated_at":           now,
-				"error":                "",
+		_, err = r.collection.UpdateByID(ctx, job.ID, bson.A{
+			bson.M{
+				"$set": bson.M{
+					"local_path":               localPath,
+					"file_path":                localPath,
+					"downloaded_file_path":     localPath,
+					"status":                   models.IngestionStatusReadyToProcess,
+					"stage":                    "ready_to_process",
+					"steps.download":           true,
+					"progress":                 100,
+					"updated_at":               now,
+					"error":                    "",
+					"download_finished_at":     bson.M{"$ifNull": bson.A{"$download_finished_at", now}},
+					"queued_for_processing_at": bson.M{"$ifNull": bson.A{"$queued_for_processing_at", now}},
+				},
 			},
 		})
 		if err != nil {
@@ -447,6 +456,7 @@ func (r *JobRepository) UpdateStatus(ctx context.Context, id string, status mode
 	if status == models.IngestionStatusCompleted || status == models.IngestionStatusFailed || status == models.IngestionStatusNeedsManual {
 		completedAt := time.Now()
 		update["$set"].(bson.M)["completed_at"] = completedAt
+		update["$set"].(bson.M)["processing_finished_at"] = completedAt
 	}
 
 	_, err = r.collection.UpdateByID(ctx, objID, update)
@@ -980,15 +990,24 @@ func (r *JobRepository) TransitionToProcessing(ctx context.Context, id, localPat
 
 	// Use $set to ensure stage is explicitly set to "processing"
 	// This handles edge case where job was claimed but stuck at stage=download
-	update := bson.M{
-		"$set": bson.M{
-			"status":         models.IngestionStatusReadyToProcess,
-			"stage":          "ready_to_process",
-			"progress":       100,
-			"local_path":     localPath,
-			"steps.download": true,
-			"error":          "",
-			"updated_at":     time.Now(),
+	now := time.Now()
+	// Aggregation pipeline so download_finished_at / queued_for_processing_at
+	// are stamped on the FIRST transition only. If TransitionToProcessing is
+	// called again (e.g. parser status sync), keep the original timestamps so
+	// queue-wait time stays accurate.
+	update := bson.A{
+		bson.M{
+			"$set": bson.M{
+				"status":                   models.IngestionStatusReadyToProcess,
+				"stage":                    "ready_to_process",
+				"progress":                 100,
+				"local_path":               localPath,
+				"steps.download":           true,
+				"error":                    "",
+				"updated_at":               now,
+				"download_finished_at":     bson.M{"$ifNull": bson.A{"$download_finished_at", now}},
+				"queued_for_processing_at": bson.M{"$ifNull": bson.A{"$queued_for_processing_at", now}},
+			},
 		},
 	}
 
@@ -1036,16 +1055,22 @@ func (r *JobRepository) RetryFromProcess(ctx context.Context, id string) error {
 		return fmt.Errorf("invalid id")
 	}
 
+	now := time.Now()
 	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
 		"$set": bson.M{
-			"status":         models.IngestionStatusReadyToProcess,
-			"stage":          "ready_to_process",
-			"progress":       100,
-			"steps.download": true, // Keep download as complete
-			"steps.process":  false,
-			"steps.upload":   false,
-			"error":          "",
-			"updated_at":     time.Now(),
+			"status":                   models.IngestionStatusReadyToProcess,
+			"stage":                    "ready_to_process",
+			"progress":                 100,
+			"steps.download":           true, // Keep download as complete
+			"steps.process":            false,
+			"steps.upload":             false,
+			"error":                    "",
+			"updated_at":               now,
+			"queued_for_processing_at": now,
+		},
+		"$unset": bson.M{
+			"processing_started_at":  "",
+			"processing_finished_at": "",
 		},
 	})
 

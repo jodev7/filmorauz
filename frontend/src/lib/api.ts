@@ -1610,6 +1610,11 @@ export interface IngestionJob {
   updated_at: string;
   started_at?: string;
   completed_at?: string;
+  download_started_at?: string;
+  download_finished_at?: string;
+  queued_for_processing_at?: string;
+  processing_started_at?: string;
+  processing_finished_at?: string;
   // Real-time download progress fields
   stage?: string;
   downloaded_bytes?: number;
