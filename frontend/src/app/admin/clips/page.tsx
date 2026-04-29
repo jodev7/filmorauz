@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
   Film,
   ExternalLink,
@@ -33,6 +33,7 @@ const TASHKENT_TZ = "Asia/Tashkent";
 const CDN_BASE_URL =
   (process.env.NEXT_PUBLIC_CDN_BASE_URL || "").trim().replace(/\/+$/, "") ||
   "https://cdn.filmorauz.net/file/filmorauznet";
+const CLIPS_PAGE_LIMIT = 20;
 
 // ─── Time helpers ─────────────────────────────────────────────────────────────
 
@@ -148,28 +149,52 @@ interface PublishModal {
   scheduledCreated: boolean;
 }
 
-interface EpisodeClipGroup {
-  key: string;
+// Server-side group summary tree (counts only — no clip docs).
+interface ServerEpisodeGroup {
+  episode_id: string;
+  episode_number: number;
   title: string;
-  episodeNumber: number;
-  clips: Clip[];
+  clip_count: number;
+  ig_uploaded_count: number;
+  last_ig_upload_at?: string;
 }
-
-interface SeasonClipGroup {
-  key: string;
-  title: string;
-  seasonNumber: number;
-  episodes: EpisodeClipGroup[];
+interface ServerSeasonGroup {
+  season_number: number;
+  clip_count: number;
+  episodes: ServerEpisodeGroup[];
 }
-
-interface ContentClipGroup {
-  key: string;
-  kind: "movie" | "series";
+interface ServerSeriesGroup {
+  series_id: string;
   title: string;
   slug: string;
-  code?: string;
+  clip_count: number;
+  ig_uploaded_count: number;
+  last_ig_upload_at?: string;
+  seasons: ServerSeasonGroup[];
+}
+interface ServerMovieGroup {
+  movie_id: string;
+  title: string;
+  slug: string;
+  code: string;
+  clip_count: number;
+  ig_uploaded_count: number;
+  last_ig_upload_at?: string;
+}
+interface ServerGroups {
+  movies: ServerMovieGroup[];
+  series: ServerSeriesGroup[];
+  total_clips: number;
+  total_contents: number;
+}
+
+// Lazy-loaded clip page for a single scope (movie or episode).
+interface ScopeClipPage {
   clips: Clip[];
-  seasons?: SeasonClipGroup[];
+  total: number;
+  offset: number;
+  loading: boolean;
+  error?: string;
 }
 
 interface PaginationControlsProps {
@@ -221,7 +246,6 @@ function PlatformUploadStatuses({
 }) {
   const rows: React.ReactNode[] = [];
 
-  // Instagram: driven by clip fields
   if (clip.instagram_upload_count > 0 || clip.last_instagram_upload_status) {
     const meta = PLATFORM_META.instagram;
     const { Icon } = meta;
@@ -252,7 +276,6 @@ function PlatformUploadStatuses({
     );
   }
 
-  // YouTube + TikTok: driven by publishJobs
   for (const platform of ["youtube", "tiktok"] as const) {
     const jobs = clipJobs.filter((j) => j.platform === platform);
     if (jobs.length === 0) continue;
@@ -388,131 +411,6 @@ function getClipSequence(clip: Clip): number {
   return clip.clip_index || clip.sequence || 0;
 }
 
-// Returns true if value is a non-empty, non-zero MongoDB ObjectID string.
-// `primitive.ObjectID` json-marshals zero values as "000000000000000000000000",
-// which would otherwise be truthy and misclassify movie clips as series clips.
-function hasId(value?: string): boolean {
-  if (!value) return false;
-  const trimmed = value.trim();
-  if (!trimmed) return false;
-  if (/^0+$/.test(trimmed)) return false;
-  return true;
-}
-
-function normalizeClipType(clip: Clip): "movie" | "series_episode" {
-  if (clip.source_type === "series_episode") return "series_episode";
-  if (clip.source_type === "movie") return "movie";
-  if (clip.content_kind === "series") return "series_episode";
-  if (clip.content_kind === "movie") return "movie";
-  if (hasId(clip.episode_id) || hasId(clip.series_id)) return "series_episode";
-  if (hasId(clip.movie_id)) return "movie";
-  return "movie";
-}
-
-function getClipKind(clip: Clip): "movie" | "series" {
-  return normalizeClipType(clip) === "series_episode" ? "series" : "movie";
-}
-
-function buildClipGroups(clips: Clip[]): ContentClipGroup[] {
-  const movieGroups = new Map<string, ContentClipGroup>();
-  const seriesGroups = new Map<string, {
-    key: string;
-    title: string;
-    slug: string;
-    clips: Clip[];
-    seasons: Map<number, {
-      key: string;
-      title: string;
-      seasonNumber: number;
-      episodes: Map<string, EpisodeClipGroup>;
-    }>;
-  }>();
-
-  for (const clip of clips) {
-    if (getClipKind(clip) === "movie") {
-      const key = hasId(clip.movie_id)
-        ? `movie:${clip.movie_id}`
-        : clip.movie_slug
-          ? `movie:slug:${clip.movie_slug}`
-          : `movie:clip:${clip.id}`;
-      if (!movieGroups.has(key)) {
-        movieGroups.set(key, {
-          key,
-          kind: "movie",
-          title: clip.movie_title?.trim() || clip.title?.trim() || "Untitled movie",
-          slug: clip.movie_slug || "",
-          code: clip.movie_code || "",
-          clips: [],
-        });
-      }
-      movieGroups.get(key)!.clips.push(clip);
-      continue;
-    }
-
-    const seriesKey = hasId(clip.series_id)
-      ? `series:${clip.series_id}`
-      : clip.series_slug
-        ? `series:slug:${clip.series_slug}`
-        : `series:clip:${clip.id}`;
-    if (!seriesGroups.has(seriesKey)) {
-      seriesGroups.set(seriesKey, {
-        key: seriesKey,
-        title: clip.series_title?.trim() || clip.title?.trim() || "Untitled series",
-        slug: clip.series_slug || "",
-        clips: [],
-        seasons: new Map(),
-      });
-    }
-    const seriesGroup = seriesGroups.get(seriesKey)!;
-    seriesGroup.clips.push(clip);
-
-    const seasonNumber = clip.season_number || 0;
-    if (!seriesGroup.seasons.has(seasonNumber)) {
-      seriesGroup.seasons.set(seasonNumber, {
-        key: `${seriesKey}:season:${seasonNumber}`,
-        title: `Season ${seasonNumber}`,
-        seasonNumber,
-        episodes: new Map(),
-      });
-    }
-    const seasonGroup = seriesGroup.seasons.get(seasonNumber)!;
-    const episodeKey = clip.episode_id || `${seasonGroup.key}:episode:${clip.episode_number || 0}`;
-    if (!seasonGroup.episodes.has(episodeKey)) {
-      seasonGroup.episodes.set(episodeKey, {
-        key: episodeKey,
-        title: clip.title || `${seriesGroup.title} S${padEpisodeNumber(seasonNumber)}E${padEpisodeNumber(clip.episode_number)}`,
-        episodeNumber: clip.episode_number || 0,
-        clips: [],
-      });
-    }
-    seasonGroup.episodes.get(episodeKey)!.clips.push(clip);
-  }
-
-  const movieResults = Array.from(movieGroups.values());
-  const seriesResults: ContentClipGroup[] = Array.from(seriesGroups.values()).map((group) => ({
-    key: group.key,
-    kind: "series",
-    title: group.title,
-    slug: group.slug,
-    clips: group.clips,
-    seasons: Array.from(group.seasons.values())
-      .sort((a, b) => a.seasonNumber - b.seasonNumber)
-      .map((season) => ({
-        key: season.key,
-        title: season.title,
-        seasonNumber: season.seasonNumber,
-        episodes: Array.from(season.episodes.values())
-          .sort((a, b) => a.episodeNumber - b.episodeNumber)
-          .map((episode) => ({
-            ...episode,
-            clips: [...episode.clips].sort((a, b) => getClipSequence(a) - getClipSequence(b)),
-          })),
-      })),
-  }));
-
-  return [...movieResults, ...seriesResults];
-}
-
 function resolveClipDownloadUrl(clip: Clip): string {
   const candidates = [
     clip.url,
@@ -556,54 +454,261 @@ function resolveClipOpenUrl(clip: Clip): string {
   return resolveClipDownloadUrl(clip);
 }
 
+// Scope keys identify the clip page cache slot for a single content group.
+type Scope =
+  | { kind: "movie"; movieId: string }
+  | { kind: "episode"; episodeId: string };
+
+function scopeKey(scope: Scope): string {
+  return scope.kind === "movie" ? `movie:${scope.movieId}` : `episode:${scope.episodeId}`;
+}
+
+// ─── Clip table (shared by movie groups and episode groups) ──────────────────
+
+function ClipTable({
+  page,
+  publishJobs,
+  downloading,
+  uploading,
+  token,
+  onDownload,
+  onPublish,
+  onPrev,
+  onNext,
+  pageNum,
+  totalPages,
+}: {
+  page: ScopeClipPage;
+  publishJobs: PublishJob[];
+  downloading: Record<string, boolean>;
+  uploading: Record<string, boolean>;
+  token: string | null;
+  onDownload: (clip: Clip) => void;
+  onPublish: (clip: Clip) => void;
+  onPrev: () => void;
+  onNext: () => void;
+  pageNum: number;
+  totalPages: number;
+}) {
+  if (page.loading && page.clips.length === 0) {
+    return (
+      <div className="flex items-center gap-2 text-gray-500 py-8 px-4 justify-center">
+        <Loader2 size={14} className="animate-spin" />
+        Kliplar yuklanmoqda...
+      </div>
+    );
+  }
+  if (page.error) {
+    return <div className="px-4 py-6 text-sm text-red-400">{page.error}</div>;
+  }
+  if (page.clips.length === 0) {
+    return <div className="px-4 py-6 text-sm text-gray-500">Klip topilmadi.</div>;
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-brand-border text-gray-500 text-xs uppercase tracking-wider">
+            <th className="text-left px-4 py-3">#</th>
+            <th className="text-left px-4 py-3">Fayl</th>
+            <th className="text-left px-4 py-3">Davom</th>
+            <th className="text-left px-4 py-3">Saxlash</th>
+            <th className="text-left px-4 py-3">Platformlar</th>
+            <th className="text-right px-4 py-3">Amallar</th>
+          </tr>
+        </thead>
+        <tbody>
+          {page.clips.map((clip) => {
+            const clipJobs = publishJobs.filter((j) => j.clip_id === clip.id);
+            return (
+              <tr
+                key={clip.id}
+                className="border-b border-brand-border/50 last:border-0 hover:bg-brand-border/20 transition-colors"
+              >
+                <td className="px-4 py-3 text-gray-500">{getClipSequence(clip)}</td>
+                <td className="px-4 py-3">
+                  <span className="text-gray-300 font-mono text-xs">{clip.filename}</span>
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-1.5 text-gray-400">
+                    <Clock size={14} />
+                    <span>{formatDuration(clip.duration)}</span>
+                  </div>
+                </td>
+                <td className="px-4 py-3">
+                  <span
+                    className={`text-xs px-2 py-0.5 rounded ${
+                      clip.storage_type === "b2"
+                        ? "bg-blue-500/20 text-blue-400"
+                        : "bg-green-500/20 text-green-400"
+                    }`}
+                  >
+                    {clip.storage_type === "b2" ? "B2/CDN" : "Local"}
+                  </span>
+                </td>
+                <td className="px-4 py-3">
+                  <PlatformUploadStatuses clip={clip} clipJobs={clipJobs} />
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center justify-end gap-2">
+                    <a
+                      href={resolveClipOpenUrl(clip)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-gray-500 hover:text-gray-300 transition-colors"
+                      title="Klipni ochish"
+                    >
+                      <ExternalLink size={14} />
+                    </a>
+                    <button
+                      onClick={() => onDownload(clip)}
+                      disabled={!token || downloading[clip.id]}
+                      title="Klipni yuklab olish"
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {downloading[clip.id] ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : (
+                        <Download size={12} />
+                      )}
+                      {downloading[clip.id] ? "..." : "Download"}
+                    </button>
+                    <button
+                      onClick={() => onPublish(clip)}
+                      disabled={uploading[clip.id]}
+                      title="Ijtimoiy tarmoqlarga yuklash"
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50"
+                    >
+                      {uploading[clip.id] ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : (
+                        <Upload size={12} />
+                      )}
+                      {uploading[clip.id] ? "..." : "Publish"}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {totalPages > 1 && (
+        <div className="flex justify-end px-4 py-2 border-t border-brand-border/40">
+          <PaginationControls
+            page={pageNum}
+            totalPages={totalPages}
+            onPrev={onPrev}
+            onNext={onNext}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function AdminClipsPage() {
   const { token } = useAuth();
-  const clipsPageLimit = 10;
+  const groupsPageLimit = 10;
   const jobsPageLimit = 10;
-  const [clips, setClips] = useState<Clip[]>([]);
-  const [clipsPage, setClipsPage] = useState(1);
-  const [loading, setLoading] = useState(true);
+
+  const [groups, setGroups] = useState<ServerGroups | null>(null);
+  const [groupsLoading, setGroupsLoading] = useState(true);
+  const [groupsPage, setGroupsPage] = useState(1);
+
   const [allAccounts, setAllAccounts] = useState<AllAccounts>({ instagram: [], youtube: [], tiktok: [] });
   const [publishJobs, setPublishJobs] = useState<PublishJob[]>([]);
   const [jobsPage, setJobsPage] = useState(1);
   const [jobsTotal, setJobsTotal] = useState(0);
+
   const [uploading, setUploading] = useState<Record<string, boolean>>({});
+  const [downloading, setDownloading] = useState<Record<string, boolean>>({});
   const [modal, setModal] = useState<PublishModal | null>(null);
   const [editingJob, setEditingJob] = useState<{ id: string; value: string } | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [downloading, setDownloading] = useState<Record<string, boolean>>({});
+  const [expandedEpisodes, setExpandedEpisodes] = useState<Set<string>>(new Set());
 
-  const toggleGroup = (groupKey: string) =>
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      next.has(groupKey) ? next.delete(groupKey) : next.add(groupKey);
-      return next;
-    });
+  // Lazy clip cache. Keyed by scope ("movie:<id>" or "episode:<id>").
+  const [scopeClips, setScopeClips] = useState<Record<string, ScopeClipPage>>({});
 
-  const expandAll = () =>
-    setExpandedGroups(new Set(buildClipGroups(clips).map((group) => group.key)));
+  // ── Data fetching ───────────────────────────────────────────────────
 
-  const collapseAll = () => setExpandedGroups(new Set());
-
-  const fetchClips = useCallback(async () => {
+  const fetchGroups = useCallback(async () => {
     if (!token) return;
+    setGroupsLoading(true);
     try {
-      const res = await fetch(`${API}/admin/clips?limit=100`, {
+      const res = await fetch(`${API}/admin/clips/groups`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
-        const data = await res.json();
-        setClips(data.data || []);
+        const data: ServerGroups = await res.json();
+        setGroups({
+          movies: data.movies || [],
+          series: data.series || [],
+          total_clips: data.total_clips || 0,
+          total_contents: data.total_contents || 0,
+        });
       }
     } catch {
       // silently ignore
     } finally {
-      setLoading(false);
+      setGroupsLoading(false);
     }
   }, [token]);
+
+  const fetchScopedClips = useCallback(
+    async (scope: Scope, offset = 0) => {
+      if (!token) return;
+      const key = scopeKey(scope);
+      setScopeClips((prev) => ({
+        ...prev,
+        [key]: {
+          clips: prev[key]?.clips ?? [],
+          total: prev[key]?.total ?? 0,
+          offset,
+          loading: true,
+          error: undefined,
+        },
+      }));
+      const params = new URLSearchParams();
+      params.set("limit", String(CLIPS_PAGE_LIMIT));
+      params.set("offset", String(offset));
+      if (scope.kind === "movie") params.set("movie_id", scope.movieId);
+      else params.set("episode_id", scope.episodeId);
+      try {
+        const res = await fetch(`${API}/admin/clips?${params.toString()}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const data = await res.json();
+        setScopeClips((prev) => ({
+          ...prev,
+          [key]: {
+            clips: data.data || [],
+            total: data.total || 0,
+            offset,
+            loading: false,
+          },
+        }));
+      } catch (err) {
+        setScopeClips((prev) => ({
+          ...prev,
+          [key]: {
+            clips: [],
+            total: prev[key]?.total ?? 0,
+            offset,
+            loading: false,
+            error: err instanceof Error ? err.message : "fetch failed",
+          },
+        }));
+      }
+    },
+    [token]
+  );
 
   const fetchAccounts = useCallback(async () => {
     if (!token) return;
@@ -642,28 +747,110 @@ export default function AdminClipsPage() {
   }, [token, jobsPage]);
 
   useEffect(() => {
-    fetchClips();
+    fetchGroups();
     fetchAccounts();
     fetchJobs();
-  }, [fetchClips, fetchAccounts, fetchJobs]);
+  }, [fetchGroups, fetchAccounts, fetchJobs]);
 
-  useEffect(() => {
-    const totalGroups = buildClipGroups(clips).length;
-    const totalPages = Math.max(1, Math.ceil(totalGroups / clipsPageLimit));
-    if (clipsPage > totalPages) {
-      setClipsPage(totalPages);
-    }
-  }, [clips, clipsPage]);
+  // ── Group / episode expand/collapse + lazy load ─────────────────────
 
-  useEffect(() => {
-    const totalPages = Math.max(1, Math.ceil(jobsTotal / jobsPageLimit));
-    if (jobsPage > totalPages) {
-      setJobsPage(totalPages);
-    }
-  }, [jobsPage, jobsTotal]);
+  const ensureMovieClips = useCallback(
+    (movieId: string) => {
+      const key = `movie:${movieId}`;
+      if (!scopeClips[key]) {
+        fetchScopedClips({ kind: "movie", movieId }, 0);
+      }
+    },
+    [scopeClips, fetchScopedClips]
+  );
+
+  const ensureEpisodeClips = useCallback(
+    (episodeId: string) => {
+      if (!episodeId) return;
+      const key = `episode:${episodeId}`;
+      if (!scopeClips[key]) {
+        fetchScopedClips({ kind: "episode", episodeId }, 0);
+      }
+    },
+    [scopeClips, fetchScopedClips]
+  );
+
+  const toggleMovieGroup = (movieId: string) => {
+    const key = `movie:${movieId}`;
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+        ensureMovieClips(movieId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSeriesGroup = (seriesId: string) => {
+    const key = `series:${seriesId}`;
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  };
+
+  const toggleEpisode = (episodeId: string) => {
+    setExpandedEpisodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(episodeId)) {
+        next.delete(episodeId);
+      } else {
+        next.add(episodeId);
+        ensureEpisodeClips(episodeId);
+      }
+      return next;
+    });
+  };
+
+  const expandAllSeriesEpisodes = (s: ServerSeriesGroup) => {
+    setExpandedEpisodes((prev) => {
+      const next = new Set(prev);
+      s.seasons.forEach((season) =>
+        season.episodes.forEach((ep) => {
+          next.add(ep.episode_id);
+          ensureEpisodeClips(ep.episode_id);
+        })
+      );
+      return next;
+    });
+  };
+
+  const collapseAllSeriesEpisodes = (s: ServerSeriesGroup) => {
+    setExpandedEpisodes((prev) => {
+      const next = new Set(prev);
+      s.seasons.forEach((season) => season.episodes.forEach((ep) => next.delete(ep.episode_id)));
+      return next;
+    });
+  };
+
+  // Top-level expand/collapse for content groups (movies + series headers).
+  const allGroupKeys = useMemo(() => {
+    if (!groups) return [] as string[];
+    return [
+      ...groups.movies.map((m) => `movie:${m.movie_id}`),
+      ...groups.series.map((s) => `series:${s.series_id}`),
+    ];
+  }, [groups]);
+
+  const expandAll = () => {
+    if (!groups) return;
+    setExpandedGroups(new Set(allGroupKeys));
+    groups.movies.forEach((m) => ensureMovieClips(m.movie_id));
+  };
+  const collapseAll = () => setExpandedGroups(new Set());
+
+  // ── Publish modal handlers (unchanged behavior) ─────────────────────
 
   const openModal = (clip: Clip) => {
-    // Pre-select first account for each platform that has accounts configured
     const defaultJobs: SelectedJob[] = [];
     if (allAccounts.instagram.length > 0)
       defaultJobs.push({ platform: "instagram", account_name: allAccounts.instagram[0] });
@@ -677,9 +864,9 @@ export default function AdminClipsPage() {
     });
   };
 
-  const hasAnyAccount = allAccounts.instagram.length > 0 || allAccounts.youtube.length > 0 || allAccounts.tiktok.length > 0;
+  const hasAnyAccount =
+    allAccounts.instagram.length > 0 || allAccounts.youtube.length > 0 || allAccounts.tiktok.length > 0;
 
-  // Toggle a specific platform+account combo in selectedJobs
   const toggleJob = (platform: Platform, accountName: string) => {
     setModal((prev) => {
       if (!prev) return prev;
@@ -692,7 +879,15 @@ export default function AdminClipsPage() {
     });
   };
 
-  // Upload now
+  const refreshAfterPublish = (clip: Clip) => {
+    // Refetch the scope this clip belongs to so the upload counters update.
+    if (clip.episode_id) {
+      fetchScopedClips({ kind: "episode", episodeId: clip.episode_id }, scopeClips[`episode:${clip.episode_id}`]?.offset ?? 0);
+    } else if (clip.movie_id) {
+      fetchScopedClips({ kind: "movie", movieId: clip.movie_id }, scopeClips[`movie:${clip.movie_id}`]?.offset ?? 0);
+    }
+  };
+
   const handleUploadNow = async () => {
     if (!token || !modal || modal.selectedJobs.length === 0) return;
     const { clip, selectedJobs } = modal;
@@ -705,7 +900,7 @@ export default function AdminClipsPage() {
       });
       const data = await res.json();
       setModal((prev) => (prev ? { ...prev, results: data.results || [] } : prev));
-      await fetchClips();
+      refreshAfterPublish(clip);
     } catch {
       // silently ignore
     } finally {
@@ -713,7 +908,6 @@ export default function AdminClipsPage() {
     }
   };
 
-  // Schedule upload
   const handleSchedule = async () => {
     if (!token || !modal || modal.selectedJobs.length === 0) return;
     const { clip, selectedJobs, scheduledFor } = modal;
@@ -794,9 +988,7 @@ export default function AdminClipsPage() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(async (res) => {
-        if (!res.ok) {
-          throw new Error(`download failed: ${res.status}`);
-        }
+        if (!res.ok) throw new Error(`download failed: ${res.status}`);
         const blob = await res.blob();
         const objectUrl = window.URL.createObjectURL(blob);
         const link = document.createElement("a");
@@ -807,23 +999,40 @@ export default function AdminClipsPage() {
         document.body.removeChild(link);
         window.URL.revokeObjectURL(objectUrl);
       })
-      .catch(() => {
-        // silently ignore
-      })
+      .catch(() => {})
       .finally(() => {
         setDownloading((prev) => ({ ...prev, [clip.id]: false }));
       });
   };
 
-  const groupedClips = buildClipGroups(clips);
-  const clipsTotalPages = Math.max(1, Math.ceil(groupedClips.length / clipsPageLimit));
-  const pagedGroupedClips = groupedClips.slice(
-    (clipsPage - 1) * clipsPageLimit,
-    clipsPage * clipsPageLimit,
+  // ── Derived: paged content group list ───────────────────────────────
+
+  type FlatGroup =
+    | { kind: "movie"; group: ServerMovieGroup }
+    | { kind: "series"; group: ServerSeriesGroup };
+  const flatGroups: FlatGroup[] = useMemo(() => {
+    if (!groups) return [];
+    return [
+      ...groups.movies.map((g) => ({ kind: "movie" as const, group: g })),
+      ...groups.series.map((g) => ({ kind: "series" as const, group: g })),
+    ];
+  }, [groups]);
+
+  const groupsTotalPages = Math.max(1, Math.ceil(flatGroups.length / groupsPageLimit));
+  const pagedGroups = flatGroups.slice(
+    (groupsPage - 1) * groupsPageLimit,
+    groupsPage * groupsPageLimit
   );
+
+  useEffect(() => {
+    if (groupsPage > groupsTotalPages) setGroupsPage(groupsTotalPages);
+  }, [groupsPage, groupsTotalPages]);
+
   const pendingJobs = publishJobs.filter((j) => j.status === "pending" || j.status === "processing");
   const doneJobs = publishJobs.filter((j) => j.status === "success" || j.status === "failed");
   const jobsTotalPages = Math.max(1, Math.ceil(jobsTotal / jobsPageLimit));
+
+  // ── Render ───────────────────────────────────────────────────────────
 
   return (
     <div className="p-4 sm:p-8">
@@ -831,10 +1040,10 @@ export default function AdminClipsPage() {
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-white">Kliplar</h1>
           <p className="text-gray-500 text-sm mt-1">
-            {groupedClips.length} ta kontent · {clips.length} ta klip
+            {groups?.total_contents ?? 0} ta kontent · {groups?.total_clips ?? 0} ta klip
           </p>
         </div>
-        {clips.length > 0 && (
+        {flatGroups.length > 0 && (
           <div className="flex items-center gap-2">
             <button
               onClick={expandAll}
@@ -854,13 +1063,12 @@ export default function AdminClipsPage() {
         )}
       </div>
 
-      {/* ── Clips table ─────────────────────────────────────────── */}
-      {loading ? (
+      {groupsLoading ? (
         <div className="flex items-center gap-2 text-gray-500 py-12 justify-center">
           <Loader2 size={18} className="animate-spin" />
           Kliplar yuklanmoqda...
         </div>
-      ) : clips.length === 0 ? (
+      ) : flatGroups.length === 0 ? (
         <div className="bg-brand-card border border-brand-border rounded-xl p-8 sm:p-12 text-center">
           <Film className="mx-auto text-gray-600 mb-4" size={48} />
           <p className="text-gray-500">Hali klip yaratilmagan.</p>
@@ -872,47 +1080,112 @@ export default function AdminClipsPage() {
         <div className="space-y-8">
           <div className="flex justify-end">
             <PaginationControls
-              page={clipsPage}
-              totalPages={clipsTotalPages}
-              onPrev={() => setClipsPage((prev) => Math.max(1, prev - 1))}
-              onNext={() => setClipsPage((prev) => Math.min(clipsTotalPages, prev + 1))}
+              page={groupsPage}
+              totalPages={groupsTotalPages}
+              onPrev={() => setGroupsPage((prev) => Math.max(1, prev - 1))}
+              onNext={() => setGroupsPage((prev) => Math.min(groupsTotalPages, prev + 1))}
             />
           </div>
-          {pagedGroupedClips.map((group) => {
-            const isExpanded = expandedGroups.has(group.key);
-            const groupPublishJobs = publishJobs.filter((j) =>
-              group.clips.some((c) => c.id === j.clip_id)
-            );
-            const igUploaded = group.clips.filter((c) => c.instagram_upload_count > 0).length;
-            const ytUploaded = new Set(
-              groupPublishJobs
-                .filter((j) => j.platform === "youtube" && j.status === "success")
-                .map((j) => j.clip_id)
-            ).size;
-            const ttUploaded = new Set(
-              groupPublishJobs
-                .filter((j) => j.platform === "tiktok" && j.status === "success")
-                .map((j) => j.clip_id)
-            ).size;
-            const lastUpload = [
-              ...group.clips.map((c) => c.last_instagram_upload_at).filter(Boolean),
-              ...groupPublishJobs
-                .filter((j) => j.status === "success" && j.executed_at)
-                .map((j) => j.executed_at!),
-            ].sort().at(-1);
-            const headerHref = group.slug
-              ? group.kind === "movie"
-                ? `/movies/${group.slug}`
-                : `/series/${group.slug}`
-              : "";
 
+          {pagedGroups.map((entry) => {
+            if (entry.kind === "movie") {
+              const m = entry.group;
+              const key = `movie:${m.movie_id}`;
+              const isExpanded = expandedGroups.has(key);
+              const page = scopeClips[key];
+              const totalPages = page ? Math.max(1, Math.ceil(page.total / CLIPS_PAGE_LIMIT)) : 1;
+              const pageNum = page ? Math.floor(page.offset / CLIPS_PAGE_LIMIT) + 1 : 1;
+              return (
+                <div
+                  key={key}
+                  className="bg-brand-card border border-brand-border rounded-xl overflow-hidden"
+                >
+                  <button
+                    onClick={() => toggleMovieGroup(m.movie_id)}
+                    className="w-full px-4 sm:px-6 py-4 border-b border-brand-border bg-brand-dark/50 hover:bg-brand-dark/80 transition-colors text-left"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-gray-500 flex-shrink-0">
+                        {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <span className="text-white font-medium truncate">{m.title || "Untitled movie"}</span>
+                          {m.code && (
+                            <span className="text-xs font-mono text-gray-500">#{m.code}</span>
+                          )}
+                          <span className="text-xs text-emerald-300/80">Movie clips</span>
+                          <span className="text-xs text-gray-600">{m.clip_count} ta klip</span>
+                        </div>
+                        <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                          {m.ig_uploaded_count > 0 ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] text-pink-400">
+                              <Instagram size={10} />
+                              {m.ig_uploaded_count}/{m.clip_count}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-gray-600">Yuklanmagan</span>
+                          )}
+                          {m.last_ig_upload_at && (
+                            <span className="text-[11px] text-gray-600">
+                              · {formatTashkent(m.last_ig_upload_at)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {m.slug && (
+                        <a
+                          href={`/movies/${m.slug}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-gray-600 hover:text-white transition-colors flex-shrink-0"
+                        >
+                          <ExternalLink size={15} />
+                        </a>
+                      )}
+                    </div>
+                  </button>
+
+                  {isExpanded && (
+                    <ClipTable
+                      page={page ?? { clips: [], total: m.clip_count, offset: 0, loading: true }}
+                      publishJobs={publishJobs}
+                      downloading={downloading}
+                      uploading={uploading}
+                      token={token}
+                      onDownload={handleDownloadClip}
+                      onPublish={openModal}
+                      onPrev={() =>
+                        fetchScopedClips(
+                          { kind: "movie", movieId: m.movie_id },
+                          Math.max(0, (page?.offset ?? 0) - CLIPS_PAGE_LIMIT)
+                        )
+                      }
+                      onNext={() =>
+                        fetchScopedClips(
+                          { kind: "movie", movieId: m.movie_id },
+                          (page?.offset ?? 0) + CLIPS_PAGE_LIMIT
+                        )
+                      }
+                      pageNum={pageNum}
+                      totalPages={totalPages}
+                    />
+                  )}
+                </div>
+              );
+            }
+
+            const s = entry.group;
+            const key = `series:${s.series_id}`;
+            const isExpanded = expandedGroups.has(key);
             return (
               <div
-                key={group.key}
+                key={key}
                 className="bg-brand-card border border-brand-border rounded-xl overflow-hidden"
               >
                 <button
-                  onClick={() => toggleGroup(group.key)}
+                  onClick={() => toggleSeriesGroup(s.series_id)}
                   className="w-full px-4 sm:px-6 py-4 border-b border-brand-border bg-brand-dark/50 hover:bg-brand-dark/80 transition-colors text-left"
                 >
                   <div className="flex items-center gap-3">
@@ -921,55 +1194,29 @@ export default function AdminClipsPage() {
                     </span>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-3 flex-wrap">
-                        <span className="text-white font-medium truncate">
-                          {group.title}
-                        </span>
-                        {group.kind === "movie" && group.code && (
-                          <span className="text-xs font-mono text-gray-500">
-                            #{group.code}
-                          </span>
-                        )}
-                        {group.kind === "movie" ? (
-                          <span className="text-xs text-emerald-300/80">Movie clips</span>
-                        ) : (
-                          <span className="text-xs text-amber-300/80">Serial episode clips</span>
-                        )}
-                        <span className="text-xs text-gray-600">
-                          {group.clips.length} ta klip
-                        </span>
+                        <span className="text-white font-medium truncate">{s.title || "Untitled series"}</span>
+                        <span className="text-xs text-amber-300/80">Serial episode clips</span>
+                        <span className="text-xs text-gray-600">{s.clip_count} ta klip</span>
                       </div>
                       <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                        {igUploaded > 0 && (
+                        {s.ig_uploaded_count > 0 ? (
                           <span className="inline-flex items-center gap-1 text-[11px] text-pink-400">
                             <Instagram size={10} />
-                            {igUploaded}/{group.clips.length}
+                            {s.ig_uploaded_count}/{s.clip_count}
                           </span>
-                        )}
-                        {ytUploaded > 0 && (
-                          <span className="inline-flex items-center gap-1 text-[11px] text-red-400">
-                            <Youtube size={10} />
-                            {ytUploaded}/{group.clips.length}
-                          </span>
-                        )}
-                        {ttUploaded > 0 && (
-                          <span className="inline-flex items-center gap-1 text-[11px] text-sky-400">
-                            <Music2 size={10} />
-                            {ttUploaded}/{group.clips.length}
-                          </span>
-                        )}
-                        {igUploaded === 0 && ytUploaded === 0 && ttUploaded === 0 && (
+                        ) : (
                           <span className="text-[11px] text-gray-600">Yuklanmagan</span>
                         )}
-                        {lastUpload && (
+                        {s.last_ig_upload_at && (
                           <span className="text-[11px] text-gray-600">
-                            · {formatTashkent(lastUpload)}
+                            · {formatTashkent(s.last_ig_upload_at)}
                           </span>
                         )}
                       </div>
                     </div>
-                    {headerHref && (
+                    {s.slug && (
                       <a
-                        href={headerHref}
+                        href={`/series/${s.slug}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={(e) => e.stopPropagation()}
@@ -982,218 +1229,117 @@ export default function AdminClipsPage() {
                 </button>
 
                 {isExpanded && (
-                  <div className="overflow-x-auto">
-                    {group.kind === "movie" ? (
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b border-brand-border text-gray-500 text-xs uppercase tracking-wider">
-                            <th className="text-left px-4 py-3">#</th>
-                            <th className="text-left px-4 py-3">Fayl</th>
-                            <th className="text-left px-4 py-3">Davom</th>
-                            <th className="text-left px-4 py-3">Saxlash</th>
-                            <th className="text-left px-4 py-3">Platformlar</th>
-                            <th className="text-right px-4 py-3">Amallar</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {[...group.clips]
-                            .sort((a, b) => getClipSequence(a) - getClipSequence(b))
-                            .map((clip) => {
-                              const clipJobs = publishJobs.filter((j) => j.clip_id === clip.id);
-                              return (
-                                <tr
-                                  key={clip.id}
-                                  className="border-b border-brand-border/50 last:border-0 hover:bg-brand-border/20 transition-colors"
+                  <div className="divide-y divide-brand-border/50">
+                    <div className="px-4 sm:px-6 py-2 flex items-center justify-end gap-2 bg-white/[0.02]">
+                      <button
+                        onClick={() => expandAllSeriesEpisodes(s)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-brand-border text-[11px] text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
+                      >
+                        <ChevronsUpDown size={12} />
+                        Barchasini ochish
+                      </button>
+                      <button
+                        onClick={() => collapseAllSeriesEpisodes(s)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-brand-border text-[11px] text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
+                      >
+                        <ChevronsDownUp size={12} />
+                        Barchasini yopish
+                      </button>
+                    </div>
+                    {s.seasons.map((season) => (
+                      <div key={`${key}:season:${season.season_number}`}>
+                        <div className="px-4 sm:px-6 py-3 bg-white/[0.03] border-b border-brand-border/50">
+                          <p className="text-sm font-medium text-gray-200">
+                            Season {season.season_number} · {season.clip_count} ta klip
+                          </p>
+                        </div>
+                        <div className="divide-y divide-brand-border/30">
+                          {season.episodes.map((ep) => {
+                            const epExpanded = expandedEpisodes.has(ep.episode_id);
+                            const epLabel = `S${padEpisodeNumber(season.season_number)}E${padEpisodeNumber(ep.episode_number)}`;
+                            const scope = `episode:${ep.episode_id}`;
+                            const page = scopeClips[scope];
+                            const totalPages = page ? Math.max(1, Math.ceil(page.total / CLIPS_PAGE_LIMIT)) : 1;
+                            const pageNum = page ? Math.floor(page.offset / CLIPS_PAGE_LIMIT) + 1 : 1;
+                            return (
+                              <div key={ep.episode_id}>
+                                <button
+                                  onClick={() => toggleEpisode(ep.episode_id)}
+                                  className="w-full px-4 sm:px-6 py-3 bg-white/[0.02] hover:bg-white/[0.05] transition-colors text-left"
                                 >
-                                  <td className="px-4 py-3 text-gray-500">{getClipSequence(clip)}</td>
-                                  <td className="px-4 py-3">
-                                    <span className="text-gray-300 font-mono text-xs">{clip.filename}</span>
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <div className="flex items-center gap-1.5 text-gray-400">
-                                      <Clock size={14} />
-                                      <span>{formatDuration(clip.duration)}</span>
-                                    </div>
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <span
-                                      className={`text-xs px-2 py-0.5 rounded ${
-                                        clip.storage_type === "b2"
-                                          ? "bg-blue-500/20 text-blue-400"
-                                          : "bg-green-500/20 text-green-400"
-                                      }`}
-                                    >
-                                      {clip.storage_type === "b2" ? "B2/CDN" : "Local"}
+                                  <div className="flex items-center gap-3">
+                                    <span className="text-gray-500 flex-shrink-0">
+                                      {epExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                                     </span>
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <PlatformUploadStatuses clip={clip} clipJobs={clipJobs} />
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <div className="flex items-center justify-end gap-2">
-                                      <a
-                                        href={resolveClipOpenUrl(clip)}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-gray-500 hover:text-gray-300 transition-colors"
-                                        title="Klipni ochish"
-                                      >
-                                        <ExternalLink size={14} />
-                                      </a>
-                                      <button
-                                        onClick={() => handleDownloadClip(clip)}
-                                        disabled={!token || downloading[clip.id]}
-                                        title="Klipni yuklab olish"
-                                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
-                                      >
-                                        {downloading[clip.id] ? (
-                                          <Loader2 size={12} className="animate-spin" />
-                                        ) : (
-                                          <Download size={12} />
-                                        )}
-                                        {downloading[clip.id] ? "..." : "Download"}
-                                      </button>
-                                      <button
-                                        onClick={() => openModal(clip)}
-                                        disabled={uploading[clip.id]}
-                                        title="Ijtimoiy tarmoqlarga yuklash"
-                                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50"
-                                      >
-                                        {uploading[clip.id] ? (
-                                          <Loader2 size={12} className="animate-spin" />
-                                        ) : (
-                                          <Upload size={12} />
-                                        )}
-                                        {uploading[clip.id] ? "..." : "Publish"}
-                                      </button>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="text-sm text-white truncate">
+                                          {ep.title || epLabel}
+                                        </span>
+                                        <span className="text-[11px] font-mono text-gray-500">{epLabel}</span>
+                                        <span className="text-[11px] text-gray-600">
+                                          {ep.clip_count} ta klip
+                                        </span>
+                                      </div>
+                                      {ep.ig_uploaded_count > 0 && (
+                                        <div className="flex items-center gap-3 mt-1 flex-wrap">
+                                          <span className="inline-flex items-center gap-1 text-[11px] text-pink-400">
+                                            <Instagram size={10} />
+                                            {ep.ig_uploaded_count}/{ep.clip_count}
+                                          </span>
+                                          {ep.last_ig_upload_at && (
+                                            <span className="text-[11px] text-gray-600">
+                                              · {formatTashkent(ep.last_ig_upload_at)}
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
                                     </div>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                        </tbody>
-                      </table>
-                    ) : (
-                      <div className="divide-y divide-brand-border/50">
-                        {group.seasons?.map((season) => (
-                          <div key={season.key}>
-                            <div className="px-4 sm:px-6 py-3 bg-white/[0.03] border-b border-brand-border/50">
-                              <p className="text-sm font-medium text-gray-200">{season.title}</p>
-                            </div>
-                            <div className="divide-y divide-brand-border/30">
-                              {season.episodes.map((episode) => (
-                                <div key={episode.key}>
-                                  <div className="px-4 sm:px-6 py-3 bg-white/[0.02]">
-                                    <p className="text-sm text-white">{episode.title}</p>
-                                    <p className="text-xs text-gray-500 mt-1">
-                                      {episode.clips.length} ta klip
-                                    </p>
                                   </div>
-                                  <table className="w-full text-sm">
-                                    <thead>
-                                      <tr className="border-y border-brand-border/50 text-gray-500 text-xs uppercase tracking-wider">
-                                        <th className="text-left px-4 py-3">#</th>
-                                        <th className="text-left px-4 py-3">Fayl</th>
-                                        <th className="text-left px-4 py-3">Davom</th>
-                                        <th className="text-left px-4 py-3">Saxlash</th>
-                                        <th className="text-left px-4 py-3">Platformlar</th>
-                                        <th className="text-right px-4 py-3">Amallar</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {episode.clips.map((clip) => {
-                                        const clipJobs = publishJobs.filter((j) => j.clip_id === clip.id);
-                                        return (
-                                          <tr
-                                            key={clip.id}
-                                            className="border-b border-brand-border/30 last:border-0 hover:bg-brand-border/20 transition-colors"
-                                          >
-                                            <td className="px-4 py-3 text-gray-500">{getClipSequence(clip)}</td>
-                                            <td className="px-4 py-3">
-                                              <span className="text-gray-300 font-mono text-xs">{clip.filename}</span>
-                                            </td>
-                                            <td className="px-4 py-3">
-                                              <div className="flex items-center gap-1.5 text-gray-400">
-                                                <Clock size={14} />
-                                                <span>{formatDuration(clip.duration)}</span>
-                                              </div>
-                                            </td>
-                                            <td className="px-4 py-3">
-                                              <span
-                                                className={`text-xs px-2 py-0.5 rounded ${
-                                                  clip.storage_type === "b2"
-                                                    ? "bg-blue-500/20 text-blue-400"
-                                                    : "bg-green-500/20 text-green-400"
-                                                }`}
-                                              >
-                                                {clip.storage_type === "b2" ? "B2/CDN" : "Local"}
-                                              </span>
-                                            </td>
-                                            <td className="px-4 py-3">
-                                              <PlatformUploadStatuses clip={clip} clipJobs={clipJobs} />
-                                            </td>
-                                            <td className="px-4 py-3">
-                                              <div className="flex items-center justify-end gap-2">
-                                                <a
-                                                  href={resolveClipOpenUrl(clip)}
-                                                  target="_blank"
-                                                  rel="noopener noreferrer"
-                                                  className="text-gray-500 hover:text-gray-300 transition-colors"
-                                                  title="Klipni ochish"
-                                                >
-                                                  <ExternalLink size={14} />
-                                                </a>
-                                                <button
-                                                  onClick={() => handleDownloadClip(clip)}
-                                                  disabled={!token || downloading[clip.id]}
-                                                  title="Klipni yuklab olish"
-                                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
-                                                >
-                                                  {downloading[clip.id] ? (
-                                                    <Loader2 size={12} className="animate-spin" />
-                                                  ) : (
-                                                    <Download size={12} />
-                                                  )}
-                                                  {downloading[clip.id] ? "..." : "Download"}
-                                                </button>
-                                                <button
-                                                  onClick={() => openModal(clip)}
-                                                  disabled={uploading[clip.id]}
-                                                  title="Ijtimoiy tarmoqlarga yuklash"
-                                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50"
-                                                >
-                                                  {uploading[clip.id] ? (
-                                                    <Loader2 size={12} className="animate-spin" />
-                                                  ) : (
-                                                    <Upload size={12} />
-                                                  )}
-                                                  {uploading[clip.id] ? "..." : "Publish"}
-                                                </button>
-                                              </div>
-                                            </td>
-                                          </tr>
-                                        );
-                                      })}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
+                                </button>
+                                {epExpanded && (
+                                  <ClipTable
+                                    page={page ?? { clips: [], total: ep.clip_count, offset: 0, loading: true }}
+                                    publishJobs={publishJobs}
+                                    downloading={downloading}
+                                    uploading={uploading}
+                                    token={token}
+                                    onDownload={handleDownloadClip}
+                                    onPublish={openModal}
+                                    onPrev={() =>
+                                      fetchScopedClips(
+                                        { kind: "episode", episodeId: ep.episode_id },
+                                        Math.max(0, (page?.offset ?? 0) - CLIPS_PAGE_LIMIT)
+                                      )
+                                    }
+                                    onNext={() =>
+                                      fetchScopedClips(
+                                        { kind: "episode", episodeId: ep.episode_id },
+                                        (page?.offset ?? 0) + CLIPS_PAGE_LIMIT
+                                      )
+                                    }
+                                    pageNum={pageNum}
+                                    totalPages={totalPages}
+                                  />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                    )}
+                    ))}
                   </div>
                 )}
               </div>
             );
           })}
+
           <div className="flex justify-end">
             <PaginationControls
-              page={clipsPage}
-              totalPages={clipsTotalPages}
-              onPrev={() => setClipsPage((prev) => Math.max(1, prev - 1))}
-              onNext={() => setClipsPage((prev) => Math.min(clipsTotalPages, prev + 1))}
+              page={groupsPage}
+              totalPages={groupsTotalPages}
+              onPrev={() => setGroupsPage((prev) => Math.max(1, prev - 1))}
+              onNext={() => setGroupsPage((prev) => Math.min(groupsTotalPages, prev + 1))}
             />
           </div>
         </div>
@@ -1215,7 +1361,6 @@ export default function AdminClipsPage() {
             />
           </div>
 
-          {/* Pending / processing */}
           {pendingJobs.length > 0 && (
             <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden mb-4">
               <div className="px-4 py-3 border-b border-brand-border bg-brand-dark/50">
@@ -1311,7 +1456,6 @@ export default function AdminClipsPage() {
             </div>
           )}
 
-          {/* Done (success / failed) */}
           {doneJobs.length > 0 && (
             <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden">
               <div className="px-4 py-3 border-b border-brand-border bg-brand-dark/50">
@@ -1366,7 +1510,6 @@ export default function AdminClipsPage() {
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className="bg-brand-card border border-brand-border rounded-xl w-full max-w-sm shadow-2xl max-h-[90vh] overflow-y-auto">
-            {/* Header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-brand-border sticky top-0 bg-brand-card">
               <div>
                 <h2 className="text-white font-semibold text-sm">Ijtimoiy tarmoqlarga yuklash</h2>
@@ -1382,7 +1525,6 @@ export default function AdminClipsPage() {
               </button>
             </div>
 
-            {/* Schedule created success */}
             {modal.scheduledCreated ? (
               <div className="px-5 py-6 text-center space-y-3">
                 <div className="w-12 h-12 rounded-full bg-blue-500/15 flex items-center justify-center mx-auto">
@@ -1406,7 +1548,6 @@ export default function AdminClipsPage() {
                 </button>
               </div>
             ) : modal.results ? (
-              /* Upload results */
               <div className="px-5 py-4 space-y-3">
                 <p className="text-gray-400 text-xs mb-1">Yuklash natijalari:</p>
                 {modal.results.map((r, i) => (
@@ -1446,7 +1587,6 @@ export default function AdminClipsPage() {
                 </button>
               </div>
             ) : (
-              /* Picker */
               <div className="px-5 py-4 space-y-4">
                 {!hasAnyAccount ? (
                   <p className="text-gray-500 text-sm text-center py-4">
@@ -1458,7 +1598,6 @@ export default function AdminClipsPage() {
                   </p>
                 ) : (
                   <>
-                    {/* Platform + account selectors */}
                     <div className="space-y-4">
                       {ALL_PLATFORMS.map((platform) => {
                         const accounts = allAccounts[platform];
@@ -1493,7 +1632,6 @@ export default function AdminClipsPage() {
                         };
                         return (
                           <div key={platform} className="rounded-lg border border-brand-border overflow-hidden">
-                            {/* Platform header row */}
                             <label
                               className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors ${
                                 someChecked ? meta.bgColor : "bg-white/5"
@@ -1514,7 +1652,6 @@ export default function AdminClipsPage() {
                                 ).length}/{accounts.length}
                               </span>
                             </label>
-                            {/* Account rows */}
                             <div className="divide-y divide-brand-border">
                               {accounts.map((name) => {
                                 const checked = modal.selectedJobs.some(
@@ -1552,7 +1689,6 @@ export default function AdminClipsPage() {
                       </p>
                     )}
 
-                    {/* Mode toggle */}
                     <div className="flex rounded-lg border border-brand-border overflow-hidden">
                       <button
                         onClick={() => setModal((p) => (p ? { ...p, mode: "now" } : p))}
@@ -1578,7 +1714,6 @@ export default function AdminClipsPage() {
                       </button>
                     </div>
 
-                    {/* Datetime picker */}
                     {modal.mode === "scheduled" && (
                       <div>
                         <label className="block text-gray-400 text-xs mb-1.5">
@@ -1598,7 +1733,6 @@ export default function AdminClipsPage() {
                   </>
                 )}
 
-                {/* Action buttons */}
                 <div className="flex gap-2 pt-1">
                   <button
                     onClick={() => setModal(null)}

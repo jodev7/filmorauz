@@ -261,6 +261,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 		admin.DELETE("/collections/:id", collectionHandler.DeleteCollection)
 
 		// Clip management
+		admin.GET("/clips/groups", clipHandler.ListClipGroups)
 		admin.GET("/clips", clipHandler.ListClips)
 		admin.GET("/clips/movie/:movieId", clipHandler.GetClipsByMovie)
 		admin.GET("/clips/:id/download", clipHandler.DownloadClip)

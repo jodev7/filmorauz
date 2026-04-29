@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"log"
+	"sort"
 	"time"
 
 	"github.com/filmorauz/backend/models"
@@ -67,8 +68,8 @@ func (r *ClipRepository) List(ctx context.Context, limit, offset int64) ([]model
 	if limit <= 0 {
 		limit = 50
 	}
-	if limit > 100 {
-		limit = 100
+	if limit > 200 {
+		limit = 200
 	}
 
 	filter := bson.M{}
@@ -128,6 +129,290 @@ func (r *ClipRepository) List(ctx context.Context, limit, offset int64) ([]model
 	}
 
 	return clips, total, nil
+}
+
+// ListFiltered returns clips matching the given filter (movie / series /
+// episode scope) with sequence-ordered output and limit/offset pagination.
+// Used to lazy-load a single content group's clips from the admin UI.
+func (r *ClipRepository) ListFiltered(ctx context.Context, filter bson.M, limit, offset int64) ([]models.Clip, int64, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	total, _ := r.col.CountDocuments(ctx, filter)
+	opts := options.Find().
+		SetSort(bson.D{{Key: "sequence", Value: 1}, {Key: "clip_index", Value: 1}, {Key: "_id", Value: 1}}).
+		SetLimit(limit).
+		SetSkip(offset)
+	cursor, err := r.col.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cursor.Close(ctx)
+	var clips []models.Clip
+	if err := cursor.All(ctx, &clips); err != nil {
+		return nil, 0, err
+	}
+	return clips, total, nil
+}
+
+// MovieClipGroup is a per-movie summary returned by GroupClips.
+type MovieClipGroup struct {
+	MovieID         primitive.ObjectID `json:"movie_id"`
+	Title           string             `json:"title"`
+	Slug            string             `json:"slug"`
+	Code            string             `json:"code"`
+	ClipCount       int                `json:"clip_count"`
+	IGUploadedCount int                `json:"ig_uploaded_count"`
+	LastIGUploadAt  *time.Time         `json:"last_ig_upload_at,omitempty"`
+}
+
+// EpisodeClipGroup is a per-episode summary inside a SeasonClipGroup.
+type EpisodeClipGroup struct {
+	EpisodeID       primitive.ObjectID `json:"episode_id"`
+	EpisodeNumber   int                `json:"episode_number"`
+	Title           string             `json:"title"`
+	ClipCount       int                `json:"clip_count"`
+	IGUploadedCount int                `json:"ig_uploaded_count"`
+	LastIGUploadAt  *time.Time         `json:"last_ig_upload_at,omitempty"`
+}
+
+// SeasonClipGroup nests episodes under a season number.
+type SeasonClipGroup struct {
+	SeasonNumber int                `json:"season_number"`
+	ClipCount    int                `json:"clip_count"`
+	Episodes     []EpisodeClipGroup `json:"episodes"`
+}
+
+// SeriesClipGroup is a per-series summary including nested seasons/episodes.
+type SeriesClipGroup struct {
+	SeriesID        primitive.ObjectID `json:"series_id"`
+	Title           string             `json:"title"`
+	Slug            string             `json:"slug"`
+	ClipCount       int                `json:"clip_count"`
+	IGUploadedCount int                `json:"ig_uploaded_count"`
+	LastIGUploadAt  *time.Time         `json:"last_ig_upload_at,omitempty"`
+	Seasons         []SeasonClipGroup  `json:"seasons"`
+}
+
+// GroupClips builds a (movies, series→season→episode) summary tree from the
+// clips collection. Only counts/metadata are returned — never the clip docs
+// themselves — so the response stays small even with 100k+ clips.
+func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []SeriesClipGroup, int64, error) {
+	totalClips, _ := r.col.CountDocuments(ctx, bson.M{})
+
+	classify := bson.D{{Key: "$addFields", Value: bson.M{
+		"is_series": bson.M{"$cond": []interface{}{
+			bson.M{"$or": []interface{}{
+				bson.M{"$eq": []interface{}{"$content_kind", "series"}},
+				bson.M{"$eq": []interface{}{"$source_type", "series_episode"}},
+				bson.M{"$and": []interface{}{
+					bson.M{"$ne": []interface{}{"$episode_id", nil}},
+					bson.M{"$ne": []interface{}{"$episode_id", primitive.NilObjectID}},
+				}},
+				bson.M{"$and": []interface{}{
+					bson.M{"$ne": []interface{}{"$series_id", nil}},
+					bson.M{"$ne": []interface{}{"$series_id", primitive.NilObjectID}},
+				}},
+			}},
+			true, false,
+		}},
+	}}}
+
+	igFlag := bson.M{"$cond": []interface{}{
+		bson.M{"$gt": []interface{}{"$instagram_upload_count", 0}}, 1, 0,
+	}}
+
+	// ── Movies ────────────────────────────────────────────────────────
+	moviePipeline := mongo.Pipeline{
+		classify,
+		{{Key: "$match", Value: bson.M{"is_series": false}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":               "$movie_id",
+			"title":             bson.M{"$first": "$movie_title"},
+			"slug":              bson.M{"$first": "$movie_slug"},
+			"code":              bson.M{"$first": "$movie_code"},
+			"clip_count":        bson.M{"$sum": 1},
+			"ig_uploaded_count": bson.M{"$sum": igFlag},
+			"last_ig_upload_at": bson.M{"$max": "$last_instagram_upload_at"},
+		}}},
+		{{Key: "$sort", Value: bson.D{{Key: "title", Value: 1}}}},
+	}
+
+	movies := []MovieClipGroup{}
+	{
+		cur, err := r.col.Aggregate(ctx, moviePipeline)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		var rows []bson.M
+		if err := cur.All(ctx, &rows); err != nil {
+			cur.Close(ctx)
+			return nil, nil, 0, err
+		}
+		cur.Close(ctx)
+		for _, row := range rows {
+			id, _ := row["_id"].(primitive.ObjectID)
+			if id.IsZero() {
+				continue
+			}
+			mg := MovieClipGroup{
+				MovieID:         id,
+				Title:           asString(row["title"]),
+				Slug:            asString(row["slug"]),
+				Code:            asString(row["code"]),
+				ClipCount:       asInt(row["clip_count"]),
+				IGUploadedCount: asInt(row["ig_uploaded_count"]),
+				LastIGUploadAt:  asTimePtr(row["last_ig_upload_at"]),
+			}
+			movies = append(movies, mg)
+		}
+	}
+
+	// ── Series → Season → Episode ─────────────────────────────────────
+	episodePipeline := mongo.Pipeline{
+		classify,
+		{{Key: "$match", Value: bson.M{"is_series": true}}},
+		{{Key: "$group", Value: bson.M{
+			"_id": bson.M{
+				"series_id":     "$series_id",
+				"season_number": "$season_number",
+				"episode_id":    "$episode_id",
+			},
+			"series_title":      bson.M{"$first": "$series_title"},
+			"series_slug":       bson.M{"$first": "$series_slug"},
+			"episode_number":    bson.M{"$first": "$episode_number"},
+			"episode_title":     bson.M{"$first": "$title"},
+			"clip_count":        bson.M{"$sum": 1},
+			"ig_uploaded_count": bson.M{"$sum": igFlag},
+			"last_ig_upload_at": bson.M{"$max": "$last_instagram_upload_at"},
+		}}},
+	}
+
+	seriesIdx := map[primitive.ObjectID]*SeriesClipGroup{}
+	seasonIdx := map[primitive.ObjectID]map[int]*SeasonClipGroup{}
+	{
+		cur, err := r.col.Aggregate(ctx, episodePipeline)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		var rows []bson.M
+		if err := cur.All(ctx, &rows); err != nil {
+			cur.Close(ctx)
+			return nil, nil, 0, err
+		}
+		cur.Close(ctx)
+		for _, row := range rows {
+			key, _ := row["_id"].(bson.M)
+			if key == nil {
+				continue
+			}
+			sID, _ := key["series_id"].(primitive.ObjectID)
+			if sID.IsZero() {
+				continue
+			}
+			seasonNum := asInt(key["season_number"])
+			epID, _ := key["episode_id"].(primitive.ObjectID)
+			clipCount := asInt(row["clip_count"])
+			igCount := asInt(row["ig_uploaded_count"])
+			lastIG := asTimePtr(row["last_ig_upload_at"])
+
+			sg := seriesIdx[sID]
+			if sg == nil {
+				sg = &SeriesClipGroup{
+					SeriesID: sID,
+					Title:    asString(row["series_title"]),
+					Slug:     asString(row["series_slug"]),
+				}
+				seriesIdx[sID] = sg
+				seasonIdx[sID] = map[int]*SeasonClipGroup{}
+			}
+			sg.ClipCount += clipCount
+			sg.IGUploadedCount += igCount
+			if lastIG != nil && (sg.LastIGUploadAt == nil || lastIG.After(*sg.LastIGUploadAt)) {
+				sg.LastIGUploadAt = lastIG
+			}
+
+			seasonMap := seasonIdx[sID]
+			seasonGroup := seasonMap[seasonNum]
+			if seasonGroup == nil {
+				seasonGroup = &SeasonClipGroup{SeasonNumber: seasonNum}
+				seasonMap[seasonNum] = seasonGroup
+			}
+			seasonGroup.ClipCount += clipCount
+			seasonGroup.Episodes = append(seasonGroup.Episodes, EpisodeClipGroup{
+				EpisodeID:       epID,
+				EpisodeNumber:   asInt(row["episode_number"]),
+				Title:           asString(row["episode_title"]),
+				ClipCount:       clipCount,
+				IGUploadedCount: igCount,
+				LastIGUploadAt:  lastIG,
+			})
+		}
+	}
+
+	series := make([]SeriesClipGroup, 0, len(seriesIdx))
+	for sID, sg := range seriesIdx {
+		seasonMap := seasonIdx[sID]
+		seasonNums := make([]int, 0, len(seasonMap))
+		for n := range seasonMap {
+			seasonNums = append(seasonNums, n)
+		}
+		sort.Ints(seasonNums)
+		seasons := make([]SeasonClipGroup, 0, len(seasonNums))
+		for _, n := range seasonNums {
+			s := seasonMap[n]
+			sort.Slice(s.Episodes, func(i, j int) bool {
+				return s.Episodes[i].EpisodeNumber < s.Episodes[j].EpisodeNumber
+			})
+			seasons = append(seasons, *s)
+		}
+		sg.Seasons = seasons
+		series = append(series, *sg)
+	}
+	sort.Slice(series, func(i, j int) bool { return series[i].Title < series[j].Title })
+
+	return movies, series, totalClips, nil
+}
+
+func asString(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func asInt(v interface{}) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int32:
+		return int(n)
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return 0
+}
+
+func asTimePtr(v interface{}) *time.Time {
+	switch t := v.(type) {
+	case time.Time:
+		if t.IsZero() {
+			return nil
+		}
+		return &t
+	case primitive.DateTime:
+		tt := t.Time()
+		if tt.IsZero() {
+			return nil
+		}
+		return &tt
+	}
+	return nil
 }
 
 func (r *ClipRepository) DeleteByMovieID(ctx context.Context, movieID primitive.ObjectID) error {

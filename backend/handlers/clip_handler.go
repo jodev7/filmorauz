@@ -15,6 +15,7 @@ import (
 	"github.com/filmorauz/backend/repositories"
 	"github.com/filmorauz/backend/services"
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -31,9 +32,54 @@ func (h *ClipHandler) ListClips(c *gin.Context) {
 	limit, _ := strconv.ParseInt(c.DefaultQuery("limit", "50"), 10, 64)
 	offset, _ := strconv.ParseInt(c.DefaultQuery("offset", "0"), 10, 64)
 
-	log.Printf("[ClipHandler] ListClips: limit=%d, offset=%d", limit, offset)
+	movieIDStr := strings.TrimSpace(c.Query("movie_id"))
+	seriesIDStr := strings.TrimSpace(c.Query("series_id"))
+	episodeIDStr := strings.TrimSpace(c.Query("episode_id"))
 
 	ctx := context.Background()
+
+	// Scoped lookup (lazy-load a single content group's clips).
+	if movieIDStr != "" || seriesIDStr != "" || episodeIDStr != "" {
+		filter := bson.M{}
+		if movieIDStr != "" {
+			id, err := primitive.ObjectIDFromHex(movieIDStr)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movie_id"})
+				return
+			}
+			filter["movie_id"] = id
+		}
+		if seriesIDStr != "" {
+			id, err := primitive.ObjectIDFromHex(seriesIDStr)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid series_id"})
+				return
+			}
+			filter["series_id"] = id
+		}
+		if episodeIDStr != "" {
+			id, err := primitive.ObjectIDFromHex(episodeIDStr)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode_id"})
+				return
+			}
+			filter["episode_id"] = id
+		}
+		clips, total, err := h.clipRepo.ListFiltered(ctx, filter, limit, offset)
+		if err != nil {
+			log.Printf("[ClipHandler] ListClips(scoped): failed: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch clips"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"data":   clips,
+			"total":  total,
+			"limit":  limit,
+			"offset": offset,
+		})
+		return
+	}
+
 	clips, total, err := h.clipRepo.List(ctx, limit, offset)
 	if err != nil {
 		log.Printf("[ClipHandler] ListClips: failed to fetch clips: %v", err)
@@ -41,13 +87,30 @@ func (h *ClipHandler) ListClips(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[ClipHandler] ListClips: returning %d clips (total=%d)", len(clips), total)
-
 	c.JSON(http.StatusOK, gin.H{
 		"data":   clips,
 		"total":  total,
 		"limit":  limit,
 		"offset": offset,
+	})
+}
+
+// ListClipGroups GET /api/admin/clips/groups
+// Returns a (movies, series→season→episode) summary tree built via aggregation.
+// Counts only — clip docs are loaded lazily via ListClips with filters.
+func (h *ClipHandler) ListClipGroups(c *gin.Context) {
+	ctx := context.Background()
+	movies, series, total, err := h.clipRepo.GroupClips(ctx)
+	if err != nil {
+		log.Printf("[ClipHandler] ListClipGroups: failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to group clips"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"movies":          movies,
+		"series":          series,
+		"total_clips":     total,
+		"total_contents":  len(movies) + len(series),
 	})
 }
 
