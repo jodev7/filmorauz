@@ -1117,6 +1117,39 @@ func (r *UserRepository) DeductWalletAndActivatePremium(userHex string, price fl
 	return nil
 }
 
+// ActivateOrExtendPremium activates premium for the user, extending from the
+// current premium_expires_at when an active subscription exists, or starting
+// from now otherwise. Used by Telegram Stars purchases (no wallet deduction).
+func (r *UserRepository) ActivateOrExtendPremium(userID primitive.ObjectID, durationDays int) (time.Time, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var user models.User
+	if err := r.col.FindOne(ctx, bson.M{"_id": userID}).Decode(&user); err != nil {
+		return time.Time{}, err
+	}
+
+	now := time.Now()
+	base := now
+	if user.IsPremium && user.PremiumExpiresAt != nil && user.PremiumExpiresAt.After(now) {
+		base = *user.PremiumExpiresAt
+	}
+	expiresAt := base.Add(time.Duration(durationDays) * 24 * time.Hour)
+
+	set := bson.M{
+		"is_premium":         true,
+		"premium_expires_at": expiresAt,
+		"updated_at":         now,
+	}
+	if !user.IsPremium || user.PremiumStartedAt == nil {
+		set["premium_started_at"] = now
+	}
+	if _, err := r.col.UpdateOne(ctx, bson.M{"_id": userID}, bson.M{"$set": set}); err != nil {
+		return time.Time{}, err
+	}
+	return expiresAt, nil
+}
+
 // Helper function to check if a string is in a slice
 func containsString(s string, list []string) bool {
 	for _, item := range list {

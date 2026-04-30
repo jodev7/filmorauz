@@ -19,7 +19,33 @@ import {
   Wallet,
   ExternalLink,
   AlertCircle,
+  Star,
 } from "lucide-react";
+
+const TELEGRAM_BOT_USERNAME =
+  process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || "filmorauznet";
+
+interface StarsPackage {
+  id: string; // matches backend (1m, 3m, 6m, 12m)
+  label: string;
+  months: number;
+  starsPrice: number;
+  badge?: string;
+}
+
+const starsPackages: StarsPackage[] = [
+  { id: "1m", label: "1 oy", months: 1, starsPrice: 100 },
+  { id: "3m", label: "3 oy", months: 3, starsPrice: 270, badge: "-10%" },
+  { id: "6m", label: "6 oy", months: 6, starsPrice: 500, badge: "-17%" },
+  { id: "12m", label: "12 oy", months: 12, starsPrice: 900, badge: "-25%" },
+];
+
+function formatExpiryDate(value?: string | null): string {
+  if (!value) return "";
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("uz-UZ", { day: "2-digit", month: "long", year: "numeric" });
+}
 
 interface FAQItem {
   question: string;
@@ -104,6 +130,10 @@ export default function PremiumPage() {
   // Check if user is premium
   const isPremium = user?.is_premium === true || user?.is_premium_active === true;
   const walletBalance = user?.wallet_balance ?? 0;
+  const premiumExpiresLabel = formatExpiryDate(user?.premium_expires_at);
+
+  const buildStarsDeepLink = (packageId: string) =>
+    `https://t.me/${TELEGRAM_BOT_USERNAME}?start=premium_${packageId}`;
 
   const features = [
     {
@@ -223,9 +253,16 @@ export default function PremiumPage() {
 
             {/* CTA Button or Already Premium state */}
             {isPremium ? (
-              <div className="inline-flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-green-500/20 to-emerald-500/20 border border-green-500/40 rounded-xl text-green-400">
-                <Check className="w-6 h-6" />
-                <span className="text-lg font-semibold">Siz allaqachon Premiumsiz</span>
+              <div className="inline-flex flex-col items-center gap-1 px-8 py-4 bg-gradient-to-r from-green-500/20 to-emerald-500/20 border border-green-500/40 rounded-xl text-green-400">
+                <div className="flex items-center gap-3">
+                  <Check className="w-6 h-6" />
+                  <span className="text-lg font-semibold">Sizda Premium faol</span>
+                </div>
+                {premiumExpiresLabel && (
+                  <span className="text-sm text-green-300/80">
+                    Tugash sanasi: {premiumExpiresLabel}
+                  </span>
+                )}
               </div>
             ) : (
               <button
@@ -279,12 +316,75 @@ export default function PremiumPage() {
           </div>
         </section>
 
+        {/* Telegram Stars Section */}
+        {!isPremium && (
+        <section className="py-12 sm:py-16">
+          <div className="max-w-6xl mx-auto px-4">
+            <div className="text-center mb-8">
+              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-sm font-medium mb-4">
+                <Star className="w-4 h-4" fill="currentColor" />
+                Telegram Stars orqali
+              </div>
+              <h2 className="font-display text-3xl sm:text-4xl text-white mb-3">
+                Botdan <span className="text-brand-red">avtomatik</span> olish
+              </h2>
+              <p className="text-gray-400 max-w-2xl mx-auto">
+                FilmoraUz Premium ni Telegram Stars orqali bir necha soniyada faollashtiring.
+                Tugmani bosing — bot to'lov chekini ko'rsatadi va to'lovdan so'ng premium avtomatik
+                yoqiladi.
+              </p>
+              <p className="text-xs text-gray-500 mt-2">
+                Premium olish uchun avval saytga Telegram orqali kirgan bo'lishingiz kerak.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
+              {starsPackages.map((pkg) => (
+                <div
+                  key={pkg.id}
+                  className="relative rounded-2xl p-6 bg-brand-card/50 border border-brand-border hover:border-yellow-500/50 transition-all duration-300"
+                >
+                  {pkg.badge && (
+                    <div className="absolute -top-3 right-4 px-3 py-1 rounded-full text-xs font-bold bg-gradient-to-r from-green-500 to-emerald-600 text-white">
+                      {pkg.badge}
+                    </div>
+                  )}
+                  <h3 className="text-lg font-semibold text-white mb-1 text-center">
+                    {pkg.label}
+                  </h3>
+                  <div className="text-center mb-5">
+                    <div className="flex items-baseline justify-center gap-1.5">
+                      <Star className="w-5 h-5 text-yellow-400" fill="currentColor" />
+                      <span className="text-3xl font-bold text-white">{pkg.starsPrice}</span>
+                      <span className="text-sm text-gray-400">Stars</span>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">{pkg.months} oylik premium</p>
+                  </div>
+                  <a
+                    href={buildStarsDeepLink(pkg.id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-semibold bg-gradient-to-r from-yellow-500 to-amber-600 text-black hover:opacity-90 transition-opacity"
+                  >
+                    <Star size={14} fill="currentColor" />
+                    Telegram Stars orqali olish
+                  </a>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+        )}
+
         {/* Pricing Section */}
         <section className="py-16 sm:py-24">
           <div className="max-w-6xl mx-auto px-4">
-            <h2 className="font-display text-3xl sm:text-4xl text-white text-center mb-4">
-              Narx <span className="text-brand-red">rejalari</span>
+            <h2 className="font-display text-3xl sm:text-4xl text-white text-center mb-2">
+              Admin orqali — <span className="text-brand-red">hisob to&apos;ldirish</span>
             </h2>
+            <p className="text-center text-xs uppercase tracking-wider text-gray-500 mb-4">
+              An&apos;anaviy usul
+            </p>
             <p className="text-gray-400 text-center mb-8 max-w-xl mx-auto">
               Qancha uzoq obuna olsangiz, shuncha ko'proq tejaysiz
             </p>

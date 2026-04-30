@@ -16,12 +16,30 @@ import {
   Lock,
   RotateCcw,
   RotateCw,
+  List,
 } from "lucide-react";
 import Hls from "hls.js";
-import { VideoSourceType } from "@/lib/api";
+import { VideoSourceType, Ad, getAdsByPlacement, recordAdImpression } from "@/lib/api";
 import { PremiumBadge, isUserPremium } from "@/components/PremiumComponents";
 import { useAuth } from "@/lib/auth-context";
 import { logger } from "@/lib/logger";
+
+const AD_INTERVAL_SECONDS = 600; // 10 minutes
+const AD_DEFAULT_DURATION = 15;
+const AD_MAX_PER_BREAK = 2;
+
+function extractAdVideoUrl(ad: Ad): string | null {
+  const candidates: Array<[string | undefined, string | undefined]> = [
+    [ad.player_overlay_media_url, ad.player_overlay_media_type],
+    [ad.banner_media_url, ad.banner_media_type],
+    [ad.inline_media_url, ad.inline_media_type],
+    [ad.telegram_media_url, ad.telegram_media_type],
+  ];
+  for (const [url, type] of candidates) {
+    if (url && type === "video") return url;
+  }
+  return null;
+}
 
 interface Props {
   videoUrl: string;
@@ -34,6 +52,12 @@ interface Props {
   forceStart?: boolean;
   onTimeUpdate?: (currentTime: number, duration: number) => void;
   onEnded?: () => void;
+  // New UI props (all optional — older callers keep working unchanged)
+  headerTitle?: string;
+  headerSubtitle?: string;
+  seriesButtonUrl?: string;
+  seriesButtonLabel?: string;
+  previewImageUrl?: string;
 }
 
 // Detect if URL is an embed (YouTube, Vimeo, etc.)
@@ -233,6 +257,11 @@ function HLSPlayer({
   isPremiumUser,
   onTimeUpdate,
   onEnded,
+  headerTitle,
+  headerSubtitle,
+  seriesButtonUrl,
+  seriesButtonLabel,
+  previewImageUrl,
 }: {
   src: string;
   poster?: string;
@@ -240,6 +269,11 @@ function HLSPlayer({
   isPremiumUser: boolean;
   onTimeUpdate?: (currentTime: number, duration: number) => void;
   onEnded?: () => void;
+  headerTitle?: string;
+  headerSubtitle?: string;
+  seriesButtonUrl?: string;
+  seriesButtonLabel?: string;
+  previewImageUrl?: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -264,6 +298,23 @@ function HLSPlayer({
   const [seekStep, setSeekStep] = useState(10);
   const [showSeekStepMenu, setShowSeekStepMenu] = useState(false);
 
+  // Progress hover preview
+  const progressContainerRef = useRef<HTMLDivElement>(null);
+  const [hoverTime, setHoverTime] = useState<number | null>(null);
+  const [hoverX, setHoverX] = useState(0);
+  const [progressWidth, setProgressWidth] = useState(0);
+
+  // In-player ad state
+  const adVideoRef = useRef<HTMLVideoElement>(null);
+  const [adQueue, setAdQueue] = useState<Array<{ ad: Ad; url: string }>>([]);
+  const [adIndex, setAdIndex] = useState(0);
+  const [adRemaining, setAdRemaining] = useState(AD_DEFAULT_DURATION);
+  const [adActive, setAdActive] = useState(false);
+  const [adFetching, setAdFetching] = useState(false);
+  const nextAdAtRef = useRef<number | null>(null);
+  const adInitializedRef = useRef(false);
+  const resumeTimeRef = useRef(0);
+
   useEffect(() => {
     setSeekStep(loadSeekStep());
   }, []);
@@ -285,14 +336,56 @@ function HLSPlayer({
     }
   }, []);
 
-  // future preroll hook — insert ad logic here before play starts
-  // future midroll hook — check currentTime intervals for mid-roll triggers
-  // future overlay ad layer — render over player container
+  const triggerAdBreak = useCallback(async () => {
+    if (isPremiumUser || adActive || adFetching) return;
+    const video = videoRef.current;
+    if (!video) return;
+    setAdFetching(true);
+    try {
+      const ads = await getAdsByPlacement("player");
+      const queue = ads
+        .map((ad) => {
+          const url = extractAdVideoUrl(ad);
+          return url ? { ad, url } : null;
+        })
+        .filter((x): x is { ad: Ad; url: string } => x !== null)
+        .slice(0, AD_MAX_PER_BREAK);
+      if (queue.length === 0) {
+        // no ads — push next window forward so we don't spam refetch
+        nextAdAtRef.current = video.currentTime + AD_INTERVAL_SECONDS;
+        return;
+      }
+      resumeTimeRef.current = video.currentTime;
+      video.pause();
+      setAdQueue(queue);
+      setAdIndex(0);
+      setAdRemaining(AD_DEFAULT_DURATION);
+      setAdActive(true);
+      queue.forEach((item) => recordAdImpression(item.ad.id).catch(() => {}));
+    } finally {
+      setAdFetching(false);
+    }
+  }, [isPremiumUser, adActive, adFetching]);
+
+  const finishAdBreak = useCallback(() => {
+    setAdActive(false);
+    setAdQueue([]);
+    setAdIndex(0);
+    const video = videoRef.current;
+    if (video) {
+      nextAdAtRef.current = video.currentTime + AD_INTERVAL_SECONDS;
+      video.play().catch(() => {});
+    }
+  }, []);
 
   const resetControlsTimer = useCallback(() => {
     setShowControls(true);
     if (controlsTimer.current) clearTimeout(controlsTimer.current);
-    controlsTimer.current = setTimeout(() => setShowControls(false), 3000);
+    controlsTimer.current = setTimeout(() => {
+      // Keep controls visible while paused — only auto-hide during playback.
+      const v = videoRef.current;
+      if (v && !v.paused) setShowControls(false);
+    }, 3000);
   }, []);
 
   useEffect(() => {
@@ -302,6 +395,11 @@ function HLSPlayer({
     setError(null);
     setQualities([]);
     setSelectedQuality(-1);
+    setAdActive(false);
+    setAdQueue([]);
+    setAdIndex(0);
+    nextAdAtRef.current = null;
+    adInitializedRef.current = false;
 
     logger.debug("[HLSPlayer] initializing");
 
@@ -454,6 +552,7 @@ function HLSPlayer({
         target.tagName === "SELECT" ||
         target.isContentEditable
       ) return;
+      if (adActive) return;
       const video = videoRef.current;
       if (!video) return;
       if (e.code === "Space") {
@@ -472,22 +571,43 @@ function HLSPlayer({
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [seekStep, seekBy, resetControlsTimer]);
+  }, [seekStep, seekBy, resetControlsTimer, adActive]);
 
   // Video event listeners
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     const onPlay = () => setPlaying(true);
-    const onPause = () => setPlaying(false);
+    const onPause = () => {
+      setPlaying(false);
+      setShowControls(true);
+    };
     const onVideoTimeUpdate = () => {
       setCurrentTime(video.currentTime);
       onTimeUpdate?.(video.currentTime, video.duration || 0);
       if (video.buffered.length > 0) {
         setBuffered(video.buffered.end(video.buffered.length - 1));
       }
+      if (
+        !isPremiumUser &&
+        !adActive &&
+        nextAdAtRef.current !== null &&
+        video.currentTime >= nextAdAtRef.current &&
+        video.duration > 0 &&
+        video.currentTime < video.duration - 1
+      ) {
+        nextAdAtRef.current = video.currentTime + AD_INTERVAL_SECONDS;
+        triggerAdBreak();
+      }
     };
-    const onDurationChange = () => setDuration(video.duration);
+    const onDurationChange = () => {
+      setDuration(video.duration);
+      if (!adInitializedRef.current && isFinite(video.duration) && video.duration > 0) {
+        adInitializedRef.current = true;
+        nextAdAtRef.current =
+          video.duration < AD_INTERVAL_SECONDS ? video.duration * 0.5 : AD_INTERVAL_SECONDS;
+      }
+    };
     const onVolumeChange = () => {
       setVolume(video.volume);
       setMuted(video.muted);
@@ -510,9 +630,10 @@ function HLSPlayer({
       video.removeEventListener("volumechange", onVolumeChange);
       video.removeEventListener("ended", onVideoEnded);
     };
-  }, [onEnded, onTimeUpdate]);
+  }, [onEnded, onTimeUpdate, isPremiumUser, adActive, triggerAdBreak]);
 
   const togglePlay = () => {
+    if (adActive) return;
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) video.play();
@@ -520,6 +641,7 @@ function HLSPlayer({
   };
 
   const seek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (adActive) return;
     const video = videoRef.current;
     if (!video) return;
     video.currentTime = Number(e.target.value);
@@ -608,14 +730,66 @@ function HLSPlayer({
       onMouseEnter={() => setShowControls(true)}
       onClick={() => { togglePlay(); resetControlsTimer(); }}
     >
-      {/* future overlay ad layer */}
-
       <video
         ref={videoRef}
         className="w-full h-full"
         poster={poster}
         playsInline
       />
+
+      {adActive && adQueue[adIndex] && (
+        <div className="absolute inset-0 z-30 bg-black animate-in fade-in duration-200">
+          <video
+            ref={adVideoRef}
+            key={`${adQueue[adIndex].ad.id}-${adIndex}`}
+            src={adQueue[adIndex].url}
+            className="w-full h-full"
+            autoPlay
+            playsInline
+            onLoadedMetadata={(e) => {
+              const d = e.currentTarget.duration;
+              setAdRemaining(
+                isFinite(d) && d > 0 ? Math.ceil(Math.min(d, AD_DEFAULT_DURATION)) : AD_DEFAULT_DURATION
+              );
+            }}
+            onTimeUpdate={(e) => {
+              const v = e.currentTarget;
+              const cap = Math.min(v.duration || AD_DEFAULT_DURATION, AD_DEFAULT_DURATION);
+              const remaining = Math.max(0, Math.ceil(cap - v.currentTime));
+              setAdRemaining(remaining);
+              if (v.currentTime >= AD_DEFAULT_DURATION) {
+                v.pause();
+                if (adIndex + 1 < adQueue.length) {
+                  setAdIndex(adIndex + 1);
+                  setAdRemaining(AD_DEFAULT_DURATION);
+                } else {
+                  finishAdBreak();
+                }
+              }
+            }}
+            onEnded={() => {
+              if (adIndex + 1 < adQueue.length) {
+                setAdIndex(adIndex + 1);
+                setAdRemaining(AD_DEFAULT_DURATION);
+              } else {
+                finishAdBreak();
+              }
+            }}
+          />
+          <div className="pointer-events-none absolute left-3 top-3 rounded bg-black/70 px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-white">
+            Reklama
+          </div>
+          <div className="pointer-events-none absolute left-3 bottom-3 rounded bg-black/70 px-2 py-1 text-xs text-white tabular-nums">
+            Reklama tugashiga: {adRemaining}s
+          </div>
+          <Link
+            href="/premium"
+            className="absolute right-3 bottom-3 rounded-full bg-white/95 px-4 py-2 text-xs font-semibold text-black transition hover:bg-white"
+          >
+            Reklamani o&apos;chirish
+          </Link>
+        </div>
+      )}
 
       <div className="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-2">
         {isPremiumUser && <PremiumBadge size="sm" showCrown />}
@@ -625,6 +799,37 @@ function HLSPlayer({
           </span>
         )}
       </div>
+
+      {/* Top title / series-button overlay — fades with controls, hidden during ads */}
+      {(headerTitle || seriesButtonUrl) && (
+        <div
+          className={`pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-3 px-4 pt-4 pb-8 transition-opacity duration-200 bg-gradient-to-b from-black/70 via-black/30 to-transparent ${
+            showControls && !adActive ? "opacity-100" : "opacity-0"
+          }`}
+        >
+          <div className="min-w-0 pl-12 sm:pl-16 max-w-[70%]">
+            {headerTitle && (
+              <h2 className="truncate text-sm sm:text-base font-semibold text-white drop-shadow-md">
+                {headerTitle}
+              </h2>
+            )}
+            {headerSubtitle && (
+              <p className="truncate text-xs text-gray-300/90 drop-shadow">{headerSubtitle}</p>
+            )}
+          </div>
+          {seriesButtonUrl && (
+            <Link
+              href={seriesButtonUrl}
+              onClick={(e) => e.stopPropagation()}
+              className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-sm border border-white/15 px-3 py-1.5 text-xs font-medium text-white transition-colors"
+            >
+              <List size={14} />
+              <span className="hidden sm:inline">{seriesButtonLabel || "Sezonlar va qismlar"}</span>
+              <span className="sm:hidden">Qismlar</span>
+            </Link>
+          )}
+        </div>
+      )}
 
       {showPremiumPrompt && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 p-4">
@@ -657,7 +862,7 @@ function HLSPlayer({
       {/* Controls overlay — transparent area passes clicks through to container toggle */}
       <div
         className={`absolute inset-0 flex flex-col justify-end transition-opacity duration-200 ${
-          showControls ? "opacity-100" : "opacity-0 pointer-events-none"
+          showControls && !adActive ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
       >
         {/* Gradient */}
@@ -670,8 +875,53 @@ function HLSPlayer({
           }`}
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Progress bar */}
-          <div className="relative h-1 group/progress">
+          {/* Progress bar with hover preview */}
+          <div
+            ref={progressContainerRef}
+            className="relative h-1.5 group/progress hover:h-2 transition-all"
+            onMouseMove={(e) => {
+              if (adActive) return;
+              const rect = e.currentTarget.getBoundingClientRect();
+              const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+              setHoverX(x);
+              setProgressWidth(rect.width);
+              if (duration > 0) setHoverTime((x / rect.width) * duration);
+            }}
+            onMouseLeave={() => setHoverTime(null)}
+          >
+            {/* Hover preview — thumbnail + time. Positioned above the bar, follows mouse. */}
+            {hoverTime !== null && duration > 0 && !adActive && (() => {
+              const PREVIEW_W = 160;
+              const half = PREVIEW_W / 2;
+              const left = Math.max(half, Math.min(hoverX, progressWidth - half));
+              return (
+                <div
+                  className="pointer-events-none absolute -translate-x-1/2 bottom-full mb-3 flex flex-col items-center"
+                  style={{ left }}
+                >
+                  <div
+                    className="overflow-hidden rounded-md border border-white/15 bg-black shadow-xl"
+                    style={{ width: PREVIEW_W, height: PREVIEW_W * 9 / 16 }}
+                  >
+                    {previewImageUrl || poster ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={previewImageUrl || poster}
+                        alt=""
+                        className="w-full h-full object-cover"
+                        draggable={false}
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-gray-800" />
+                    )}
+                  </div>
+                  <span className="mt-1 rounded bg-black/85 px-2 py-0.5 text-[11px] font-medium text-white tabular-nums">
+                    {formatTime(hoverTime)}
+                  </span>
+                </div>
+              );
+            })()}
+
             {/* base track — full width always visible */}
             <div className="absolute inset-0 bg-white/10 rounded-full" />
             {/* buffered */}
@@ -684,6 +934,13 @@ function HLSPlayer({
               className="absolute top-0 left-0 h-full bg-brand-red rounded-full pointer-events-none"
               style={{ width: duration ? `${Math.min((currentTime / duration) * 100, 100)}%` : "0%" }}
             />
+            {/* hover indicator dot */}
+            {hoverTime !== null && duration > 0 && !adActive && (
+              <div
+                className="pointer-events-none absolute top-1/2 -translate-y-1/2 h-3 w-3 rounded-full bg-white shadow"
+                style={{ left: hoverX - 6 }}
+              />
+            )}
             {/* invisible range input — on top for interaction */}
             <input
               type="range"
@@ -857,6 +1114,11 @@ export default function VideoPlayer({
   forceStart,
   onTimeUpdate,
   onEnded,
+  headerTitle,
+  headerSubtitle,
+  seriesButtonUrl,
+  seriesButtonLabel,
+  previewImageUrl,
 }: Props) {
   const { user } = useAuth();
   const [started, setStarted] = useState(false);
@@ -1000,6 +1262,11 @@ export default function VideoPlayer({
           isPremiumUser={isPremiumViewer}
           onTimeUpdate={onTimeUpdate}
           onEnded={onEnded}
+          headerTitle={headerTitle}
+          headerSubtitle={headerSubtitle}
+          seriesButtonUrl={seriesButtonUrl}
+          seriesButtonLabel={seriesButtonLabel}
+          previewImageUrl={previewImageUrl}
         />
       );
 

@@ -302,6 +302,13 @@ func main() {
 	suggestionService := services.NewSuggestionService(suggestionRepo, userRepo, notificationService)
 	suggestionHandler := handlers.NewSuggestionHandlerWithConfig(suggestionService, cfg)
 
+	// Premium (Telegram Stars) repository + handler
+	premiumPaymentRepo := repositories.NewPremiumPaymentRepository(db)
+	if err := premiumPaymentRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure telegram_stars_payments indexes: %v", err)
+	}
+	premiumHandler := handlers.NewPremiumHandler(userRepo, premiumPaymentRepo)
+
 	// Serve uploaded files in dev mode
 	if cfg.IsDev {
 		r.Static("/uploads", "./uploads")
@@ -314,7 +321,7 @@ func main() {
 	}
 
 	// Register routes
-	routes.Setup(r, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler)
+	routes.Setup(r, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler)
 
 	// Start premium cleanup background job (runs every 10 minutes)
 	go startPremiumCleanupJob(userRepo, notificationService)

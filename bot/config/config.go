@@ -30,6 +30,13 @@ type Config struct {
 	// Telegram. Required because B2 bucket visibility flips broke the older
 	// inferred URLs.
 	CDNBaseURL string
+	// BotInternalToken is the shared secret sent to the backend when granting
+	// premium after a Telegram Stars successful_payment. Must match the backend
+	// BOT_INTERNAL_TOKEN env var. Required for the Stars purchase flow.
+	BotInternalToken string
+	// SiteURL is the public website URL shown to users who haven't linked
+	// their Telegram account yet (so they can log in and try again).
+	SiteURL string
 }
 
 // channelEnvPrefix is the prefix for channel env vars
@@ -64,6 +71,8 @@ func Load() *Config {
 		RequiredChannels:  channels,
 		BackendBaseURL:    getEnv("BACKEND_BASE_URL", "http://localhost:8080"),
 		CDNBaseURL:        cdnBase,
+		BotInternalToken:  getEnv("BOT_INTERNAL_TOKEN", ""),
+		SiteURL:           getEnv("SITE_URL", "https://filmorauz.net"),
 	}
 
 	log.Printf("Bot starting in %s mode", cfg.Mode)

@@ -571,6 +571,29 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
                 forceStart={videoCanStart}
                 onTimeUpdate={handleTimeUpdate}
                 onEnded={handleVideoEnded}
+                headerTitle={
+                  movie.type === "episode" && movie.series_title
+                    ? movie.series_title
+                    : localizedTitle
+                }
+                headerSubtitle={
+                  movie.type === "episode"
+                    ? `${movie.episode_number ? `${movie.episode_number}-qism` : ""}${
+                        localizedTitle && localizedTitle !== movie.series_title
+                          ? ` — ${localizedTitle}`
+                          : ""
+                      }`.trim() || undefined
+                    : undefined
+                }
+                seriesButtonUrl={
+                  movie.type === "episode" && movie.series_slug
+                    ? `/series/${movie.series_slug}`
+                    : undefined
+                }
+                previewImageUrl={normalizeMediaUrl(
+                  movie.backdrop_url || movie.poster_url,
+                  DEFAULT_POSTER_PLACEHOLDER,
+                )}
               />
             ) : (
               <div className="flex aspect-video items-center justify-center rounded-xl bg-gray-900">

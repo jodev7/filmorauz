@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler) {
+func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler) {
 	api := r.Group("/api")
 
 	// Health check
@@ -81,6 +81,13 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 		// Premium purchase via wallet
 		user.POST("/premium/buy", userHandler.BuyPremium)
 	}
+
+	// Public premium package list (Telegram Stars)
+	api.GET("/premium/packages", premiumHandler.GetPackages)
+
+	// Internal: bot calls this after a Telegram Stars successful_payment.
+	// Auth via shared X-Internal-Token header (BOT_INTERNAL_TOKEN env).
+	api.POST("/internal/premium/telegram-stars/grant", premiumHandler.GrantTelegramStars)
 
 	// Watch progress (auth required)
 	watch := api.Group("/watch")

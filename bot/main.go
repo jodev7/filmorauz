@@ -21,6 +21,7 @@ type Bot struct {
 	config              *config.Config
 	subscriptionService *services.SubscriptionService
 	authClient          *services.AuthClient
+	premiumClient       *services.PremiumClient
 	httpClient          *http.Client
 }
 
@@ -84,11 +85,14 @@ func NewBot(cfg *config.Config) (*Bot, error) {
 	// Initialize auth client
 	authClient := services.NewAuthClient(cfg.BackendBaseURL, api)
 
+	premiumClient := services.NewPremiumClient(cfg.BackendBaseURL, cfg.BotInternalToken)
+
 	return &Bot{
 		api:                 api,
 		config:              cfg,
 		subscriptionService: subService,
 		authClient:          authClient,
+		premiumClient:       premiumClient,
 		httpClient:          &http.Client{Timeout: 10 * time.Second},
 	}, nil
 }
@@ -101,7 +105,15 @@ func (b *Bot) startPolling() {
 	updates := b.api.GetUpdatesChan(u)
 
 	for update := range updates {
+		if update.PreCheckoutQuery != nil {
+			b.handlePreCheckout(update.PreCheckoutQuery)
+			continue
+		}
 		if update.Message != nil {
+			if update.Message.SuccessfulPayment != nil {
+				b.handleSuccessfulPayment(update.Message)
+				continue
+			}
 			b.handleMessage(update.Message)
 		} else if update.CallbackQuery != nil {
 			b.handleCallback(update.CallbackQuery)
@@ -139,6 +151,13 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 		if authCode := b.parseLoginCode(msg.Text); authCode != "" {
 			log.Printf("Detected login deep link with code: %s", authCode)
 			b.handleLogin(chatID, userID, msg.From, authCode)
+			return
+		}
+
+		// Check for premium deep link: /start premium_<package>
+		if pkgID := b.parsePremiumStart(msg.Text); pkgID != "" {
+			log.Printf("Detected premium deep link: package=%s", pkgID)
+			b.handlePremiumStart(chatID, userID, msg.From, pkgID)
 			return
 		}
 
@@ -767,4 +786,161 @@ func (b *Bot) sendMessage(chatID int64, text string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ParseMode = "HTML" // HTML mode supports <a href="url">text</a> inline links
 	b.api.Send(msg)
+}
+
+// parsePremiumStart returns the package id from a "/start premium_<id>" command,
+// or "" if the message is not a premium deep link.
+func (b *Bot) parsePremiumStart(text string) string {
+	clean := strings.ToLower(strings.TrimSpace(text))
+	if idx := strings.Index(clean, "@"); idx != -1 {
+		// strip bot mention before the space, e.g. "/start@bot premium_1m"
+		space := strings.Index(clean, " ")
+		if space != -1 && space > idx {
+			clean = clean[:idx] + clean[space:]
+		}
+	}
+	const prefix = "/start premium_"
+	if !strings.HasPrefix(clean, prefix) {
+		return ""
+	}
+	id := strings.TrimSpace(strings.TrimPrefix(clean, prefix))
+	if _, ok := services.PremiumPackageByID(id); !ok {
+		return ""
+	}
+	return id
+}
+
+// handlePremiumStart shows the package details and sends a Telegram Stars invoice.
+func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User, packageID string) {
+	// Best-effort upsert so the backend has a user record to link the payment to.
+	go func() {
+		if err := b.authClient.RegisterBotUser(chatID, from); err != nil {
+			log.Printf("[PREMIUM] RegisterBotUser failed telegram_id=%d: %v", from.ID, err)
+		}
+	}()
+
+	pkg, ok := services.PremiumPackageByID(packageID)
+	if !ok {
+		b.sendMessage(chatID, "❌ Noto'g'ri paket.")
+		return
+	}
+
+	intro := fmt.Sprintf(
+		"⭐ <b>FilmoraUz Premium — %s</b>\n\nNarx: <b>%d Stars</b>\nMuddat: <b>%d oy</b>\n\nTo'lovni amalga oshirish uchun pastdagi tugmani bosing.",
+		pkg.Label, pkg.StarsPrice, pkg.DurationMonths,
+	)
+	b.sendMessage(chatID, intro)
+
+	// Telegram Stars: empty provider token + currency "XTR".
+	payload := fmt.Sprintf("premium:%d:%s", userID, pkg.ID)
+	prices := []tgbotapi.LabeledPrice{
+		{Label: "Premium " + pkg.Label, Amount: pkg.StarsPrice},
+	}
+	invoice := tgbotapi.NewInvoice(
+		chatID,
+		"FilmoraUz Premium "+pkg.Label,
+		fmt.Sprintf("Premium obuna — %d oy. Reklamasiz tomosha, 1080p, premium kontent.", pkg.DurationMonths),
+		payload,
+		"",  // empty provider token = Telegram Stars
+		pkg.ID,
+		"XTR",
+		prices,
+	)
+	if _, err := b.api.Send(invoice); err != nil {
+		log.Printf("[PREMIUM] Failed to send invoice user=%d: %v", userID, err)
+		b.sendMessage(chatID, "❌ Invoice yuborishda xatolik. Keyinroq qayta urinib ko'ring.")
+	}
+}
+
+// handlePreCheckout approves all incoming pre-checkout queries.
+// Telegram Stars payloads we issue are validated again on successful_payment;
+// rejecting at pre-checkout based on user state would block legitimate payers,
+// so we accept and verify the payload server-side after charge.
+func (b *Bot) handlePreCheckout(q *tgbotapi.PreCheckoutQuery) {
+	log.Printf("[PREMIUM] PreCheckout id=%s payload=%s currency=%s amount=%d",
+		q.ID, q.InvoicePayload, q.Currency, q.TotalAmount)
+	cfg := tgbotapi.PreCheckoutConfig{
+		PreCheckoutQueryID: q.ID,
+		OK:                 true,
+	}
+	if _, err := b.api.Request(cfg); err != nil {
+		log.Printf("[PREMIUM] PreCheckout answer failed: %v", err)
+	}
+}
+
+// handleSuccessfulPayment grants premium server-side after a Telegram Stars charge.
+// We trust only the SuccessfulPayment event; the deep link alone never grants premium.
+func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
+	sp := msg.SuccessfulPayment
+	if sp == nil || msg.From == nil {
+		return
+	}
+	chatID := msg.Chat.ID
+	userID := msg.From.ID
+
+	log.Printf("[PREMIUM] SuccessfulPayment user=%d currency=%s amount=%d charge=%s payload=%s",
+		userID, sp.Currency, sp.TotalAmount, sp.TelegramPaymentChargeID, sp.InvoicePayload)
+
+	// Validate payload: premium:<telegramID>:<package>
+	parts := strings.Split(sp.InvoicePayload, ":")
+	if len(parts) != 3 || parts[0] != "premium" {
+		log.Printf("[PREMIUM] Invalid payload format: %q", sp.InvoicePayload)
+		b.sendMessage(chatID, "⚠️ To'lov qabul qilindi, lekin paketni aniqlab bo'lmadi. Admin bilan bog'laning.")
+		return
+	}
+	pkg, ok := services.PremiumPackageByID(parts[2])
+	if !ok {
+		log.Printf("[PREMIUM] Unknown package in payload: %s", parts[2])
+		b.sendMessage(chatID, "⚠️ To'lov qabul qilindi, lekin paket noma'lum. Admin bilan bog'laning.")
+		return
+	}
+	if sp.Currency != "XTR" {
+		log.Printf("[PREMIUM] Unexpected currency: %s", sp.Currency)
+		// Still attempt grant — backend is the source of truth — but log loudly.
+	}
+
+	if b.config.BotInternalToken == "" {
+		log.Printf("[PREMIUM] BOT_INTERNAL_TOKEN not configured; cannot grant premium")
+		b.sendMessage(chatID, "⚠️ To'lov qabul qilindi, lekin server sozlamasi noto'g'ri. Admin bilan bog'laning.")
+		return
+	}
+
+	resp, status, err := b.premiumClient.GrantTelegramStars(services.GrantStarsRequest{
+		TelegramID:              userID,
+		Package:                 pkg.ID,
+		StarsAmount:             sp.TotalAmount,
+		TelegramPaymentChargeID: sp.TelegramPaymentChargeID,
+		ProviderPaymentChargeID: sp.ProviderPaymentChargeID,
+	})
+	if err != nil {
+		log.Printf("[PREMIUM] Grant failed user=%d: %v", userID, err)
+		b.sendMessage(chatID, "⚠️ To'lov qabul qilindi, lekin server bilan bog'lanishda xatolik. Iltimos, qayta urinib ko'ring yoki admin bilan bog'laning.")
+		return
+	}
+	if status == http.StatusNotFound || (resp != nil && resp.Error == "user_not_linked") {
+		b.sendMessage(chatID, fmt.Sprintf(
+			"⚠️ Premium olish uchun avval FilmoraUz profilingizni Telegram bilan bog'lang.\n\nSayt: %s\n\nLogin qilgandan so'ng administratorga to'lov chekini yuboring — premium qo'lda faollashtiriladi.",
+			b.config.SiteURL,
+		))
+		return
+	}
+	if status != http.StatusOK || (resp != nil && !resp.OK) {
+		errMsg := ""
+		if resp != nil {
+			errMsg = resp.Error
+		}
+		log.Printf("[PREMIUM] Grant non-OK status=%d err=%s", status, errMsg)
+		b.sendMessage(chatID, "⚠️ To'lov qabul qilindi, lekin premium faollashtirishda xatolik. Admin bilan bog'laning.")
+		return
+	}
+
+	if resp != nil && resp.AlreadyProcessed {
+		log.Printf("[PREMIUM] Duplicate charge ignored: %s", sp.TelegramPaymentChargeID)
+		return
+	}
+
+	b.sendMessage(chatID, fmt.Sprintf(
+		"Premium faollashtirildi ✅\n\nPaket: <b>%s</b>\nMuddat: <b>%d oy</b>\n\nFilmorauz.net da Premium afzalliklaridan foydalanishingiz mumkin.",
+		pkg.Label, pkg.DurationMonths,
+	))
 }
