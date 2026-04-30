@@ -14,6 +14,8 @@ import {
   ChevronDown,
   Crown,
   Lock,
+  RotateCcw,
+  RotateCw,
 } from "lucide-react";
 import Hls from "hls.js";
 import { VideoSourceType } from "@/lib/api";
@@ -197,6 +199,14 @@ function IframePlayer({ src, title }: { src: string; title: string }) {
 // ─── Custom HLS Player ────────────────────────────────────────────────────────
 
 const SPEEDS = [0.5, 1, 1.25, 1.5, 2];
+const SEEK_STEPS = [5, 10, 15, 30];
+const SEEK_STEP_STORAGE_KEY = "filmorauz:player:seekStep";
+
+function loadSeekStep(): number {
+  if (typeof window === "undefined") return 10;
+  const v = Number(window.localStorage.getItem(SEEK_STEP_STORAGE_KEY));
+  return SEEK_STEPS.includes(v) ? v : 10;
+}
 
 interface QualityLevel {
   index: number; // hls.js level index, -1 = Auto
@@ -251,6 +261,29 @@ function HLSPlayer({
   const [showQualityMenu, setShowQualityMenu] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [showPremiumPrompt, setShowPremiumPrompt] = useState(false);
+  const [seekStep, setSeekStep] = useState(10);
+  const [showSeekStepMenu, setShowSeekStepMenu] = useState(false);
+
+  useEffect(() => {
+    setSeekStep(loadSeekStep());
+  }, []);
+
+  const seekBy = useCallback((delta: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const dur = video.duration;
+    const next = video.currentTime + delta;
+    const clamped = Math.max(0, isFinite(dur) && dur > 0 ? Math.min(next, dur) : next);
+    video.currentTime = clamped;
+  }, []);
+
+  const handleSeekStepChange = useCallback((step: number) => {
+    setSeekStep(step);
+    setShowSeekStepMenu(false);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(SEEK_STEP_STORAGE_KEY, String(step));
+    }
+  }, []);
 
   // future preroll hook — insert ad logic here before play starts
   // future midroll hook — check currentTime intervals for mid-roll triggers
@@ -411,10 +444,9 @@ function HLSPlayer({
     }
   }, [selectedSpeed]);
 
-  // Space key: toggle play/pause — ignore when focus is on a text input
+  // Keyboard: space (play/pause), ArrowLeft/ArrowRight (seek)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code !== "Space") return;
       const target = e.target as HTMLElement;
       if (
         target.tagName === "INPUT" ||
@@ -422,15 +454,25 @@ function HLSPlayer({
         target.tagName === "SELECT" ||
         target.isContentEditable
       ) return;
-      e.preventDefault();
       const video = videoRef.current;
       if (!video) return;
-      if (video.paused) video.play();
-      else video.pause();
+      if (e.code === "Space") {
+        e.preventDefault();
+        if (video.paused) video.play();
+        else video.pause();
+      } else if (e.code === "ArrowRight") {
+        e.preventDefault();
+        seekBy(seekStep);
+        resetControlsTimer();
+      } else if (e.code === "ArrowLeft") {
+        e.preventDefault();
+        seekBy(-seekStep);
+        resetControlsTimer();
+      }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [seekStep, seekBy, resetControlsTimer]);
 
   // Video event listeners
   useEffect(() => {
@@ -661,6 +703,28 @@ function HLSPlayer({
               {playing ? <Pause size={20} fill="white" /> : <Play size={20} fill="white" />}
             </button>
 
+            {/* Rewind */}
+            <button
+              onClick={() => { seekBy(-seekStep); resetControlsTimer(); }}
+              className="flex items-center gap-0.5 text-white hover:text-brand-red transition-colors"
+              aria-label={`Rewind ${seekStep} seconds`}
+              title={`Rewind ${seekStep}s`}
+            >
+              <RotateCcw size={18} />
+              <span className="text-[10px] tabular-nums">{seekStep}s</span>
+            </button>
+
+            {/* Forward */}
+            <button
+              onClick={() => { seekBy(seekStep); resetControlsTimer(); }}
+              className="flex items-center gap-0.5 text-white hover:text-brand-red transition-colors"
+              aria-label={`Forward ${seekStep} seconds`}
+              title={`Forward ${seekStep}s`}
+            >
+              <span className="text-[10px] tabular-nums">{seekStep}s</span>
+              <RotateCw size={18} />
+            </button>
+
             {/* Volume */}
             <div className="flex items-center gap-1.5">
               <button onClick={toggleMute} className="text-white hover:text-brand-red transition-colors">
@@ -687,10 +751,38 @@ function HLSPlayer({
 
             <div className="flex-1" />
 
+            {/* Seek step selector */}
+            <div className="relative">
+              <button
+                onClick={() => { setShowSeekStepMenu((v) => !v); setShowSpeedMenu(false); setShowQualityMenu(false); }}
+                className="flex items-center gap-1 text-white text-xs hover:text-brand-red transition-colors"
+                title="Seek step"
+              >
+                <RotateCw size={14} />
+                {seekStep}s
+                <ChevronDown size={12} />
+              </button>
+              {showSeekStepMenu && (
+                <div className="absolute bottom-full right-0 mb-2 bg-black/90 border border-white/10 rounded-lg overflow-hidden text-xs min-w-[80px]">
+                  {SEEK_STEPS.map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => handleSeekStepChange(s)}
+                      className={`block w-full px-3 py-1.5 text-left hover:bg-white/10 transition-colors ${
+                        s === seekStep ? "text-brand-red font-semibold" : "text-white"
+                      }`}
+                    >
+                      {s}s
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {/* Speed selector */}
             <div className="relative">
               <button
-                onClick={() => { setShowSpeedMenu((v) => !v); setShowQualityMenu(false); }}
+                onClick={() => { setShowSpeedMenu((v) => !v); setShowQualityMenu(false); setShowSeekStepMenu(false); }}
                 className="flex items-center gap-1 text-white text-xs hover:text-brand-red transition-colors"
               >
                 <Settings size={14} />
@@ -718,7 +810,7 @@ function HLSPlayer({
             {qualities.length > 1 && (
               <div className="relative">
                 <button
-                  onClick={() => { setShowQualityMenu((v) => !v); setShowSpeedMenu(false); }}
+                  onClick={() => { setShowQualityMenu((v) => !v); setShowSpeedMenu(false); setShowSeekStepMenu(false); }}
                   className="flex items-center gap-1 text-white text-xs hover:text-brand-red transition-colors"
                 >
                   {qualityLabel}
