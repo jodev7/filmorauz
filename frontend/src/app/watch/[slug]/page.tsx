@@ -9,18 +9,23 @@ interface PageProps {
   params: { slug: string };
 }
 
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
+
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = params;
-  
+
   try {
     const movie = await getMovie(slug);
     return {
-      title: `${movie.title} — FILMORAUZ`,
+      title: `${movie.title} — Tomosha qilish | FILMORAUZ`,
       description: movie.description,
+      alternates: { canonical: `${SITE_URL}/movies/${slug}` },
+      robots: { index: false, follow: true },
     };
   } catch {
     return {
       title: "Film topilmadi — FILMORAUZ",
+      robots: { index: false, follow: false },
     };
   }
 }

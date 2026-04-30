@@ -9,13 +9,33 @@ import { localizeSingleGenre } from "@/lib/localization";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 
-export async function generateMetadata(): Promise<Metadata> {
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams?: { genre?: string };
+}): Promise<Metadata> {
+  const genre = searchParams?.genre?.trim();
+  if (genre) {
+    const cap = localizeSingleGenre(genre);
+    const title = `${cap} seriallar o'zbek tilida | FilmoraUz`;
+    const description = `${cap} janridagi seriallarni o'zbek tilida HD sifatda FilmoraUz'da tomosha qiling.`;
+    const canonical = `${SITE_URL}/series?genre=${encodeURIComponent(genre)}`;
+    return {
+      title,
+      description,
+      openGraph: { title, description, url: canonical, siteName: "FILMORAUZ", type: "website", locale: "uz_UZ" },
+      twitter: { card: "summary", title, description },
+      alternates: { canonical },
+    };
+  }
+  const title = "Seriallar o'zbek tilida | FilmoraUz";
+  const description = "FilmoraUz'da barcha seriallarni o'zbek tilida HD sifatda tomosha qiling.";
   return {
-    title: "Seriallar — FILMORAUZ",
-    description: "FILMORAUZ'da barcha seriallarni ko'ring.",
-    alternates: {
-      canonical: `${SITE_URL}/series`,
-    },
+    title,
+    description,
+    openGraph: { title, description, url: `${SITE_URL}/series`, siteName: "FILMORAUZ", type: "website", locale: "uz_UZ" },
+    twitter: { card: "summary", title, description },
+    alternates: { canonical: `${SITE_URL}/series` },
   };
 }
 

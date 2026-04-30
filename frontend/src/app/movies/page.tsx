@@ -14,26 +14,34 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 
-export async function generateMetadata(): Promise<Metadata> {
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams?: { genre?: string };
+}): Promise<Metadata> {
+  const genre = searchParams?.genre?.trim();
+  if (genre) {
+    const localized = localizeSingleGenre(genre);
+    const cap = localized.charAt(0).toUpperCase() + localized.slice(1);
+    const title = `${cap} kinolar o'zbek tilida | FilmoraUz`;
+    const description = `${cap} janridagi kinolar va seriallarni o'zbek tilida HD sifatda tomosha qiling.`;
+    const canonical = `${SITE_URL}/movies?genre=${encodeURIComponent(genre)}`;
+    return {
+      title,
+      description,
+      openGraph: { title, description, url: canonical, siteName: "FILMORAUZ", type: "website", locale: "uz_UZ" },
+      twitter: { card: "summary", title, description },
+      alternates: { canonical },
+    };
+  }
+  const title = "Barcha kinolar o'zbek tilida | FilmoraUz";
+  const description = "FilmoraUz'da barcha kinolarni o'zbek tilida HD sifatda ko'ring. Janr bo'yicha filtr qiling, nom bo'yicha qidiring.";
   return {
-    title: "Barcha Filmlar — FILMORAUZ",
-    description: "FILMORAUZ'da barcha filmlarni ko'ring. Janr bo'yicha filtr qiling, nom bo'yicha qidiring.",
-    openGraph: {
-      title: "Barcha Filmlar",
-      description: "FILMORAUZ'da barcha filmlarni ko'ring. Janr bo'yicha filtr qiling, nom bo'yicha qidiring.",
-      url: `${SITE_URL}/movies`,
-      siteName: "FILMORAUZ",
-      type: "website",
-      locale: "uz_UZ",
-    },
-    twitter: {
-      card: "summary",
-      title: "Barcha Filmlar",
-      description: "FILMORAUZ'da barcha filmlarni ko'ring. Janr bo'yicha filtr qiling, nom bo'yicha qidiring.",
-    },
-    alternates: {
-      canonical: `${SITE_URL}/movies`,
-    },
+    title,
+    description,
+    openGraph: { title, description, url: `${SITE_URL}/movies`, siteName: "FILMORAUZ", type: "website", locale: "uz_UZ" },
+    twitter: { card: "summary", title, description },
+    alternates: { canonical: `${SITE_URL}/movies` },
   };
 }
 

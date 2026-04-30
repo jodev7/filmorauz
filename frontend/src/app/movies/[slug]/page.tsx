@@ -49,16 +49,18 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     const localizedDescription = getLocalizedDescription(movie);
     const localizedGenres = getLocalizedGenres(movie);
     
-    const description = `${localizedTitle} (${movie.year}) - FILMORAUZ'da onlayn tomosha qiling. ${localizedDescription?.slice(0, 120) || "Eng yaxshi filmlar bepul"}.`;
+    const genresStr = localizedGenres.length > 0 ? localizedGenres.join(", ") : "kino";
+    const seoTitle = `${localizedTitle} (${movie.year}) o'zbek tilida HD tomosha qilish | FilmoraUz`;
+    const description = `${localizedTitle} ${movie.year} o'zbek tilida HD sifatda tomosha qiling. Janr: ${genresStr}. FilmoraUz'da online kino.${localizedDescription ? " " + localizedDescription.slice(0, 100) : ""}`;
 
     return {
-      title: `${localizedTitle} (${movie.year}) — FILMORAUZ`,
+      title: seoTitle,
       description: description,
-      keywords: [localizedTitle, movie.year?.toString(), ...localizedGenres, "film", "tomosha", "kino"],
+      keywords: [localizedTitle, movie.year?.toString(), ...localizedGenres, "film", "tomosha", "kino", "o'zbek tilida", "HD"],
       authors: [{ name: "FILMORAUZ" }],
       publisher: "FILMORAUZ",
       openGraph: {
-        title: `${localizedTitle} (${movie.year})`,
+        title: seoTitle,
         description: description,
         url: canonicalUrl,
         siteName: "FILMORAUZ",
@@ -75,7 +77,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       },
       twitter: {
         card: "summary_large_image",
-        title: `${localizedTitle} (${movie.year})`,
+        title: seoTitle,
         description: description,
         images: [imageUrl],
       },
@@ -153,7 +155,7 @@ export default async function MovieDetailPage({ params }: Props) {
   };
 
   // JSON-LD structured data for SEO - Movie
-  const movieJsonLd = {
+  const movieJsonLd: Record<string, any> = {
     "@context": "https://schema.org",
     "@type": "Movie",
     name: localizedTitle,
@@ -170,6 +172,15 @@ export default async function MovieDetailPage({ params }: Props) {
       target: `${SITE_URL}/watch/${slug}`,
     },
   };
+  if (movie.rating_count && movie.rating_count > 0 && movie.rating_avg) {
+    movieJsonLd.aggregateRating = {
+      "@type": "AggregateRating",
+      ratingValue: movie.rating_avg,
+      ratingCount: movie.rating_count,
+      bestRating: 5,
+      worstRating: 1,
+    };
+  }
 
   return (
     <>

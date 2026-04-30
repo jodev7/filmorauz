@@ -21,11 +21,11 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 
 export async function generateMetadata(): Promise<Metadata> {
   return {
-    title: "FILMORAUZ — Onlayn Kino",
-    description: "FILMORAUZ — O'zbekistondagi eng yaxshi onlayn kinoteatr. Yangi filmlar, klassika va mashhur filmlarni bepul tomosha qiling.",
+    title: "FilmoraUz — Kinolar va seriallar o'zbek tilida",
+    description: "FilmoraUz'da kinolar va seriallarni o'zbek tilida HD sifatda tomosha qiling.",
     openGraph: {
-      title: "FILMORAUZ — Onlayn Kino",
-      description: "FILMORAUZ — O'zbekistondagi eng yaxshi onlayn kinoteatr. Yangi filmlar, klassika va mashhur filmlarni bepul tomosha qiling.",
+      title: "FilmoraUz — Kinolar va seriallar o'zbek tilida",
+      description: "FilmoraUz'da kinolar va seriallarni o'zbek tilida HD sifatda tomosha qiling.",
       url: SITE_URL,
       siteName: "FILMORAUZ",
       type: "website",
@@ -41,8 +41,8 @@ export async function generateMetadata(): Promise<Metadata> {
     },
     twitter: {
       card: "summary_large_image",
-      title: "FILMORAUZ — Onlayn Kino",
-      description: "FILMORAUZ — O'zbekistondagi eng yaxshi onlayn kinoteatr. Yangi filmlar, klassika va mashhur filmlarni bepul tomosha qiling.",
+      title: "FilmoraUz — Kinolar va seriallar o'zbek tilida",
+      description: "FilmoraUz'da kinolar va seriallarni o'zbek tilida HD sifatda tomosha qiling.",
       images: [`${SITE_URL}/og-image.jpg`],
     },
     alternates: {

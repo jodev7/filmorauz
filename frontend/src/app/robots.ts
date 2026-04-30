@@ -3,36 +3,24 @@ import { MetadataRoute } from "next";
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 
 export default function robots(): MetadataRoute.Robots {
-  // Pages that should NOT be indexed
   const disallowPaths = [
     "/admin",
-    "/user",
-    "/watch",
     "/api",
+    "/user",
+    "/profile",
+    "/login",
+    "/premium",
+    "/watch",
     "/uploads",
-    "/favorites",
-    "/history",
+    "/notifications",
+    "/banned",
   ];
 
   return {
     rules: [
-      {
-        userAgent: "*",
-        allow: "/",
-        disallow: disallowPaths,
-      },
-      {
-        // Specific rules for Googlebot to ensure proper indexing
-        userAgent: "Googlebot",
-        allow: "/",
-        disallow: disallowPaths,
-      },
-      {
-        // Yandex bot
-        userAgent: "Yandex",
-        allow: "/",
-        disallow: disallowPaths,
-      },
+      { userAgent: "*", allow: "/", disallow: disallowPaths },
+      { userAgent: "Googlebot", allow: "/", disallow: disallowPaths },
+      { userAgent: "Yandex", allow: "/", disallow: disallowPaths },
     ],
     sitemap: `${SITE_URL}/sitemap.xml`,
     host: SITE_URL,

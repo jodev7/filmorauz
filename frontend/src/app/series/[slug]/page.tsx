@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import dynamicImport from "next/dynamic";
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import Script from "next/script";
 import { ChevronLeft, Calendar, Globe, Play } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
@@ -23,19 +24,41 @@ interface Props {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = params;
-  
+  const canonicalUrl = `${SITE_URL}/series/${slug}`;
+
   try {
-    const series = await getSeriesBySlug(slug);
+    const data = await getSeriesBySlug(slug);
+    const s = data.series;
+    const title = `${s.title} serial barcha qismlar o'zbek tilida | FilmoraUz`;
+    const description = `${s.title} serialini barcha qismlari o'zbek tilida HD sifatda FilmoraUz'da tomosha qiling.${s.description ? " " + s.description.slice(0, 100) : ""}`;
+    const imageUrl = normalizeMediaUrl(s.backdrop_url || s.poster_url, `${SITE_URL}/og-image.jpg`);
+
     return {
-      title: `${series.series.title} — FILMORAUZ`,
-      description: series.series.description,
-      alternates: {
-        canonical: `${SITE_URL}/series/${slug}`,
+      title,
+      description,
+      keywords: [s.title, "serial", "o'zbek tilida", "HD", ...(s.genre || [])],
+      openGraph: {
+        title,
+        description,
+        url: canonicalUrl,
+        siteName: "FILMORAUZ",
+        type: "video.tv_show",
+        locale: "uz_UZ",
+        images: [{ url: imageUrl, width: 1200, height: 630, alt: s.title }],
       },
+      twitter: {
+        card: "summary_large_image",
+        title,
+        description,
+        images: [imageUrl],
+      },
+      alternates: { canonical: canonicalUrl },
+      robots: { index: true, follow: true },
     };
   } catch {
     return {
-      title: "Serial Not Found — FILMORAUZ",
+      title: "Serial topilmadi — FILMORAUZ",
+      robots: { index: false, follow: false },
     };
   }
 }
@@ -61,8 +84,50 @@ export default async function SeriesDetailPage({ params }: Props) {
 
   const { series, seasons } = seriesData;
 
+  const seriesJsonLd: Record<string, any> = {
+    "@context": "https://schema.org",
+    "@type": "TVSeries",
+    name: series.title,
+    description: series.description,
+    image: normalizeMediaUrl(series.poster_url || series.backdrop_url, `${SITE_URL}/og-image.jpg`),
+    genre: series.genre || [],
+    url: `${SITE_URL}/series/${slug}`,
+    datePublished: series.year?.toString(),
+    countryOfOrigin: series.country,
+    numberOfSeasons: seasons?.length || undefined,
+  };
+  if (series.rating_count && series.rating_count > 0 && series.rating_avg) {
+    seriesJsonLd.aggregateRating = {
+      "@type": "AggregateRating",
+      ratingValue: series.rating_avg,
+      ratingCount: series.rating_count,
+      bestRating: 5,
+      worstRating: 1,
+    };
+  }
+
+  const breadcrumbJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", position: 1, name: "Bosh sahifa", item: SITE_URL },
+      { "@type": "ListItem", position: 2, name: "Seriallar", item: `${SITE_URL}/series` },
+      { "@type": "ListItem", position: 3, name: series.title, item: `${SITE_URL}/series/${slug}` },
+    ],
+  };
+
   return (
     <>
+      <Script
+        id="series-schema"
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(seriesJsonLd) }}
+      />
+      <Script
+        id="series-breadcrumb-schema"
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
+      />
       <Navbar />
       <main className="min-h-screen">
         {/* Backdrop hero */}
