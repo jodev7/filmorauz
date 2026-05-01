@@ -28,6 +28,7 @@ export type VideoSourceType =
 export interface Movie {
   id: string;
   _id?: string;
+  record_id?: string;
   code: string;
   title: string;
   description: string;
@@ -56,9 +57,16 @@ export interface Movie {
   approved_at?: string | null;
   approved_by?: string;
   type?: "movie" | "episode";
+  target_type?: "movie" | "episode" | "series";
+  target_id?: string;
+  episode_id?: string;
+  series_id?: string;
+  season_id?: string;
+  season_number?: number;
   series_slug?: string;
   series_title?: string;
   episode_number?: number;
+  episode_title?: string;
   premium_stream_url?: string;
   master_playlist_url?: string;
   thumbnails_base_url?: string;
@@ -743,12 +751,14 @@ export async function updatePrivacySettings(token: string, privacy: PrivacySetti
 
 export interface WatchHistoryItem {
   id: string;
+  record_id?: string;
   movie_id?: string;
   target_type: "movie" | "episode" | "series";
   target_id: string;
   series_id?: string;
   season_id?: string;
   episode_id?: string;
+  season_number?: number;
   watched_at: string;
   last_position_sec?: number;
   duration_sec?: number;
@@ -766,15 +776,19 @@ export interface WatchHistoryItem {
   series_title?: string;
   series_slug?: string;
   episode_number?: number;
+  episode_title?: string;
 }
 
 export interface FavoriteItem {
   id: string;
+  record_id?: string;
   movie_id?: string;
   target_type: "movie" | "episode" | "series";
   target_id: string;
   series_id?: string;
   season_id?: string;
+  episode_id?: string;
+  season_number?: number;
   created_at: string;
   title: string;
   poster_url: string;
@@ -788,6 +802,7 @@ export interface FavoriteItem {
   series_title?: string;
   series_slug?: string;
   episode_number?: number;
+  episode_title?: string;
 }
 
 interface TargetOptions {

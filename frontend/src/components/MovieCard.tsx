@@ -40,11 +40,19 @@ function MovieCardImpl({ movie, priority = false, showSkeleton = true }: Props) 
   const localizedTitle = getLocalizedTitle(movie);
   const localizedGenres = getLocalizedGenres(movie);
   const isEpisode = movie.type === "episode";
-  const href = isEpisode ? `/episode/${movie.id}` : `/movies/${movie.slug}`;
+  const episodeLinkId = movie.episode_id || movie.target_id || movie.id;
+  const href = isEpisode ? `/episode/${episodeLinkId}` : `/movies/${movie.slug}`;
   const cardTitle = isEpisode && movie.series_title ? movie.series_title : localizedTitle;
+  const episodeLabel = movie.season_number && movie.episode_number
+    ? `S${String(movie.season_number).padStart(2, "0")}E${String(movie.episode_number).padStart(2, "0")}`
+    : movie.episode_number
+    ? `${movie.episode_number}-qism`
+    : "Epizod";
   const episodeSubtitle = isEpisode
-    ? `${movie.episode_number ? `${movie.episode_number}-qism` : "Epizod"}${
-        localizedTitle && movie.series_title && localizedTitle !== movie.series_title ? ` • ${localizedTitle}` : ""
+    ? `${episodeLabel}${
+        (movie.episode_title || localizedTitle) && movie.series_title && (movie.episode_title || localizedTitle) !== movie.series_title
+          ? ` • ${movie.episode_title || localizedTitle}`
+          : ""
       }`
     : "";
 

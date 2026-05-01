@@ -47,6 +47,49 @@ type MovieInfo struct {
 	Duration    int      `json:"duration"`
 }
 
+func mustMarshalJSON(v interface{}) string {
+	if v == nil {
+		return "null"
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("marshal_error=%v value=%#v", err, v)
+	}
+	return string(raw)
+}
+
+type minimalStarsInvoiceConfig struct {
+	tgbotapi.BaseChat
+	Title         string
+	Description   string
+	Payload       string
+	ProviderToken string
+	Currency      string
+	Prices        []tgbotapi.LabeledPrice
+}
+
+func (config minimalStarsInvoiceConfig) params() (tgbotapi.Params, error) {
+	params := make(tgbotapi.Params)
+	if err := params.AddFirstValid("chat_id", config.BaseChat.ChatID, config.BaseChat.ChannelUsername); err != nil {
+		return params, err
+	}
+	params.AddNonZero("reply_to_message_id", config.BaseChat.ReplyToMessageID)
+	params.AddBool("disable_notification", config.BaseChat.DisableNotification)
+	params.AddBool("allow_sending_without_reply", config.BaseChat.AllowSendingWithoutReply)
+	if err := params.AddInterface("reply_markup", config.BaseChat.ReplyMarkup); err != nil {
+		return params, err
+	}
+	params["title"] = config.Title
+	params["description"] = config.Description
+	params["payload"] = config.Payload
+	params["provider_token"] = config.ProviderToken
+	params["currency"] = config.Currency
+	if err := params.AddInterface("prices", config.Prices); err != nil {
+		return params, err
+	}
+	return params, nil
+}
+
 func main() {
 	cfg := config.Load()
 
@@ -843,22 +886,31 @@ func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User
 	payload := fmt.Sprintf("premium:%d:%s", userID, pkg.ID)
 	amount := pkg.StarsPrice
 	prices := []tgbotapi.LabeledPrice{
-		{Label: "Premium " + pkg.Label, Amount: amount},
+		{Label: "FilmoraUz Premium " + pkg.Label, Amount: amount},
 	}
-	invoice := tgbotapi.NewInvoice(
-		chatID,
-		"FilmoraUz Premium "+pkg.Label,
-		fmt.Sprintf("Premium obuna — %d oy. Reklamasiz tomosha, 1080p, premium kontent.", pkg.DurationMonths),
-		payload,
-		"", // empty provider token = Telegram Stars
-		"", // minimal Stars invoice: no start parameter
-		"XTR",
-		prices,
-	)
+	invoice := minimalStarsInvoiceConfig{
+		BaseChat: tgbotapi.BaseChat{ChatID: chatID},
+		Title:    "FilmoraUz Premium " + pkg.Label,
+		Description: fmt.Sprintf(
+			"Premium obuna — %d oy. Reklamasiz tomosha, 1080p, premium kontent.",
+			pkg.DurationMonths,
+		),
+		Payload:       payload,
+		ProviderToken: "",
+		Currency:      "XTR",
+		Prices:        prices,
+	}
+	params, paramsErr := invoice.params()
+	if paramsErr != nil {
+		log.Printf("[PREMIUM] sendInvoice params build failed user=%d pkg=%s err=%v", userID, pkg.ID, paramsErr)
+		b.sendMessage(chatID, "❌ Invoice yuborishda xatolik. Keyinroq qayta urinib ko'ring.")
+		return
+	}
+	requestJSON, _ := json.Marshal(params)
 	pricesJSON, _ := json.Marshal(prices)
-	log.Printf("[PREMIUM] sendInvoice user=%d pkg=%s payload=%q currency=%q provider_token=%q start_parameter=%q prices=%s prices_amount=%d stars=%d",
-		userID, pkg.ID, payload, invoice.Currency, invoice.ProviderToken, invoice.StartParameter, string(pricesJSON), amount, pkg.StarsPrice)
-	resp, err := b.api.Request(invoice)
+	log.Printf("[PREMIUM] sendInvoice user=%d pkg=%s payload=%q currency=%q provider_token=%q prices=%s prices_amount=%d stars=%d request_json=%s",
+		userID, pkg.ID, payload, invoice.Currency, invoice.ProviderToken, string(pricesJSON), amount, pkg.StarsPrice, string(requestJSON))
+	resp, err := b.api.MakeRequest("sendInvoice", params)
 	if err != nil {
 		responseBody := "null"
 		if resp != nil {
@@ -870,16 +922,18 @@ func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User
 		}
 
 		if apiErr, ok := err.(*tgbotapi.Error); ok {
-			log.Printf("[PREMIUM] sendInvoice FAILED user=%d pkg=%s payload=%q currency=%q prices_amount=%d code=%d description=%q response_body=%s response_parameters=%+v api_error=%#v",
-				userID, pkg.ID, payload, invoice.Currency, amount, apiErr.Code, apiErr.Message, responseBody, apiErr.ResponseParameters, apiErr)
+			log.Printf("[PREMIUM] sendInvoice FAILED user=%d pkg=%s payload=%q currency=%q prices_amount=%d code=%d description=%q request_json=%s response_body=%s response_parameters=%+v api_error=%#v",
+				userID, pkg.ID, payload, invoice.Currency, amount, apiErr.Code, apiErr.Message, string(requestJSON), responseBody, apiErr.ResponseParameters, apiErr)
 		} else {
-			log.Printf("[PREMIUM] sendInvoice FAILED user=%d pkg=%s payload=%q currency=%q prices_amount=%d response_body=%s err=%T %#v",
-				userID, pkg.ID, payload, invoice.Currency, amount, responseBody, err, err)
+			log.Printf("[PREMIUM] sendInvoice FAILED user=%d pkg=%s payload=%q currency=%q prices_amount=%d request_json=%s response_body=%s err=%T %#v",
+				userID, pkg.ID, payload, invoice.Currency, amount, string(requestJSON), responseBody, err, err)
 		}
 		b.sendMessage(chatID,
 			"❌ Invoice yuborishda xatolik. Iltimos, avval /start bosing va qayta urinib ko'ring. "+
 				"Agar muammo davom etsa, admin bilan bog'laning.")
+		return
 	}
+	log.Printf("[PREMIUM] sendInvoice OK user=%d pkg=%s request_json=%s response_body=%s", userID, pkg.ID, string(requestJSON), mustMarshalJSON(resp))
 }
 
 // handlePreCheckout approves all incoming pre-checkout queries.

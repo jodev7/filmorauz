@@ -263,18 +263,37 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 	totalClips, _ := r.col.CountDocuments(ctx, bson.M{})
 
 	classify := bson.D{{Key: "$addFields", Value: bson.M{
+		"has_episode_ref": bson.M{"$and": []interface{}{
+			bson.M{"$ne": []interface{}{"$episode_id", nil}},
+			bson.M{"$ne": []interface{}{"$episode_id", primitive.NilObjectID}},
+		}},
+		"has_series_ref": bson.M{"$and": []interface{}{
+			bson.M{"$ne": []interface{}{"$series_id", nil}},
+			bson.M{"$ne": []interface{}{"$series_id", primitive.NilObjectID}},
+		}},
+		"has_movie_ref": bson.M{"$or": []interface{}{
+			bson.M{"$and": []interface{}{
+				bson.M{"$ne": []interface{}{"$movie_id", nil}},
+				bson.M{"$ne": []interface{}{"$movie_id", primitive.NilObjectID}},
+			}},
+			bson.M{"$ne": []interface{}{bson.M{"$trim": bson.M{"input": bson.M{"$ifNull": []interface{}{"$movie_code", ""}}}}, ""}},
+			bson.M{"$eq": []interface{}{"$source_type", "movie"}},
+			bson.M{"$eq": []interface{}{"$content_kind", "movie"}},
+		}},
 		"is_series": bson.M{"$cond": []interface{}{
 			bson.M{"$or": []interface{}{
 				bson.M{"$eq": []interface{}{"$content_kind", "series"}},
 				bson.M{"$eq": []interface{}{"$source_type", "series_episode"}},
-				bson.M{"$and": []interface{}{
-					bson.M{"$ne": []interface{}{"$episode_id", nil}},
-					bson.M{"$ne": []interface{}{"$episode_id", primitive.NilObjectID}},
-				}},
-				bson.M{"$and": []interface{}{
-					bson.M{"$ne": []interface{}{"$series_id", nil}},
-					bson.M{"$ne": []interface{}{"$series_id", primitive.NilObjectID}},
-				}},
+				"$has_episode_ref",
+				"$has_series_ref",
+			}},
+			true, false,
+		}},
+		"is_movie": bson.M{"$cond": []interface{}{
+			bson.M{"$and": []interface{}{
+				"$has_movie_ref",
+				bson.M{"$not": []interface{}{"$has_series_ref"}},
+				bson.M{"$not": []interface{}{"$has_episode_ref"}},
 			}},
 			true, false,
 		}},
@@ -287,9 +306,14 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 	// ── Movies ────────────────────────────────────────────────────────
 	moviePipeline := mongo.Pipeline{
 		classify,
-		{{Key: "$match", Value: bson.M{"is_series": false}}},
+		{{Key: "$match", Value: bson.M{"is_movie": true}}},
 		{{Key: "$group", Value: bson.M{
-			"_id":               "$movie_id",
+			"_id": bson.M{
+				"movie_id":    "$movie_id",
+				"movie_code":  "$movie_code",
+				"movie_slug":  "$movie_slug",
+				"movie_title": "$movie_title",
+			},
 			"title":             bson.M{"$first": "$movie_title"},
 			"slug":              bson.M{"$first": "$movie_slug"},
 			"code":              bson.M{"$first": "$movie_code"},
@@ -319,7 +343,8 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 		// duplicate groups.
 		movieIdx := map[string]int{}
 		for _, row := range rows {
-			id, _ := row["_id"].(primitive.ObjectID)
+			keyMap, _ := row["_id"].(bson.M)
+			id, _ := keyMap["movie_id"].(primitive.ObjectID)
 			title := asString(row["title"])
 			slug := asString(row["slug"])
 			code := asString(row["code"])

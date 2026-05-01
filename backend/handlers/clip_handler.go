@@ -171,10 +171,12 @@ func (h *ClipHandler) ListClipGroups(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"movies":         movies,
-		"series":         series,
-		"total_clips":    total,
-		"total_contents": len(movies) + len(series),
+		"movies":             movies,
+		"series":             series,
+		"total_clips":        total,
+		"total_contents":     len(movies) + len(series),
+		"movie_group_count":  len(movies),
+		"series_group_count": len(series),
 	})
 }
 

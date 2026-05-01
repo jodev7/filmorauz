@@ -38,13 +38,16 @@ type ContinueWatchingItem struct {
 	MovieID         string    `json:"movie_id,omitempty"`
 	TargetType      string    `json:"target_type"`
 	TargetID        string    `json:"target_id"`
+	EpisodeID       string    `json:"episode_id,omitempty"`
 	Title           string    `json:"title"`
 	Slug            string    `json:"slug"`
 	PosterURL       string    `json:"poster_url"`
 	Type            string    `json:"type,omitempty"`
 	SeriesTitle     string    `json:"series_title,omitempty"`
 	SeriesSlug      string    `json:"series_slug,omitempty"`
+	SeasonNumber    int       `json:"season_number,omitempty"`
 	EpisodeNumber   int       `json:"episode_number,omitempty"`
+	EpisodeTitle    string    `json:"episode_title,omitempty"`
 	LastPositionSec int64     `json:"last_position_sec"`
 	DurationSec     int64     `json:"duration_sec"`
 	ProgressPercent float64   `json:"progress_percent"`
@@ -54,6 +57,7 @@ type ContinueWatchingItem struct {
 // WatchHistoryListItem represents watch history enriched for frontend display.
 type WatchHistoryListItem struct {
 	ID              primitive.ObjectID `bson:"_id" json:"id"`
+	RecordID        primitive.ObjectID `bson:"record_id" json:"record_id"`
 	MovieID         primitive.ObjectID `bson:"movie_id,omitempty" json:"movie_id,omitempty"`
 	TargetType      string             `bson:"target_type" json:"target_type"`
 	TargetID        primitive.ObjectID `bson:"target_id" json:"target_id"`
@@ -76,5 +80,7 @@ type WatchHistoryListItem struct {
 	Type            string             `bson:"type" json:"type"`
 	SeriesTitle     string             `bson:"series_title,omitempty" json:"series_title,omitempty"`
 	SeriesSlug      string             `bson:"series_slug,omitempty" json:"series_slug,omitempty"`
+	SeasonNumber    int                `bson:"season_number,omitempty" json:"season_number,omitempty"`
 	EpisodeNumber   int                `bson:"episode_number,omitempty" json:"episode_number,omitempty"`
+	EpisodeTitle    string             `bson:"episode_title,omitempty" json:"episode_title,omitempty"`
 }

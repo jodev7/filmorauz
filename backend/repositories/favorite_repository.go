@@ -161,6 +161,13 @@ func (r *FavoriteRepository) GetUserFavorites(userID primitive.ObjectID) ([]mode
 			"as":           "episode_series",
 		}}},
 		{{Key: "$unwind", Value: bson.M{"path": "$episode_series", "preserveNullAndEmptyArrays": true}}},
+		{{Key: "$lookup", Value: bson.M{
+			"from":         "seasons",
+			"localField":   "episode.season_id",
+			"foreignField": "_id",
+			"as":           "episode_season",
+		}}},
+		{{Key: "$unwind", Value: bson.M{"path": "$episode_season", "preserveNullAndEmptyArrays": true}}},
 		{{Key: "$match", Value: bson.M{
 			"$or": []bson.M{
 				{"effective_target_type": "movie", "movie._id": bson.M{"$ne": nil}},
@@ -169,12 +176,26 @@ func (r *FavoriteRepository) GetUserFavorites(userID primitive.ObjectID) ([]mode
 		}}},
 		{{Key: "$project", Value: bson.M{
 			"_id":         1,
+			"record_id":   "$_id",
 			"target_type": "$effective_target_type",
-			"target_id":   "$effective_target_id",
-			"movie_id":    "$effective_movie_id",
-			"series_id":   bson.M{"$ifNull": []interface{}{"$series_id", "$episode.series_id"}},
-			"season_id":   bson.M{"$ifNull": []interface{}{"$season_id", "$episode.season_id"}},
-			"created_at":  1,
+			"target_id": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				"$episode._id",
+				"$effective_target_id",
+			}},
+			"movie_id": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "movie"}},
+				"$effective_movie_id",
+				primitive.NilObjectID,
+			}},
+			"series_id": bson.M{"$ifNull": []interface{}{"$series_id", "$episode.series_id"}},
+			"season_id": bson.M{"$ifNull": []interface{}{"$season_id", "$episode.season_id"}},
+			"episode_id": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				"$episode._id",
+				primitive.NilObjectID,
+			}},
+			"created_at": 1,
 			"title": bson.M{"$cond": []interface{}{
 				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
 				"$episode.title",
@@ -218,10 +239,20 @@ func (r *FavoriteRepository) GetUserFavorites(userID primitive.ObjectID) ([]mode
 				"$episode_series.slug",
 				"",
 			}},
+			"season_number": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				bson.M{"$ifNull": []interface{}{"$episode_season.season_number", 0}},
+				0,
+			}},
 			"episode_number": bson.M{"$cond": []interface{}{
 				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
 				bson.M{"$ifNull": []interface{}{"$episode.episode_number", 0}},
 				0,
+			}},
+			"episode_title": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				"$episode.title",
+				"",
 			}},
 		}}},
 	}

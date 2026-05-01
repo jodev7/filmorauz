@@ -197,6 +197,8 @@ interface ServerGroups {
   series: ServerSeriesGroup[];
   total_clips: number;
   total_contents: number;
+  movie_group_count?: number;
+  series_group_count?: number;
 }
 
 // Lazy-loaded clip page for a single scope (movie or episode).
@@ -668,10 +670,12 @@ export default function AdminClipsPage() {
         if (process.env.NODE_ENV === "development") {
           console.log("[admin/clips] grouped response", {
             total_groups: (data.movies?.length || 0) + (data.series?.length || 0),
+            movie_group_count: data.movie_group_count ?? (data.movies?.length || 0),
+            series_group_count: data.series_group_count ?? (data.series?.length || 0),
             total_clips: data.total_clips || 0,
             first_10_groups: [
-              ...(data.movies || []).map((m) => ({ title: m.title, type: "movie" })),
-              ...(data.series || []).map((s) => ({ title: s.title, type: "series" })),
+              ...(data.movies || []).map((m) => ({ title: m.title, type: "movie", count: m.clip_count })),
+              ...(data.series || []).map((s) => ({ title: s.title, type: "series", count: s.clip_count })),
             ].slice(0, 10),
           });
         }
