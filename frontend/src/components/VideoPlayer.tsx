@@ -58,6 +58,8 @@ interface Props {
   seriesButtonUrl?: string;
   seriesButtonLabel?: string;
   previewImageUrl?: string;
+  thumbnailsBaseUrl?: string;
+  thumbnailInterval?: number;
 }
 
 // Detect if URL is an embed (YouTube, Vimeo, etc.)
@@ -262,6 +264,8 @@ function HLSPlayer({
   seriesButtonUrl,
   seriesButtonLabel,
   previewImageUrl,
+  thumbnailsBaseUrl,
+  thumbnailInterval,
 }: {
   src: string;
   poster?: string;
@@ -274,11 +278,14 @@ function HLSPlayer({
   seriesButtonUrl?: string;
   seriesButtonLabel?: string;
   previewImageUrl?: string;
+  thumbnailsBaseUrl?: string;
+  thumbnailInterval?: number;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -567,6 +574,17 @@ function HLSPlayer({
         e.preventDefault();
         seekBy(-seekStep);
         resetControlsTimer();
+      } else if (e.code === "ArrowUp") {
+        e.preventDefault();
+        const next = Math.min(1, (video.muted ? 0 : video.volume) + 0.05);
+        video.muted = false;
+        video.volume = next;
+        resetControlsTimer();
+      } else if (e.code === "ArrowDown") {
+        e.preventDefault();
+        const next = Math.max(0, (video.muted ? 0 : video.volume) - 0.05);
+        video.volume = next;
+        resetControlsTimer();
       }
     };
     document.addEventListener("keydown", onKeyDown);
@@ -728,7 +746,22 @@ function HLSPlayer({
       onMouseMove={resetControlsTimer}
       onMouseLeave={() => setShowControls(false)}
       onMouseEnter={() => setShowControls(true)}
-      onClick={() => { togglePlay(); resetControlsTimer(); }}
+      onClick={() => {
+        resetControlsTimer();
+        if (clickTimer.current) clearTimeout(clickTimer.current);
+        clickTimer.current = setTimeout(() => {
+          clickTimer.current = null;
+          togglePlay();
+        }, 250);
+      }}
+      onDoubleClick={(e) => {
+        e.preventDefault();
+        if (clickTimer.current) {
+          clearTimeout(clickTimer.current);
+          clickTimer.current = null;
+        }
+        toggleFullscreen();
+      }}
     >
       <video
         ref={videoRef}
@@ -903,17 +936,29 @@ function HLSPlayer({
                     className="overflow-hidden rounded-md border border-white/15 bg-black shadow-xl"
                     style={{ width: PREVIEW_W, height: PREVIEW_W * 9 / 16 }}
                   >
-                    {previewImageUrl || poster ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={previewImageUrl || poster}
-                        alt=""
-                        className="w-full h-full object-cover"
-                        draggable={false}
-                      />
-                    ) : (
-                      <div className="w-full h-full bg-gray-800" />
-                    )}
+                    {(() => {
+                      const interval = thumbnailInterval && thumbnailInterval > 0 ? thumbnailInterval : 10;
+                      const thumbSrc = thumbnailsBaseUrl
+                        ? `${thumbnailsBaseUrl}thumb-${Math.max(1, Math.floor(hoverTime / interval) + 1)}.jpg`
+                        : (previewImageUrl || poster);
+                      return thumbSrc ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={thumbSrc}
+                          alt=""
+                          className="w-full h-full object-cover"
+                          draggable={false}
+                          onError={(e) => {
+                            // Fallback to poster if a particular thumbnail is missing
+                            const img = e.currentTarget;
+                            const fallback = previewImageUrl || poster || "";
+                            if (fallback && img.src !== fallback) img.src = fallback;
+                          }}
+                        />
+                      ) : (
+                        <div className="w-full h-full bg-gray-800" />
+                      );
+                    })()}
                   </div>
                   <span className="mt-1 rounded bg-black/85 px-2 py-0.5 text-[11px] font-medium text-white tabular-nums">
                     {formatTime(hoverTime)}
@@ -1119,6 +1164,8 @@ export default function VideoPlayer({
   seriesButtonUrl,
   seriesButtonLabel,
   previewImageUrl,
+  thumbnailsBaseUrl,
+  thumbnailInterval,
 }: Props) {
   const { user } = useAuth();
   const [started, setStarted] = useState(false);
@@ -1267,6 +1314,8 @@ export default function VideoPlayer({
           seriesButtonUrl={seriesButtonUrl}
           seriesButtonLabel={seriesButtonLabel}
           previewImageUrl={previewImageUrl}
+          thumbnailsBaseUrl={thumbnailsBaseUrl}
+          thumbnailInterval={thumbnailInterval}
         />
       );
 

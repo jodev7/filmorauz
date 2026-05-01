@@ -118,9 +118,19 @@ function PlayerOverlayAd({
           (a) => a.player_overlay_media_url || a.banner_media_url || a.image_url
         );
         adsRef.current = valid;
-        if (valid.length > 0) setAdsLoaded(true);
+        if (valid.length > 0) {
+          setAdsLoaded(true);
+        } else if (!firstCompleteRef.current) {
+          firstCompleteRef.current = true;
+          onFirstCompleteRef.current();
+        }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!firstCompleteRef.current) {
+          firstCompleteRef.current = true;
+          onFirstCompleteRef.current();
+        }
+      });
     return () => {
       cancelled = true;
       if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
@@ -594,6 +604,8 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
                   movie.backdrop_url || movie.poster_url,
                   DEFAULT_POSTER_PLACEHOLDER,
                 )}
+                thumbnailsBaseUrl={movie.thumbnails_base_url}
+                thumbnailInterval={movie.thumbnail_interval}
               />
             ) : (
               <div className="flex aspect-video items-center justify-center rounded-xl bg-gray-900">

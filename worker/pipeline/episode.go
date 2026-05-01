@@ -109,7 +109,8 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	}
 
 	// === Notify backend so the Episode row gets the playback URL ===
-	if err := p.notifyEpisodeComplete(ctx, job, streamingURL); err != nil {
+	thumbBase := thumbnailsBaseURLFromMaster(streamingURL)
+	if err := p.notifyEpisodeComplete(ctx, job, streamingURL, thumbBase, ThumbnailIntervalSeconds); err != nil {
 		log.Printf("[EPISODE] WARNING: notifyEpisodeComplete failed: %v", err)
 		// Non-fatal: the HLS exists, admin can re-run or patch the row.
 	}
@@ -158,7 +159,7 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	return nil
 }
 
-func (p *Pipeline) notifyEpisodeComplete(ctx context.Context, job *models.IngestionJob, streamingURL string) error {
+func (p *Pipeline) notifyEpisodeComplete(ctx context.Context, job *models.IngestionJob, streamingURL, thumbnailsBaseURL string, thumbnailInterval int) error {
 	backendURL := p.config.BackendURL
 	if backendURL == "" {
 		return fmt.Errorf("BackendURL not configured; cannot notify episode completion")
@@ -166,10 +167,15 @@ func (p *Pipeline) notifyEpisodeComplete(ctx context.Context, job *models.Ingest
 	endpoint := fmt.Sprintf("%s/api/ingestion/episodes/%s/complete",
 		backendURL, job.EpisodeID.Hex())
 
-	body, _ := json.Marshal(map[string]interface{}{
+	payload := map[string]interface{}{
 		"video_url": streamingURL,
 		"duration":  0,
-	})
+	}
+	if thumbnailsBaseURL != "" {
+		payload["thumbnails_base_url"] = thumbnailsBaseURL
+		payload["thumbnail_interval"] = thumbnailInterval
+	}
+	body, _ := json.Marshal(payload)
 
 	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()

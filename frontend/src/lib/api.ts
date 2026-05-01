@@ -61,6 +61,8 @@ export interface Movie {
   episode_number?: number;
   premium_stream_url?: string;
   master_playlist_url?: string;
+  thumbnails_base_url?: string;
+  thumbnail_interval?: number;
 }
 
 export interface MovieInput {

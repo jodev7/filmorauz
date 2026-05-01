@@ -304,6 +304,11 @@ func (r *CommentRepository) GetAllApprovedByMovieID(movieID primitive.ObjectID, 
 		user, _ := r.getUserByID(c.UserID)
 		repliesCount, _ := r.CountReplies(c.ID)
 
+		likesCount := c.LikesCount
+		if likesCount == 0 && len(c.LikedBy) > 0 {
+			likesCount = len(c.LikedBy)
+		}
+
 		result = append(result, models.CommentWithUser{
 			ID:                  c.ID,
 			MovieID:             c.MovieID,
@@ -322,6 +327,8 @@ func (r *CommentRepository) GetAllApprovedByMovieID(movieID primitive.ObjectID, 
 			UserIsPremium:       getUserIsPremium(user),
 			UserIsPremiumActive: getUserIsPremiumActive(user),
 			RepliesCount:        repliesCount,
+			LikesCount:          likesCount,
+			LikedBy:             c.LikedBy,
 		})
 	}
 
@@ -777,6 +784,11 @@ func (r *CommentRepository) GetAllApprovedByTarget(targetType models.CommentTarg
 			targetTitle, _ = r.getEpisodeTitle(targetID)
 		}
 
+		likesCount := c.LikesCount
+		if likesCount == 0 && len(c.LikedBy) > 0 {
+			likesCount = len(c.LikedBy)
+		}
+
 		result = append(result, models.CommentWithUser{
 			ID:                  c.ID,
 			TargetType:          c.TargetType,
@@ -797,7 +809,7 @@ func (r *CommentRepository) GetAllApprovedByTarget(targetType models.CommentTarg
 			UserIsPremiumActive: getUserIsPremiumActive(user),
 			TargetTitle:         targetTitle,
 			RepliesCount:        repliesCount,
-			LikesCount:          c.LikesCount,
+			LikesCount:          likesCount,
 			LikedBy:             c.LikedBy,
 		})
 	}

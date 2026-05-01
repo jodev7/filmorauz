@@ -536,9 +536,11 @@ func (r *SeriesRepository) UpdateEpisode(episode *models.Episode) error {
 			"video_url":      episode.VideoURL,
 			"embed_url":      episode.EmbedURL,
 			"source_type":    episode.SourceType,
-			"duration":       episode.Duration,
-			"air_date":       episode.AirDate,
-			"updated_at":     episode.UpdatedAt,
+			"duration":            episode.Duration,
+			"air_date":            episode.AirDate,
+			"updated_at":          episode.UpdatedAt,
+			"thumbnails_base_url": episode.ThumbnailsBaseURL,
+			"thumbnail_interval":  episode.ThumbnailInterval,
 		},
 	}
 

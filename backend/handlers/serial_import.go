@@ -350,9 +350,11 @@ func (h *IngestionHandler) CompleteEpisode(c *gin.Context) {
 	}
 
 	var body struct {
-		VideoURL string `json:"video_url" binding:"required"`
-		EmbedURL string `json:"embed_url"`
-		Duration int    `json:"duration"`
+		VideoURL          string `json:"video_url" binding:"required"`
+		EmbedURL          string `json:"embed_url"`
+		Duration          int    `json:"duration"`
+		ThumbnailsBaseURL string `json:"thumbnails_base_url"`
+		ThumbnailInterval int    `json:"thumbnail_interval"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -377,6 +379,12 @@ func (h *IngestionHandler) CompleteEpisode(c *gin.Context) {
 	}
 	if body.Duration > 0 {
 		episode.Duration = body.Duration
+	}
+	if body.ThumbnailsBaseURL != "" {
+		episode.ThumbnailsBaseURL = body.ThumbnailsBaseURL
+		if body.ThumbnailInterval > 0 {
+			episode.ThumbnailInterval = body.ThumbnailInterval
+		}
 	}
 	if err := h.seriesRepo.UpdateEpisode(episode); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

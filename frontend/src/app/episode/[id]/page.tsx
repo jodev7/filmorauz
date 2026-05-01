@@ -119,6 +119,8 @@ export default async function EpisodePage({ params }: PageProps) {
     series_slug: episode.series_slug,
     series_title: series?.series.title,
     episode_number: episode.episode_number,
+    thumbnails_base_url: episode.thumbnails_base_url,
+    thumbnail_interval: episode.thumbnail_interval,
   } : null;
 
   const episodeJsonLd = episode ? {

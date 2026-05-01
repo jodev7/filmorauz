@@ -313,7 +313,7 @@ func (s *NotificationService) NotifyCommentLike(ctx context.Context, commentOwne
 		UserID:    commentOwnerID,
 		Type:      models.NotificationCommentLike,
 		Title:     "Izohingizga like bosildi",
-		Message:   fmt.Sprintf("%s sizning commentingizga like bosdi", likerName),
+		Message:   fmt.Sprintf("%s commentingizga like bosdi", likerName),
 		ActionURL: actionURL,
 		Data: map[string]interface{}{
 			"liker_id":   likerID.Hex(),

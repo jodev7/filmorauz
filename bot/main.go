@@ -812,12 +812,19 @@ func (b *Bot) parsePremiumStart(text string) string {
 
 // handlePremiumStart shows the package details and sends a Telegram Stars invoice.
 func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User, packageID string) {
-	// Best-effort upsert so the backend has a user record to link the payment to.
-	go func() {
-		if err := b.authClient.RegisterBotUser(chatID, from); err != nil {
-			log.Printf("[PREMIUM] RegisterBotUser failed telegram_id=%d: %v", from.ID, err)
-		}
-	}()
+	// Synchronously ensure the backend has a user record to link the payment
+	// to. Telegram refuses sendInvoice for users who never opened the bot,
+	// and a missing DB row also breaks our post-payment grant flow — so we
+	// register first and surface the failure to the user.
+	if from == nil {
+		b.sendMessage(chatID, "❌ Avval botni /start bosib oching.")
+		return
+	}
+	if err := b.authClient.RegisterBotUser(chatID, from); err != nil {
+		log.Printf("[PREMIUM] RegisterBotUser failed telegram_id=%d: %v", from.ID, err)
+		b.sendMessage(chatID, "❌ Avval botni /start bosib oching, so'ng qayta urinib ko'ring.")
+		return
+	}
 
 	pkg, ok := services.PremiumPackageByID(packageID)
 	if !ok {
@@ -832,23 +839,34 @@ func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User
 	b.sendMessage(chatID, intro)
 
 	// Telegram Stars: empty provider token + currency "XTR".
+	// Amount is in the smallest currency unit, i.e. stars * 100
+	// (e.g. 100 Stars → 10000). The Bot API rejects raw star counts.
 	payload := fmt.Sprintf("premium:%d:%s", userID, pkg.ID)
+	amount := pkg.StarsPrice * 100
 	prices := []tgbotapi.LabeledPrice{
-		{Label: "Premium " + pkg.Label, Amount: pkg.StarsPrice},
+		{Label: "Premium " + pkg.Label, Amount: amount},
 	}
 	invoice := tgbotapi.NewInvoice(
 		chatID,
 		"FilmoraUz Premium "+pkg.Label,
 		fmt.Sprintf("Premium obuna — %d oy. Reklamasiz tomosha, 1080p, premium kontent.", pkg.DurationMonths),
 		payload,
-		"",  // empty provider token = Telegram Stars
+		"", // empty provider token = Telegram Stars
 		pkg.ID,
 		"XTR",
 		prices,
 	)
+	log.Printf("[PREMIUM] sendInvoice user=%d pkg=%s stars=%d amount=%d currency=XTR",
+		userID, pkg.ID, pkg.StarsPrice, amount)
 	if _, err := b.api.Send(invoice); err != nil {
-		log.Printf("[PREMIUM] Failed to send invoice user=%d: %v", userID, err)
-		b.sendMessage(chatID, "❌ Invoice yuborishda xatolik. Keyinroq qayta urinib ko'ring.")
+		// Surface the exact Telegram API error so misconfigurations
+		// (Payments not enabled in BotFather, user hasn't /started, etc.)
+		// show up directly in the logs.
+		log.Printf("[PREMIUM] sendInvoice FAILED user=%d pkg=%s amount=%d err=%v",
+			userID, pkg.ID, amount, err)
+		b.sendMessage(chatID,
+			"❌ Invoice yuborishda xatolik. Iltimos, avval /start bosing va qayta urinib ko'ring. "+
+				"Agar muammo davom etsa, admin bilan bog'laning.")
 	}
 }
 

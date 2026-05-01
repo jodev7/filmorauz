@@ -418,6 +418,33 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	}
 	log.Printf("[STAGE] mongodb_save end — movie_id=%v, code=%s, slug=%s", movieResult.MovieID, movieResult.Code, movieResult.Slug)
 
+	// Persist hover-preview thumbnails URL on the movie row. Best-effort: if the
+	// thumbnail step failed earlier, base URL will be empty and we skip the write.
+	if thumbBase := thumbnailsBaseURLFromMaster(streamingURL); thumbBase != "" && p.movieCol != nil {
+		var movieOID primitive.ObjectID
+		switch v := movieResult.MovieID.(type) {
+		case primitive.ObjectID:
+			movieOID = v
+		case string:
+			if oid, err := primitive.ObjectIDFromHex(v); err == nil {
+				movieOID = oid
+			}
+		}
+		if !movieOID.IsZero() {
+			_, err := p.movieCol.UpdateOne(ctx, bson.M{"_id": movieOID}, bson.M{
+				"$set": bson.M{
+					"thumbnails_base_url": thumbBase,
+					"thumbnail_interval":  ThumbnailIntervalSeconds,
+				},
+			})
+			if err != nil {
+				log.Printf("[PIPELINE] WARNING: failed to set thumbnail fields on movie: %v", err)
+			} else {
+				log.Printf("[PIPELINE] thumbnails_base_url=%s interval=%d", thumbBase, ThumbnailIntervalSeconds)
+			}
+		}
+	}
+
 	// Both upload and MongoDB save succeeded — safe to delete the original source file
 	log.Printf("[STAGE] deleting source file after full success: %s", videoPath)
 	p.cleanupFile(videoPath)
@@ -1808,6 +1835,16 @@ func (p *Pipeline) processVideo(job *models.IngestionJob, inputPath string, cano
 	}
 	if err := p.jobRepo.UpdateQualityInfo(context.Background(), jobID, job.SourceQuality, sourceResolution, generatedQualities, masterPlaylistPath); err != nil {
 		log.Printf("[PIPELINE] WARNING: failed to update quality info: %v", err)
+	}
+
+	// Generate hover-preview thumbnails from the processed master. Non-fatal:
+	// if ffmpeg fails or the source isn't seekable the player falls back to
+	// the static poster.
+	thumbDir := filepath.Join(outputDir, "thumbnails")
+	if processedMasterPath != "" {
+		if _, err := generateThumbnails(processedMasterPath, thumbDir, ThumbnailIntervalSeconds); err != nil {
+			log.Printf("[PIPELINE] WARNING: thumbnail generation failed: %v", err)
+		}
 	}
 
 	return outputDir, processedMasterPath, nil

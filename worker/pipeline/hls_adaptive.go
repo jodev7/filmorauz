@@ -844,10 +844,11 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 				return nil
 			}
 
-			// Only HLS playlists are allowed to reach B2. Anything else in the
-			// work dir (processed_master.mp4, base_video.mp4, thumbnails, logs)
-			// is an intermediate and stays local until pipeline cleanup.
-			if !strings.HasSuffix(path, ".m3u8") {
+			// Only HLS playlists and hover-preview thumbnails reach B2. Other
+			// files in the work dir (processed_master.mp4, base_video.mp4, logs)
+			// are intermediates and stay local until pipeline cleanup.
+			isThumb := strings.HasSuffix(path, ".jpg") && strings.Contains(filepath.ToSlash(relPath), "thumbnails/")
+			if !strings.HasSuffix(path, ".m3u8") && !isThumb {
 				log.Printf("[HLS] Skipping non-HLS intermediate (will be cleaned up locally): %s", relPath)
 				return nil
 			}
@@ -953,7 +954,8 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 			relPath, _ := filepath.Rel(hlsDir, path)
 			log.Printf("[HLS] Walked local file: %s (rel=%s)", path, relPath)
 
-			if !strings.HasSuffix(path, ".m3u8") && !strings.HasSuffix(path, ".ts") {
+			isThumb := strings.HasSuffix(path, ".jpg") && strings.Contains(filepath.ToSlash(relPath), "thumbnails/")
+			if !strings.HasSuffix(path, ".m3u8") && !strings.HasSuffix(path, ".ts") && !isThumb {
 				log.Printf("[HLS] Skipping non-HLS intermediate (will be cleaned up locally): %s", relPath)
 				return nil
 			}

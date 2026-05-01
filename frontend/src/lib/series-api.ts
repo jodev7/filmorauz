@@ -52,6 +52,8 @@ export interface Episode {
   updated_at: string;
   series_slug?: string;
   series_title?: string;
+  thumbnails_base_url?: string;
+  thumbnail_interval?: number;
 }
 
 export interface EpisodeLink {

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -740,7 +741,7 @@ func (h *CommentHandler) ToggleCommentLike(c *gin.Context) {
 
 		go func() {
 			_ = h.notificationService.NotifyCommentLike(
-				c.Request.Context(),
+				context.Background(),
 				ownerID,
 				userOID,
 				likerName,
