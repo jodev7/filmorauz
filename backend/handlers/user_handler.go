@@ -97,6 +97,11 @@ type GenericWatchProgressRequest struct {
 	Duration    int64  `json:"duration" binding:"required,min=1"`
 }
 
+type GenericWatchProgressResetRequest struct {
+	TargetType string `json:"target_type" binding:"required"`
+	TargetID   string `json:"target_id" binding:"required"`
+}
+
 func stringFromBodyMap(raw map[string]interface{}, keys ...string) string {
 	for _, key := range keys {
 		value, ok := raw[key]
@@ -430,6 +435,59 @@ func (h *UserHandler) GetWatchProgress(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, progress)
+}
+
+// ResetWatchProgress godoc
+// POST /api/watch/progress/reset
+func (h *UserHandler) ResetWatchProgress(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	var raw map[string]interface{}
+	if err := c.ShouldBindJSON(&raw); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "target_type and target_id are required"})
+		return
+	}
+	req := GenericWatchProgressResetRequest{
+		TargetType: stringFromBodyMap(raw, "target_type", "targetType"),
+		TargetID:   stringFromBodyMap(raw, "target_id", "targetId"),
+	}
+	if req.TargetType == "" || req.TargetID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "target_type and target_id are required"})
+		return
+	}
+
+	userOID, err := primitive.ObjectIDFromHex(userID.(string))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user_id"})
+		return
+	}
+
+	target, err := h.resolveUserTarget(req.TargetID, req.TargetType)
+	if err != nil {
+		status := http.StatusNotFound
+		if strings.Contains(err.Error(), "invalid") {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.watchHistoryRepo.ResetProgress(userOID, target.TargetID, target.TargetType, target.SeriesID, target.SeasonID, target.EpisodeID); err != nil {
+		log.Printf("[USER HANDLER] Failed to reset progress: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to reset progress"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"current_time":     0,
+		"duration":         0,
+		"progress_percent": 0,
+		"completed":        false,
+	})
 }
 
 // MarkWatchComplete godoc

@@ -931,6 +931,31 @@ export async function getWatchProgress(
   return res.json();
 }
 
+export async function resetWatchProgress(
+  token: string,
+  targetId: string,
+  options?: TargetOptions
+): Promise<WatchProgressSummary> {
+  const normalizedTargetId = String(targetId || "").trim();
+  if (!normalizedTargetId) {
+    throw new Error("Missing target_id for watch progress reset");
+  }
+  const payload = {
+    target_type: options?.targetType || "movie",
+    target_id: normalizedTargetId,
+  };
+  const res = await fetch(`${API_URL}/watch/progress/reset`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Failed to reset progress" }));
+    throw new Error(err.error || "Failed to reset progress");
+  }
+  return res.json();
+}
+
 // Mark watch as complete (authenticated)
 export async function markWatchComplete(token: string, targetId: string, durationSec?: number, options?: TargetOptions): Promise<void> {
   const res = await fetch(`${API_URL}/watch/${targetId}/complete`, {

@@ -53,6 +53,7 @@ interface Props {
   initialSeekTime?: number;
   onTimeUpdate?: (currentTime: number, duration: number) => void;
   onPause?: (currentTime: number, duration: number) => void;
+  onInitialSeekResolved?: (applied: boolean) => void;
   onEnded?: () => void;
   // New UI props (all optional — older callers keep working unchanged)
   headerTitle?: string;
@@ -150,6 +151,7 @@ function DirectVideoPlayer({
   initialSeekTime,
   onTimeUpdate,
   onPause,
+  onInitialSeekResolved,
   onEnded,
 }: { 
   src: string; 
@@ -158,6 +160,7 @@ function DirectVideoPlayer({
   initialSeekTime?: number;
   onTimeUpdate?: (currentTime: number, duration: number) => void;
   onPause?: (currentTime: number, duration: number) => void;
+  onInitialSeekResolved?: (applied: boolean) => void;
   onEnded?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -190,6 +193,7 @@ function DirectVideoPlayer({
     const video = videoRef.current;
     if (!video || hasAppliedInitialSeek.current) return;
     if (!initialSeekTime || initialSeekTime <= 0) {
+      onInitialSeekResolved?.(false);
       if (isDev) {
         console.log("[watch-progress] seek skipped", {
           player: "direct",
@@ -203,6 +207,7 @@ function DirectVideoPlayer({
     }
     video.currentTime = initialSeekTime;
     hasAppliedInitialSeek.current = true;
+    onInitialSeekResolved?.(true);
     if (isDev) {
       console.log("[watch-progress] seek applied", {
         player: "direct",
@@ -210,7 +215,7 @@ function DirectVideoPlayer({
         duration: video.duration,
       });
     }
-  }, [initialSeekTime, isDev]);
+  }, [initialSeekTime, isDev, onInitialSeekResolved]);
 
   return (
     <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden">
@@ -228,6 +233,7 @@ function DirectVideoPlayer({
           if (!videoRef.current || hasAppliedInitialSeek.current) return;
           if (initialSeekTime && initialSeekTime > 0) {
             videoRef.current.currentTime = initialSeekTime;
+            onInitialSeekResolved?.(true);
             if (isDev) {
               console.log("[watch-progress] seek applied", {
                 player: "direct",
@@ -236,12 +242,15 @@ function DirectVideoPlayer({
                 trigger: "loadedmetadata",
               });
             }
-          } else if (isDev) {
-            console.log("[watch-progress] seek skipped", {
-              player: "direct",
-              reason: "no_initial_seek_time",
-              trigger: "loadedmetadata",
-            });
+          } else {
+            onInitialSeekResolved?.(false);
+            if (isDev) {
+              console.log("[watch-progress] seek skipped", {
+                player: "direct",
+                reason: "no_initial_seek_time",
+                trigger: "loadedmetadata",
+              });
+            }
           }
           hasAppliedInitialSeek.current = true;
         }}
@@ -320,6 +329,7 @@ function HLSPlayer({
   initialSeekTime,
   onTimeUpdate,
   onPause,
+  onInitialSeekResolved,
   onEnded,
   headerTitle,
   headerSubtitle,
@@ -333,6 +343,7 @@ function HLSPlayer({
   initialSeekTime?: number;
   onTimeUpdate?: (currentTime: number, duration: number) => void;
   onPause?: (currentTime: number, duration: number) => void;
+  onInitialSeekResolved?: (applied: boolean) => void;
   onEnded?: () => void;
   headerTitle?: string;
   headerSubtitle?: string;
@@ -390,6 +401,7 @@ function HLSPlayer({
     const video = videoRef.current;
     if (!video || hasAppliedInitialSeek.current) return;
     if (!initialSeekTime || initialSeekTime <= 0) {
+      onInitialSeekResolved?.(false);
       if (isDev) {
         console.log("[watch-progress] seek skipped", {
           player: "hls",
@@ -403,6 +415,7 @@ function HLSPlayer({
     }
     video.currentTime = initialSeekTime;
     hasAppliedInitialSeek.current = true;
+    onInitialSeekResolved?.(true);
     if (isDev) {
       console.log("[watch-progress] seek applied", {
         player: "hls",
@@ -411,7 +424,7 @@ function HLSPlayer({
         trigger: "effect",
       });
     }
-  }, [initialSeekTime, isDev]);
+  }, [initialSeekTime, isDev, onInitialSeekResolved]);
 
   const seekBy = useCallback((delta: number) => {
     const video = videoRef.current;
@@ -712,6 +725,7 @@ function HLSPlayer({
       if (!hasAppliedInitialSeek.current && initialSeekTime && initialSeekTime > 0) {
         video.currentTime = initialSeekTime;
         hasAppliedInitialSeek.current = true;
+        onInitialSeekResolved?.(true);
         if (isDev) {
           console.log("[watch-progress] seek applied", {
             player: "hls",
@@ -720,12 +734,15 @@ function HLSPlayer({
             trigger: "durationchange",
           });
         }
-      } else if (!hasAppliedInitialSeek.current && isDev) {
-        console.log("[watch-progress] seek skipped", {
-          player: "hls",
-          reason: "no_initial_seek_time",
-          trigger: "durationchange",
-        });
+      } else if (!hasAppliedInitialSeek.current) {
+        onInitialSeekResolved?.(false);
+        if (isDev) {
+          console.log("[watch-progress] seek skipped", {
+            player: "hls",
+            reason: "no_initial_seek_time",
+            trigger: "durationchange",
+          });
+        }
       }
       if (!adInitializedRef.current && isFinite(video.duration) && video.duration > 0) {
         adInitializedRef.current = true;
@@ -755,7 +772,7 @@ function HLSPlayer({
       video.removeEventListener("volumechange", onVolumeChange);
       video.removeEventListener("ended", onVideoEnded);
     };
-  }, [onEnded, onTimeUpdate, onPause, isPremiumUser, adActive, triggerAdBreak, initialSeekTime]);
+  }, [onEnded, onTimeUpdate, onPause, onInitialSeekResolved, isPremiumUser, adActive, triggerAdBreak, initialSeekTime]);
 
   const togglePlay = () => {
     if (adActive) return;
@@ -1239,6 +1256,7 @@ export default function VideoPlayer({
   initialSeekTime,
   onTimeUpdate,
   onPause,
+  onInitialSeekResolved,
   onEnded,
   headerTitle,
   headerSubtitle,
@@ -1376,6 +1394,7 @@ export default function VideoPlayer({
           initialSeekTime={initialSeekTime}
           onTimeUpdate={onTimeUpdate}
           onPause={onPause}
+          onInitialSeekResolved={onInitialSeekResolved}
           onEnded={onEnded}
         />
       );
@@ -1390,6 +1409,7 @@ export default function VideoPlayer({
           initialSeekTime={initialSeekTime}
           onTimeUpdate={onTimeUpdate}
           onPause={onPause}
+          onInitialSeekResolved={onInitialSeekResolved}
           onEnded={onEnded}
           headerTitle={headerTitle}
           headerSubtitle={headerSubtitle}

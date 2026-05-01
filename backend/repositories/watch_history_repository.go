@@ -152,12 +152,27 @@ func (r *WatchHistoryRepository) SaveProgress(
 	seriesID, seasonID, episodeID *primitive.ObjectID,
 	positionSec, durationSec int64,
 ) error {
+	existing, err := r.GetProgress(userID, targetID, targetType)
+	if err != nil {
+		return err
+	}
+	if existing != nil && existing.CurrentTime > 30 && positionSec <= 1 {
+		return nil
+	}
 	progressPercent := float64(0)
 	if durationSec > 0 {
 		progressPercent = (float64(positionSec) / float64(durationSec)) * 100
 	}
 	completed := progressPercent >= 90
 	return r.upsertHistory(userID, targetID, targetType, seriesID, seasonID, episodeID, positionSec, durationSec, progressPercent, completed, true)
+}
+
+func (r *WatchHistoryRepository) ResetProgress(
+	userID, targetID primitive.ObjectID,
+	targetType string,
+	seriesID, seasonID, episodeID *primitive.ObjectID,
+) error {
+	return r.upsertHistory(userID, targetID, targetType, seriesID, seasonID, episodeID, 0, 0, 0, false, true)
 }
 
 // MarkComplete marks a watch history entry as completed.

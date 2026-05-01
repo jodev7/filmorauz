@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Clock, Calendar, Heart, Eye, Crown } from "lucide-react";
 import VideoPlayer from "@/components/VideoPlayer";
-import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveUnifiedWatchProgress, getWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, getProtectedMediaAccess, Ad, Movie } from "@/lib/api";
+import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveUnifiedWatchProgress, getWatchProgress, resetWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, getProtectedMediaAccess, Ad, Movie } from "@/lib/api";
 import { pickWeightedRandomAd } from "@/lib/ads-utils";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { useAuth } from "@/lib/auth-context";
@@ -291,6 +291,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   const autoNextIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const latestProgressRef = useRef({ currentTime: 0, duration: 0 });
   const lastSavedAtRef = useRef(0);
+  const resumeResolvedRef = useRef(!user || !token);
 
   // Player ad flow: user clicks play → ad shows → ad dismissed → video starts
   const [playIntended, setPlayIntended] = useState(false);
@@ -374,6 +375,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   // Fetch watch progress for resume
   useEffect(() => {
     if (!user || !token || !progressTargetId) return;
+    resumeResolvedRef.current = false;
     getWatchProgress(token, progressTargetId, { targetType })
       .then((progress) => {
         if (isDev) {
@@ -396,6 +398,9 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
         setResumePosition(nextResume);
         setSelectedStartPosition(nextResume);
         setResumePromptVisible(canResume);
+        if (!canResume) {
+          resumeResolvedRef.current = true;
+        }
         if (isDev && !canResume) {
           console.log("[watch-progress] resume skipped", {
             reason:
@@ -418,6 +423,12 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
       .catch(console.error);
   }, [user, token, progressTargetId, targetType, isDev]);
 
+  useEffect(() => {
+    if (!user || !token) {
+      resumeResolvedRef.current = true;
+    }
+  }, [user, token]);
+
   // Fetch recommendations
   useEffect(() => {
     getRecommendations(movie.id, 12)
@@ -428,9 +439,11 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
 
   const persistProgress = useCallback((force: boolean = false) => {
     if (!user || !token || !progressTargetId) return;
+    if (!playIntended) return;
+    if (!resumeResolvedRef.current) return;
     const { currentTime, duration } = latestProgressRef.current;
     if (!Number.isFinite(currentTime) || !Number.isFinite(duration)) return;
-    if (duration <= 0 || currentTime <= 0) return;
+    if (duration <= 0 || currentTime < 5) return;
     if (currentTime >= duration - 5) return;
     const now = Date.now();
     if (!force && now - lastSavedAtRef.current < 10000) return;
@@ -451,15 +464,28 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   const handleTimeUpdate = (currentTime: number, duration: number) => {
     if (!user || !token) return;
     if (!Number.isFinite(currentTime) || !Number.isFinite(duration) || duration <= 0) return;
+    if (currentTime <= 1) return;
     latestProgressRef.current = { currentTime, duration };
     persistProgress(false);
   };
 
   const handlePauseSave = useCallback((currentTime: number, duration: number) => {
     if (!Number.isFinite(currentTime) || !Number.isFinite(duration) || duration <= 0) return;
+    if (currentTime <= 1) return;
     latestProgressRef.current = { currentTime, duration };
     persistProgress(true);
   }, [persistProgress]);
+
+  const handleInitialSeekResolved = useCallback((applied: boolean) => {
+    resumeResolvedRef.current = true;
+    if (isDev) {
+      console.log("[watch-progress] initial seek resolved", {
+        applied,
+        target_type: targetType,
+        target_id: progressTargetId,
+      });
+    }
+  }, [isDev, progressTargetId, targetType]);
 
   // Handle video end
   const handleVideoEnded = () => {
@@ -591,8 +617,14 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   };
 
   const handleResumeFromStart = () => {
+    resumeResolvedRef.current = true;
     setSelectedStartPosition(0);
     setResumePromptVisible(false);
+    latestProgressRef.current = { currentTime: 0, duration: 0 };
+    lastSavedAtRef.current = 0;
+    if (user && token && progressTargetId) {
+      resetWatchProgress(token, progressTargetId, { targetType }).catch(console.error);
+    }
     handlePlayIntent();
   };
 
@@ -703,6 +735,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
                   initialSeekTime={selectedStartPosition}
                   onTimeUpdate={handleTimeUpdate}
                   onPause={handlePauseSave}
+                  onInitialSeekResolved={handleInitialSeekResolved}
                   onEnded={handleVideoEnded}
                   headerTitle={
                     movie.type === "episode" && movie.series_title

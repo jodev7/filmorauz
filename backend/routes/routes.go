@@ -98,6 +98,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	{
 		watch.GET("/progress", userHandler.GetWatchProgress)
 		watch.POST("/progress", userHandler.SaveWatchProgressGeneric)
+		watch.POST("/progress/reset", userHandler.ResetWatchProgress)
 		watch.POST("/:movieId/progress", userHandler.SaveWatchProgress)
 		watch.POST("/:movieId/complete", userHandler.MarkWatchComplete)
 	}
