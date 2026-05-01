@@ -886,15 +886,19 @@ export async function saveUnifiedWatchProgress(
   if (!Number.isFinite(normalizedCurrentTime) || !Number.isFinite(normalizedDuration) || normalizedDuration <= 0) {
     throw new Error("Watch progress requires finite current_time and duration");
   }
+  const payload = {
+    target_type: options?.targetType || "movie",
+    target_id: normalizedTargetId,
+    current_time: normalizedCurrentTime,
+    duration: normalizedDuration,
+  };
+  if (process.env.NODE_ENV !== "production") {
+    console.debug("save progress payload", payload);
+  }
   const res = await fetch(`${API_URL}/watch/progress`, {
     method: "POST",
     headers: authHeaders(token),
-    body: JSON.stringify({
-      target_type: options?.targetType || "movie",
-      target_id: normalizedTargetId,
-      current_time: normalizedCurrentTime,
-      duration: normalizedDuration,
-    }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "Failed to save progress" }));

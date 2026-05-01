@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/filmorauz/backend/models"
@@ -93,6 +95,53 @@ type GenericWatchProgressRequest struct {
 	TargetID    string `json:"target_id" binding:"required"`
 	CurrentTime int64  `json:"current_time" binding:"required,min=0"`
 	Duration    int64  `json:"duration" binding:"required,min=1"`
+}
+
+func stringFromBodyMap(raw map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		value, ok := raw[key]
+		if !ok || value == nil {
+			continue
+		}
+		if text, ok := value.(string); ok {
+			if trimmed := strings.TrimSpace(text); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
+}
+
+func int64FromBodyMap(raw map[string]interface{}, keys ...string) (int64, bool) {
+	for _, key := range keys {
+		value, ok := raw[key]
+		if !ok || value == nil {
+			continue
+		}
+		switch v := value.(type) {
+		case float64:
+			return int64(v), true
+		case float32:
+			return int64(v), true
+		case int:
+			return int64(v), true
+		case int32:
+			return int64(v), true
+		case int64:
+			return v, true
+		case json.Number:
+			if parsed, err := v.Int64(); err == nil {
+				return parsed, true
+			}
+		case string:
+			if trimmed := strings.TrimSpace(v); trimmed != "" {
+				if parsed, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+					return parsed, true
+				}
+			}
+		}
+	}
+	return 0, false
 }
 
 type resolvedUserTarget struct {
@@ -275,8 +324,25 @@ func (h *UserHandler) SaveWatchProgressGeneric(c *gin.Context) {
 		return
 	}
 
-	var req GenericWatchProgressRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	var raw map[string]interface{}
+	if err := c.ShouldBindJSON(&raw); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "target_type, target_id, current_time and duration are required"})
+		return
+	}
+	req := GenericWatchProgressRequest{
+		TargetType: stringFromBodyMap(raw, "target_type", "targetType"),
+		TargetID:   stringFromBodyMap(raw, "target_id", "targetId"),
+	}
+	currentTime, hasCurrentTime := int64FromBodyMap(raw, "current_time", "currentTime")
+	duration, hasDuration := int64FromBodyMap(raw, "duration", "durationSec")
+	if hasCurrentTime {
+		req.CurrentTime = currentTime
+	}
+	if hasDuration {
+		req.Duration = duration
+	}
+	if req.TargetType == "" || req.TargetID == "" || !hasCurrentTime || !hasDuration || req.CurrentTime < 0 || req.Duration < 1 {
+		log.Printf("[USER HANDLER] Invalid watch progress payload: %#v", raw)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "target_type, target_id, current_time and duration are required"})
 		return
 	}
