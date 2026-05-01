@@ -509,6 +509,14 @@ export interface TelegramAuthStatusResponse {
   token?: string;
 }
 
+export interface PremiumStarsSessionResponse {
+  token: string;
+  package: string;
+  stars_price: number;
+  expires_at: string;
+  bot_url: string;
+}
+
 export interface BanInfo {
   is_banned: boolean;
   reason?: string;
@@ -587,6 +595,22 @@ export async function getTelegramAuthStatus(code: string): Promise<TelegramAuthS
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || "Failed to get status");
+  }
+  return res.json();
+}
+
+export async function createPremiumStarsSession(
+  token: string,
+  packageId: string
+): Promise<PremiumStarsSessionResponse> {
+  const res = await fetch(`${API_URL}/premium/stars/session`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ package: packageId }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to create premium purchase session");
   }
   return res.json();
 }

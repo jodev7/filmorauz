@@ -12,6 +12,7 @@ type TelegramStarsPayment struct {
 	ID                      primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	UserID                  primitive.ObjectID `bson:"user_id" json:"user_id"`
 	TelegramID              int64              `bson:"telegram_id" json:"telegram_id"`
+	SessionToken            string             `bson:"session_token,omitempty" json:"session_token,omitempty"`
 	Package                 string             `bson:"package" json:"package"`
 	StarsAmount             int                `bson:"stars_amount" json:"stars_amount"`
 	DurationMonths          int                `bson:"duration_months" json:"duration_months"`

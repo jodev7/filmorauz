@@ -526,10 +526,10 @@ var premiumPlans = map[string]struct {
 	Price        float64
 	DurationDays int
 }{
-	"1month":  {Price: 39000, DurationDays: 30},
-	"3month":  {Price: 105000, DurationDays: 90},
-	"6month":  {Price: 195000, DurationDays: 180},
-	"12month": {Price: 340000, DurationDays: 365},
+	"1month":  {Price: 25000, DurationDays: 30},
+	"3month":  {Price: 69000, DurationDays: 90},
+	"6month":  {Price: 118000, DurationDays: 180},
+	"12month": {Price: 234000, DurationDays: 365},
 }
 
 // BuyPremium godoc

@@ -304,10 +304,14 @@ func main() {
 
 	// Premium (Telegram Stars) repository + handler
 	premiumPaymentRepo := repositories.NewPremiumPaymentRepository(db)
+	premiumSessionRepo := repositories.NewPremiumPurchaseSessionRepository(db)
 	if err := premiumPaymentRepo.EnsureIndexes(); err != nil {
 		log.Printf("Warning: Failed to ensure telegram_stars_payments indexes: %v", err)
 	}
-	premiumHandler := handlers.NewPremiumHandler(userRepo, premiumPaymentRepo)
+	if err := premiumSessionRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure premium_purchase_sessions indexes: %v", err)
+	}
+	premiumHandler := handlers.NewPremiumHandler(userRepo, premiumPaymentRepo, premiumSessionRepo, cfg.TelegramBotUsername)
 
 	// Serve uploaded files in dev mode
 	if cfg.IsDev {

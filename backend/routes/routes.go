@@ -84,9 +84,11 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 
 	// Public premium package list (Telegram Stars)
 	api.GET("/premium/packages", premiumHandler.GetPackages)
+	api.POST("/premium/stars/session", middleware.RequireAuth(authService), premiumHandler.CreateStarsSession)
 
 	// Internal: bot calls this after a Telegram Stars successful_payment.
 	// Auth via shared X-Internal-Token header (BOT_INTERNAL_TOKEN env).
+	api.POST("/internal/premium/telegram-stars/session/validate", premiumHandler.ValidateStarsSession)
 	api.POST("/internal/premium/telegram-stars/grant", premiumHandler.GrantTelegramStars)
 
 	// Watch progress (auth required)

@@ -256,6 +256,26 @@ func appendUniqueString(dst []string, value string) []string {
 	return append(dst, value)
 }
 
+func clipFolderFromLocation(pathOrURL string) string {
+	pathOrURL = strings.TrimSpace(pathOrURL)
+	if pathOrURL == "" {
+		return ""
+	}
+	const marker = "videos/clips/"
+	if idx := strings.Index(pathOrURL, marker); idx != -1 {
+		rest := pathOrURL[idx+len(marker):]
+		if slash := strings.Index(rest, "/"); slash != -1 {
+			return strings.TrimSpace(rest[:slash])
+		}
+		return strings.TrimSpace(rest)
+	}
+	parts := strings.Split(pathOrURL, "/")
+	if len(parts) >= 2 {
+		return strings.TrimSpace(parts[len(parts)-2])
+	}
+	return ""
+}
+
 // GroupClips builds a (movies, series→season→episode) summary tree from the
 // clips collection. Only counts/metadata are returned — never the clip docs
 // themselves — so the response stays small even with 100k+ clips.
@@ -290,10 +310,14 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 			true, false,
 		}},
 		"is_movie": bson.M{"$cond": []interface{}{
-			bson.M{"$and": []interface{}{
+			bson.M{"$or": []interface{}{
+				bson.M{"$and": []interface{}{
+					bson.M{"$eq": []interface{}{"$has_episode_ref", false}},
+					bson.M{"$eq": []interface{}{"$has_series_ref", false}},
+					bson.M{"$eq": []interface{}{bson.M{"$ifNull": []interface{}{"$season_number", 0}}, 0}},
+					bson.M{"$eq": []interface{}{bson.M{"$ifNull": []interface{}{"$season_id", primitive.NilObjectID}}, primitive.NilObjectID}},
+				}},
 				"$has_movie_ref",
-				bson.M{"$not": []interface{}{"$has_series_ref"}},
-				bson.M{"$not": []interface{}{"$has_episode_ref"}},
 			}},
 			true, false,
 		}},
@@ -317,6 +341,9 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 			"title":             bson.M{"$first": "$movie_title"},
 			"slug":              bson.M{"$first": "$movie_slug"},
 			"code":              bson.M{"$first": "$movie_code"},
+			"path":              bson.M{"$first": "$path"},
+			"url":               bson.M{"$first": "$url"},
+			"filename":          bson.M{"$first": "$filename"},
 			"clip_count":        bson.M{"$sum": 1},
 			"ig_uploaded_count": bson.M{"$sum": igFlag},
 			"last_ig_upload_at": bson.M{"$max": "$last_instagram_upload_at"},
@@ -348,6 +375,8 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 			title := asString(row["title"])
 			slug := asString(row["slug"])
 			code := asString(row["code"])
+			folder := clipFolderFromLocation(firstNonEmpty(asString(row["path"]), asString(row["url"])))
+			filename := asString(row["filename"])
 
 			var key string
 			switch {
@@ -357,8 +386,12 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 				key = "code:" + strings.TrimSpace(code)
 			case normalizeGroupKey(slug) != "":
 				key = "slug:" + normalizeGroupKey(slug)
+			case normalizeGroupKey(folder) != "":
+				key = "folder:" + normalizeGroupKey(folder)
 			case normalizeGroupKey(title) != "":
 				key = "title:" + normalizeGroupKey(title)
+			case normalizeGroupKey(filename) != "":
+				key = "file:" + normalizeGroupKey(filename)
 			default:
 				continue
 			}
@@ -377,7 +410,7 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 					movies[i].MovieID = id
 				}
 				if movies[i].Title == "" {
-					movies[i].Title = title
+					movies[i].Title = firstNonEmpty(title, folder, filename)
 				}
 				if movies[i].Slug == "" {
 					movies[i].Slug = slug
@@ -395,7 +428,7 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 			movies = append(movies, MovieClipGroup{
 				GroupKey:         key,
 				MovieID:          id,
-				Title:            title,
+				Title:            firstNonEmpty(title, folder, filename),
 				Slug:             slug,
 				Code:             code,
 				ClipCount:        clipCount,

@@ -197,10 +197,10 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 			return
 		}
 
-		// Check for premium deep link: /start premium_<package>
-		if pkgID := b.parsePremiumStart(msg.Text); pkgID != "" {
-			log.Printf("Detected premium deep link: package=%s", pkgID)
-			b.handlePremiumStart(chatID, userID, msg.From, pkgID)
+		// Check for premium deep link: /start premium_<token>
+		if sessionToken := b.parsePremiumStart(msg.Text); sessionToken != "" {
+			log.Printf("Detected premium deep link: token=%s", sessionToken)
+			b.handlePremiumStart(chatID, userID, msg.From, sessionToken)
 			return
 		}
 
@@ -831,7 +831,7 @@ func (b *Bot) sendMessage(chatID int64, text string) {
 	b.api.Send(msg)
 }
 
-// parsePremiumStart returns the package id from a "/start premium_<id>" command,
+// parsePremiumStart returns the purchase session token from a "/start premium_<token>" command,
 // or "" if the message is not a premium deep link.
 func (b *Bot) parsePremiumStart(text string) string {
 	clean := strings.ToLower(strings.TrimSpace(text))
@@ -846,15 +846,20 @@ func (b *Bot) parsePremiumStart(text string) string {
 	if !strings.HasPrefix(clean, prefix) {
 		return ""
 	}
-	id := strings.TrimSpace(strings.TrimPrefix(clean, prefix))
-	if _, ok := services.PremiumPackageByID(id); !ok {
+	token := strings.TrimSpace(strings.TrimPrefix(clean, prefix))
+	if len(token) < 12 || len(token) > 64 {
 		return ""
 	}
-	return id
+	for _, ch := range token {
+		if (ch < 'a' || ch > 'f') && (ch < '0' || ch > '9') {
+			return ""
+		}
+	}
+	return token
 }
 
-// handlePremiumStart shows the package details and sends a Telegram Stars invoice.
-func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User, packageID string) {
+// handlePremiumStart validates the purchase session against the current Telegram account and sends a Telegram Stars invoice.
+func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User, sessionToken string) {
 	// Synchronously ensure the backend has a user record to link the payment
 	// to. Telegram refuses sendInvoice for users who never opened the bot,
 	// and a missing DB row also breaks our post-payment grant flow — so we
@@ -869,31 +874,60 @@ func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User
 		return
 	}
 
-	pkg, ok := services.PremiumPackageByID(packageID)
-	if !ok {
-		b.sendMessage(chatID, "❌ Noto'g'ri paket.")
+	if b.config.BotInternalToken == "" {
+		log.Printf("[PREMIUM] BOT_INTERNAL_TOKEN not configured; cannot validate session")
+		b.sendMessage(chatID, "❌ Premium to'lovini tayyorlashda server sozlamasi xato. Keyinroq qayta urinib ko'ring.")
+		return
+	}
+	sessionResp, status, err := b.premiumClient.ValidateStarsSession(services.ValidateStarsSessionRequest{
+		Token:      sessionToken,
+		TelegramID: userID,
+	})
+	if err != nil {
+		log.Printf("[PREMIUM] session validate failed telegram_id=%d token=%s err=%v", userID, sessionToken, err)
+		b.sendMessage(chatID, "❌ Premium sessiyasini tekshirishda xatolik. Saytdan qayta urinib ko'ring.")
+		return
+	}
+	if status != http.StatusOK || sessionResp == nil || !sessionResp.OK {
+		errCode := ""
+		if sessionResp != nil {
+			errCode = sessionResp.Error
+		}
+		log.Printf("[PREMIUM] session validate rejected telegram_id=%d token=%s status=%d error=%s", userID, sessionToken, status, errCode)
+		switch errCode {
+		case "telegram_mismatch":
+			b.sendMessage(chatID, "❌ Bu Telegram akkaunt FilmoraUz profilingizga bog‘lanmagan. Iltimos saytga bog‘langan Telegram akkaunt bilan urinib ko‘ring.")
+		case "session_expired":
+			b.sendMessage(chatID, "❌ Premium sessiyasi muddati tugagan. Saytdan qayta premium tanlang.")
+		case "session_completed":
+			b.sendMessage(chatID, "❌ Bu premium havolasi allaqachon ishlatilgan. Saytdan yangi premium sessiyasi oching.")
+		case "user_not_linked":
+			b.sendMessage(chatID, "❌ Stars orqali premium olish uchun profilingizni Telegram bilan bog‘lang.")
+		default:
+			b.sendMessage(chatID, "❌ Premium havolasi yaroqsiz. Saytdan qayta urinib ko‘ring.")
+		}
 		return
 	}
 
 	intro := fmt.Sprintf(
 		"⭐ <b>FilmoraUz Premium — %s</b>\n\nNarx: <b>%d Stars</b>\nMuddat: <b>%d oy</b>\n\nTo'lovni amalga oshirish uchun pastdagi tugmani bosing.",
-		pkg.Label, pkg.StarsPrice, pkg.DurationMonths,
+		sessionResp.Label, sessionResp.StarsPrice, sessionResp.DurationMonths,
 	)
 	b.sendMessage(chatID, intro)
 
 	// Telegram Stars: empty provider token + currency "XTR".
 	// For XTR, amount equals the raw star count (NOT multiplied by 100).
-	payload := fmt.Sprintf("premium:%d:%s", userID, pkg.ID)
-	amount := pkg.StarsPrice
+	payload := "premium_session:" + sessionToken
+	amount := sessionResp.StarsPrice
 	prices := []tgbotapi.LabeledPrice{
-		{Label: "FilmoraUz Premium " + pkg.Label, Amount: amount},
+		{Label: "FilmoraUz Premium " + sessionResp.Label, Amount: amount},
 	}
 	invoice := minimalStarsInvoiceConfig{
 		BaseChat: tgbotapi.BaseChat{ChatID: chatID},
-		Title:    "FilmoraUz Premium " + pkg.Label,
+		Title:    "FilmoraUz Premium " + sessionResp.Label,
 		Description: fmt.Sprintf(
 			"Premium obuna — %d oy. Reklamasiz tomosha, 1080p, premium kontent.",
-			pkg.DurationMonths,
+			sessionResp.DurationMonths,
 		),
 		Payload:       payload,
 		ProviderToken: "",
@@ -902,14 +936,14 @@ func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User
 	}
 	params, paramsErr := invoice.params()
 	if paramsErr != nil {
-		log.Printf("[PREMIUM] sendInvoice params build failed user=%d pkg=%s err=%v", userID, pkg.ID, paramsErr)
+		log.Printf("[PREMIUM] sendInvoice params build failed user=%d token=%s pkg=%s err=%v", userID, sessionToken, sessionResp.Package, paramsErr)
 		b.sendMessage(chatID, "❌ Invoice yuborishda xatolik. Keyinroq qayta urinib ko'ring.")
 		return
 	}
 	requestJSON, _ := json.Marshal(params)
 	pricesJSON, _ := json.Marshal(prices)
-	log.Printf("[PREMIUM] sendInvoice user=%d pkg=%s payload=%q currency=%q provider_token=%q prices=%s prices_amount=%d stars=%d request_json=%s",
-		userID, pkg.ID, payload, invoice.Currency, invoice.ProviderToken, string(pricesJSON), amount, pkg.StarsPrice, string(requestJSON))
+	log.Printf("[PREMIUM] sendInvoice user=%d token=%s pkg=%s payload=%q currency=%q provider_token=%q prices=%s prices_amount=%d stars=%d request_json=%s",
+		userID, sessionToken, sessionResp.Package, payload, invoice.Currency, invoice.ProviderToken, string(pricesJSON), amount, sessionResp.StarsPrice, string(requestJSON))
 	resp, err := b.api.MakeRequest("sendInvoice", params)
 	if err != nil {
 		responseBody := "null"
@@ -922,18 +956,22 @@ func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User
 		}
 
 		if apiErr, ok := err.(*tgbotapi.Error); ok {
-			log.Printf("[PREMIUM] sendInvoice FAILED user=%d pkg=%s payload=%q currency=%q prices_amount=%d code=%d description=%q request_json=%s response_body=%s response_parameters=%+v api_error=%#v",
-				userID, pkg.ID, payload, invoice.Currency, amount, apiErr.Code, apiErr.Message, string(requestJSON), responseBody, apiErr.ResponseParameters, apiErr)
+			log.Printf("[PREMIUM] sendInvoice FAILED user=%d token=%s pkg=%s payload=%q currency=%q prices_amount=%d code=%d description=%q request_json=%s response_body=%s response_parameters=%+v api_error=%#v",
+				userID, sessionToken, sessionResp.Package, payload, invoice.Currency, amount, apiErr.Code, apiErr.Message, string(requestJSON), responseBody, apiErr.ResponseParameters, apiErr)
 		} else {
-			log.Printf("[PREMIUM] sendInvoice FAILED user=%d pkg=%s payload=%q currency=%q prices_amount=%d request_json=%s response_body=%s err=%T %#v",
-				userID, pkg.ID, payload, invoice.Currency, amount, string(requestJSON), responseBody, err, err)
+			log.Printf("[PREMIUM] sendInvoice FAILED user=%d token=%s pkg=%s payload=%q currency=%q prices_amount=%d request_json=%s response_body=%s err=%T %#v",
+				userID, sessionToken, sessionResp.Package, payload, invoice.Currency, amount, string(requestJSON), responseBody, err, err)
 		}
 		b.sendMessage(chatID,
 			"❌ Invoice yuborishda xatolik. Iltimos, avval /start bosing va qayta urinib ko'ring. "+
 				"Agar muammo davom etsa, admin bilan bog'laning.")
 		return
 	}
-	log.Printf("[PREMIUM] sendInvoice OK user=%d pkg=%s request_json=%s response_body=%s", userID, pkg.ID, string(requestJSON), mustMarshalJSON(resp))
+	log.Printf("[PREMIUM] sendInvoice OK user=%d token=%s pkg=%s request_json=%s response_body=%s", userID, sessionToken, sessionResp.Package, string(requestJSON), mustMarshalJSON(resp))
+	b.sendMessage(chatID,
+		"ℹ️ Telegram Stars to'lovi Telegram mobil ilovasida yaxshiroq ishlaydi.\n\n"+
+			"Agar checkout ochilib, lekin to'lov ishlamasa, Telegram Stars to‘lovi hozircha sizning hisobingizda ishlamadi. "+
+			"Iltimos Telegram mobile app orqali urinib ko‘ring yoki admin orqali premium oling: @primeposuz")
 }
 
 // handlePreCheckout approves all incoming pre-checkout queries.
@@ -941,14 +979,14 @@ func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User
 // rejecting at pre-checkout based on user state would block legitimate payers,
 // so we accept and verify the payload server-side after charge.
 func (b *Bot) handlePreCheckout(q *tgbotapi.PreCheckoutQuery) {
-	log.Printf("[PREMIUM] PreCheckout id=%s payload=%s currency=%s amount=%d",
-		q.ID, q.InvoicePayload, q.Currency, q.TotalAmount)
+	log.Printf("[PREMIUM] PRE_CHECKOUT_QUERY user=%d id=%s payload=%s currency=%s amount=%d",
+		q.From.ID, q.ID, q.InvoicePayload, q.Currency, q.TotalAmount)
 	cfg := tgbotapi.PreCheckoutConfig{
 		PreCheckoutQueryID: q.ID,
 		OK:                 true,
 	}
 	if _, err := b.api.Request(cfg); err != nil {
-		log.Printf("[PREMIUM] PreCheckout answer failed: %v", err)
+		log.Printf("[PREMIUM] PRE_CHECKOUT_QUERY answer failed user=%d id=%s: %v", q.From.ID, q.ID, err)
 	}
 }
 
@@ -962,22 +1000,17 @@ func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
 	chatID := msg.Chat.ID
 	userID := msg.From.ID
 
-	log.Printf("[PREMIUM] SuccessfulPayment user=%d currency=%s amount=%d charge=%s payload=%s",
-		userID, sp.Currency, sp.TotalAmount, sp.TelegramPaymentChargeID, sp.InvoicePayload)
+	log.Printf("[PREMIUM] SUCCESSFUL_PAYMENT user=%d currency=%s amount=%d charge=%s provider_charge=%s payload=%s",
+		userID, sp.Currency, sp.TotalAmount, sp.TelegramPaymentChargeID, sp.ProviderPaymentChargeID, sp.InvoicePayload)
 
-	// Validate payload: premium:<telegramID>:<package>
+	// Validate payload: premium_session:<token>
 	parts := strings.Split(sp.InvoicePayload, ":")
-	if len(parts) != 3 || parts[0] != "premium" {
+	if len(parts) != 2 || parts[0] != "premium_session" {
 		log.Printf("[PREMIUM] Invalid payload format: %q", sp.InvoicePayload)
 		b.sendMessage(chatID, "⚠️ To'lov qabul qilindi, lekin paketni aniqlab bo'lmadi. Admin bilan bog'laning.")
 		return
 	}
-	pkg, ok := services.PremiumPackageByID(parts[2])
-	if !ok {
-		log.Printf("[PREMIUM] Unknown package in payload: %s", parts[2])
-		b.sendMessage(chatID, "⚠️ To'lov qabul qilindi, lekin paket noma'lum. Admin bilan bog'laning.")
-		return
-	}
+	sessionToken := parts[1]
 	if sp.Currency != "XTR" {
 		log.Printf("[PREMIUM] Unexpected currency: %s", sp.Currency)
 		// Still attempt grant — backend is the source of truth — but log loudly.
@@ -991,7 +1024,7 @@ func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
 
 	resp, status, err := b.premiumClient.GrantTelegramStars(services.GrantStarsRequest{
 		TelegramID:              userID,
-		Package:                 pkg.ID,
+		SessionToken:            sessionToken,
 		StarsAmount:             sp.TotalAmount,
 		TelegramPaymentChargeID: sp.TelegramPaymentChargeID,
 		ProviderPaymentChargeID: sp.ProviderPaymentChargeID,
@@ -1006,6 +1039,10 @@ func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
 			"⚠️ Premium olish uchun avval FilmoraUz profilingizni Telegram bilan bog'lang.\n\nSayt: %s\n\nLogin qilgandan so'ng administratorga to'lov chekini yuboring — premium qo'lda faollashtiriladi.",
 			b.config.SiteURL,
 		))
+		return
+	}
+	if resp != nil && resp.Error == "telegram_mismatch" {
+		b.sendMessage(chatID, "❌ Bu Telegram akkaunt FilmoraUz profilingizga bog‘lanmagan. Iltimos saytga bog‘langan Telegram akkaunt bilan urinib ko‘ring.")
 		return
 	}
 	if status != http.StatusOK || (resp != nil && !resp.OK) {
@@ -1024,7 +1061,6 @@ func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
 	}
 
 	b.sendMessage(chatID, fmt.Sprintf(
-		"Premium faollashtirildi ✅\n\nPaket: <b>%s</b>\nMuddat: <b>%d oy</b>\n\nFilmorauz.net da Premium afzalliklaridan foydalanishingiz mumkin.",
-		pkg.Label, pkg.DurationMonths,
+		"Premium faollashtirildi ✅\n\nFilmorauz.net da Premium afzalliklaridan foydalanishingiz mumkin.",
 	))
 }

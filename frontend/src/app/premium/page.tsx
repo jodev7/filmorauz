@@ -3,7 +3,9 @@
 import { useState } from "react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import TelegramLoginModal from "@/components/TelegramLoginModal";
 import { useAuth } from "@/lib/auth-context";
+import { createPremiumStarsSession } from "@/lib/api";
 import {
   Crown,
   Check,
@@ -19,9 +21,6 @@ import {
   Star,
 } from "lucide-react";
 
-const TELEGRAM_BOT_USERNAME =
-  process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || "filmorauznet";
-
 interface StarsPackage {
   id: string; // matches backend (1m, 3m, 6m, 12m)
   label: string;
@@ -34,7 +33,7 @@ const starsPackages: StarsPackage[] = [
   { id: "1m", label: "1 oy", months: 1, starsPrice: 100 },
   { id: "3m", label: "3 oy", months: 3, starsPrice: 270, badge: "-10%" },
   { id: "6m", label: "6 oy", months: 6, starsPrice: 500, badge: "-17%" },
-  { id: "12m", label: "12 oy", months: 12, starsPrice: 900, badge: "-25%" },
+  { id: "12m", label: "12 oy", months: 12, starsPrice: 1000, badge: "-17%" },
 ];
 
 function formatExpiryDate(value?: string | null): string {
@@ -74,14 +73,14 @@ interface PricingPlan {
 }
 
 // Pricing plans with discount logic
-const MONTHLY_PRICE = 39000; // Base monthly price in so'm
+const MONTHLY_PRICE = 25000; // Base monthly price in so'm
 
 const pricingPlans: PricingPlan[] = [
   {
     id: "1month",
     months: 1,
-    totalPrice: 39000,
-    monthlyEquivalent: 39000,
+    totalPrice: 25000,
+    monthlyEquivalent: 25000,
     discount: 0,
     discountPercent: 0,
     label: "1 oylik"
@@ -89,30 +88,30 @@ const pricingPlans: PricingPlan[] = [
   {
     id: "3month",
     months: 3,
-    totalPrice: 105000, // 10% discount: 3 * 39000 = 117000, with 10% off = 105300 ≈ 105000
-    monthlyEquivalent: 35000,
-    discount: 12000,
-    discountPercent: 10,
+    totalPrice: 69000,
+    monthlyEquivalent: 23000,
+    discount: 6000,
+    discountPercent: 8,
     label: "3 oylik",
     badge: "Eng mashhur"
   },
   {
     id: "6month",
     months: 6,
-    totalPrice: 195000, // 17% discount: 6 * 39000 = 234000, with 17% off = 194220 ≈ 195000
-    monthlyEquivalent: 32500,
-    discount: 39000,
-    discountPercent: 17,
+    totalPrice: 118000,
+    monthlyEquivalent: 19667,
+    discount: 32000,
+    discountPercent: 21,
     label: "6 oylik",
     badge: "Eng foydali"
   },
   {
     id: "12month",
     months: 12,
-    totalPrice: 340000, // 27% discount: 12 * 39000 = 468000, with 27% off = 341640 ≈ 340000
-    monthlyEquivalent: 28333,
-    discount: 128000,
-    discountPercent: 27,
+    totalPrice: 234000,
+    monthlyEquivalent: 19500,
+    discount: 66000,
+    discountPercent: 22,
     label: "12 oylik",
     badge: "Chegirma"
   }
@@ -129,16 +128,21 @@ const premiumFeatures = [
 ];
 
 export default function PremiumPage() {
-  const { user } = useAuth();
+  const { user, token, isAuthenticated } = useAuth();
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
+  const [loginModalOpen, setLoginModalOpen] = useState(false);
+  const [starsLoadingPackage, setStarsLoadingPackage] = useState<string | null>(null);
+  const [starsError, setStarsError] = useState<string>("");
 
   // Check if user is premium
   const isPremium = user?.is_premium === true || user?.is_premium_active === true;
+  const isLoggedIn = isAuthenticated && !!user;
+  const hasLinkedTelegram = !!user?.telegram_id;
   const walletBalance = user?.wallet_balance ?? 0;
   const premiumExpiresLabel = formatExpiryDate(user?.premium_expires_at);
-
-  const buildStarsDeepLink = (packageId: string) =>
-    `https://t.me/${TELEGRAM_BOT_USERNAME}?start=premium_${packageId}`;
+  const canBuyStars = isLoggedIn && hasLinkedTelegram && !!token && !isPremium;
+  const requiresLogin = !isLoggedIn;
+  const requiresTelegramLink = isLoggedIn && !hasLinkedTelegram;
 
   const features = [
     {
@@ -203,6 +207,28 @@ export default function PremiumPage() {
     return price.toLocaleString('en-US');
   };
 
+  const handleLoginRequired = () => {
+    setLoginModalOpen(true);
+  };
+
+  const handleStarsPurchase = async (packageId: string) => {
+    if (!token || !canBuyStars) return;
+    setStarsError("");
+    setStarsLoadingPackage(packageId);
+    try {
+      const session = await createPremiumStarsSession(token, packageId);
+      window.open(session.bot_url, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Telegram Stars to'lovini tayyorlashda xatolik yuz berdi.";
+      setStarsError(message);
+    } finally {
+      setStarsLoadingPackage(null);
+    }
+  };
+
   return (
     <>
       <Navbar />
@@ -255,6 +281,26 @@ export default function PremiumPage() {
                   </span>
                 )}
               </div>
+            ) : requiresLogin ? (
+              <div className="inline-flex flex-col items-center gap-4 px-8 py-5 bg-brand-card/60 border border-brand-border rounded-2xl">
+                <p className="text-sm text-gray-300">Premium olish uchun avval saytga kiring.</p>
+                <button
+                  onClick={handleLoginRequired}
+                  className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-brand-red to-orange-600 text-white font-semibold"
+                >
+                  Kirish
+                </button>
+              </div>
+            ) : requiresTelegramLink ? (
+              <div className="inline-flex flex-col items-center gap-4 px-8 py-5 bg-brand-card/60 border border-yellow-500/20 rounded-2xl">
+                <p className="text-sm text-gray-300">Stars orqali premium olish uchun profilingizni Telegram bilan bog&apos;lang.</p>
+                <button
+                  onClick={handleLoginRequired}
+                  className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 font-semibold"
+                >
+                  Telegramni bog&apos;lash
+                </button>
+              </div>
             ) : (
               <button
                 onClick={scrollToPurchaseOptions}
@@ -306,6 +352,28 @@ export default function PremiumPage() {
         {!isPremium && (
         <section id="telegram-stars" className="py-12 sm:py-16 scroll-mt-28">
           <div className="max-w-6xl mx-auto px-4">
+            {requiresLogin && (
+              <div className="max-w-2xl mx-auto mb-8 rounded-2xl border border-brand-border bg-brand-card/50 p-5 text-center">
+                <p className="text-white font-medium mb-3">Premium olish uchun avval saytga kiring.</p>
+                <button
+                  onClick={handleLoginRequired}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-brand-red to-orange-600 text-white font-semibold"
+                >
+                  Kirish
+                </button>
+              </div>
+            )}
+            {requiresTelegramLink && (
+              <div className="max-w-2xl mx-auto mb-8 rounded-2xl border border-yellow-500/20 bg-yellow-500/5 p-5 text-center">
+                <p className="text-yellow-200 font-medium mb-3">Stars orqali premium olish uchun profilingizni Telegram bilan bog&apos;lang.</p>
+                <button
+                  onClick={handleLoginRequired}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-yellow-500/30 text-yellow-400 font-semibold hover:bg-yellow-500/10 transition-colors"
+                >
+                  Telegramni bog&apos;lash
+                </button>
+              </div>
+            )}
             <div className="text-center mb-8">
               <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-sm font-medium mb-4">
                 <Star className="w-4 h-4" fill="currentColor" />
@@ -320,9 +388,18 @@ export default function PremiumPage() {
                 yoqiladi.
               </p>
               <p className="text-xs text-gray-500 mt-2">
-                Premium olish uchun avval saytga Telegram orqali kirgan bo'lishingiz kerak.
+                Stars to&apos;lovi faqat saytga kirilgan va Telegram hisobiga bog&apos;langan profil uchun ishlaydi.
+              </p>
+              <p className="text-sm text-yellow-400/90 mt-3 max-w-2xl mx-auto">
+                Stars to'lovi Telegram mobil ilovasida yaxshiroq ishlaydi. Agar xatolik bo'lsa, admin orqali ham olishingiz mumkin.
               </p>
             </div>
+
+            {starsError && (
+              <div className="max-w-2xl mx-auto mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200 text-center">
+                {starsError}
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
               {starsPackages.map((pkg) => (
@@ -346,15 +423,15 @@ export default function PremiumPage() {
                     </div>
                     <p className="text-xs text-gray-500 mt-1">{pkg.months} oylik premium</p>
                   </div>
-                  <a
-                    href={buildStarsDeepLink(pkg.id)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-semibold bg-gradient-to-r from-yellow-500 to-amber-600 text-black hover:opacity-90 transition-opacity"
+                  <button
+                    type="button"
+                    disabled={!canBuyStars || starsLoadingPackage !== null}
+                    onClick={() => handleStarsPurchase(pkg.id)}
+                    className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-semibold bg-gradient-to-r from-yellow-500 to-amber-600 text-black hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Star size={14} fill="currentColor" />
-                    Telegram Stars orqali olish
-                  </a>
+                    {starsLoadingPackage === pkg.id ? "Yuklanmoqda..." : "Telegram Stars orqali olish"}
+                  </button>
                 </div>
               ))}
             </div>
@@ -375,8 +452,20 @@ export default function PremiumPage() {
               Qancha uzoq obuna olsangiz, shuncha ko'proq tejaysiz
             </p>
 
+            {requiresLogin && (
+              <div className="max-w-2xl mx-auto mb-8 rounded-2xl border border-brand-border bg-brand-card/50 p-5 text-center">
+                <p className="text-white font-medium mb-3">Premium olish uchun avval saytga kiring.</p>
+                <button
+                  onClick={handleLoginRequired}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-brand-red to-orange-600 text-white font-semibold"
+                >
+                  Kirish
+                </button>
+              </div>
+            )}
+
             {/* Wallet balance card */}
-            {user && (
+            {isLoggedIn && (
               <div className="max-w-md mx-auto mb-10 p-5 bg-brand-card/60 border border-brand-border rounded-2xl flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-yellow-500/20 to-amber-500/20 flex items-center justify-center">
@@ -482,10 +571,14 @@ export default function PremiumPage() {
                         <Check size={16} />
                         Premium
                       </div>
-                    ) : !user ? (
-                      <div className="text-center text-xs text-gray-500 py-3">
-                        Sotib olish uchun tizimga kiring
-                      </div>
+                    ) : !isLoggedIn ? (
+                      <button
+                        type="button"
+                        onClick={handleLoginRequired}
+                        className="w-full py-3 rounded-xl border border-brand-border text-gray-300 text-sm font-semibold hover:border-brand-red/40 hover:text-white transition-colors"
+                      >
+                        Kirish
+                      </button>
                     ) : walletBalance < plan.totalPrice ? (
                       <a
                         href="https://t.me/filmorauznet?start=topup"
@@ -581,6 +674,20 @@ export default function PremiumPage() {
                     <Check className="w-6 h-6" />
                     Siz allaqachon Premiumsiz
                   </div>
+                ) : requiresLogin ? (
+                  <button
+                    onClick={handleLoginRequired}
+                    className="group inline-flex items-center gap-3 px-10 py-4 bg-gradient-to-r from-brand-red to-orange-600 hover:from-orange-600 hover:to-brand-red text-white font-bold text-lg rounded-xl shadow-[0_0_30px_rgba(249,115,22,0.4)] transition-all duration-300 hover:shadow-[0_0_50px_rgba(249,115,22,0.6)] hover:scale-105"
+                  >
+                    Kirish
+                  </button>
+                ) : requiresTelegramLink ? (
+                  <button
+                    onClick={handleLoginRequired}
+                    className="group inline-flex items-center gap-3 px-10 py-4 bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 font-bold text-lg rounded-xl transition-all duration-300 hover:bg-yellow-500/20"
+                  >
+                    Telegramni bog&apos;lash
+                  </button>
                 ) : (
                   <button
                     onClick={scrollToPurchaseOptions}
@@ -601,6 +708,10 @@ export default function PremiumPage() {
         <div className="pb-12" />
       </main>
       <Footer />
+      <TelegramLoginModal
+        isOpen={loginModalOpen}
+        onClose={() => setLoginModalOpen(false)}
+      />
     </>
   );
 }

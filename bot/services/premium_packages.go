@@ -19,7 +19,7 @@ var defaultPremiumPackages = []PremiumPackage{
 	{ID: "1m", Label: "1 oy", DurationMonths: 1, StarsPrice: 100},
 	{ID: "3m", Label: "3 oy", DurationMonths: 3, StarsPrice: 270},
 	{ID: "6m", Label: "6 oy", DurationMonths: 6, StarsPrice: 500},
-	{ID: "12m", Label: "12 oy", DurationMonths: 12, StarsPrice: 900},
+	{ID: "12m", Label: "12 oy", DurationMonths: 12, StarsPrice: 1000},
 }
 
 func PremiumPackageByID(id string) (PremiumPackage, bool) {

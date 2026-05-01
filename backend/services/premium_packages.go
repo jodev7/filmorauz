@@ -23,7 +23,7 @@ var defaultPremiumPackages = []PremiumPackage{
 	{ID: "1m", Label: "1 oy", DurationMonths: 1, DurationDays: 30, StarsPrice: 100},
 	{ID: "3m", Label: "3 oy", DurationMonths: 3, DurationDays: 90, StarsPrice: 270, Discount: "-10%"},
 	{ID: "6m", Label: "6 oy", DurationMonths: 6, DurationDays: 180, StarsPrice: 500, Discount: "-17%"},
-	{ID: "12m", Label: "12 oy", DurationMonths: 12, DurationDays: 365, StarsPrice: 900, Discount: "-25%"},
+	{ID: "12m", Label: "12 oy", DurationMonths: 12, DurationDays: 365, StarsPrice: 1000, Discount: "-17%"},
 }
 
 // PremiumPackages returns the configured packages, allowing per-package star
