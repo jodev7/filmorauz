@@ -57,9 +57,6 @@ interface Props {
   headerSubtitle?: string;
   seriesButtonUrl?: string;
   seriesButtonLabel?: string;
-  previewImageUrl?: string;
-  thumbnailsBaseUrl?: string;
-  thumbnailInterval?: number;
 }
 
 // Detect if URL is an embed (YouTube, Vimeo, etc.)
@@ -263,9 +260,6 @@ function HLSPlayer({
   headerSubtitle,
   seriesButtonUrl,
   seriesButtonLabel,
-  previewImageUrl,
-  thumbnailsBaseUrl,
-  thumbnailInterval,
 }: {
   src: string;
   poster?: string;
@@ -277,9 +271,6 @@ function HLSPlayer({
   headerSubtitle?: string;
   seriesButtonUrl?: string;
   seriesButtonLabel?: string;
-  previewImageUrl?: string;
-  thumbnailsBaseUrl?: string;
-  thumbnailInterval?: number;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -908,7 +899,7 @@ function HLSPlayer({
           }`}
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Progress bar with hover preview */}
+          {/* Progress bar with hover time tooltip */}
           <div
             ref={progressContainerRef}
             className="relative h-1.5 group/progress hover:h-2 transition-all"
@@ -922,45 +913,17 @@ function HLSPlayer({
             }}
             onMouseLeave={() => setHoverTime(null)}
           >
-            {/* Hover preview — thumbnail + time. Positioned above the bar, follows mouse. */}
+            {/* Hover tooltip — time only. Positioned above the bar, follows mouse. */}
             {hoverTime !== null && duration > 0 && !adActive && (() => {
-              const PREVIEW_W = 160;
-              const half = PREVIEW_W / 2;
+              const TOOLTIP_W = 56;
+              const half = TOOLTIP_W / 2;
               const left = Math.max(half, Math.min(hoverX, progressWidth - half));
               return (
                 <div
-                  className="pointer-events-none absolute -translate-x-1/2 bottom-full mb-3 flex flex-col items-center"
+                  className="pointer-events-none absolute -translate-x-1/2 bottom-full mb-3"
                   style={{ left }}
                 >
-                  <div
-                    className="overflow-hidden rounded-md border border-white/15 bg-black shadow-xl"
-                    style={{ width: PREVIEW_W, height: PREVIEW_W * 9 / 16 }}
-                  >
-                    {(() => {
-                      const interval = thumbnailInterval && thumbnailInterval > 0 ? thumbnailInterval : 10;
-                      const thumbSrc = thumbnailsBaseUrl
-                        ? `${thumbnailsBaseUrl}thumb-${Math.max(1, Math.floor(hoverTime / interval) + 1)}.jpg`
-                        : (previewImageUrl || poster);
-                      return thumbSrc ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={thumbSrc}
-                          alt=""
-                          className="w-full h-full object-cover"
-                          draggable={false}
-                          onError={(e) => {
-                            // Fallback to poster if a particular thumbnail is missing
-                            const img = e.currentTarget;
-                            const fallback = previewImageUrl || poster || "";
-                            if (fallback && img.src !== fallback) img.src = fallback;
-                          }}
-                        />
-                      ) : (
-                        <div className="w-full h-full bg-gray-800" />
-                      );
-                    })()}
-                  </div>
-                  <span className="mt-1 rounded bg-black/85 px-2 py-0.5 text-[11px] font-medium text-white tabular-nums">
+                  <span className="block min-w-14 rounded bg-black/85 px-2 py-1 text-center text-[11px] font-medium text-white tabular-nums shadow-lg">
                     {formatTime(hoverTime)}
                   </span>
                 </div>
@@ -1163,9 +1126,6 @@ export default function VideoPlayer({
   headerSubtitle,
   seriesButtonUrl,
   seriesButtonLabel,
-  previewImageUrl,
-  thumbnailsBaseUrl,
-  thumbnailInterval,
 }: Props) {
   const { user } = useAuth();
   const [started, setStarted] = useState(false);
@@ -1313,9 +1273,6 @@ export default function VideoPlayer({
           headerSubtitle={headerSubtitle}
           seriesButtonUrl={seriesButtonUrl}
           seriesButtonLabel={seriesButtonLabel}
-          previewImageUrl={previewImageUrl}
-          thumbnailsBaseUrl={thumbnailsBaseUrl}
-          thumbnailInterval={thumbnailInterval}
         />
       );
 

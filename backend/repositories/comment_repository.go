@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -172,6 +173,7 @@ func (r *CommentRepository) GetByMovieID(movieID primitive.ObjectID, limit, skip
 			UpdatedAt:           c.UpdatedAt,
 			IsPremiumUser:       c.IsPremiumUser,
 			UserDisplayName:     getUserDisplayName(user),
+			UserUsername:        getUserUsername(user),
 			UserAvatarURL:       getUserAvatarURL(user),
 			UserRole:            getUserRole(user),
 			UserIsPremium:       getUserIsPremium(user),
@@ -227,6 +229,7 @@ func (r *CommentRepository) GetReplies(parentID primitive.ObjectID) ([]models.Co
 			UpdatedAt:           c.UpdatedAt,
 			IsPremiumUser:       c.IsPremiumUser,
 			UserDisplayName:     getUserDisplayName(user),
+			UserUsername:        getUserUsername(user),
 			UserAvatarURL:       getUserAvatarURL(user),
 			UserRole:            getUserRole(user),
 			UserIsPremium:       getUserIsPremium(user),
@@ -322,6 +325,7 @@ func (r *CommentRepository) GetAllApprovedByMovieID(movieID primitive.ObjectID, 
 			UpdatedAt:           c.UpdatedAt,
 			IsPremiumUser:       c.IsPremiumUser,
 			UserDisplayName:     getUserDisplayName(user),
+			UserUsername:        getUserUsername(user),
 			UserAvatarURL:       getUserAvatarURL(user),
 			UserRole:            getUserRole(user),
 			UserIsPremium:       getUserIsPremium(user),
@@ -362,36 +366,40 @@ func (r *CommentRepository) GetByStatus(status string, page, limit int) ([]model
 	}
 	defer cursor.Close(ctx)
 
-	var comments []models.MovieComment
-	if err := cursor.All(ctx, &comments); err != nil {
+	var rawComments []bson.M
+	if err := cursor.All(ctx, &rawComments); err != nil {
 		return nil, 0, err
 	}
 
-	result := make([]models.CommentWithUser, 0, len(comments))
-	for _, c := range comments {
-		user, _ := r.getUserByID(c.UserID)
-		movieTitle, _ := r.getMovieTitle(c.MovieID)
+	result := make([]models.CommentWithUser, 0, len(rawComments))
+	for _, raw := range rawComments {
+		comment := hydrateAdminComment(raw)
+		user, _ := r.resolveCommentUser(raw, comment.UserID)
+		targetTitle, _, _ := r.getCommentTargetMeta(comment.TargetType, comment.TargetID, comment.MovieID)
 		result = append(result, models.CommentWithUser{
-			ID:                  c.ID,
-			MovieID:             c.MovieID,
-			UserID:              c.UserID,
-			ParentID:            c.ParentID,
-			Content:             c.Content,
-			Status:              c.Status,
-			HasBlockedWord:      c.HasBlockedWord,
-			HasLink:             c.HasLink,
-			CreatedAt:           c.CreatedAt,
-			UpdatedAt:           c.UpdatedAt,
-			IsPremiumUser:       c.IsPremiumUser,
+			ID:                  comment.ID,
+			MovieID:             comment.MovieID,
+			TargetType:          comment.TargetType,
+			TargetID:            comment.TargetID,
+			UserID:              comment.UserID,
+			ParentID:            comment.ParentID,
+			Content:             comment.Content,
+			Status:              comment.Status,
+			HasBlockedWord:      comment.HasBlockedWord,
+			HasLink:             comment.HasLink,
+			CreatedAt:           comment.CreatedAt,
+			UpdatedAt:           comment.UpdatedAt,
+			IsPremiumUser:       comment.IsPremiumUser,
 			UserDisplayName:     getUserDisplayName(user),
+			UserUsername:        getUserUsername(user),
 			UserAvatarURL:       getUserAvatarURL(user),
 			UserRole:            getUserRole(user),
 			UserIsPremium:       getUserIsPremium(user),
 			UserIsPremiumActive: getUserIsPremiumActive(user),
-			LikesCount:          c.LikesCount,
-			LikedBy:             c.LikedBy,
+			LikesCount:          comment.LikesCount,
+			LikedBy:             comment.LikedBy,
+			TargetTitle:         targetTitle,
 		})
-		_ = movieTitle // Could be added to response if needed
 	}
 
 	return result, total, nil
@@ -596,21 +604,187 @@ func (r *CommentRepository) getUserByID(userID primitive.ObjectID) (*models.User
 	return &user, nil
 }
 
+func (r *CommentRepository) resolveCommentUser(raw bson.M, fallback primitive.ObjectID) (*models.User, error) {
+	if !fallback.IsZero() {
+		if user, err := r.getUserByID(fallback); err == nil && user != nil {
+			return user, nil
+		}
+	}
+
+	for _, key := range []string{"user_id", "author_id", "userId", "authorId", "created_by", "created_by_user_id"} {
+		if resolved := objectIDFromAny(raw[key]); !resolved.IsZero() {
+			if user, err := r.getUserByID(resolved); err == nil && user != nil {
+				return user, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("user not found")
+}
+
+func (r *CommentRepository) getCommentTargetMeta(targetType models.CommentTargetType, targetID, movieID primitive.ObjectID) (string, string, error) {
+	if targetType == models.CommentTargetEpisode && !targetID.IsZero() {
+		title, err := r.getEpisodeTitle(targetID)
+		return title, "", err
+	}
+
+	targetMovieID := movieID
+	if targetMovieID.IsZero() {
+		targetMovieID = targetID
+	}
+	if !targetMovieID.IsZero() {
+		return r.getMovieMeta(targetMovieID)
+	}
+	return "", "", fmt.Errorf("target not found")
+}
+
+func hydrateAdminComment(raw bson.M) models.MovieComment {
+	comment := models.MovieComment{
+		ID:             objectIDFromAny(raw["_id"]),
+		MovieID:        objectIDFromAny(firstAny(raw, "movie_id", "movieId")),
+		TargetID:       objectIDFromAny(firstAny(raw, "target_id", "targetId")),
+		UserID:         objectIDFromAny(firstAny(raw, "user_id", "author_id", "userId", "authorId", "created_by", "created_by_user_id")),
+		Content:        stringFromAny(raw["content"]),
+		Status:         stringFromAny(raw["status"]),
+		HasBlockedWord: boolFromAny(raw["has_blocked_word"]),
+		HasLink:        boolFromAny(raw["has_link"]),
+		CreatedAt:      timeFromAny(raw["created_at"]),
+		UpdatedAt:      timeFromAny(raw["updated_at"]),
+		IsPremiumUser:  boolFromAny(raw["is_premium_user"]),
+		LikesCount:     intFromAny(raw["likes_count"]),
+		LikedBy:        objectIDSliceFromAny(raw["liked_by"]),
+	}
+	if comment.Status == "" {
+		comment.Status = models.CommentStatusApproved
+	}
+	if parentID := objectIDFromAny(firstAny(raw, "parent_id", "parentId")); !parentID.IsZero() {
+		comment.ParentID = &parentID
+	}
+	targetType := stringFromAny(firstAny(raw, "target_type", "targetType"))
+	if targetType == "" {
+		if !comment.TargetID.IsZero() {
+			targetType = string(models.CommentTargetEpisode)
+		} else {
+			targetType = string(models.CommentTargetMovie)
+		}
+	}
+	comment.TargetType = models.CommentTargetType(targetType)
+	if comment.TargetID.IsZero() && comment.TargetType == models.CommentTargetMovie && !comment.MovieID.IsZero() {
+		comment.TargetID = comment.MovieID
+	}
+	return comment
+}
+
+func firstAny(raw bson.M, keys ...string) interface{} {
+	for _, key := range keys {
+		if value, ok := raw[key]; ok {
+			return value
+		}
+	}
+	return nil
+}
+
+func objectIDFromAny(value interface{}) primitive.ObjectID {
+	switch v := value.(type) {
+	case primitive.ObjectID:
+		return v
+	case string:
+		id, err := primitive.ObjectIDFromHex(strings.TrimSpace(v))
+		if err == nil {
+			return id
+		}
+	}
+	return primitive.NilObjectID
+}
+
+func stringFromAny(value interface{}) string {
+	if s, ok := value.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
+}
+
+func boolFromAny(value interface{}) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case int:
+		return v != 0
+	case int32:
+		return v != 0
+	case int64:
+		return v != 0
+	}
+	return false
+}
+
+func intFromAny(value interface{}) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int32:
+		return int(v)
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	}
+	return 0
+}
+
+func timeFromAny(value interface{}) time.Time {
+	switch v := value.(type) {
+	case time.Time:
+		return v
+	case primitive.DateTime:
+		return v.Time()
+	}
+	return time.Time{}
+}
+
+func objectIDSliceFromAny(value interface{}) []primitive.ObjectID {
+	items, ok := value.(primitive.A)
+	if !ok {
+		return nil
+	}
+	result := make([]primitive.ObjectID, 0, len(items))
+	for _, item := range items {
+		if oid := objectIDFromAny(item); !oid.IsZero() {
+			result = append(result, oid)
+		}
+	}
+	return result
+}
+
 // getMovieTitle retrieves movie title by ID
-func (r *CommentRepository) getMovieTitle(movieID primitive.ObjectID) (string, error) {
+func (r *CommentRepository) getMovieMeta(movieID primitive.ObjectID) (string, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	var movie models.Movie
 	err := r.movieCol.FindOne(ctx, bson.M{"_id": movieID}).Decode(&movie)
 	if err != nil {
+		return "", "", err
+	}
+	return movie.Title, movie.Slug, nil
+}
+
+func (r *CommentRepository) getEpisodeTitle(episodeID primitive.ObjectID) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	var episode models.Episode
+	err := r.episodeCol.FindOne(ctx, bson.M{"_id": episodeID}).Decode(&episode)
+	if err != nil {
 		return "", err
 	}
-	return movie.Title, nil
+	return episode.Title, nil
 }
 
 // getUserDisplayName extracts display name from user
 func getUserDisplayName(user *models.User) string {
+	if user == nil {
+		return ""
+	}
 	if user.DisplayName != "" {
 		return user.DisplayName
 	}
@@ -623,40 +797,43 @@ func getUserDisplayName(user *models.User) string {
 	return "Anonymous"
 }
 
+func getUserUsername(user *models.User) string {
+	if user == nil {
+		return ""
+	}
+	return user.TelegramUser
+}
+
 // getUserAvatarURL extracts avatar URL from user
 func getUserAvatarURL(user *models.User) string {
+	if user == nil {
+		return ""
+	}
 	return user.ProfileImageURL
 }
 
 // getUserRole extracts role from user
 func getUserRole(user *models.User) string {
+	if user == nil {
+		return ""
+	}
 	return user.Role
 }
 
 // getUserIsPremium extracts active premium status from user
 func getUserIsPremium(user *models.User) bool {
+	if user == nil {
+		return false
+	}
 	return user.IsPremiumActive()
 }
 
 // getUserIsPremiumActive extracts active premium status from user (same as getUserIsPremium but explicit)
 func getUserIsPremiumActive(user *models.User) bool {
+	if user == nil {
+		return false
+	}
 	return user.IsPremiumActive()
-}
-
-// GetEpisodeTitle retrieves episode title for admin display
-func (r *CommentRepository) getEpisodeTitle(episodeID primitive.ObjectID) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	var episode struct {
-		Title string `bson:"title"`
-	}
-
-	err := r.episodeCol.FindOne(ctx, bson.M{"_id": episodeID}).Decode(&episode)
-	if err != nil {
-		return "", err
-	}
-	return episode.Title, nil
 }
 
 // GetByTarget returns approved comments for a target (movie or episode)
@@ -701,7 +878,7 @@ func (r *CommentRepository) GetByTarget(targetType models.CommentTargetType, tar
 		// Get target title
 		targetTitle := ""
 		if targetType == models.CommentTargetMovie {
-			targetTitle, _ = r.getMovieTitle(targetID)
+			targetTitle, _, _ = r.getMovieMeta(targetID)
 		} else if targetType == models.CommentTargetEpisode {
 			targetTitle, _ = r.getEpisodeTitle(targetID)
 		}
@@ -720,6 +897,7 @@ func (r *CommentRepository) GetByTarget(targetType models.CommentTargetType, tar
 			UpdatedAt:           c.UpdatedAt,
 			IsPremiumUser:       c.IsPremiumUser,
 			UserDisplayName:     getUserDisplayName(user),
+			UserUsername:        getUserUsername(user),
 			UserAvatarURL:       getUserAvatarURL(user),
 			UserRole:            getUserRole(user),
 			UserIsPremium:       getUserIsPremium(user),
@@ -779,7 +957,7 @@ func (r *CommentRepository) GetAllApprovedByTarget(targetType models.CommentTarg
 		// Get target title
 		targetTitle := ""
 		if targetType == models.CommentTargetMovie {
-			targetTitle, _ = r.getMovieTitle(targetID)
+			targetTitle, _, _ = r.getMovieMeta(targetID)
 		} else if targetType == models.CommentTargetEpisode {
 			targetTitle, _ = r.getEpisodeTitle(targetID)
 		}
@@ -803,6 +981,7 @@ func (r *CommentRepository) GetAllApprovedByTarget(targetType models.CommentTarg
 			UpdatedAt:           c.UpdatedAt,
 			IsPremiumUser:       c.IsPremiumUser,
 			UserDisplayName:     getUserDisplayName(user),
+			UserUsername:        getUserUsername(user),
 			UserAvatarURL:       getUserAvatarURL(user),
 			UserRole:            getUserRole(user),
 			UserIsPremium:       getUserIsPremium(user),
@@ -864,6 +1043,7 @@ func (r *CommentRepository) GetRepliesByTarget(parentID primitive.ObjectID, targ
 			UpdatedAt:           c.UpdatedAt,
 			IsPremiumUser:       c.IsPremiumUser,
 			UserDisplayName:     getUserDisplayName(user),
+			UserUsername:        getUserUsername(user),
 			UserAvatarURL:       getUserAvatarURL(user),
 			UserRole:            getUserRole(user),
 			UserIsPremium:       getUserIsPremium(user),

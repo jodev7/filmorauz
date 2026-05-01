@@ -39,6 +39,14 @@ function MovieCardImpl({ movie, priority = false, showSkeleton = true }: Props) 
   // Get localized metadata based on locale
   const localizedTitle = getLocalizedTitle(movie);
   const localizedGenres = getLocalizedGenres(movie);
+  const isEpisode = movie.type === "episode";
+  const href = isEpisode ? `/episode/${movie.id}` : `/movies/${movie.slug}`;
+  const cardTitle = isEpisode && movie.series_title ? movie.series_title : localizedTitle;
+  const episodeSubtitle = isEpisode
+    ? `${movie.episode_number ? `${movie.episode_number}-qism` : "Epizod"}${
+        localizedTitle && movie.series_title && localizedTitle !== movie.series_title ? ` • ${localizedTitle}` : ""
+      }`
+    : "";
 
   // Use created_at from backend (ISO 8601 format)
   const createdAt = movie.created_at;
@@ -54,7 +62,7 @@ function MovieCardImpl({ movie, priority = false, showSkeleton = true }: Props) 
 
   return (
     <Link
-      href={`/movies/${movie.slug}`}
+      href={href}
       className={`movie-card group relative bg-[#12121a] rounded-2xl overflow-hidden border border-[#1e1e2e] transition-all duration-300 hover:-translate-y-1 hover:shadow-lg block h-full flex flex-col ${
         premium 
           ? "hover:border-yellow-500/40 hover:shadow-yellow-500/10" 
@@ -128,8 +136,13 @@ function MovieCardImpl({ movie, priority = false, showSkeleton = true }: Props) 
         <h3 className={`font-semibold text-xs sm:text-sm leading-tight line-clamp-2 text-white group-hover:transition-colors ${
           premium ? "group-hover:text-yellow-400" : "group-hover:text-orange-500"
         }`}>
-          {localizedTitle}
+          {cardTitle}
         </h3>
+        {episodeSubtitle && (
+          <p className="mt-1 text-[11px] leading-tight text-zinc-400 line-clamp-2">
+            {episodeSubtitle}
+          </p>
+        )}
         
         {/* Metadata row with rating and time */}
         <div className="flex items-center gap-2 mt-auto pt-1.5 text-xs text-zinc-500 flex-wrap">

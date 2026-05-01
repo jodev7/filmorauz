@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -161,23 +162,30 @@ func (r *ClipRepository) ListFiltered(ctx context.Context, filter bson.M, limit,
 
 // MovieClipGroup is a per-movie summary returned by GroupClips.
 type MovieClipGroup struct {
-	MovieID         primitive.ObjectID `json:"movie_id"`
-	Title           string             `json:"title"`
-	Slug            string             `json:"slug"`
-	Code            string             `json:"code"`
-	ClipCount       int                `json:"clip_count"`
-	IGUploadedCount int                `json:"ig_uploaded_count"`
-	LastIGUploadAt  *time.Time         `json:"last_ig_upload_at,omitempty"`
+	GroupKey         string               `json:"group_key"`
+	MovieID          primitive.ObjectID   `json:"movie_id"`
+	Title            string               `json:"title"`
+	Slug             string               `json:"slug"`
+	Code             string               `json:"code"`
+	ClipCount        int                  `json:"clip_count"`
+	IGUploadedCount  int                  `json:"ig_uploaded_count"`
+	LastIGUploadAt   *time.Time           `json:"last_ig_upload_at,omitempty"`
+	MatchMovieIDs    []primitive.ObjectID `json:"match_movie_ids,omitempty"`
+	MatchMovieCodes  []string             `json:"match_movie_codes,omitempty"`
+	MatchMovieSlugs  []string             `json:"match_movie_slugs,omitempty"`
+	MatchMovieTitles []string             `json:"match_movie_titles,omitempty"`
 }
 
 // EpisodeClipGroup is a per-episode summary inside a SeasonClipGroup.
 type EpisodeClipGroup struct {
-	EpisodeID       primitive.ObjectID `json:"episode_id"`
-	EpisodeNumber   int                `json:"episode_number"`
-	Title           string             `json:"title"`
-	ClipCount       int                `json:"clip_count"`
-	IGUploadedCount int                `json:"ig_uploaded_count"`
-	LastIGUploadAt  *time.Time         `json:"last_ig_upload_at,omitempty"`
+	GroupKey        string               `json:"group_key"`
+	EpisodeID       primitive.ObjectID   `json:"episode_id"`
+	EpisodeNumber   int                  `json:"episode_number"`
+	Title           string               `json:"title"`
+	ClipCount       int                  `json:"clip_count"`
+	IGUploadedCount int                  `json:"ig_uploaded_count"`
+	LastIGUploadAt  *time.Time           `json:"last_ig_upload_at,omitempty"`
+	MatchEpisodeIDs []primitive.ObjectID `json:"match_episode_ids,omitempty"`
 }
 
 // SeasonClipGroup nests episodes under a season number.
@@ -189,13 +197,17 @@ type SeasonClipGroup struct {
 
 // SeriesClipGroup is a per-series summary including nested seasons/episodes.
 type SeriesClipGroup struct {
-	SeriesID        primitive.ObjectID `json:"series_id"`
-	Title           string             `json:"title"`
-	Slug            string             `json:"slug"`
-	ClipCount       int                `json:"clip_count"`
-	IGUploadedCount int                `json:"ig_uploaded_count"`
-	LastIGUploadAt  *time.Time         `json:"last_ig_upload_at,omitempty"`
-	Seasons         []SeasonClipGroup  `json:"seasons"`
+	GroupKey          string               `json:"group_key"`
+	SeriesID          primitive.ObjectID   `json:"series_id"`
+	Title             string               `json:"title"`
+	Slug              string               `json:"slug"`
+	ClipCount         int                  `json:"clip_count"`
+	IGUploadedCount   int                  `json:"ig_uploaded_count"`
+	LastIGUploadAt    *time.Time           `json:"last_ig_upload_at,omitempty"`
+	Seasons           []SeasonClipGroup    `json:"seasons"`
+	MatchSeriesIDs    []primitive.ObjectID `json:"match_series_ids,omitempty"`
+	MatchSeriesSlugs  []string             `json:"match_series_slugs,omitempty"`
+	MatchSeriesTitles []string             `json:"match_series_titles,omitempty"`
 }
 
 // normalizeGroupKey returns a lowercase, whitespace-collapsed form of s.
@@ -217,6 +229,31 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func appendUniqueObjectID(dst []primitive.ObjectID, id primitive.ObjectID) []primitive.ObjectID {
+	if id.IsZero() {
+		return dst
+	}
+	for _, existing := range dst {
+		if existing == id {
+			return dst
+		}
+	}
+	return append(dst, id)
+}
+
+func appendUniqueString(dst []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return dst
+	}
+	for _, existing := range dst {
+		if existing == value {
+			return dst
+		}
+	}
+	return append(dst, value)
 }
 
 // GroupClips builds a (movies, series→season→episode) summary tree from the
@@ -323,17 +360,26 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 				if movies[i].Code == "" {
 					movies[i].Code = code
 				}
+				movies[i].MatchMovieIDs = appendUniqueObjectID(movies[i].MatchMovieIDs, id)
+				movies[i].MatchMovieCodes = appendUniqueString(movies[i].MatchMovieCodes, code)
+				movies[i].MatchMovieSlugs = appendUniqueString(movies[i].MatchMovieSlugs, slug)
+				movies[i].MatchMovieTitles = appendUniqueString(movies[i].MatchMovieTitles, title)
 				continue
 			}
 			movieIdx[key] = len(movies)
 			movies = append(movies, MovieClipGroup{
-				MovieID:         id,
-				Title:           title,
-				Slug:            slug,
-				Code:            code,
-				ClipCount:       clipCount,
-				IGUploadedCount: igCount,
-				LastIGUploadAt:  lastIG,
+				GroupKey:         key,
+				MovieID:          id,
+				Title:            title,
+				Slug:             slug,
+				Code:             code,
+				ClipCount:        clipCount,
+				IGUploadedCount:  igCount,
+				LastIGUploadAt:   lastIG,
+				MatchMovieIDs:    appendUniqueObjectID(nil, id),
+				MatchMovieCodes:  appendUniqueString(nil, code),
+				MatchMovieSlugs:  appendUniqueString(nil, slug),
+				MatchMovieTitles: appendUniqueString(nil, title),
 			})
 		}
 		sort.Slice(movies, func(i, j int) bool { return strings.ToLower(movies[i].Title) < strings.ToLower(movies[j].Title) })
@@ -349,6 +395,8 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 				"season_number": "$season_number",
 				"episode_id":    "$episode_id",
 			},
+			"content_kind":      bson.M{"$first": "$content_kind"},
+			"source_type":       bson.M{"$first": "$source_type"},
 			"series_title":      bson.M{"$first": "$series_title"},
 			"series_slug":       bson.M{"$first": "$series_slug"},
 			"episode_number":    bson.M{"$first": "$episode_number"},
@@ -362,8 +410,14 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 	// Group key priority: series_id > normalized series_slug > normalized
 	// series_title. This collapses Vonpis variants whose ObjectIDs differ
 	// (legacy ingestion sometimes emitted distinct ids for the same series).
+	type seasonBuild struct {
+		group      *SeasonClipGroup
+		episodeIdx map[string]int
+	}
+
 	seriesIdx := map[string]*SeriesClipGroup{}
-	seasonIdx := map[string]map[int]*SeasonClipGroup{}
+	seriesAlias := map[string]string{}
+	seasonIdx := map[string]map[int]*seasonBuild{}
 	seriesOrder := []string{}
 	{
 		cur, err := r.col.Aggregate(ctx, episodePipeline)
@@ -384,21 +438,38 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 			sID, _ := key["series_id"].(primitive.ObjectID)
 			seriesTitle := asString(row["series_title"])
 			seriesSlug := asString(row["series_slug"])
+			contentKind := asString(row["content_kind"])
+			sourceType := asString(row["source_type"])
 
-			var groupKey string
+			var primaryKey string
 			switch {
 			case !sID.IsZero():
-				groupKey = "id:" + sID.Hex()
+				primaryKey = "id:" + sID.Hex()
 			case normalizeGroupKey(seriesSlug) != "":
-				groupKey = "slug:" + normalizeGroupKey(seriesSlug)
+				primaryKey = "slug:" + normalizeGroupKey(seriesSlug)
 			case normalizeGroupKey(seriesTitle) != "":
-				groupKey = "title:" + normalizeGroupKey(seriesTitle)
+				primaryKey = "title:" + normalizeGroupKey(seriesTitle)
 			default:
 				continue
+			}
+			groupKey := primaryKey
+			titleAlias := ""
+			if normalizeGroupKey(seriesTitle) != "" && (contentKind == "series" || sourceType == "series_episode") {
+				titleAlias = "title:" + normalizeGroupKey(seriesTitle)
+			}
+			if titleAlias != "" {
+				if canonical, ok := seriesAlias[titleAlias]; ok {
+					groupKey = canonical
+				}
+			}
+			if canonical, ok := seriesAlias[primaryKey]; ok {
+				groupKey = canonical
 			}
 
 			seasonNum := asInt(key["season_number"])
 			epID, _ := key["episode_id"].(primitive.ObjectID)
+			epNum := asInt(row["episode_number"])
+			epTitle := asString(row["episode_title"])
 			clipCount := asInt(row["clip_count"])
 			igCount := asInt(row["ig_uploaded_count"])
 			lastIG := asTimePtr(row["last_ig_upload_at"])
@@ -406,19 +477,34 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 			sg := seriesIdx[groupKey]
 			if sg == nil {
 				sg = &SeriesClipGroup{
-					SeriesID: sID,
-					Title:    seriesTitle,
-					Slug:     seriesSlug,
+					GroupKey:          groupKey,
+					SeriesID:          sID,
+					Title:             seriesTitle,
+					Slug:              seriesSlug,
+					MatchSeriesIDs:    appendUniqueObjectID(nil, sID),
+					MatchSeriesSlugs:  appendUniqueString(nil, seriesSlug),
+					MatchSeriesTitles: appendUniqueString(nil, seriesTitle),
 				}
 				seriesIdx[groupKey] = sg
-				seasonIdx[groupKey] = map[int]*SeasonClipGroup{}
+				seasonIdx[groupKey] = map[int]*seasonBuild{}
 				seriesOrder = append(seriesOrder, groupKey)
+				seriesAlias[primaryKey] = groupKey
+				if titleAlias != "" {
+					seriesAlias[titleAlias] = groupKey
+				}
 			} else {
 				if sg.SeriesID.IsZero() && !sID.IsZero() {
 					sg.SeriesID = sID
 				}
 				sg.Title = firstNonEmpty(sg.Title, seriesTitle)
 				sg.Slug = firstNonEmpty(sg.Slug, seriesSlug)
+				sg.MatchSeriesIDs = appendUniqueObjectID(sg.MatchSeriesIDs, sID)
+				sg.MatchSeriesSlugs = appendUniqueString(sg.MatchSeriesSlugs, seriesSlug)
+				sg.MatchSeriesTitles = appendUniqueString(sg.MatchSeriesTitles, seriesTitle)
+				seriesAlias[primaryKey] = groupKey
+				if titleAlias != "" {
+					seriesAlias[titleAlias] = groupKey
+				}
 			}
 			sg.ClipCount += clipCount
 			sg.IGUploadedCount += igCount
@@ -429,17 +515,55 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 			seasonMap := seasonIdx[groupKey]
 			seasonGroup := seasonMap[seasonNum]
 			if seasonGroup == nil {
-				seasonGroup = &SeasonClipGroup{SeasonNumber: seasonNum}
+				seasonGroup = &seasonBuild{
+					group:      &SeasonClipGroup{SeasonNumber: seasonNum},
+					episodeIdx: map[string]int{},
+				}
 				seasonMap[seasonNum] = seasonGroup
 			}
-			seasonGroup.ClipCount += clipCount
-			seasonGroup.Episodes = append(seasonGroup.Episodes, EpisodeClipGroup{
+			seasonGroup.group.ClipCount += clipCount
+
+			episodePrimaryKey := ""
+			switch {
+			case !epID.IsZero():
+				episodePrimaryKey = "id:" + epID.Hex()
+			case epNum > 0 && normalizeGroupKey(epTitle) != "":
+				episodePrimaryKey = "numtitle:" + strconv.Itoa(epNum) + ":" + normalizeGroupKey(epTitle)
+			case epNum > 0:
+				episodePrimaryKey = "num:" + strconv.Itoa(epNum)
+			default:
+				episodePrimaryKey = "title:" + normalizeGroupKey(epTitle)
+			}
+
+			episodeMergeKey := episodePrimaryKey
+			if epNum > 0 && normalizeGroupKey(epTitle) != "" {
+				episodeMergeKey = "numtitle:" + strconv.Itoa(epNum) + ":" + normalizeGroupKey(epTitle)
+			}
+			if idx, ok := seasonGroup.episodeIdx[episodeMergeKey]; ok {
+				seasonGroup.group.Episodes[idx].ClipCount += clipCount
+				seasonGroup.group.Episodes[idx].IGUploadedCount += igCount
+				if lastIG != nil && (seasonGroup.group.Episodes[idx].LastIGUploadAt == nil || lastIG.After(*seasonGroup.group.Episodes[idx].LastIGUploadAt)) {
+					seasonGroup.group.Episodes[idx].LastIGUploadAt = lastIG
+				}
+				if seasonGroup.group.Episodes[idx].EpisodeID.IsZero() && !epID.IsZero() {
+					seasonGroup.group.Episodes[idx].EpisodeID = epID
+				}
+				if seasonGroup.group.Episodes[idx].Title == "" {
+					seasonGroup.group.Episodes[idx].Title = epTitle
+				}
+				seasonGroup.group.Episodes[idx].MatchEpisodeIDs = appendUniqueObjectID(seasonGroup.group.Episodes[idx].MatchEpisodeIDs, epID)
+				continue
+			}
+			seasonGroup.episodeIdx[episodeMergeKey] = len(seasonGroup.group.Episodes)
+			seasonGroup.group.Episodes = append(seasonGroup.group.Episodes, EpisodeClipGroup{
+				GroupKey:        episodePrimaryKey,
 				EpisodeID:       epID,
-				EpisodeNumber:   asInt(row["episode_number"]),
-				Title:           asString(row["episode_title"]),
+				EpisodeNumber:   epNum,
+				Title:           epTitle,
 				ClipCount:       clipCount,
 				IGUploadedCount: igCount,
 				LastIGUploadAt:  lastIG,
+				MatchEpisodeIDs: appendUniqueObjectID(nil, epID),
 			})
 		}
 	}
@@ -455,8 +579,11 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 		sort.Ints(seasonNums)
 		seasons := make([]SeasonClipGroup, 0, len(seasonNums))
 		for _, n := range seasonNums {
-			s := seasonMap[n]
+			s := seasonMap[n].group
 			sort.Slice(s.Episodes, func(i, j int) bool {
+				if s.Episodes[i].EpisodeNumber == s.Episodes[j].EpisodeNumber {
+					return strings.ToLower(s.Episodes[i].Title) < strings.ToLower(s.Episodes[j].Title)
+				}
 				return s.Episodes[i].EpisodeNumber < s.Episodes[j].EpisodeNumber
 			})
 			seasons = append(seasons, *s)

@@ -198,7 +198,7 @@ function PlayerOverlayAd({
 }
 
 // Fetch watch progress for resume
-async function getWatchProgressForResume(token: string, movieId: string): Promise<number> {
+async function getWatchProgressForResume(token: string, targetId: string, targetType: "movie" | "episode"): Promise<number> {
   try {
     const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/user/history`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -206,7 +206,11 @@ async function getWatchProgressForResume(token: string, movieId: string): Promis
     if (!res.ok) return 0;
     const json = await res.json();
     const history = json.data || [];
-    const item = history.find((h: any) => h.movie_id === movieId);
+    const item = history.find((h: any) => {
+      const historyTargetId = h.target_id || h.movie_id;
+      const historyTargetType = h.target_type || h.type || "movie";
+      return historyTargetId === targetId && historyTargetType === targetType;
+    });
     if (item && item.last_position_sec > 30 && item.last_position_sec < (item.duration_sec || 0) - 60) {
       return item.last_position_sec;
     }
@@ -280,6 +284,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   const [recommendations, setRecommendations] = useState<Movie[]>([]);
   const [isLoadingRecommendations, setIsLoadingRecommendations] = useState(true);
   const [resumePosition, setResumePosition] = useState(0);
+  const [viewCount, setViewCount] = useState(movie.views ?? 0);
   const [resolvedPlaybackUrl, setResolvedPlaybackUrl] = useState<string | null>(null);
   const [playbackAccessError, setPlaybackAccessError] = useState<string | null>(null);
   const [autoNextCountdown, setAutoNextCountdown] = useState(5);
@@ -308,6 +313,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   const localizedGenres = getLocalizedGenres(movie);
   const localizedCountry = getLocalizedCountry(movie);
   const isPremiumViewer = isUserPremium(user);
+  const targetType = movie.type === "episode" ? "episode" : "movie";
   const backHref = movie.type === "episode"
     ? movie.series_slug
       ? `/series/${movie.series_slug}`
@@ -368,10 +374,10 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   // Fetch watch progress for resume
   useEffect(() => {
     if (!user || !token) return;
-    getWatchProgressForResume(token, movie.id)
+    getWatchProgressForResume(token, movie.id, targetType)
       .then(setResumePosition)
       .catch(console.error);
-  }, [user, token, movie.id]);
+  }, [user, token, movie.id, targetType]);
 
   // Fetch recommendations
   useEffect(() => {
@@ -394,7 +400,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
     
     // Don't save if near the end (will mark complete instead)
     if (currentTime < duration - 60) {
-      saveWatchProgress(token, movie.id, Math.floor(currentTime), Math.floor(duration)).catch(console.error);
+      saveWatchProgress(token, movie.id, Math.floor(currentTime), Math.floor(duration), { targetType }).catch(console.error);
     }
   };
   handleTimeUpdate.lastSave = 0;
@@ -402,7 +408,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   // Handle video end
   const handleVideoEnded = () => {
     if (user && token) {
-      markWatchComplete(token, movie.id, Math.floor(movie.duration * 60)).catch(console.error);
+      markWatchComplete(token, movie.id, Math.floor(movie.duration * 60), { targetType }).catch(console.error);
     }
     if (movie.type === "episode" && episodeNavigation?.nextEpisode) {
       if (isPremiumViewer) {
@@ -436,6 +442,10 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   }, [movie.id]);
 
   useEffect(() => {
+    setViewCount(movie.views ?? 0);
+  }, [movie.id, movie.views]);
+
+  useEffect(() => {
     if (!showAutoNextCountdown || !episodeNavigation?.nextEpisode) return;
 
     autoNextIntervalRef.current = setInterval(() => {
@@ -461,35 +471,37 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
     hasRecorded.current = true;
 
     // Record public view count (no auth required)
-    recordView(movie.id).catch((err) => {
+    recordView(movie.id)
+      .then(() => setViewCount((prev) => prev + 1))
+      .catch((err) => {
       console.error("Failed to record view:", err);
     });
 
     // Record watch history for authenticated users
     if (user && token) {
-      recordWatchHistory(token, movie.id).catch((err) => {
+      recordWatchHistory(token, movie.id, { targetType }).catch((err) => {
         console.error("Failed to record watch history:", err);
       });
     }
-  }, [movie.id, user, token]);
+  }, [movie.id, user, token, targetType]);
 
   // Check if movie is favorite
   useEffect(() => {
     if (!user || !token) return;
-    checkIsFavorite(token, movie.id)
+    checkIsFavorite(token, movie.id, { targetType })
       .then(setIsFavorite)
       .catch(console.error);
-  }, [user, token, movie.id]);
+  }, [user, token, movie.id, targetType]);
 
   const handleToggleFavorite = async () => {
     if (!user || !token) return;
     setIsLoading(true);
     try {
       if (isFavorite) {
-        await removeFavorite(token, movie.id);
+        await removeFavorite(token, movie.id, { targetType });
         setIsFavorite(false);
       } else {
-        await addFavorite(token, movie.id);
+        await addFavorite(token, movie.id, { targetType });
         setIsFavorite(true);
       }
     } catch (error) {
@@ -600,12 +612,6 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
                     ? `/series/${movie.series_slug}`
                     : undefined
                 }
-                previewImageUrl={normalizeMediaUrl(
-                  movie.backdrop_url || movie.poster_url,
-                  DEFAULT_POSTER_PLACEHOLDER,
-                )}
-                thumbnailsBaseUrl={movie.thumbnails_base_url}
-                thumbnailInterval={movie.thumbnail_interval}
               />
             ) : (
               <div className="flex aspect-video items-center justify-center rounded-xl bg-gray-900">
@@ -726,7 +732,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
             )}
             <div className="flex items-center gap-1.5 text-gray-400 pt-2">
               <Eye size={14} />
-              <span className="text-xs">{movie.views ?? 0} ko'rish</span>
+              <span className="text-xs">{viewCount} ko'rish</span>
             </div>
             {user && token && (
               <button

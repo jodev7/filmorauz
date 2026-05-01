@@ -790,9 +790,41 @@ func (h *CommentHandler) AdminGetComments(c *gin.Context) {
 	// Convert to response format with user info
 	result := make([]gin.H, 0, len(comments))
 	for _, c := range comments {
+		targetType := string(c.TargetType)
+		if targetType == "" {
+			targetType = string(models.CommentTargetMovie)
+		}
+		targetID := ""
+		if !c.TargetID.IsZero() {
+			targetID = c.TargetID.Hex()
+		} else if !c.MovieID.IsZero() {
+			targetID = c.MovieID.Hex()
+		}
+		targetURL := ""
+		targetSlug := ""
+		if targetType == string(models.CommentTargetEpisode) && targetID != "" {
+			targetURL = fmt.Sprintf("/episode/%s", targetID)
+		} else if h.movieRepo != nil && !c.MovieID.IsZero() {
+			if movie, err := h.movieRepo.FindByIDHex(c.MovieID.Hex()); err == nil && movie != nil {
+				targetSlug = movie.Slug
+				if targetSlug != "" {
+					targetURL = fmt.Sprintf("/movies/%s", targetSlug)
+				}
+			}
+		}
+
+		userDisplayName := c.UserDisplayName
+		if userDisplayName == "" {
+			userDisplayName = "Noma'lum"
+		}
 		result = append(result, gin.H{
 			"id":                     c.ID.Hex(),
 			"movie_id":               c.MovieID.Hex(),
+			"target_type":            targetType,
+			"target_id":              targetID,
+			"target_title":           c.TargetTitle,
+			"target_slug":            targetSlug,
+			"target_url":             targetURL,
 			"user_id":                c.UserID.Hex(),
 			"parent_id":              pointerToString(c.ParentID),
 			"content":                c.Content,
@@ -801,11 +833,20 @@ func (h *CommentHandler) AdminGetComments(c *gin.Context) {
 			"has_link":               c.HasLink,
 			"created_at":             c.CreatedAt,
 			"updated_at":             c.UpdatedAt,
-			"user_display_name":      c.UserDisplayName,
+			"user_display_name":      userDisplayName,
 			"user_avatar_url":        c.UserAvatarURL,
 			"user_role":              c.UserRole,
 			"user_is_premium":        c.UserIsPremium,
 			"user_is_premium_active": c.UserIsPremiumActive,
+			"user": gin.H{
+				"id":                c.UserID.Hex(),
+				"display_name":      userDisplayName,
+				"username":          c.UserUsername,
+				"avatar_url":        c.UserAvatarURL,
+				"role":              c.UserRole,
+				"is_premium":        c.UserIsPremium,
+				"is_premium_active": c.UserIsPremiumActive,
+			},
 		})
 	}
 

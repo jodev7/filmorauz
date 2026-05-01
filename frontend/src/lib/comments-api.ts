@@ -36,6 +36,9 @@ export interface Comment {
     is_premium_active?: boolean;
   };
   movie_title?: string;
+  target_title?: string;
+  target_slug?: string;
+  target_url?: string;
 }
 
 export type CommentStatus = "pending" | "approved" | "rejected";

@@ -743,36 +743,67 @@ export async function updatePrivacySettings(token: string, privacy: PrivacySetti
 
 export interface WatchHistoryItem {
   id: string;
-  movie_id: string;
+  movie_id?: string;
+  target_type: "movie" | "episode" | "series";
+  target_id: string;
+  series_id?: string;
+  season_id?: string;
+  episode_id?: string;
   watched_at: string;
+  last_position_sec?: number;
+  duration_sec?: number;
+  progress_percent?: number;
+  completed?: boolean;
   title: string;
   poster_url: string;
+  backdrop_url?: string;
   slug: string;
   code: string;
   year: number;
   quality: string;
   website_url: string;
+  type?: "movie" | "episode" | "series";
+  series_title?: string;
+  series_slug?: string;
+  episode_number?: number;
 }
 
 export interface FavoriteItem {
   id: string;
-  movie_id: string;
+  movie_id?: string;
+  target_type: "movie" | "episode" | "series";
+  target_id: string;
+  series_id?: string;
+  season_id?: string;
   created_at: string;
   title: string;
   poster_url: string;
+  backdrop_url?: string;
   slug: string;
   code: string;
   year: number;
   quality: string;
   website_url: string;
+  type?: "movie" | "episode" | "series";
+  series_title?: string;
+  series_slug?: string;
+  episode_number?: number;
+}
+
+interface TargetOptions {
+  targetType?: "movie" | "episode" | "series";
 }
 
 // Record watch history (authenticated)
-export async function recordWatchHistory(token: string, movieId: string): Promise<void> {
+export async function recordWatchHistory(token: string, targetId: string, options?: TargetOptions): Promise<void> {
   const res = await fetch(`${API_URL}/user/history/watch`, {
     method: "POST",
     headers: authHeaders(token),
-    body: JSON.stringify({ movie_id: movieId }),
+    body: JSON.stringify({
+      movie_id: targetId,
+      target_id: targetId,
+      target_type: options?.targetType || "movie",
+    }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "Failed to record watch history" }));
@@ -781,27 +812,27 @@ export async function recordWatchHistory(token: string, movieId: string): Promis
 }
 
 // Save watch progress (authenticated)
-export async function saveWatchProgress(token: string, movieId: string, positionSec: number, durationSec: number): Promise<void> {
-  const res = await fetch(`${API_URL}/watch/${movieId}/progress`, {
+export async function saveWatchProgress(token: string, targetId: string, positionSec: number, durationSec: number, options?: TargetOptions): Promise<void> {
+  const res = await fetch(`${API_URL}/watch/${targetId}/progress`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ positionSec, durationSec }),
+    body: JSON.stringify({ positionSec, durationSec, target_type: options?.targetType || "movie" }),
   });
   if (!res.ok) throw new Error("Failed to save progress");
 }
 
 // Mark watch as complete (authenticated)
-export async function markWatchComplete(token: string, movieId: string, durationSec?: number): Promise<void> {
-  const res = await fetch(`${API_URL}/watch/${movieId}/complete`, {
+export async function markWatchComplete(token: string, targetId: string, durationSec?: number, options?: TargetOptions): Promise<void> {
+  const res = await fetch(`${API_URL}/watch/${targetId}/complete`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ durationSec }),
+    body: JSON.stringify({ durationSec, target_type: options?.targetType || "movie" }),
   });
   if (!res.ok) throw new Error("Failed to mark complete");
 }
@@ -820,8 +851,9 @@ export async function getWatchHistory(token: string): Promise<WatchHistoryItem[]
 }
 
 // Add to favorites (authenticated)
-export async function addFavorite(token: string, movieId: string): Promise<void> {
-  const res = await fetch(`${API_URL}/user/favorites/${movieId}`, {
+export async function addFavorite(token: string, targetId: string, options?: TargetOptions): Promise<void> {
+  const query = options?.targetType ? `?target_type=${encodeURIComponent(options.targetType)}` : "";
+  const res = await fetch(`${API_URL}/user/favorites/${targetId}${query}`, {
     method: "POST",
     headers: authHeaders(token),
   });
@@ -832,8 +864,9 @@ export async function addFavorite(token: string, movieId: string): Promise<void>
 }
 
 // Remove from favorites (authenticated)
-export async function removeFavorite(token: string, movieId: string): Promise<void> {
-  const res = await fetch(`${API_URL}/user/favorites/${movieId}`, {
+export async function removeFavorite(token: string, targetId: string, options?: TargetOptions): Promise<void> {
+  const query = options?.targetType ? `?target_type=${encodeURIComponent(options.targetType)}` : "";
+  const res = await fetch(`${API_URL}/user/favorites/${targetId}${query}`, {
     method: "DELETE",
     headers: authHeaders(token),
   });
@@ -856,8 +889,8 @@ export async function getFavorites(token: string): Promise<FavoriteItem[]> {
   return json.data || [];
 }
 
-// Check if movie is favorite (authenticated)
-export async function checkIsFavorite(token: string, movieId: string): Promise<boolean> {
+// Check if target is favorite (authenticated)
+export async function checkIsFavorite(token: string, targetId: string, options?: TargetOptions): Promise<boolean> {
   const res = await fetch(`${API_URL}/user/favorites`, {
     headers: authHeaders(token),
     cache: "no-store",
@@ -867,15 +900,19 @@ export async function checkIsFavorite(token: string, movieId: string): Promise<b
   }
   const json = await res.json();
   const favorites: FavoriteItem[] = json.data || [];
-  return favorites.some(f => f.movie_id === movieId);
+  const targetType = options?.targetType || "movie";
+  return favorites.some((f) => {
+    const favoriteTargetId = f.target_id || f.movie_id;
+    const favoriteTargetType = f.target_type || f.type || "movie";
+    return favoriteTargetId === targetId && favoriteTargetType === targetType;
+  });
 }
 
 // Record view (public - no auth required)
-export async function recordView(movieId: string): Promise<void> {
-  const res = await fetch(`${API_URL}/movies/${movieId}/view`, {
+export async function recordView(targetId: string): Promise<void> {
+  await fetch(`${API_URL}/movies/${targetId}/view`, {
     method: "POST",
   });
-  // Silently fail - view counting should not break the app
 }
 
 // ── Rating API ─────────────────────────────────────────────────

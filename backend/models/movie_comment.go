@@ -58,6 +58,7 @@ type CommentWithUser struct {
 	IsPremiumUser bool `json:"is_premium_user"`
 	// User info
 	UserDisplayName     string `json:"user_display_name"`
+	UserUsername        string `json:"user_username,omitempty"`
 	UserAvatarURL       string `json:"user_avatar_url,omitempty"`
 	UserRole            string `json:"user_role"`
 	UserIsPremium       bool   `json:"user_is_premium"`

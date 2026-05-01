@@ -139,9 +139,6 @@ func (h *SeriesHandler) GetEpisode(c *gin.Context) {
 		return
 	}
 
-	// Increment views
-	h.seriesService.IncrementEpisodeViews(id)
-
 	// Get series to include slug
 	series, err := h.seriesService.GetSeriesByID(episode.SeriesID)
 	seriesSlug := ""

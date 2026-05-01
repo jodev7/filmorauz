@@ -124,7 +124,75 @@ func (r *SeriesRepository) GetByID(id primitive.ObjectID) (*models.Series, error
 		return nil, err
 	}
 	series.Genre = normalizeSeriesGenres(series.Genre)
+	if err := r.applyEpisodeRatingSummary(ctx, &series); err != nil {
+		return nil, err
+	}
 	return &series, nil
+}
+
+func (r *SeriesRepository) applyEpisodeRatingSummary(ctx context.Context, series *models.Series) error {
+	if series == nil {
+		return nil
+	}
+	list := []models.Series{*series}
+	if err := r.applyEpisodeRatingSummaries(ctx, list); err != nil {
+		return err
+	}
+	*series = list[0]
+	return nil
+}
+
+func (r *SeriesRepository) applyEpisodeRatingSummaries(ctx context.Context, seriesList []models.Series) error {
+	if len(seriesList) == 0 {
+		return nil
+	}
+
+	seriesIDs := make([]primitive.ObjectID, 0, len(seriesList))
+	indexByID := make(map[primitive.ObjectID]int, len(seriesList))
+	for i := range seriesList {
+		seriesIDs = append(seriesIDs, seriesList[i].ID)
+		indexByID[seriesList[i].ID] = i
+		seriesList[i].RatingAvg = 0
+		seriesList[i].RatingCount = 0
+	}
+
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"series_id": bson.M{"$in": seriesIDs}}}},
+		{{Key: "$lookup", Value: bson.M{
+			"from":         "episode_ratings",
+			"localField":   "_id",
+			"foreignField": "episode_id",
+			"as":           "ratings",
+		}}},
+		{{Key: "$unwind", Value: bson.M{"path": "$ratings", "preserveNullAndEmptyArrays": false}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":   "$series_id",
+			"avg":   bson.M{"$avg": "$ratings.rating"},
+			"count": bson.M{"$sum": 1},
+		}}},
+	}
+
+	cursor, err := r.episodeCol.Aggregate(ctx, pipeline)
+	if err != nil {
+		return err
+	}
+	defer cursor.Close(ctx)
+
+	for cursor.Next(ctx) {
+		var row struct {
+			ID    primitive.ObjectID `bson:"_id"`
+			Avg   float64            `bson:"avg"`
+			Count int64              `bson:"count"`
+		}
+		if err := cursor.Decode(&row); err != nil {
+			return err
+		}
+		if idx, ok := indexByID[row.ID]; ok {
+			seriesList[idx].RatingAvg = row.Avg
+			seriesList[idx].RatingCount = row.Count
+		}
+	}
+	return cursor.Err()
 }
 
 func (r *SeriesRepository) GetBySlug(slug string) (*models.Series, error) {
@@ -137,6 +205,9 @@ func (r *SeriesRepository) GetBySlug(slug string) (*models.Series, error) {
 		return nil, err
 	}
 	series.Genre = normalizeSeriesGenres(series.Genre)
+	if err := r.applyEpisodeRatingSummary(ctx, &series); err != nil {
+		return nil, err
+	}
 	return &series, nil
 }
 
@@ -149,6 +220,9 @@ func (r *SeriesRepository) FindByCode(code string) (*models.Series, error) {
 		return nil, err
 	}
 	series.Genre = normalizeSeriesGenres(series.Genre)
+	if err := r.applyEpisodeRatingSummary(ctx, &series); err != nil {
+		return nil, err
+	}
 	return &series, nil
 }
 
@@ -193,6 +267,9 @@ func (r *SeriesRepository) List(limit, skip int, genre string) ([]models.Series,
 	}
 	for i := range seriesList {
 		seriesList[i].Genre = normalizeSeriesGenres(seriesList[i].Genre)
+	}
+	if err := r.applyEpisodeRatingSummaries(ctx, seriesList); err != nil {
+		return nil, err
 	}
 
 	return seriesList, nil
@@ -528,14 +605,14 @@ func (r *SeriesRepository) UpdateEpisode(episode *models.Episode) error {
 	filter := bson.M{"_id": episode.ID}
 	update := bson.M{
 		"$set": bson.M{
-			"season_id":      episode.SeasonID,
-			"episode_number": episode.EpisodeNumber,
-			"title":          episode.Title,
-			"description":    episode.Description,
-			"thumbnail_url":  episode.ThumbnailURL,
-			"video_url":      episode.VideoURL,
-			"embed_url":      episode.EmbedURL,
-			"source_type":    episode.SourceType,
+			"season_id":           episode.SeasonID,
+			"episode_number":      episode.EpisodeNumber,
+			"title":               episode.Title,
+			"description":         episode.Description,
+			"thumbnail_url":       episode.ThumbnailURL,
+			"video_url":           episode.VideoURL,
+			"embed_url":           episode.EmbedURL,
+			"source_type":         episode.SourceType,
 			"duration":            episode.Duration,
 			"air_date":            episode.AirDate,
 			"updated_at":          episode.UpdatedAt,

@@ -33,21 +33,67 @@ func (h *ClipHandler) ListClips(c *gin.Context) {
 	offset, _ := strconv.ParseInt(c.DefaultQuery("offset", "0"), 10, 64)
 
 	movieIDStr := strings.TrimSpace(c.Query("movie_id"))
+	movieIDsStr := strings.TrimSpace(c.Query("movie_ids"))
+	movieCodeStr := strings.TrimSpace(c.Query("movie_code"))
+	movieSlugStr := strings.TrimSpace(c.Query("movie_slug"))
+	movieTitlesStr := strings.TrimSpace(c.Query("movie_titles"))
 	seriesIDStr := strings.TrimSpace(c.Query("series_id"))
 	episodeIDStr := strings.TrimSpace(c.Query("episode_id"))
+	episodeIDsStr := strings.TrimSpace(c.Query("episode_ids"))
 
 	ctx := context.Background()
 
 	// Scoped lookup (lazy-load a single content group's clips).
-	if movieIDStr != "" || seriesIDStr != "" || episodeIDStr != "" {
+	if movieIDStr != "" || movieIDsStr != "" || movieCodeStr != "" || movieSlugStr != "" || movieTitlesStr != "" || seriesIDStr != "" || episodeIDStr != "" || episodeIDsStr != "" {
 		filter := bson.M{}
+		movieOr := make([]bson.M, 0, 4)
 		if movieIDStr != "" {
 			id, err := primitive.ObjectIDFromHex(movieIDStr)
 			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movie_id"})
 				return
 			}
-			filter["movie_id"] = id
+			movieOr = append(movieOr, bson.M{"movie_id": id})
+		}
+		if movieIDsStr != "" {
+			movieIDs := make([]primitive.ObjectID, 0)
+			for _, raw := range strings.Split(movieIDsStr, ",") {
+				raw = strings.TrimSpace(raw)
+				if raw == "" {
+					continue
+				}
+				id, err := primitive.ObjectIDFromHex(raw)
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movie_ids"})
+					return
+				}
+				movieIDs = append(movieIDs, id)
+			}
+			if len(movieIDs) > 0 {
+				movieOr = append(movieOr, bson.M{"movie_id": bson.M{"$in": movieIDs}})
+			}
+		}
+		if movieCodeStr != "" {
+			if codes := splitCSV(movieCodeStr); len(codes) > 0 {
+				movieOr = append(movieOr, bson.M{"movie_code": bson.M{"$in": codes}})
+			}
+		}
+		if movieSlugStr != "" {
+			if slugs := splitCSV(movieSlugStr); len(slugs) > 0 {
+				movieOr = append(movieOr, bson.M{"movie_slug": bson.M{"$in": slugs}})
+			}
+		}
+		if movieTitlesStr != "" {
+			if titles := splitCSV(movieTitlesStr); len(titles) > 0 {
+				movieOr = append(movieOr, bson.M{"movie_title": bson.M{"$in": titles}})
+			}
+		}
+		if len(movieOr) == 1 {
+			for k, v := range movieOr[0] {
+				filter[k] = v
+			}
+		} else if len(movieOr) > 1 {
+			filter["$or"] = movieOr
 		}
 		if seriesIDStr != "" {
 			id, err := primitive.ObjectIDFromHex(seriesIDStr)
@@ -64,6 +110,24 @@ func (h *ClipHandler) ListClips(c *gin.Context) {
 				return
 			}
 			filter["episode_id"] = id
+		}
+		if episodeIDsStr != "" {
+			episodeIDs := make([]primitive.ObjectID, 0)
+			for _, raw := range strings.Split(episodeIDsStr, ",") {
+				raw = strings.TrimSpace(raw)
+				if raw == "" {
+					continue
+				}
+				id, err := primitive.ObjectIDFromHex(raw)
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode_ids"})
+					return
+				}
+				episodeIDs = append(episodeIDs, id)
+			}
+			if len(episodeIDs) > 0 {
+				filter["episode_id"] = bson.M{"$in": episodeIDs}
+			}
 		}
 		clips, total, err := h.clipRepo.ListFiltered(ctx, filter, limit, offset)
 		if err != nil {
@@ -107,10 +171,10 @@ func (h *ClipHandler) ListClipGroups(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"movies":          movies,
-		"series":          series,
-		"total_clips":     total,
-		"total_contents":  len(movies) + len(series),
+		"movies":         movies,
+		"series":         series,
+		"total_clips":    total,
+		"total_contents": len(movies) + len(series),
 	})
 }
 
@@ -247,6 +311,18 @@ func (h *ClipHandler) DownloadClip(c *gin.Context) {
 	if _, err := io.Copy(c.Writer, resp.Body); err != nil {
 		log.Printf("[ClipHandler] DownloadClip: stream copy failed: %v", err)
 	}
+}
+
+func splitCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func (h *ClipHandler) SaveClips(c *gin.Context) {

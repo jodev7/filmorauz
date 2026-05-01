@@ -839,10 +839,9 @@ func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User
 	b.sendMessage(chatID, intro)
 
 	// Telegram Stars: empty provider token + currency "XTR".
-	// Amount is in the smallest currency unit, i.e. stars * 100
-	// (e.g. 100 Stars → 10000). The Bot API rejects raw star counts.
+	// For XTR, amount equals the raw star count (NOT multiplied by 100).
 	payload := fmt.Sprintf("premium:%d:%s", userID, pkg.ID)
-	amount := pkg.StarsPrice * 100
+	amount := pkg.StarsPrice
 	prices := []tgbotapi.LabeledPrice{
 		{Label: "Premium " + pkg.Label, Amount: amount},
 	}
@@ -852,18 +851,31 @@ func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User
 		fmt.Sprintf("Premium obuna — %d oy. Reklamasiz tomosha, 1080p, premium kontent.", pkg.DurationMonths),
 		payload,
 		"", // empty provider token = Telegram Stars
-		pkg.ID,
+		"", // minimal Stars invoice: no start parameter
 		"XTR",
 		prices,
 	)
-	log.Printf("[PREMIUM] sendInvoice user=%d pkg=%s stars=%d amount=%d currency=XTR",
-		userID, pkg.ID, pkg.StarsPrice, amount)
-	if _, err := b.api.Send(invoice); err != nil {
-		// Surface the exact Telegram API error so misconfigurations
-		// (Payments not enabled in BotFather, user hasn't /started, etc.)
-		// show up directly in the logs.
-		log.Printf("[PREMIUM] sendInvoice FAILED user=%d pkg=%s amount=%d err=%v",
-			userID, pkg.ID, amount, err)
+	pricesJSON, _ := json.Marshal(prices)
+	log.Printf("[PREMIUM] sendInvoice user=%d pkg=%s payload=%q currency=%q provider_token=%q start_parameter=%q prices=%s prices_amount=%d stars=%d",
+		userID, pkg.ID, payload, invoice.Currency, invoice.ProviderToken, invoice.StartParameter, string(pricesJSON), amount, pkg.StarsPrice)
+	resp, err := b.api.Request(invoice)
+	if err != nil {
+		responseBody := "null"
+		if resp != nil {
+			if raw, marshalErr := json.Marshal(resp); marshalErr == nil {
+				responseBody = string(raw)
+			} else {
+				responseBody = fmt.Sprintf("marshal_error=%v resp=%#v", marshalErr, resp)
+			}
+		}
+
+		if apiErr, ok := err.(*tgbotapi.Error); ok {
+			log.Printf("[PREMIUM] sendInvoice FAILED user=%d pkg=%s payload=%q currency=%q prices_amount=%d code=%d description=%q response_body=%s response_parameters=%+v api_error=%#v",
+				userID, pkg.ID, payload, invoice.Currency, amount, apiErr.Code, apiErr.Message, responseBody, apiErr.ResponseParameters, apiErr)
+		} else {
+			log.Printf("[PREMIUM] sendInvoice FAILED user=%d pkg=%s payload=%q currency=%q prices_amount=%d response_body=%s err=%T %#v",
+				userID, pkg.ID, payload, invoice.Currency, amount, responseBody, err, err)
+		}
 		b.sendMessage(chatID,
 			"❌ Invoice yuborishda xatolik. Iltimos, avval /start bosing va qayta urinib ko'ring. "+
 				"Agar muammo davom etsa, admin bilan bog'laning.")

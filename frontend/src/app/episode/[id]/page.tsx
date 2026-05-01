@@ -110,7 +110,7 @@ export default async function EpisodePage({ params }: PageProps) {
     duration: episode.duration || 0,
     quality: "",
     code: series?.series.code || "",
-    views: 0,
+    views: episode.views || 0,
     rating_avg: 0,
     rating_count: 0,
     created_at: "",
@@ -181,9 +181,17 @@ export default async function EpisodePage({ params }: PageProps) {
             </nav>
           </section>
           <section className="max-w-6xl mx-auto px-3 sm:px-4 pb-6">
-            <div className="flex items-center gap-3 mt-4">
-              <h3 className="text-white font-display text-lg">Bahoyingiz</h3>
-              <StarRating episodeId={episode.id} />
+            <div className="mt-4 space-y-4">
+              {series && (
+                <div>
+                  <h3 className="text-white font-display text-lg mb-2">Serial reytingi</h3>
+                  <StarRating seriesId={series.series.id} readOnly />
+                </div>
+              )}
+              <div className="flex items-center gap-3">
+                <h3 className="text-white font-display text-lg">Bahoyingiz</h3>
+                <StarRating episodeId={episode.id} />
+              </div>
             </div>
           </section>
           <section className="max-w-6xl mx-auto px-3 sm:px-4 pb-12">

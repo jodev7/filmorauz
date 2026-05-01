@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { MessageSquare, Search, ChevronLeft, ChevronRight, Check, X, Trash2, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { getAdminComments, updateCommentStatus, adminDeleteComment, AdminComment, CommentStatus } from "@/lib/comments-api";
@@ -92,6 +93,26 @@ export default function AdminCommentsPage() {
     if (!dateStr) return "—";
     const d = new Date(dateStr);
     return d.toLocaleDateString("uz-UZ") + " " + d.toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit" });
+  };
+
+  const getAuthorLabel = (comment: AdminComment) => {
+    return comment.user?.display_name || comment.user?.username || comment.user_display_name || "O‘chirilgan user";
+  };
+
+  const getAuthorHref = (comment: AdminComment) => {
+    const userId = comment.user?.id || comment.user_id;
+    return userId ? `/user/${userId}` : null;
+  };
+
+  const getTargetHref = (comment: AdminComment) => {
+    if (comment.target_url) return comment.target_url;
+    if (comment.target_type === "episode" && comment.target_id) return `/episode/${comment.target_id}`;
+    if (comment.target_type === "movie" && comment.target_slug) return `/movies/${comment.target_slug}`;
+    return null;
+  };
+
+  const getTargetLabel = (comment: AdminComment) => {
+    return comment.target_title || comment.movie_title || comment.movie_id || "—";
   };
 
   // Get status badge
@@ -196,9 +217,18 @@ export default function AdminCommentsPage() {
                     >
                       <td className="px-3 sm:px-5 py-3">
                         <div className="min-w-0">
-                          <p className="text-white font-medium truncate max-w-[150px]">
-                            {comment.user?.display_name || comment.user?.username || "Noma'lum"}
-                          </p>
+                          {getAuthorHref(comment) ? (
+                            <Link
+                              href={getAuthorHref(comment)!}
+                              className="text-white font-medium truncate max-w-[150px] hover:text-brand-red transition-colors inline-block"
+                            >
+                              {getAuthorLabel(comment)}
+                            </Link>
+                          ) : (
+                            <p className="text-white font-medium truncate max-w-[150px]">
+                              {getAuthorLabel(comment)}
+                            </p>
+                          )}
                           {comment.user?.username && (
                             <p className="text-gray-500 text-xs">@{comment.user.username}</p>
                           )}
@@ -215,9 +245,19 @@ export default function AdminCommentsPage() {
                         )}
                       </td>
                       <td className="px-3 sm:px-5 py-3 hidden md:table-cell">
-                        <p className="text-gray-400 max-w-[120px] truncate" title={comment.movie_title}>
-                          {comment.movie_title || comment.movie_id}
-                        </p>
+                        {getTargetHref(comment) ? (
+                          <Link
+                            href={getTargetHref(comment)!}
+                            className="text-gray-400 hover:text-white transition-colors max-w-[120px] truncate inline-block"
+                            title={getTargetLabel(comment)}
+                          >
+                            {getTargetLabel(comment)}
+                          </Link>
+                        ) : (
+                          <p className="text-gray-400 max-w-[120px] truncate" title={getTargetLabel(comment)}>
+                            {getTargetLabel(comment)}
+                          </p>
+                        )}
                       </td>
                       <td className="px-3 sm:px-5 py-3 hidden lg:table-cell">
                         <span className={`inline-flex items-center text-xs px-2 py-1 rounded ${statusBadge.bg} ${statusBadge.text}`}>

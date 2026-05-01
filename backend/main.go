@@ -189,7 +189,7 @@ func main() {
 	ingestionHandler := handlers.NewIngestionHandler(jobRepo, seriesRepo, seriesService, parserURL, cfg.WorkerUploadURL)
 	uploadHandler := handlers.NewUploadHandler(userRepo, cfg)
 	adminUserHandler := handlers.NewAdminUserHandler(userRepo, movieRepo, seriesRepo, banHistoryRepo, notificationService)
-	userHandler := handlers.NewUserHandler(watchHistoryRepo, favoriteRepo, movieRepo, userRepo)
+	userHandler := handlers.NewUserHandler(watchHistoryRepo, favoriteRepo, movieRepo, seriesRepo, userRepo)
 	collectionHandler := handlers.NewCollectionHandler(collectionService)
 	ratingHandler := handlers.NewRatingHandler(ratingService)
 

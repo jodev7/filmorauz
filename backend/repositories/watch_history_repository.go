@@ -2,7 +2,6 @@ package repositories
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/filmorauz/backend/models"
@@ -13,129 +12,165 @@ import (
 )
 
 type WatchHistoryRepository struct {
-	col      *mongo.Collection
-	movieCol *mongo.Collection
+	col        *mongo.Collection
+	movieCol   *mongo.Collection
+	episodeCol *mongo.Collection
+	seriesCol  *mongo.Collection
 }
 
 func NewWatchHistoryRepository(db *mongo.Database) *WatchHistoryRepository {
 	return &WatchHistoryRepository{
-		col:      db.Collection("watch_history"),
-		movieCol: db.Collection("movies"),
+		col:        db.Collection("watch_history"),
+		movieCol:   db.Collection("movies"),
+		episodeCol: db.Collection("episodes"),
+		seriesCol:  db.Collection("series"),
 	}
 }
 
-// UpsertWatchHistory creates or updates watch history for user/movie
-func (r *WatchHistoryRepository) UpsertWatchHistory(userID, movieID primitive.ObjectID) error {
+func normalizeWatchTargetType(targetType string) string {
+	switch targetType {
+	case "episode", "series":
+		return targetType
+	default:
+		return "movie"
+	}
+}
+
+func (r *WatchHistoryRepository) watchLookupFilter(userID, targetID primitive.ObjectID, targetType string) bson.M {
+	targetType = normalizeWatchTargetType(targetType)
+	if targetType == "movie" {
+		return bson.M{
+			"user_id": userID,
+			"$or": []bson.M{
+				{"target_type": "movie", "target_id": targetID},
+				{"movie_id": targetID},
+			},
+		}
+	}
+	return bson.M{
+		"user_id":     userID,
+		"target_type": targetType,
+		"target_id":   targetID,
+	}
+}
+
+func (r *WatchHistoryRepository) findExistingID(ctx context.Context, userID, targetID primitive.ObjectID, targetType string) (*primitive.ObjectID, error) {
+	var existing struct {
+		ID primitive.ObjectID `bson:"_id"`
+	}
+	err := r.col.FindOne(ctx, r.watchLookupFilter(userID, targetID, targetType), options.FindOne().SetProjection(bson.M{"_id": 1})).Decode(&existing)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &existing.ID, nil
+}
+
+func (r *WatchHistoryRepository) upsertHistory(
+	userID, targetID primitive.ObjectID,
+	targetType string,
+	seriesID, seasonID, episodeID *primitive.ObjectID,
+	positionSec, durationSec int64,
+	progressPercent float64,
+	completed bool,
+	setStartedAt bool,
+) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	targetType = normalizeWatchTargetType(targetType)
 	now := time.Now()
 
-	// Use upsert to avoid duplicates
-	filter := bson.M{
-		"user_id":  userID,
-		"movie_id": movieID,
+	setFields := bson.M{
+		"target_type":       targetType,
+		"target_id":         targetID,
+		"last_position_sec": positionSec,
+		"duration_sec":      durationSec,
+		"progress_percent":  progressPercent,
+		"completed":         completed,
+		"watched_at":        now,
+		"last_watched_at":   now,
+		"updated_at":        now,
+	}
+	if targetType == "movie" {
+		setFields["movie_id"] = targetID
+	}
+	if seriesID != nil {
+		setFields["series_id"] = *seriesID
+	}
+	if seasonID != nil {
+		setFields["season_id"] = *seasonID
+	}
+	if episodeID != nil {
+		setFields["episode_id"] = *episodeID
 	}
 
-	// Check if this is a new entry
-	var existing models.WatchHistory
-	err := r.col.FindOne(ctx, filter).Decode(&existing)
-	isNew := err != nil
+	setOnInsert := bson.M{
+		"user_id":    userID,
+		"created_at": now,
+	}
+	if setStartedAt {
+		setOnInsert["started_at"] = now
+	}
+
+	existingID, err := r.findExistingID(ctx, userID, targetID, targetType)
+	if err != nil {
+		return err
+	}
+
+	filter := bson.M(r.watchLookupFilter(userID, targetID, targetType))
+	opts := options.Update().SetUpsert(true)
+	if existingID != nil {
+		filter = bson.M{"_id": *existingID}
+		opts = options.Update()
+	}
 
 	update := bson.M{
-		"$set": bson.M{
-			"watched_at":      now,
-			"last_watched_at": now,
-			"updated_at":      now,
-		},
+		"$set":         setFields,
+		"$setOnInsert": setOnInsert,
 	}
 
-	if isNew {
-		// Set started_at for new entries
-		update["$setOnInsert"] = bson.M{
-			"user_id":    userID,
-			"movie_id":   movieID,
-			"created_at": now,
-			"started_at": now,
-		}
-	}
-
-	opts := options.Update().SetUpsert(true)
 	_, err = r.col.UpdateOne(ctx, filter, update, opts)
 	return err
 }
 
-// SaveProgress updates watch progress for a user/movie
-func (r *WatchHistoryRepository) SaveProgress(userID, movieID primitive.ObjectID, positionSec, durationSec int64) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+// UpsertWatchHistory creates or updates watch history for a user/target.
+func (r *WatchHistoryRepository) UpsertWatchHistory(
+	userID, targetID primitive.ObjectID,
+	targetType string,
+	seriesID, seasonID, episodeID *primitive.ObjectID,
+) error {
+	return r.upsertHistory(userID, targetID, targetType, seriesID, seasonID, episodeID, 0, 0, 0, false, true)
+}
 
-	now := time.Now()
-
-	// Calculate progress percentage
+// SaveProgress updates watch progress for a user/target.
+func (r *WatchHistoryRepository) SaveProgress(
+	userID, targetID primitive.ObjectID,
+	targetType string,
+	seriesID, seasonID, episodeID *primitive.ObjectID,
+	positionSec, durationSec int64,
+) error {
 	progressPercent := float64(0)
 	if durationSec > 0 {
 		progressPercent = (float64(positionSec) / float64(durationSec)) * 100
 	}
-
-	// Mark as completed if >= 95%
 	completed := progressPercent >= 95
-
-	// Use upsert to avoid duplicates
-	filter := bson.M{
-		"user_id":  userID,
-		"movie_id": movieID,
-	}
-
-	update := bson.M{
-		"$set": bson.M{
-			"last_position_sec": positionSec,
-			"duration_sec":      durationSec,
-			"progress_percent":  progressPercent,
-			"completed":         completed,
-			"last_watched_at":   now,
-			"updated_at":        now,
-		},
-		"$setOnInsert": bson.M{
-			"user_id":    userID,
-			"movie_id":   movieID,
-			"started_at": now,
-			"created_at": now,
-		},
-	}
-
-	opts := options.Update().SetUpsert(true)
-	_, err := r.col.UpdateOne(ctx, filter, update, opts)
-	return err
+	return r.upsertHistory(userID, targetID, targetType, seriesID, seasonID, episodeID, positionSec, durationSec, progressPercent, completed, true)
 }
 
-// MarkComplete marks a watch history entry as completed
-func (r *WatchHistoryRepository) MarkComplete(userID, movieID primitive.ObjectID, durationSec int64) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	now := time.Now()
-
-	filter := bson.M{
-		"user_id":  userID,
-		"movie_id": movieID,
-	}
-
-	update := bson.M{
-		"$set": bson.M{
-			"completed":         true,
-			"progress_percent":  100,
-			"last_position_sec": durationSec,
-			"last_watched_at":   now,
-			"updated_at":        now,
-		},
-	}
-
-	_, err := r.col.UpdateOne(ctx, filter, update)
-	return err
+// MarkComplete marks a watch history entry as completed.
+func (r *WatchHistoryRepository) MarkComplete(
+	userID, targetID primitive.ObjectID,
+	targetType string,
+	seriesID, seasonID, episodeID *primitive.ObjectID,
+	durationSec int64,
+) error {
+	return r.upsertHistory(userID, targetID, targetType, seriesID, seasonID, episodeID, durationSec, durationSec, 100, true, false)
 }
 
-// GetContinueWatching returns movies the user is still watching (not completed)
+// GetContinueWatching returns items the user is still watching (not completed).
 func (r *WatchHistoryRepository) GetContinueWatching(userID primitive.ObjectID, limit int) ([]models.ContinueWatchingItem, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -150,23 +185,73 @@ func (r *WatchHistoryRepository) GetContinueWatching(userID primitive.ObjectID, 
 			"completed":        false,
 			"progress_percent": bson.M{"$gt": 0, "$lt": 95},
 		}}},
+		{{Key: "$addFields", Value: bson.M{
+			"effective_target_type": bson.M{
+				"$cond": bson.M{
+					"if":   bson.M{"$eq": []interface{}{"$target_type", ""}},
+					"then": "movie",
+					"else": bson.M{"$ifNull": []interface{}{"$target_type", "movie"}},
+				},
+			},
+			"effective_target_id": bson.M{"$ifNull": []interface{}{"$target_id", "$movie_id"}},
+			"effective_movie_id":  bson.M{"$ifNull": []interface{}{"$movie_id", "$target_id"}},
+		}}},
 		{{Key: "$sort", Value: bson.D{{Key: "last_watched_at", Value: -1}}}},
 		{{Key: "$limit", Value: int64(limit)}},
 		{{Key: "$lookup", Value: bson.M{
 			"from":         "movies",
-			"localField":   "movie_id",
+			"localField":   "effective_movie_id",
 			"foreignField": "_id",
 			"as":           "movie",
 		}}},
-		{{Key: "$unwind", Value: bson.M{
-			"path":                       "$movie",
-			"preserveNullAndEmptyArrays": false,
+		{{Key: "$lookup", Value: bson.M{
+			"from":         "episodes",
+			"localField":   "effective_target_id",
+			"foreignField": "_id",
+			"as":           "episode",
+		}}},
+		{{Key: "$unwind", Value: bson.M{"path": "$movie", "preserveNullAndEmptyArrays": true}}},
+		{{Key: "$unwind", Value: bson.M{"path": "$episode", "preserveNullAndEmptyArrays": true}}},
+		{{Key: "$lookup", Value: bson.M{
+			"from":         "series",
+			"localField":   "episode.series_id",
+			"foreignField": "_id",
+			"as":           "episode_series",
+		}}},
+		{{Key: "$unwind", Value: bson.M{"path": "$episode_series", "preserveNullAndEmptyArrays": true}}},
+		{{Key: "$match", Value: bson.M{
+			"$or": []bson.M{
+				{"effective_target_type": "movie", "movie._id": bson.M{"$ne": nil}},
+				{"effective_target_type": "episode", "episode._id": bson.M{"$ne": nil}},
+			},
 		}}},
 		{{Key: "$project", Value: bson.M{
-			"movie_id":          "$movie_id",
-			"title":             "$movie.title",
-			"slug":              "$movie.slug",
-			"poster_url":        bson.M{"$ifNull": []interface{}{"$movie.poster_url", ""}},
+			"movie_id": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "movie"}},
+				bson.M{"$toString": "$effective_movie_id"},
+				"",
+			}},
+			"target_type": bson.M{"$ifNull": []interface{}{"$effective_target_type", "movie"}},
+			"target_id":   bson.M{"$toString": "$effective_target_id"},
+			"title": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				"$episode.title",
+				"$movie.title",
+			}},
+			"slug": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				bson.M{"$toString": "$effective_target_id"},
+				"$movie.slug",
+			}},
+			"poster_url": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				bson.M{"$ifNull": []interface{}{"$episode_series.poster_url", "$episode_series.backdrop_url", "$episode.thumbnail_url", ""}},
+				bson.M{"$ifNull": []interface{}{"$movie.poster_url", ""}},
+			}},
+			"type":              "$effective_target_type",
+			"series_title":      "$episode_series.title",
+			"series_slug":       "$episode_series.slug",
+			"episode_number":    bson.M{"$ifNull": []interface{}{"$episode.episode_number", 0}},
 			"last_position_sec": "$last_position_sec",
 			"duration_sec":      "$duration_sec",
 			"progress_percent":  "$progress_percent",
@@ -184,58 +269,121 @@ func (r *WatchHistoryRepository) GetContinueWatching(userID primitive.ObjectID, 
 	if err := cursor.All(ctx, &results); err != nil {
 		return nil, err
 	}
-
 	if results == nil {
 		return []models.ContinueWatchingItem{}, nil
 	}
-
 	return results, nil
 }
 
-// GetUserWatchHistory returns watch history for a user, sorted by watched_at descending
-func (r *WatchHistoryRepository) GetUserWatchHistory(userID primitive.ObjectID, limit int) ([]models.WatchHistoryWithMovie, error) {
+// GetUserWatchHistory returns watch history for a user, sorted by watched_at descending.
+func (r *WatchHistoryRepository) GetUserWatchHistory(userID primitive.ObjectID, limit int) ([]models.WatchHistoryListItem, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// First get watch history entries
-	pipeline := []bson.M{
-		{
-			"$match": bson.M{"user_id": userID},
-		},
-		{
-			"$sort": bson.D{{Key: "watched_at", Value: -1}},
-		},
-		{
-			"$limit": int64(limit),
-		},
-		{
-			"$lookup": bson.M{
-				"from":         "movies",
-				"localField":   "movie_id",
-				"foreignField": "_id",
-				"as":           "movie",
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"user_id": userID}}},
+		{{Key: "$addFields", Value: bson.M{
+			"effective_target_type": bson.M{
+				"$cond": bson.M{
+					"if":   bson.M{"$eq": []interface{}{"$target_type", ""}},
+					"then": "movie",
+					"else": bson.M{"$ifNull": []interface{}{"$target_type", "movie"}},
+				},
 			},
-		},
-		{
-			"$unwind": bson.M{
-				"path":                       "$movie",
-				"preserveNullAndEmptyArrays": false,
+			"effective_target_id": bson.M{"$ifNull": []interface{}{"$target_id", "$movie_id"}},
+			"effective_movie_id":  bson.M{"$ifNull": []interface{}{"$movie_id", "$target_id"}},
+		}}},
+		{{Key: "$sort", Value: bson.D{{Key: "watched_at", Value: -1}, {Key: "last_watched_at", Value: -1}}}},
+		{{Key: "$limit", Value: int64(limit)}},
+		{{Key: "$lookup", Value: bson.M{
+			"from":         "movies",
+			"localField":   "effective_movie_id",
+			"foreignField": "_id",
+			"as":           "movie",
+		}}},
+		{{Key: "$lookup", Value: bson.M{
+			"from":         "episodes",
+			"localField":   "effective_target_id",
+			"foreignField": "_id",
+			"as":           "episode",
+		}}},
+		{{Key: "$unwind", Value: bson.M{"path": "$movie", "preserveNullAndEmptyArrays": true}}},
+		{{Key: "$unwind", Value: bson.M{"path": "$episode", "preserveNullAndEmptyArrays": true}}},
+		{{Key: "$lookup", Value: bson.M{
+			"from":         "series",
+			"localField":   "episode.series_id",
+			"foreignField": "_id",
+			"as":           "episode_series",
+		}}},
+		{{Key: "$unwind", Value: bson.M{"path": "$episode_series", "preserveNullAndEmptyArrays": true}}},
+		{{Key: "$match", Value: bson.M{
+			"$or": []bson.M{
+				{"effective_target_type": "movie", "movie._id": bson.M{"$ne": nil}},
+				{"effective_target_type": "episode", "episode._id": bson.M{"$ne": nil}},
 			},
-		},
-		{
-			"$project": bson.M{
-				"_id":         1,
-				"movie_id":    1,
-				"watched_at":  1,
-				"title":       "$movie.title",
-				"poster_url":  bson.M{"$ifNull": []interface{}{"$movie.poster_url", "$movie.posterUrl", ""}},
-				"slug":        "$movie.slug",
-				"code":        "$movie.code",
-				"year":        "$movie.year",
-				"quality":     "$movie.quality",
-				"website_url": "$movie.website_url",
-			},
-		},
+		}}},
+		{{Key: "$project", Value: bson.M{
+			"_id":               1,
+			"movie_id":          "$effective_movie_id",
+			"target_type":       "$effective_target_type",
+			"target_id":         "$effective_target_id",
+			"series_id":         bson.M{"$ifNull": []interface{}{"$series_id", "$episode.series_id"}},
+			"season_id":         bson.M{"$ifNull": []interface{}{"$season_id", "$episode.season_id"}},
+			"episode_id":        bson.M{"$ifNull": []interface{}{"$episode_id", "$episode._id"}},
+			"watched_at":        bson.M{"$ifNull": []interface{}{"$watched_at", "$last_watched_at", "$updated_at"}},
+			"last_position_sec": bson.M{"$ifNull": []interface{}{"$last_position_sec", 0}},
+			"duration_sec":      bson.M{"$ifNull": []interface{}{"$duration_sec", 0}},
+			"progress_percent":  bson.M{"$ifNull": []interface{}{"$progress_percent", 0}},
+			"completed":         bson.M{"$ifNull": []interface{}{"$completed", false}},
+			"title": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				"$episode.title",
+				"$movie.title",
+			}},
+			"poster_url": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				bson.M{"$ifNull": []interface{}{"$episode_series.poster_url", "$episode_series.backdrop_url", "$episode.thumbnail_url", ""}},
+				bson.M{"$ifNull": []interface{}{"$movie.poster_url", "$movie.posterUrl", ""}},
+			}},
+			"backdrop_url": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				bson.M{"$ifNull": []interface{}{"$episode_series.backdrop_url", "$episode.thumbnail_url", ""}},
+				bson.M{"$ifNull": []interface{}{"$movie.backdrop_url", ""}},
+			}},
+			"slug": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				bson.M{"$toString": "$effective_target_id"},
+				"$movie.slug",
+			}},
+			"code": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				bson.M{"$ifNull": []interface{}{"$episode_series.code", ""}},
+				bson.M{"$ifNull": []interface{}{"$movie.code", ""}},
+			}},
+			"year": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				bson.M{"$ifNull": []interface{}{"$episode_series.year", 0}},
+				bson.M{"$ifNull": []interface{}{"$movie.year", 0}},
+			}},
+			"quality":     bson.M{"$ifNull": []interface{}{"$movie.quality", ""}},
+			"website_url": bson.M{"$ifNull": []interface{}{"$movie.website_url", ""}},
+			"type":        "$effective_target_type",
+			"series_title": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				"$episode_series.title",
+				"",
+			}},
+			"series_slug": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				"$episode_series.slug",
+				"",
+			}},
+			"episode_number": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				bson.M{"$ifNull": []interface{}{"$episode.episode_number", 0}},
+				0,
+			}},
+		}}},
 	}
 
 	cursor, err := r.col.Aggregate(ctx, pipeline)
@@ -244,28 +392,29 @@ func (r *WatchHistoryRepository) GetUserWatchHistory(userID primitive.ObjectID, 
 	}
 	defer cursor.Close(ctx)
 
-	var results []models.WatchHistoryWithMovie
+	var results []models.WatchHistoryListItem
 	if err := cursor.All(ctx, &results); err != nil {
 		return nil, err
 	}
-
-	log.Printf("[DEBUG] GetUserWatchHistory returned %d items", len(results))
-	for i, r := range results {
-		log.Printf("[DEBUG] History item %d: id=%s, movie_id=%s, title=%s, poster_url=%s", i, r.ID.Hex(), r.MovieID.Hex(), r.Title, r.PosterURL)
+	if results == nil {
+		return []models.WatchHistoryListItem{}, nil
 	}
-
 	return results, nil
 }
 
-// EnsureIndexes creates required indexes
+// EnsureIndexes creates required indexes.
 func (r *WatchHistoryRepository) EnsureIndexes() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	indexes := []mongo.IndexModel{
 		{
+			Keys:    bson.D{{Key: "user_id", Value: 1}, {Key: "target_type", Value: 1}, {Key: "target_id", Value: 1}},
+			Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"target_id": bson.M{"$exists": true}}),
+		},
+		{
 			Keys:    bson.D{{Key: "user_id", Value: 1}, {Key: "movie_id", Value: 1}},
-			Options: options.Index().SetUnique(true),
+			Options: options.Index().SetUnique(true).SetPartialFilterExpression(bson.M{"movie_id": bson.M{"$exists": true}}),
 		},
 		{
 			Keys:    bson.D{{Key: "user_id", Value: 1}, {Key: "watched_at", Value: -1}},

@@ -151,12 +151,14 @@ interface PublishModal {
 
 // Server-side group summary tree (counts only — no clip docs).
 interface ServerEpisodeGroup {
+  group_key: string;
   episode_id: string;
   episode_number: number;
   title: string;
   clip_count: number;
   ig_uploaded_count: number;
   last_ig_upload_at?: string;
+  match_episode_ids?: string[];
 }
 interface ServerSeasonGroup {
   season_number: number;
@@ -164,6 +166,7 @@ interface ServerSeasonGroup {
   episodes: ServerEpisodeGroup[];
 }
 interface ServerSeriesGroup {
+  group_key: string;
   series_id: string;
   title: string;
   slug: string;
@@ -171,8 +174,12 @@ interface ServerSeriesGroup {
   ig_uploaded_count: number;
   last_ig_upload_at?: string;
   seasons: ServerSeasonGroup[];
+  match_series_ids?: string[];
+  match_series_slugs?: string[];
+  match_series_titles?: string[];
 }
 interface ServerMovieGroup {
+  group_key: string;
   movie_id: string;
   title: string;
   slug: string;
@@ -180,6 +187,10 @@ interface ServerMovieGroup {
   clip_count: number;
   ig_uploaded_count: number;
   last_ig_upload_at?: string;
+  match_movie_ids?: string[];
+  match_movie_codes?: string[];
+  match_movie_slugs?: string[];
+  match_movie_titles?: string[];
 }
 interface ServerGroups {
   movies: ServerMovieGroup[];
@@ -456,11 +467,19 @@ function resolveClipOpenUrl(clip: Clip): string {
 
 // Scope keys identify the clip page cache slot for a single content group.
 type Scope =
-  | { kind: "movie"; movieId: string }
-  | { kind: "episode"; episodeId: string };
+  | {
+      kind: "movie";
+      groupKey: string;
+      movieId?: string;
+      movieIds?: string[];
+      movieCodes?: string[];
+      movieSlugs?: string[];
+      movieTitles?: string[];
+    }
+  | { kind: "episode"; groupKey: string; episodeId?: string; episodeIds?: string[] };
 
 function scopeKey(scope: Scope): string {
-  return scope.kind === "movie" ? `movie:${scope.movieId}` : `episode:${scope.episodeId}`;
+  return scope.kind === "movie" ? `movie:${scope.groupKey}` : `episode:${scope.groupKey}`;
 }
 
 // ─── Clip table (shared by movie groups and episode groups) ──────────────────
@@ -646,6 +665,16 @@ export default function AdminClipsPage() {
       });
       if (res.ok) {
         const data: ServerGroups = await res.json();
+        if (process.env.NODE_ENV === "development") {
+          console.log("[admin/clips] grouped response", {
+            total_groups: (data.movies?.length || 0) + (data.series?.length || 0),
+            total_clips: data.total_clips || 0,
+            first_10_groups: [
+              ...(data.movies || []).map((m) => ({ title: m.title, type: "movie" })),
+              ...(data.series || []).map((s) => ({ title: s.title, type: "series" })),
+            ].slice(0, 10),
+          });
+        }
         setGroups({
           movies: data.movies || [],
           series: data.series || [],
@@ -677,8 +706,16 @@ export default function AdminClipsPage() {
       const params = new URLSearchParams();
       params.set("limit", String(CLIPS_PAGE_LIMIT));
       params.set("offset", String(offset));
-      if (scope.kind === "movie") params.set("movie_id", scope.movieId);
-      else params.set("episode_id", scope.episodeId);
+      if (scope.kind === "movie") {
+        if (scope.movieId) params.set("movie_id", scope.movieId);
+        if (scope.movieIds?.length) params.set("movie_ids", scope.movieIds.join(","));
+        if (scope.movieCodes?.length) params.set("movie_code", scope.movieCodes.join(","));
+        if (scope.movieSlugs?.length) params.set("movie_slug", scope.movieSlugs.join(","));
+        if (scope.movieTitles?.length) params.set("movie_titles", scope.movieTitles.join(","));
+      } else {
+        if (scope.episodeId) params.set("episode_id", scope.episodeId);
+        if (scope.episodeIds?.length) params.set("episode_ids", scope.episodeIds.join(","));
+      }
       try {
         const res = await fetch(`${API}/admin/clips?${params.toString()}`, {
           headers: { Authorization: `Bearer ${token}` },
@@ -755,42 +792,54 @@ export default function AdminClipsPage() {
   // ── Group / episode expand/collapse + lazy load ─────────────────────
 
   const ensureMovieClips = useCallback(
-    (movieId: string) => {
-      const key = `movie:${movieId}`;
+    (movie: ServerMovieGroup) => {
+      const key = `movie:${movie.group_key}`;
       if (!scopeClips[key]) {
-        fetchScopedClips({ kind: "movie", movieId }, 0);
+        fetchScopedClips({
+          kind: "movie",
+          groupKey: movie.group_key,
+          movieId: movie.movie_id || undefined,
+          movieIds: movie.match_movie_ids,
+          movieCodes: movie.match_movie_codes,
+          movieSlugs: movie.match_movie_slugs,
+          movieTitles: movie.match_movie_titles,
+        }, 0);
       }
     },
     [scopeClips, fetchScopedClips]
   );
 
   const ensureEpisodeClips = useCallback(
-    (episodeId: string) => {
-      if (!episodeId) return;
-      const key = `episode:${episodeId}`;
+    (episode: ServerEpisodeGroup) => {
+      const key = `episode:${episode.group_key}`;
       if (!scopeClips[key]) {
-        fetchScopedClips({ kind: "episode", episodeId }, 0);
+        fetchScopedClips({
+          kind: "episode",
+          groupKey: episode.group_key,
+          episodeId: episode.episode_id || undefined,
+          episodeIds: episode.match_episode_ids,
+        }, 0);
       }
     },
     [scopeClips, fetchScopedClips]
   );
 
-  const toggleMovieGroup = (movieId: string) => {
-    const key = `movie:${movieId}`;
+  const toggleMovieGroup = (movie: ServerMovieGroup) => {
+    const key = `movie:${movie.group_key}`;
     setExpandedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(key)) {
         next.delete(key);
       } else {
         next.add(key);
-        ensureMovieClips(movieId);
+        ensureMovieClips(movie);
       }
       return next;
     });
   };
 
-  const toggleSeriesGroup = (seriesId: string) => {
-    const key = `series:${seriesId}`;
+  const toggleSeriesGroup = (series: ServerSeriesGroup) => {
+    const key = `series:${series.group_key}`;
     setExpandedGroups((prev) => {
       const next = new Set(prev);
       next.has(key) ? next.delete(key) : next.add(key);
@@ -798,14 +847,14 @@ export default function AdminClipsPage() {
     });
   };
 
-  const toggleEpisode = (episodeId: string) => {
+  const toggleEpisode = (episode: ServerEpisodeGroup) => {
     setExpandedEpisodes((prev) => {
       const next = new Set(prev);
-      if (next.has(episodeId)) {
-        next.delete(episodeId);
+      if (next.has(episode.group_key)) {
+        next.delete(episode.group_key);
       } else {
-        next.add(episodeId);
-        ensureEpisodeClips(episodeId);
+        next.add(episode.group_key);
+        ensureEpisodeClips(episode);
       }
       return next;
     });
@@ -816,8 +865,8 @@ export default function AdminClipsPage() {
       const next = new Set(prev);
       s.seasons.forEach((season) =>
         season.episodes.forEach((ep) => {
-          next.add(ep.episode_id);
-          ensureEpisodeClips(ep.episode_id);
+          next.add(ep.group_key);
+          ensureEpisodeClips(ep);
         })
       );
       return next;
@@ -827,7 +876,7 @@ export default function AdminClipsPage() {
   const collapseAllSeriesEpisodes = (s: ServerSeriesGroup) => {
     setExpandedEpisodes((prev) => {
       const next = new Set(prev);
-      s.seasons.forEach((season) => season.episodes.forEach((ep) => next.delete(ep.episode_id)));
+      s.seasons.forEach((season) => season.episodes.forEach((ep) => next.delete(ep.group_key)));
       return next;
     });
   };
@@ -836,15 +885,15 @@ export default function AdminClipsPage() {
   const allGroupKeys = useMemo(() => {
     if (!groups) return [] as string[];
     return [
-      ...groups.movies.map((m) => `movie:${m.movie_id}`),
-      ...groups.series.map((s) => `series:${s.series_id}`),
+      ...groups.movies.map((m) => `movie:${m.group_key}`),
+      ...groups.series.map((s) => `series:${s.group_key}`),
     ];
   }, [groups]);
 
   const expandAll = () => {
     if (!groups) return;
     setExpandedGroups(new Set(allGroupKeys));
-    groups.movies.forEach((m) => ensureMovieClips(m.movie_id));
+    groups.movies.forEach((m) => ensureMovieClips(m));
   };
   const collapseAll = () => setExpandedGroups(new Set());
 
@@ -882,9 +931,15 @@ export default function AdminClipsPage() {
   const refreshAfterPublish = (clip: Clip) => {
     // Refetch the scope this clip belongs to so the upload counters update.
     if (clip.episode_id) {
-      fetchScopedClips({ kind: "episode", episodeId: clip.episode_id }, scopeClips[`episode:${clip.episode_id}`]?.offset ?? 0);
+      fetchScopedClips(
+        { kind: "episode", groupKey: clip.episode_id, episodeId: clip.episode_id, episodeIds: [clip.episode_id] },
+        scopeClips[`episode:${clip.episode_id}`]?.offset ?? 0
+      );
     } else if (clip.movie_id) {
-      fetchScopedClips({ kind: "movie", movieId: clip.movie_id }, scopeClips[`movie:${clip.movie_id}`]?.offset ?? 0);
+      fetchScopedClips(
+        { kind: "movie", groupKey: clip.movie_id, movieId: clip.movie_id, movieIds: [clip.movie_id] },
+        scopeClips[`movie:${clip.movie_id}`]?.offset ?? 0
+      );
     }
   };
 
@@ -1090,7 +1145,7 @@ export default function AdminClipsPage() {
           {pagedGroups.map((entry) => {
             if (entry.kind === "movie") {
               const m = entry.group;
-              const key = `movie:${m.movie_id}`;
+              const key = `movie:${m.group_key}`;
               const isExpanded = expandedGroups.has(key);
               const page = scopeClips[key];
               const totalPages = page ? Math.max(1, Math.ceil(page.total / CLIPS_PAGE_LIMIT)) : 1;
@@ -1101,7 +1156,7 @@ export default function AdminClipsPage() {
                   className="bg-brand-card border border-brand-border rounded-xl overflow-hidden"
                 >
                   <button
-                    onClick={() => toggleMovieGroup(m.movie_id)}
+                    onClick={() => toggleMovieGroup(m)}
                     className="w-full px-4 sm:px-6 py-4 border-b border-brand-border bg-brand-dark/50 hover:bg-brand-dark/80 transition-colors text-left"
                   >
                     <div className="flex items-center gap-3">
@@ -1158,13 +1213,29 @@ export default function AdminClipsPage() {
                       onPublish={openModal}
                       onPrev={() =>
                         fetchScopedClips(
-                          { kind: "movie", movieId: m.movie_id },
+                          {
+                            kind: "movie",
+                            groupKey: m.group_key,
+                            movieId: m.movie_id || undefined,
+                            movieIds: m.match_movie_ids,
+                            movieCodes: m.match_movie_codes,
+                            movieSlugs: m.match_movie_slugs,
+                            movieTitles: m.match_movie_titles,
+                          },
                           Math.max(0, (page?.offset ?? 0) - CLIPS_PAGE_LIMIT)
                         )
                       }
                       onNext={() =>
                         fetchScopedClips(
-                          { kind: "movie", movieId: m.movie_id },
+                          {
+                            kind: "movie",
+                            groupKey: m.group_key,
+                            movieId: m.movie_id || undefined,
+                            movieIds: m.match_movie_ids,
+                            movieCodes: m.match_movie_codes,
+                            movieSlugs: m.match_movie_slugs,
+                            movieTitles: m.match_movie_titles,
+                          },
                           (page?.offset ?? 0) + CLIPS_PAGE_LIMIT
                         )
                       }
@@ -1177,7 +1248,7 @@ export default function AdminClipsPage() {
             }
 
             const s = entry.group;
-            const key = `series:${s.series_id}`;
+            const key = `series:${s.group_key}`;
             const isExpanded = expandedGroups.has(key);
             return (
               <div
@@ -1185,7 +1256,7 @@ export default function AdminClipsPage() {
                 className="bg-brand-card border border-brand-border rounded-xl overflow-hidden"
               >
                 <button
-                  onClick={() => toggleSeriesGroup(s.series_id)}
+                  onClick={() => toggleSeriesGroup(s)}
                   className="w-full px-4 sm:px-6 py-4 border-b border-brand-border bg-brand-dark/50 hover:bg-brand-dark/80 transition-colors text-left"
                 >
                   <div className="flex items-center gap-3">
@@ -1255,16 +1326,16 @@ export default function AdminClipsPage() {
                         </div>
                         <div className="divide-y divide-brand-border/30">
                           {season.episodes.map((ep) => {
-                            const epExpanded = expandedEpisodes.has(ep.episode_id);
+                            const epExpanded = expandedEpisodes.has(ep.group_key);
                             const epLabel = `S${padEpisodeNumber(season.season_number)}E${padEpisodeNumber(ep.episode_number)}`;
-                            const scope = `episode:${ep.episode_id}`;
+                            const scope = `episode:${ep.group_key}`;
                             const page = scopeClips[scope];
                             const totalPages = page ? Math.max(1, Math.ceil(page.total / CLIPS_PAGE_LIMIT)) : 1;
                             const pageNum = page ? Math.floor(page.offset / CLIPS_PAGE_LIMIT) + 1 : 1;
                             return (
-                              <div key={ep.episode_id}>
+                              <div key={ep.group_key}>
                                 <button
-                                  onClick={() => toggleEpisode(ep.episode_id)}
+                                  onClick={() => toggleEpisode(ep)}
                                   className="w-full px-4 sm:px-6 py-3 bg-white/[0.02] hover:bg-white/[0.05] transition-colors text-left"
                                 >
                                   <div className="flex items-center gap-3">
@@ -1308,13 +1379,23 @@ export default function AdminClipsPage() {
                                     onPublish={openModal}
                                     onPrev={() =>
                                       fetchScopedClips(
-                                        { kind: "episode", episodeId: ep.episode_id },
+                                        {
+                                          kind: "episode",
+                                          groupKey: ep.group_key,
+                                          episodeId: ep.episode_id || undefined,
+                                          episodeIds: ep.match_episode_ids,
+                                        },
                                         Math.max(0, (page?.offset ?? 0) - CLIPS_PAGE_LIMIT)
                                       )
                                     }
                                     onNext={() =>
                                       fetchScopedClips(
-                                        { kind: "episode", episodeId: ep.episode_id },
+                                        {
+                                          kind: "episode",
+                                          groupKey: ep.group_key,
+                                          episodeId: ep.episode_id || undefined,
+                                          episodeIds: ep.match_episode_ids,
+                                        },
                                         (page?.offset ?? 0) + CLIPS_PAGE_LIMIT
                                       )
                                     }

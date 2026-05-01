@@ -17,6 +17,7 @@ import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
+const StarRating = dynamicImport(() => import("@/components/StarRating"));
 
 interface Props {
   params: { slug: string };
@@ -213,6 +214,10 @@ export default async function SeriesDetailPage({ params }: Props) {
               <p className="text-gray-300 leading-relaxed max-w-2xl mb-6 text-sm sm:text-base">
                 {series.description}
               </p>
+
+              <div className="mb-6">
+                <StarRating seriesId={series.id} readOnly />
+              </div>
             </div>
           </div>
 

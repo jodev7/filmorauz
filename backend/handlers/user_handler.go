@@ -4,17 +4,20 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type UserHandler struct {
 	watchHistoryRepo *repositories.WatchHistoryRepository
 	favoriteRepo     *repositories.FavoriteRepository
 	movieRepo        *repositories.MovieRepository
+	seriesRepo       *repositories.SeriesRepository
 	userRepo         *repositories.UserRepository
 }
 
@@ -22,12 +25,14 @@ func NewUserHandler(
 	watchHistoryRepo *repositories.WatchHistoryRepository,
 	favoriteRepo *repositories.FavoriteRepository,
 	movieRepo *repositories.MovieRepository,
+	seriesRepo *repositories.SeriesRepository,
 	userRepo *repositories.UserRepository,
 ) *UserHandler {
 	return &UserHandler{
 		watchHistoryRepo: watchHistoryRepo,
 		favoriteRepo:     favoriteRepo,
 		movieRepo:        movieRepo,
+		seriesRepo:       seriesRepo,
 		userRepo:         userRepo,
 	}
 }
@@ -71,13 +76,79 @@ func (h *UserHandler) GetPublicProfile(c *gin.Context) {
 
 // WatchHistoryRequest is the request body for recording watch history
 type WatchHistoryRequest struct {
-	MovieID string `json:"movie_id" binding:"required"`
+	MovieID    string `json:"movie_id"`
+	TargetID   string `json:"target_id"`
+	TargetType string `json:"target_type"`
 }
 
 // WatchProgressRequest is the request body for saving watch progress
 type WatchProgressRequest struct {
-	PositionSec int64 `json:"positionSec" binding:"required,min=0"`
-	DurationSec int64 `json:"durationSec" binding:"required,min=1"`
+	PositionSec int64  `json:"positionSec" binding:"required,min=0"`
+	DurationSec int64  `json:"durationSec" binding:"required,min=1"`
+	TargetType  string `json:"target_type"`
+}
+
+type resolvedUserTarget struct {
+	TargetType string
+	TargetID   primitive.ObjectID
+	SeriesID   *primitive.ObjectID
+	SeasonID   *primitive.ObjectID
+	EpisodeID  *primitive.ObjectID
+}
+
+func (h *UserHandler) resolveFavoriteTarget(c *gin.Context, rawID string) (*resolvedUserTarget, error) {
+	targetType := strings.TrimSpace(c.Query("target_type"))
+	return h.resolveUserTarget(rawID, targetType)
+}
+
+func (h *UserHandler) resolveUserTarget(rawID string, rawTargetType string) (*resolvedUserTarget, error) {
+	targetID, err := primitive.ObjectIDFromHex(strings.TrimSpace(rawID))
+	if err != nil {
+		return nil, fmt.Errorf("invalid target id")
+	}
+
+	targetType := strings.TrimSpace(strings.ToLower(rawTargetType))
+	switch targetType {
+	case "episode":
+		episode, err := h.seriesRepo.GetEpisodeByID(targetID)
+		if err != nil {
+			return nil, fmt.Errorf("episode not found")
+		}
+		return &resolvedUserTarget{
+			TargetType: "episode",
+			TargetID:   targetID,
+			SeriesID:   &episode.SeriesID,
+			SeasonID:   &episode.SeasonID,
+			EpisodeID:  &episode.ID,
+		}, nil
+	case "movie":
+		if _, err := h.movieRepo.FindByID(targetID); err != nil {
+			return nil, fmt.Errorf("movie not found")
+		}
+		return &resolvedUserTarget{TargetType: "movie", TargetID: targetID}, nil
+	}
+
+	if _, err := h.movieRepo.FindByID(targetID); err == nil {
+		return &resolvedUserTarget{TargetType: "movie", TargetID: targetID}, nil
+	} else if err != mongo.ErrNoDocuments {
+		return nil, err
+	}
+
+	episode, err := h.seriesRepo.GetEpisodeByID(targetID)
+	if err == nil {
+		return &resolvedUserTarget{
+			TargetType: "episode",
+			TargetID:   targetID,
+			SeriesID:   &episode.SeriesID,
+			SeasonID:   &episode.SeasonID,
+			EpisodeID:  &episode.ID,
+		}, nil
+	}
+	if err != mongo.ErrNoDocuments {
+		return nil, err
+	}
+
+	return nil, fmt.Errorf("content not found")
 }
 
 // RecordWatchHistory godoc
@@ -92,21 +163,21 @@ func (h *UserHandler) RecordWatchHistory(c *gin.Context) {
 
 	var req WatchHistoryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "movie_id is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "target_id is required"})
 		return
 	}
 
-	// Parse movie ID
-	movieID, err := primitive.ObjectIDFromHex(req.MovieID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movie_id"})
-		return
+	targetRawID := strings.TrimSpace(req.TargetID)
+	if targetRawID == "" {
+		targetRawID = strings.TrimSpace(req.MovieID)
 	}
-
-	// Validate movie exists
-	_, err = h.movieRepo.FindByID(movieID)
+	target, err := h.resolveUserTarget(targetRawID, req.TargetType)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "movie not found"})
+		status := http.StatusNotFound
+		if strings.Contains(err.Error(), "invalid") {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -118,7 +189,7 @@ func (h *UserHandler) RecordWatchHistory(c *gin.Context) {
 	}
 
 	// Record watch history
-	err = h.watchHistoryRepo.UpsertWatchHistory(userOID, movieID)
+	err = h.watchHistoryRepo.UpsertWatchHistory(userOID, target.TargetID, target.TargetType, target.SeriesID, target.SeasonID, target.EpisodeID)
 	if err != nil {
 		log.Printf("[USER HANDLER] Failed to record watch history: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record watch history"})
@@ -141,16 +212,9 @@ func (h *UserHandler) SaveWatchProgress(c *gin.Context) {
 		return
 	}
 
-	movieIDStr := c.Param("movieId")
-	if movieIDStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "movie id is required"})
-		return
-	}
-
-	// Parse movie ID
-	movieID, err := primitive.ObjectIDFromHex(movieIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movie_id"})
+	targetIDStr := c.Param("movieId")
+	if targetIDStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "content id is required"})
 		return
 	}
 
@@ -174,15 +238,18 @@ func (h *UserHandler) SaveWatchProgress(c *gin.Context) {
 		return
 	}
 
-	// Validate movie exists
-	_, err = h.movieRepo.FindByID(movieID)
+	target, err := h.resolveUserTarget(targetIDStr, req.TargetType)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "movie not found"})
+		status := http.StatusNotFound
+		if strings.Contains(err.Error(), "invalid") {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 
 	// Save progress
-	err = h.watchHistoryRepo.SaveProgress(userOID, movieID, req.PositionSec, req.DurationSec)
+	err = h.watchHistoryRepo.SaveProgress(userOID, target.TargetID, target.TargetType, target.SeriesID, target.SeasonID, target.EpisodeID, req.PositionSec, req.DurationSec)
 	if err != nil {
 		log.Printf("[USER HANDLER] Failed to save progress: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save progress"})
@@ -202,16 +269,9 @@ func (h *UserHandler) MarkWatchComplete(c *gin.Context) {
 		return
 	}
 
-	movieIDStr := c.Param("movieId")
-	if movieIDStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "movie id is required"})
-		return
-	}
-
-	// Parse movie ID
-	movieID, err := primitive.ObjectIDFromHex(movieIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movie_id"})
+	targetIDStr := c.Param("movieId")
+	if targetIDStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "content id is required"})
 		return
 	}
 
@@ -224,12 +284,23 @@ func (h *UserHandler) MarkWatchComplete(c *gin.Context) {
 
 	// Bind request body for duration (optional)
 	var req struct {
-		DurationSec int64 `json:"durationSec"`
+		DurationSec int64  `json:"durationSec"`
+		TargetType  string `json:"target_type"`
 	}
 	c.ShouldBindJSON(&req)
 
+	target, err := h.resolveUserTarget(targetIDStr, req.TargetType)
+	if err != nil {
+		status := http.StatusNotFound
+		if strings.Contains(err.Error(), "invalid") {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
 	// Mark as complete
-	err = h.watchHistoryRepo.MarkComplete(userOID, movieID, req.DurationSec)
+	err = h.watchHistoryRepo.MarkComplete(userOID, target.TargetID, target.TargetType, target.SeriesID, target.SeasonID, target.EpisodeID, req.DurationSec)
 	if err != nil {
 		log.Printf("[USER HANDLER] Failed to mark complete: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mark complete"})
@@ -295,7 +366,7 @@ func (h *UserHandler) GetWatchHistory(c *gin.Context) {
 	}
 
 	if history == nil {
-		history = []models.WatchHistoryWithMovie{}
+		history = []models.WatchHistoryListItem{}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": history})
@@ -311,22 +382,19 @@ func (h *UserHandler) AddFavorite(c *gin.Context) {
 		return
 	}
 
-	movieIDStr := c.Param("movieId")
-	if movieIDStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "movieId is required"})
+	targetIDStr := c.Param("movieId")
+	if targetIDStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "content id is required"})
 		return
 	}
 
-	movieID, err := primitive.ObjectIDFromHex(movieIDStr)
+	target, err := h.resolveFavoriteTarget(c, targetIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movie_id"})
-		return
-	}
-
-	// Validate movie exists
-	_, err = h.movieRepo.FindByID(movieID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "movie not found"})
+		status := http.StatusNotFound
+		if strings.Contains(err.Error(), "invalid") {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -336,7 +404,7 @@ func (h *UserHandler) AddFavorite(c *gin.Context) {
 		return
 	}
 
-	err = h.favoriteRepo.AddFavorite(userOID, movieID)
+	err = h.favoriteRepo.AddFavorite(userOID, target.TargetID, target.TargetType, target.SeriesID, target.SeasonID)
 	if err != nil {
 		log.Printf("[USER HANDLER] Failed to add favorite: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to add favorite"})
@@ -356,15 +424,19 @@ func (h *UserHandler) RemoveFavorite(c *gin.Context) {
 		return
 	}
 
-	movieIDStr := c.Param("movieId")
-	if movieIDStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "movieId is required"})
+	targetIDStr := c.Param("movieId")
+	if targetIDStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "content id is required"})
 		return
 	}
 
-	movieID, err := primitive.ObjectIDFromHex(movieIDStr)
+	target, err := h.resolveFavoriteTarget(c, targetIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movie_id"})
+		status := http.StatusNotFound
+		if strings.Contains(err.Error(), "invalid") {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -374,7 +446,7 @@ func (h *UserHandler) RemoveFavorite(c *gin.Context) {
 		return
 	}
 
-	err = h.favoriteRepo.RemoveFavorite(userOID, movieID)
+	err = h.favoriteRepo.RemoveFavorite(userOID, target.TargetID, target.TargetType)
 	if err != nil {
 		log.Printf("[USER HANDLER] Failed to remove favorite: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to remove favorite"})
@@ -408,7 +480,7 @@ func (h *UserHandler) GetFavorites(c *gin.Context) {
 	}
 
 	if favorites == nil {
-		favorites = []models.FavoriteWithMovie{}
+		favorites = []models.FavoriteListItem{}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": favorites})
@@ -430,8 +502,16 @@ func (h *UserHandler) RecordView(c *gin.Context) {
 		return
 	}
 
-	// Increment view count (no auth required)
-	err = h.movieRepo.IncrementViews(movieID)
+	if _, err = h.movieRepo.FindByID(movieID); err == nil {
+		err = h.movieRepo.IncrementViews(movieID)
+	} else if err == mongo.ErrNoDocuments {
+		_, epErr := h.seriesRepo.GetEpisodeByID(movieID)
+		if epErr != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "content not found"})
+			return
+		}
+		err = h.seriesRepo.IncrementEpisodeViews(movieID)
+	}
 	if err != nil {
 		log.Printf("[USER HANDLER] Failed to increment views: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record view"})

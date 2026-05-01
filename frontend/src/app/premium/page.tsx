@@ -4,7 +4,6 @@ import { useState } from "react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { useAuth } from "@/lib/auth-context";
-import { buyPremium } from "@/lib/api";
 import {
   Crown,
   Check,
@@ -14,11 +13,9 @@ import {
   Film,
   ChevronDown,
   ChevronUp,
-  Loader2,
   ArrowDown,
   Wallet,
   ExternalLink,
-  AlertCircle,
   Star,
 } from "lucide-react";
 
@@ -42,9 +39,21 @@ const starsPackages: StarsPackage[] = [
 
 function formatExpiryDate(value?: string | null): string {
   if (!value) return "";
+  const normalized = value.trim();
+  const isoMatch = normalized.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    return `${isoMatch[3]}.${isoMatch[2]}.${isoMatch[1]}`;
+  }
+  const legacyMatch = normalized.match(/^(\d{4})\s+M?(\d{2})\s+(\d{2})$/i);
+  if (legacyMatch) {
+    return `${legacyMatch[3]}.${legacyMatch[2]}.${legacyMatch[1]}`;
+  }
   const d = new Date(value);
   if (isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("uz-UZ", { day: "2-digit", month: "long", year: "numeric" });
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${day}.${month}.${year}`;
 }
 
 interface FAQItem {
@@ -120,12 +129,8 @@ const premiumFeatures = [
 ];
 
 export default function PremiumPage() {
-  const { user, token, refreshUser } = useAuth();
+  const { user } = useAuth();
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
-  const [buyError, setBuyError] = useState<string | null>(null);
-  const [buySuccess, setBuySuccess] = useState<string | null>(null);
 
   // Check if user is premium
   const isPremium = user?.is_premium === true || user?.is_premium_active === true;
@@ -186,26 +191,12 @@ export default function PremiumPage() {
     setOpenFaqIndex(openFaqIndex === index ? null : index);
   };
 
-  const handleGetPremium = async (planId: string) => {
-    if (!user || !token) return;
-
-    setBuyError(null);
-    setBuySuccess(null);
-    setIsLoading(true);
-    setSelectedPlan(planId);
-
-    try {
-      const result = await buyPremium(token, planId);
-      setBuySuccess(result.message || "Premium muvaffaqiyatli faollashtirildi");
-      // Refresh user data to reflect new premium status and wallet balance
-      await refreshUser();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Xatolik yuz berdi";
-      setBuyError(msg);
-    } finally {
-      setIsLoading(false);
-      setSelectedPlan(null);
-    }
+  const scrollToPurchaseOptions = () => {
+    if (typeof document === "undefined") return;
+    const target =
+      document.getElementById("telegram-stars") ||
+      document.getElementById("admin-premium");
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const formatPrice = (price: number) => {
@@ -266,18 +257,13 @@ export default function PremiumPage() {
               </div>
             ) : (
               <button
-                onClick={() => handleGetPremium("3month")}
-                disabled={isLoading}
+                onClick={scrollToPurchaseOptions}
                 className="group inline-flex items-center gap-3 px-10 py-4 bg-gradient-to-r from-brand-red to-orange-600 hover:from-orange-600 hover:to-brand-red text-white font-bold text-lg rounded-xl shadow-[0_0_30px_rgba(249,115,22,0.4)] transition-all duration-300 hover:shadow-[0_0_50px_rgba(249,115,22,0.6)] hover:scale-105 disabled:opacity-70 disabled:cursor-not-allowed"
               >
-                {isLoading ? (
-                  <Loader2 className="w-6 h-6 animate-spin" />
-                ) : (
-                  <>
-                    <Crown className="w-6 h-6" />
-                    Premium olish
-                  </>
-                )}
+                <>
+                  <Crown className="w-6 h-6" />
+                  Premium olish
+                </>
               </button>
             )}
           </div>
@@ -318,7 +304,7 @@ export default function PremiumPage() {
 
         {/* Telegram Stars Section */}
         {!isPremium && (
-        <section className="py-12 sm:py-16">
+        <section id="telegram-stars" className="py-12 sm:py-16 scroll-mt-28">
           <div className="max-w-6xl mx-auto px-4">
             <div className="text-center mb-8">
               <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-sm font-medium mb-4">
@@ -377,7 +363,7 @@ export default function PremiumPage() {
         )}
 
         {/* Pricing Section */}
-        <section className="py-16 sm:py-24">
+        <section id="admin-premium" className="py-16 sm:py-24 scroll-mt-28">
           <div className="max-w-6xl mx-auto px-4">
             <h2 className="font-display text-3xl sm:text-4xl text-white text-center mb-2">
               Admin orqali — <span className="text-brand-red">hisob to&apos;ldirish</span>
@@ -413,20 +399,6 @@ export default function PremiumPage() {
                   <ExternalLink className="w-4 h-4" />
                   Hisobni to'ldirish
                 </a>
-              </div>
-            )}
-
-            {/* Buy status messages */}
-            {buyError && (
-              <div className="max-w-md mx-auto mb-6 flex items-center gap-3 p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm">
-                <AlertCircle className="w-5 h-5 flex-shrink-0" />
-                {buyError}
-              </div>
-            )}
-            {buySuccess && (
-              <div className="max-w-md mx-auto mb-6 flex items-center gap-3 p-4 bg-green-500/10 border border-green-500/30 rounded-xl text-green-400 text-sm">
-                <Check className="w-5 h-5 flex-shrink-0" />
-                {buySuccess}
               </div>
             )}
 
@@ -526,22 +498,17 @@ export default function PremiumPage() {
                       </a>
                     ) : (
                       <button
-                        onClick={() => handleGetPremium(plan.id)}
-                        disabled={isLoading}
+                        onClick={() => window.open("https://t.me/filmorauznet?direct", "_blank", "noopener,noreferrer")}
                         className={`w-full py-3 rounded-xl font-semibold text-sm transition-all duration-300 ${
                           isHighlighted
                             ? "bg-gradient-to-r from-brand-red to-orange-600 hover:from-orange-600 hover:to-brand-red text-white shadow-[0_0_20px_rgba(249,115,22,0.3)] hover:shadow-[0_0_30px_rgba(249,115,22,0.5)]"
                             : "bg-brand-red/20 border border-brand-red/50 text-brand-red hover:bg-brand-red hover:text-white"
-                        } disabled:opacity-70 disabled:cursor-not-allowed`}
+                        }`}
                       >
-                        {isLoading && selectedPlan === plan.id ? (
-                          <Loader2 size={16} className="animate-spin mx-auto" />
-                        ) : (
-                          <>
-                            <Crown size={14} className="inline-block mr-1" />
-                            Premium olish
-                          </>
-                        )}
+                        <>
+                          <Crown size={14} className="inline-block mr-1" />
+                          Premium olish
+                        </>
                       </button>
                     )}
                   </div>
@@ -550,7 +517,7 @@ export default function PremiumPage() {
             </div>
 
             <p className="text-center text-gray-500 text-sm mt-8">
-              To&apos;lovlar hisobingizdan avtomatik amalga oshiriladi
+              Telegram Stars orqali avtomatik, admin orqali esa qo&apos;lda faollashtiriladi
             </p>
           </div>
         </section>
@@ -616,18 +583,13 @@ export default function PremiumPage() {
                   </div>
                 ) : (
                   <button
-                    onClick={() => handleGetPremium("3month")}
-                    disabled={isLoading}
+                    onClick={scrollToPurchaseOptions}
                     className="group inline-flex items-center gap-3 px-10 py-4 bg-gradient-to-r from-brand-red to-orange-600 hover:from-orange-600 hover:to-brand-red text-white font-bold text-lg rounded-xl shadow-[0_0_30px_rgba(249,115,22,0.4)] transition-all duration-300 hover:shadow-[0_0_50px_rgba(249,115,22,0.6)] hover:scale-105 disabled:opacity-70 disabled:cursor-not-allowed"
                   >
-                    {isLoading ? (
-                      <Loader2 className="w-6 h-6 animate-spin" />
-                    ) : (
-                      <>
-                        <Crown className="w-6 h-6" />
-                        Hozir Premium bo'ling
-                      </>
-                    )}
+                    <>
+                      <Crown className="w-6 h-6" />
+                      Hozir Premium bo'ling
+                    </>
                   </button>
                 )}
               </div>
