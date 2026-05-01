@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Clock, Calendar, Heart, Eye, Crown } from "lucide-react";
 import VideoPlayer from "@/components/VideoPlayer";
-import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, getProtectedMediaAccess, Ad, Movie } from "@/lib/api";
+import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveUnifiedWatchProgress, getWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, getProtectedMediaAccess, Ad, Movie } from "@/lib/api";
 import { pickWeightedRandomAd } from "@/lib/ads-utils";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { useAuth } from "@/lib/auth-context";
@@ -197,25 +197,15 @@ function PlayerOverlayAd({
   );
 }
 
-// Fetch watch progress for resume
-async function getWatchProgressForResume(token: string, targetId: string, targetType: "movie" | "episode"): Promise<number> {
-  try {
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/user/history`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return 0;
-    const json = await res.json();
-    const history = json.data || [];
-    const item = history.find((h: any) => {
-      const historyTargetId = h.target_id || h.movie_id;
-      const historyTargetType = h.target_type || h.type || "movie";
-      return historyTargetId === targetId && historyTargetType === targetType;
-    });
-    if (item && item.last_position_sec > 30 && item.last_position_sec < (item.duration_sec || 0) - 60) {
-      return item.last_position_sec;
-    }
-  } catch {}
-  return 0;
+function formatResumeTime(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
 interface WatchPageClientProps {
@@ -284,6 +274,8 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   const [recommendations, setRecommendations] = useState<Movie[]>([]);
   const [isLoadingRecommendations, setIsLoadingRecommendations] = useState(true);
   const [resumePosition, setResumePosition] = useState(0);
+  const [resumePromptVisible, setResumePromptVisible] = useState(false);
+  const [selectedStartPosition, setSelectedStartPosition] = useState(0);
   const [viewCount, setViewCount] = useState(movie.views ?? 0);
   const [resolvedPlaybackUrl, setResolvedPlaybackUrl] = useState<string | null>(null);
   const [playbackAccessError, setPlaybackAccessError] = useState<string | null>(null);
@@ -293,6 +285,8 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   const hasRecorded = useRef(false);
   const autoNextTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoNextIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const latestProgressRef = useRef({ currentTime: 0, duration: 0 });
+  const lastSavedAtRef = useRef(0);
 
   // Player ad flow: user clicks play → ad shows → ad dismissed → video starts
   const [playIntended, setPlayIntended] = useState(false);
@@ -374,8 +368,18 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   // Fetch watch progress for resume
   useEffect(() => {
     if (!user || !token) return;
-    getWatchProgressForResume(token, movie.id, targetType)
-      .then(setResumePosition)
+    getWatchProgress(token, movie.id, { targetType })
+      .then((progress) => {
+        const canResume =
+          !progress.completed &&
+          progress.current_time > 30 &&
+          progress.duration > 0 &&
+          progress.progress_percent < 90 &&
+          progress.current_time < progress.duration - 60;
+        setResumePosition(canResume ? progress.current_time : 0);
+        setSelectedStartPosition(0);
+        setResumePromptVisible(canResume);
+      })
       .catch(console.error);
   }, [user, token, movie.id, targetType]);
 
@@ -387,23 +391,28 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
       .finally(() => setIsLoadingRecommendations(false));
   }, [movie.id]);
 
+  const persistProgress = useCallback((force: boolean = false) => {
+    if (!user || !token) return;
+    const { currentTime, duration } = latestProgressRef.current;
+    if (duration <= 0 || currentTime <= 0) return;
+    if (currentTime >= duration - 5) return;
+    const now = Date.now();
+    if (!force && now - lastSavedAtRef.current < 10000) return;
+    lastSavedAtRef.current = now;
+    saveUnifiedWatchProgress(token, movie.id, Math.floor(currentTime), Math.floor(duration), { targetType }).catch(console.error);
+  }, [user, token, movie.id, targetType]);
+
   // Save progress periodically during playback
   const handleTimeUpdate = (currentTime: number, duration: number) => {
     if (!user || !token) return;
-    
-    // Save progress every 10-15 seconds
-    const now = Date.now();
-    if (handleTimeUpdate.lastSave && now - handleTimeUpdate.lastSave < 10000) {
-      return;
-    }
-    handleTimeUpdate.lastSave = now;
-    
-    // Don't save if near the end (will mark complete instead)
-    if (currentTime < duration - 60) {
-      saveWatchProgress(token, movie.id, Math.floor(currentTime), Math.floor(duration), { targetType }).catch(console.error);
-    }
+    latestProgressRef.current = { currentTime, duration };
+    persistProgress(false);
   };
-  handleTimeUpdate.lastSave = 0;
+
+  const handlePauseSave = useCallback((currentTime: number, duration: number) => {
+    latestProgressRef.current = { currentTime, duration };
+    persistProgress(true);
+  }, [persistProgress]);
 
   // Handle video end
   const handleVideoEnded = () => {
@@ -485,6 +494,23 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
     }
   }, [movie.id, user, token, targetType]);
 
+  useEffect(() => {
+    const flushOnUnload = () => {
+      persistProgress(true);
+    };
+    const flushOnHidden = () => {
+      if (document.visibilityState === "hidden") {
+        persistProgress(true);
+      }
+    };
+    window.addEventListener("beforeunload", flushOnUnload);
+    document.addEventListener("visibilitychange", flushOnHidden);
+    return () => {
+      window.removeEventListener("beforeunload", flushOnUnload);
+      document.removeEventListener("visibilitychange", flushOnHidden);
+    };
+  }, [persistProgress]);
+
   // Check if movie is favorite
   useEffect(() => {
     if (!user || !token) return;
@@ -509,6 +535,18 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleResumeContinue = () => {
+    setSelectedStartPosition(resumePosition);
+    setResumePromptVisible(false);
+    handlePlayIntent();
+  };
+
+  const handleResumeFromStart = () => {
+    setSelectedStartPosition(0);
+    setResumePromptVisible(false);
+    handlePlayIntent();
   };
 
   return (
@@ -582,37 +620,64 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
                 <p className="text-sm text-red-400">{playbackAccessError}</p>
               </div>
             ) : resolvedPlaybackUrl ? (
-              <VideoPlayer
-                videoUrl={resolvedPlaybackUrl}
-                premiumStreamUrl={resolvedPlaybackUrl}
-                embedUrl={movie.embed_url}
-                sourceType={movie.source_type}
-                title={localizedTitle}
-                posterUrl={normalizeMediaUrl(movie.backdrop_url || movie.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
-                onPlayIntent={handlePlayIntent}
-                forceStart={videoCanStart}
-                onTimeUpdate={handleTimeUpdate}
-                onEnded={handleVideoEnded}
-                headerTitle={
-                  movie.type === "episode" && movie.series_title
-                    ? movie.series_title
-                    : localizedTitle
-                }
-                headerSubtitle={
-                  movie.type === "episode"
-                    ? `${movie.episode_number ? `${movie.episode_number}-qism` : ""}${
-                        localizedTitle && localizedTitle !== movie.series_title
-                          ? ` — ${localizedTitle}`
-                          : ""
-                      }`.trim() || undefined
-                    : undefined
-                }
-                seriesButtonUrl={
-                  movie.type === "episode" && movie.series_slug
-                    ? `/series/${movie.series_slug}`
-                    : undefined
-                }
-              />
+              <>
+                {resumePromptVisible && (
+                  <div className="mb-3 flex flex-col gap-3 rounded-xl border border-brand-red/25 bg-brand-card/80 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="text-sm text-white">
+                      Davom ettirish: {formatResumeTime(resumePosition)} dan
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleResumeContinue}
+                        className="rounded-lg bg-gradient-to-r from-brand-red to-orange-600 px-4 py-2 text-sm font-semibold text-white"
+                      >
+                        Davom etish
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleResumeFromStart}
+                        className="rounded-lg border border-brand-border bg-brand-dark px-4 py-2 text-sm font-medium text-gray-200"
+                      >
+                        Boshidan boshlash
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <VideoPlayer
+                  videoUrl={resolvedPlaybackUrl}
+                  premiumStreamUrl={resolvedPlaybackUrl}
+                  embedUrl={movie.embed_url}
+                  sourceType={movie.source_type}
+                  title={localizedTitle}
+                  posterUrl={normalizeMediaUrl(movie.backdrop_url || movie.poster_url, DEFAULT_POSTER_PLACEHOLDER)}
+                  onPlayIntent={handlePlayIntent}
+                  forceStart={videoCanStart}
+                  initialSeekTime={selectedStartPosition}
+                  onTimeUpdate={handleTimeUpdate}
+                  onPause={handlePauseSave}
+                  onEnded={handleVideoEnded}
+                  headerTitle={
+                    movie.type === "episode" && movie.series_title
+                      ? movie.series_title
+                      : localizedTitle
+                  }
+                  headerSubtitle={
+                    movie.type === "episode"
+                      ? `${movie.episode_number ? `${movie.episode_number}-qism` : ""}${
+                          localizedTitle && localizedTitle !== movie.series_title
+                            ? ` — ${localizedTitle}`
+                            : ""
+                        }`.trim() || undefined
+                      : undefined
+                  }
+                  seriesButtonUrl={
+                    movie.type === "episode" && movie.series_slug
+                      ? `/series/${movie.series_slug}`
+                      : undefined
+                  }
+                />
+              </>
             ) : (
               <div className="flex aspect-video items-center justify-center rounded-xl bg-gray-900">
                 <div className="h-10 w-10 animate-spin rounded-full border-2 border-white border-t-transparent" />

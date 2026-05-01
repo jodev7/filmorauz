@@ -95,6 +95,8 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	watch := api.Group("/watch")
 	watch.Use(middleware.RequireAuth(authService))
 	{
+		watch.GET("/progress", userHandler.GetWatchProgress)
+		watch.POST("/progress", userHandler.SaveWatchProgressGeneric)
 		watch.POST("/:movieId/progress", userHandler.SaveWatchProgress)
 		watch.POST("/:movieId/complete", userHandler.MarkWatchComplete)
 	}
@@ -271,6 +273,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 
 		// Clip management
 		admin.GET("/clips/groups", clipHandler.ListClipGroups)
+		admin.GET("/clips/groups/debug", clipHandler.GetClipGroupsDebug)
 		admin.GET("/clips", clipHandler.ListClips)
 		admin.GET("/clips/movie/:movieId", clipHandler.GetClipsByMovie)
 		admin.GET("/clips/:id/download", clipHandler.DownloadClip)

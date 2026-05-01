@@ -5,7 +5,7 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import TelegramLoginModal from "@/components/TelegramLoginModal";
 import { useAuth } from "@/lib/auth-context";
-import { createPremiumStarsSession } from "@/lib/api";
+import { buyPremium, createPremiumStarsSession } from "@/lib/api";
 import {
   Crown,
   Check,
@@ -20,6 +20,9 @@ import {
   ExternalLink,
   Star,
 } from "lucide-react";
+
+const TELEGRAM_BOT_USERNAME =
+  process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || "FilmoraUzBot";
 
 interface StarsPackage {
   id: string; // matches backend (1m, 3m, 6m, 12m)
@@ -128,11 +131,14 @@ const premiumFeatures = [
 ];
 
 export default function PremiumPage() {
-  const { user, token, isAuthenticated } = useAuth();
+  const { user, token, isAuthenticated, refreshUser } = useAuth();
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
   const [loginModalOpen, setLoginModalOpen] = useState(false);
   const [starsLoadingPackage, setStarsLoadingPackage] = useState<string | null>(null);
   const [starsError, setStarsError] = useState<string>("");
+  const [starsFallbackUrl, setStarsFallbackUrl] = useState<string>("");
+  const [manualLoadingPlan, setManualLoadingPlan] = useState<string | null>(null);
+  const [manualMessage, setManualMessage] = useState<string>("");
 
   // Check if user is premium
   const isPremium = user?.is_premium === true || user?.is_premium_active === true;
@@ -211,13 +217,58 @@ export default function PremiumPage() {
     setLoginModalOpen(true);
   };
 
+  const scrollToTopUpCard = () => {
+    if (typeof document === "undefined") return;
+    document.getElementById("manual-topup-card")?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+  };
+
+  const isMobileDevice = () => {
+    if (typeof navigator === "undefined") return false;
+    return /Android|iPhone|iPad|iPod|Mobile|IEMobile|Opera Mini/i.test(
+      navigator.userAgent
+    );
+  };
+
+  const buildTelegramLinks = (botURL: string) => {
+    try {
+      const parsed = new URL(botURL);
+      const domain = parsed.pathname.replace(/^\/+/, "") || TELEGRAM_BOT_USERNAME;
+      const start = parsed.searchParams.get("start") || "";
+      return {
+        webURL: `https://t.me/${domain}?start=${encodeURIComponent(start)}`,
+        appURL: `tg://resolve?domain=${encodeURIComponent(domain)}&start=${encodeURIComponent(start)}`,
+      };
+    } catch {
+      return {
+        webURL: botURL,
+        appURL: `tg://resolve?domain=${encodeURIComponent(TELEGRAM_BOT_USERNAME)}`,
+      };
+    }
+  };
+
   const handleStarsPurchase = async (packageId: string) => {
     if (!token || !canBuyStars) return;
     setStarsError("");
+    setStarsFallbackUrl("");
     setStarsLoadingPackage(packageId);
     try {
       const session = await createPremiumStarsSession(token, packageId);
-      window.open(session.bot_url, "_blank", "noopener,noreferrer");
+      const { webURL, appURL } = buildTelegramLinks(session.bot_url);
+      setStarsFallbackUrl(webURL);
+
+      if (typeof window !== "undefined") {
+        if (isMobileDevice()) {
+          window.location.href = appURL;
+          window.setTimeout(() => {
+            window.location.href = webURL;
+          }, 1000);
+        } else {
+          window.open(webURL, "_blank", "noopener,noreferrer");
+        }
+      }
     } catch (error) {
       const message =
         error instanceof Error
@@ -226,6 +277,35 @@ export default function PremiumPage() {
       setStarsError(message);
     } finally {
       setStarsLoadingPackage(null);
+    }
+  };
+
+  const handleManualPremiumPurchase = async (planId: string, totalPrice: number) => {
+    if (!token || !isLoggedIn) {
+      handleLoginRequired();
+      return;
+    }
+
+    if (walletBalance < totalPrice) {
+      setManualMessage("Hisobingizda mablag‘ yetarli emas. Avval hisobni to‘ldiring.");
+      scrollToTopUpCard();
+      return;
+    }
+
+    setManualMessage("");
+    setManualLoadingPlan(planId);
+    try {
+      const result = await buyPremium(token, planId);
+      setManualMessage(result.message || "Premium muvaffaqiyatli faollashtirildi");
+      await refreshUser();
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Premium sotib olishda xatolik yuz berdi.";
+      setManualMessage(message);
+    } finally {
+      setManualLoadingPlan(null);
     }
   };
 
@@ -401,6 +481,20 @@ export default function PremiumPage() {
               </div>
             )}
 
+            {starsFallbackUrl && (
+              <div className="max-w-2xl mx-auto mb-6 text-center text-sm text-gray-400">
+                Telegram ochilmasa,{" "}
+                <a
+                  href={starsFallbackUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-yellow-400 hover:text-yellow-300 underline underline-offset-4"
+                >
+                  bu yerni bosing
+                </a>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
               {starsPackages.map((pkg) => (
                 <div
@@ -466,7 +560,7 @@ export default function PremiumPage() {
 
             {/* Wallet balance card */}
             {isLoggedIn && (
-              <div className="max-w-md mx-auto mb-10 p-5 bg-brand-card/60 border border-brand-border rounded-2xl flex items-center justify-between gap-4">
+              <div id="manual-topup-card" className="max-w-md mx-auto mb-10 p-5 bg-brand-card/60 border border-brand-border rounded-2xl flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-yellow-500/20 to-amber-500/20 flex items-center justify-center">
                     <Wallet className="w-5 h-5 text-yellow-400" />
@@ -488,6 +582,16 @@ export default function PremiumPage() {
                   <ExternalLink className="w-4 h-4" />
                   Hisobni to'ldirish
                 </a>
+              </div>
+            )}
+
+            {manualMessage && (
+              <div className={`max-w-2xl mx-auto mb-6 rounded-2xl border p-4 text-sm text-center ${
+                manualMessage.toLowerCase().includes("muvaffaqiyatli")
+                  ? "border-green-500/20 bg-green-500/10 text-green-200"
+                  : "border-yellow-500/20 bg-yellow-500/10 text-yellow-100"
+              }`}>
+                {manualMessage}
               </div>
             )}
 
@@ -579,20 +683,12 @@ export default function PremiumPage() {
                       >
                         Kirish
                       </button>
-                    ) : walletBalance < plan.totalPrice ? (
-                      <a
-                        href="https://t.me/filmorauznet?start=topup"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center justify-center gap-2 w-full py-3 bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20 rounded-xl text-sm font-semibold transition-all duration-200"
-                      >
-                        <Wallet size={14} />
-                        Hisobni to&apos;ldirish
-                      </a>
                     ) : (
                       <button
-                        onClick={() => window.open("https://t.me/filmorauznet?direct", "_blank", "noopener,noreferrer")}
-                        className={`w-full py-3 rounded-xl font-semibold text-sm transition-all duration-300 ${
+                        type="button"
+                        onClick={() => handleManualPremiumPurchase(plan.id, plan.totalPrice)}
+                        disabled={manualLoadingPlan !== null}
+                        className={`w-full py-3 rounded-xl font-semibold text-sm transition-all duration-300 disabled:opacity-60 disabled:cursor-not-allowed ${
                           isHighlighted
                             ? "bg-gradient-to-r from-brand-red to-orange-600 hover:from-orange-600 hover:to-brand-red text-white shadow-[0_0_20px_rgba(249,115,22,0.3)] hover:shadow-[0_0_30px_rgba(249,115,22,0.5)]"
                             : "bg-brand-red/20 border border-brand-red/50 text-brand-red hover:bg-brand-red hover:text-white"
@@ -600,7 +696,7 @@ export default function PremiumPage() {
                       >
                         <>
                           <Crown size={14} className="inline-block mr-1" />
-                          Premium olish
+                          {manualLoadingPlan === plan.id ? "Yuklanmoqda..." : "Premium olish"}
                         </>
                       </button>
                     )}

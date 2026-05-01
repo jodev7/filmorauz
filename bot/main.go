@@ -831,6 +831,26 @@ func (b *Bot) sendMessage(chatID int64, text string) {
 	b.api.Send(msg)
 }
 
+func (b *Bot) sendMessageWithURLButton(chatID int64, text, buttonText, url string) {
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = "HTML"
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonURL(buttonText, url),
+		),
+	)
+	b.api.Send(msg)
+}
+
+func (b *Bot) sendPremiumAdminFallback(chatID int64, text string) {
+	b.sendMessageWithURLButton(
+		chatID,
+		text,
+		"Admin orqali premium olish",
+		"https://t.me/filmorauznet?direct",
+	)
+}
+
 // parsePremiumStart returns the purchase session token from a "/start premium_<token>" command,
 // or "" if the message is not a premium deep link.
 func (b *Bot) parsePremiumStart(text string) string {
@@ -937,7 +957,7 @@ func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User
 	params, paramsErr := invoice.params()
 	if paramsErr != nil {
 		log.Printf("[PREMIUM] sendInvoice params build failed user=%d token=%s pkg=%s err=%v", userID, sessionToken, sessionResp.Package, paramsErr)
-		b.sendMessage(chatID, "❌ Invoice yuborishda xatolik. Keyinroq qayta urinib ko'ring.")
+		b.sendPremiumAdminFallback(chatID, "❌ Invoice yuborishda xatolik. Agar Stars to‘lovi ishlamasa, admin orqali premium olishingiz mumkin.")
 		return
 	}
 	requestJSON, _ := json.Marshal(params)
@@ -962,16 +982,17 @@ func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User
 			log.Printf("[PREMIUM] sendInvoice FAILED user=%d token=%s pkg=%s payload=%q currency=%q prices_amount=%d request_json=%s response_body=%s err=%T %#v",
 				userID, sessionToken, sessionResp.Package, payload, invoice.Currency, amount, string(requestJSON), responseBody, err, err)
 		}
-		b.sendMessage(chatID,
-			"❌ Invoice yuborishda xatolik. Iltimos, avval /start bosing va qayta urinib ko'ring. "+
-				"Agar muammo davom etsa, admin bilan bog'laning.")
+		b.sendPremiumAdminFallback(
+			chatID,
+			"❌ Invoice yuborishda xatolik. Iltimos, avval /start bosing va qayta urinib ko'ring.\n\nAgar Stars to‘lovi ishlamasa, admin orqali premium olishingiz mumkin.",
+		)
 		return
 	}
 	log.Printf("[PREMIUM] sendInvoice OK user=%d token=%s pkg=%s request_json=%s response_body=%s", userID, sessionToken, sessionResp.Package, string(requestJSON), mustMarshalJSON(resp))
-	b.sendMessage(chatID,
+	b.sendPremiumAdminFallback(chatID,
 		"ℹ️ Telegram Stars to'lovi Telegram mobil ilovasida yaxshiroq ishlaydi.\n\n"+
-			"Agar checkout ochilib, lekin to'lov ishlamasa, Telegram Stars to‘lovi hozircha sizning hisobingizda ishlamadi. "+
-			"Iltimos Telegram mobile app orqali urinib ko‘ring yoki admin orqali premium oling: @primeposuz")
+			"Agar checkout ochilib, lekin to'lov ishlamasa, Telegram Stars to‘lovi hozircha sizning hisobingizda ishlamadi.\n\n"+
+			"Agar Stars to‘lovi ishlamasa, admin orqali premium olishingiz mumkin.")
 }
 
 // handlePreCheckout approves all incoming pre-checkout queries.
@@ -1031,7 +1052,7 @@ func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
 	})
 	if err != nil {
 		log.Printf("[PREMIUM] Grant failed user=%d: %v", userID, err)
-		b.sendMessage(chatID, "⚠️ To'lov qabul qilindi, lekin server bilan bog'lanishda xatolik. Iltimos, qayta urinib ko'ring yoki admin bilan bog'laning.")
+		b.sendPremiumAdminFallback(chatID, "⚠️ To'lov qabul qilindi, lekin server bilan bog'lanishda xatolik.\n\nAgar Stars to‘lovi ishlamasa, admin orqali premium olishingiz mumkin.")
 		return
 	}
 	if status == http.StatusNotFound || (resp != nil && resp.Error == "user_not_linked") {
@@ -1051,7 +1072,7 @@ func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
 			errMsg = resp.Error
 		}
 		log.Printf("[PREMIUM] Grant non-OK status=%d err=%s", status, errMsg)
-		b.sendMessage(chatID, "⚠️ To'lov qabul qilindi, lekin premium faollashtirishda xatolik. Admin bilan bog'laning.")
+		b.sendPremiumAdminFallback(chatID, "⚠️ To'lov qabul qilindi, lekin premium faollashtirishda xatolik.\n\nAgar Stars to‘lovi ishlamasa, admin orqali premium olishingiz mumkin.")
 		return
 	}
 

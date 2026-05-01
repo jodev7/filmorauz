@@ -180,6 +180,19 @@ func (h *ClipHandler) ListClipGroups(c *gin.Context) {
 	})
 }
 
+// GetClipGroupsDebug GET /api/admin/clips/groups/debug
+// Temporary admin-only diagnostics for the grouped clips endpoint.
+func (h *ClipHandler) GetClipGroupsDebug(c *gin.Context) {
+	ctx := context.Background()
+	debugInfo, err := h.clipRepo.ClipGroupsDebug(ctx, 20)
+	if err != nil {
+		log.Printf("[ClipHandler] GetClipGroupsDebug: failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to inspect clips"})
+		return
+	}
+	c.JSON(http.StatusOK, debugInfo)
+}
+
 func (h *ClipHandler) GetClipsByMovie(c *gin.Context) {
 	movieIDStr := c.Param("movieId")
 	movieID, err := primitive.ObjectIDFromHex(movieIDStr)

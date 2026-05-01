@@ -88,6 +88,13 @@ type WatchProgressRequest struct {
 	TargetType  string `json:"target_type"`
 }
 
+type GenericWatchProgressRequest struct {
+	TargetType  string `json:"target_type" binding:"required"`
+	TargetID    string `json:"target_id" binding:"required"`
+	CurrentTime int64  `json:"current_time" binding:"required,min=0"`
+	Duration    int64  `json:"duration" binding:"required,min=1"`
+}
+
 type resolvedUserTarget struct {
 	TargetType string
 	TargetID   primitive.ObjectID
@@ -257,6 +264,106 @@ func (h *UserHandler) SaveWatchProgress(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "progress saved"})
+}
+
+// SaveWatchProgressGeneric godoc
+// POST /api/watch/progress
+func (h *UserHandler) SaveWatchProgressGeneric(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	var req GenericWatchProgressRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "target_type, target_id, current_time and duration are required"})
+		return
+	}
+	if req.CurrentTime > req.Duration+10 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "current_time cannot exceed duration"})
+		return
+	}
+
+	userOID, err := primitive.ObjectIDFromHex(userID.(string))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user_id"})
+		return
+	}
+
+	target, err := h.resolveUserTarget(req.TargetID, req.TargetType)
+	if err != nil {
+		status := http.StatusNotFound
+		if strings.Contains(err.Error(), "invalid") {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.watchHistoryRepo.SaveProgress(userOID, target.TargetID, target.TargetType, target.SeriesID, target.SeasonID, target.EpisodeID, req.CurrentTime, req.Duration); err != nil {
+		log.Printf("[USER HANDLER] Failed to save generic progress: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save progress"})
+		return
+	}
+
+	progress, err := h.watchHistoryRepo.GetProgress(userOID, target.TargetID, target.TargetType)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load saved progress"})
+		return
+	}
+	c.JSON(http.StatusOK, progress)
+}
+
+// GetWatchProgress godoc
+// GET /api/watch/progress?target_type=movie&target_id=...
+func (h *UserHandler) GetWatchProgress(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	targetType := strings.TrimSpace(c.Query("target_type"))
+	targetIDStr := strings.TrimSpace(c.Query("target_id"))
+	if targetType == "" || targetIDStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "target_type and target_id are required"})
+		return
+	}
+
+	userOID, err := primitive.ObjectIDFromHex(userID.(string))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user_id"})
+		return
+	}
+
+	target, err := h.resolveUserTarget(targetIDStr, targetType)
+	if err != nil {
+		status := http.StatusNotFound
+		if strings.Contains(err.Error(), "invalid") {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	progress, err := h.watchHistoryRepo.GetProgress(userOID, target.TargetID, target.TargetType)
+	if err != nil {
+		log.Printf("[USER HANDLER] Failed to get progress: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get progress"})
+		return
+	}
+	if progress == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"current_time":     0,
+			"duration":         0,
+			"progress_percent": 0,
+			"completed":        false,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, progress)
 }
 
 // MarkWatchComplete godoc

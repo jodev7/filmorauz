@@ -833,6 +833,13 @@ interface TargetOptions {
   targetType?: "movie" | "episode" | "series";
 }
 
+export interface WatchProgressSummary {
+  current_time: number;
+  duration: number;
+  progress_percent: number;
+  completed?: boolean;
+}
+
 // Record watch history (authenticated)
 export async function recordWatchHistory(token: string, targetId: string, options?: TargetOptions): Promise<void> {
   const res = await fetch(`${API_URL}/user/history/watch`, {
@@ -861,6 +868,50 @@ export async function saveWatchProgress(token: string, targetId: string, positio
     body: JSON.stringify({ positionSec, durationSec, target_type: options?.targetType || "movie" }),
   });
   if (!res.ok) throw new Error("Failed to save progress");
+}
+
+export async function saveUnifiedWatchProgress(
+  token: string,
+  targetId: string,
+  currentTime: number,
+  duration: number,
+  options?: TargetOptions
+): Promise<WatchProgressSummary> {
+  const res = await fetch(`${API_URL}/watch/progress`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({
+      target_type: options?.targetType || "movie",
+      target_id: targetId,
+      current_time: currentTime,
+      duration,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Failed to save progress" }));
+    throw new Error(err.error || "Failed to save progress");
+  }
+  return res.json();
+}
+
+export async function getWatchProgress(
+  token: string,
+  targetId: string,
+  options?: TargetOptions
+): Promise<WatchProgressSummary> {
+  const params = new URLSearchParams({
+    target_type: options?.targetType || "movie",
+    target_id: targetId,
+  });
+  const res = await fetch(`${API_URL}/watch/progress?${params.toString()}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Failed to get progress" }));
+    throw new Error(err.error || "Failed to get progress");
+  }
+  return res.json();
 }
 
 // Mark watch as complete (authenticated)

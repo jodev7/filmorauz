@@ -29,8 +29,19 @@ type WatchHistory struct {
 
 // WatchProgressRequest represents the request body for saving watch progress
 type WatchProgressRequest struct {
-	PositionSec int64 `json:"positionSec" binding:"required,min=0"`
-	DurationSec int64 `json:"durationSec" binding:"required,min=1"`
+	PositionSec int64  `json:"positionSec" binding:"min=0"`
+	DurationSec int64  `json:"durationSec" binding:"min=1"`
+	CurrentTime int64  `json:"current_time" binding:"min=0"`
+	Duration    int64  `json:"duration" binding:"min=1"`
+	TargetType  string `json:"target_type"`
+	TargetID    string `json:"target_id"`
+}
+
+type WatchProgressResponse struct {
+	CurrentTime     int64   `json:"current_time"`
+	Duration        int64   `json:"duration"`
+	ProgressPercent float64 `json:"progress_percent"`
+	Completed       bool    `json:"completed"`
 }
 
 // ContinueWatchingItem represents a continue watching item for frontend

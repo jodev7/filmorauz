@@ -50,7 +50,9 @@ interface Props {
   posterUrl?: string;
   onPlayIntent?: () => void;
   forceStart?: boolean;
+  initialSeekTime?: number;
   onTimeUpdate?: (currentTime: number, duration: number) => void;
+  onPause?: (currentTime: number, duration: number) => void;
   onEnded?: () => void;
   // New UI props (all optional — older callers keep working unchanged)
   headerTitle?: string;
@@ -145,18 +147,23 @@ function DirectVideoPlayer({
   src, 
   title, 
   poster,
+  initialSeekTime,
   onTimeUpdate,
+  onPause,
   onEnded,
 }: { 
   src: string; 
   title: string; 
   poster?: string;
+  initialSeekTime?: number;
   onTimeUpdate?: (currentTime: number, duration: number) => void;
+  onPause?: (currentTime: number, duration: number) => void;
   onEnded?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const hasAppliedInitialSeek = useRef(false);
 
   const handleError = () => {
     if (videoRef.current?.error) {
@@ -174,6 +181,10 @@ function DirectVideoPlayer({
     return <ErrorFallback message={error} />;
   }
 
+  useEffect(() => {
+    hasAppliedInitialSeek.current = false;
+  }, [src, initialSeekTime]);
+
   return (
     <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden">
       <video
@@ -186,10 +197,21 @@ function DirectVideoPlayer({
         poster={poster}
         onError={handleError}
         onLoadedData={() => setLoading(false)}
+        onLoadedMetadata={() => {
+          if (!videoRef.current || hasAppliedInitialSeek.current) return;
+          if (initialSeekTime && initialSeekTime > 0) {
+            videoRef.current.currentTime = initialSeekTime;
+          }
+          hasAppliedInitialSeek.current = true;
+        }}
         onLoadStart={() => setLoading(true)}
         onTimeUpdate={() => {
           if (!videoRef.current || !onTimeUpdate) return;
           onTimeUpdate(videoRef.current.currentTime, videoRef.current.duration || 0);
+        }}
+        onPause={() => {
+          if (!videoRef.current || !onPause) return;
+          onPause(videoRef.current.currentTime, videoRef.current.duration || 0);
         }}
         onEnded={onEnded}
       >
@@ -254,7 +276,9 @@ function HLSPlayer({
   poster,
   autoPlay: shouldAutoPlay,
   isPremiumUser,
+  initialSeekTime,
   onTimeUpdate,
+  onPause,
   onEnded,
   headerTitle,
   headerSubtitle,
@@ -265,7 +289,9 @@ function HLSPlayer({
   poster?: string;
   autoPlay?: boolean;
   isPremiumUser: boolean;
+  initialSeekTime?: number;
   onTimeUpdate?: (currentTime: number, duration: number) => void;
+  onPause?: (currentTime: number, duration: number) => void;
   onEnded?: () => void;
   headerTitle?: string;
   headerSubtitle?: string;
@@ -312,6 +338,7 @@ function HLSPlayer({
   const nextAdAtRef = useRef<number | null>(null);
   const adInitializedRef = useRef(false);
   const resumeTimeRef = useRef(0);
+  const hasAppliedInitialSeek = useRef(false);
 
   useEffect(() => {
     setSeekStep(loadSeekStep());
@@ -398,6 +425,7 @@ function HLSPlayer({
     setAdIndex(0);
     nextAdAtRef.current = null;
     adInitializedRef.current = false;
+    hasAppliedInitialSeek.current = false;
 
     logger.debug("[HLSPlayer] initializing");
 
@@ -587,9 +615,10 @@ function HLSPlayer({
     const video = videoRef.current;
     if (!video) return;
     const onPlay = () => setPlaying(true);
-    const onPause = () => {
+    const handlePause = () => {
       setPlaying(false);
       setShowControls(true);
+      onPause?.(video.currentTime, video.duration || 0);
     };
     const onVideoTimeUpdate = () => {
       setCurrentTime(video.currentTime);
@@ -611,6 +640,10 @@ function HLSPlayer({
     };
     const onDurationChange = () => {
       setDuration(video.duration);
+      if (!hasAppliedInitialSeek.current && initialSeekTime && initialSeekTime > 0) {
+        video.currentTime = initialSeekTime;
+        hasAppliedInitialSeek.current = true;
+      }
       if (!adInitializedRef.current && isFinite(video.duration) && video.duration > 0) {
         adInitializedRef.current = true;
         nextAdAtRef.current =
@@ -626,20 +659,20 @@ function HLSPlayer({
       onEnded?.();
     };
     video.addEventListener("play", onPlay);
-    video.addEventListener("pause", onPause);
+    video.addEventListener("pause", handlePause);
     video.addEventListener("timeupdate", onVideoTimeUpdate);
     video.addEventListener("durationchange", onDurationChange);
     video.addEventListener("volumechange", onVolumeChange);
     video.addEventListener("ended", onVideoEnded);
     return () => {
       video.removeEventListener("play", onPlay);
-      video.removeEventListener("pause", onPause);
+      video.removeEventListener("pause", handlePause);
       video.removeEventListener("timeupdate", onVideoTimeUpdate);
       video.removeEventListener("durationchange", onDurationChange);
       video.removeEventListener("volumechange", onVolumeChange);
       video.removeEventListener("ended", onVideoEnded);
     };
-  }, [onEnded, onTimeUpdate, isPremiumUser, adActive, triggerAdBreak]);
+  }, [onEnded, onTimeUpdate, onPause, isPremiumUser, adActive, triggerAdBreak, initialSeekTime]);
 
   const togglePlay = () => {
     if (adActive) return;
@@ -1120,7 +1153,9 @@ export default function VideoPlayer({
   posterUrl,
   onPlayIntent,
   forceStart,
+  initialSeekTime,
   onTimeUpdate,
+  onPause,
   onEnded,
   headerTitle,
   headerSubtitle,
@@ -1255,7 +1290,9 @@ export default function VideoPlayer({
           src={effectiveUrl}
           title={title}
           poster={posterUrl}
+          initialSeekTime={initialSeekTime}
           onTimeUpdate={onTimeUpdate}
+          onPause={onPause}
           onEnded={onEnded}
         />
       );
@@ -1267,7 +1304,9 @@ export default function VideoPlayer({
           poster={posterUrl}
           autoPlay={forceStart}
           isPremiumUser={isPremiumViewer}
+          initialSeekTime={initialSeekTime}
           onTimeUpdate={onTimeUpdate}
+          onPause={onPause}
           onEnded={onEnded}
           headerTitle={headerTitle}
           headerSubtitle={headerSubtitle}

@@ -156,7 +156,7 @@ func (r *WatchHistoryRepository) SaveProgress(
 	if durationSec > 0 {
 		progressPercent = (float64(positionSec) / float64(durationSec)) * 100
 	}
-	completed := progressPercent >= 95
+	completed := progressPercent >= 90
 	return r.upsertHistory(userID, targetID, targetType, seriesID, seasonID, episodeID, positionSec, durationSec, progressPercent, completed, true)
 }
 
@@ -183,7 +183,7 @@ func (r *WatchHistoryRepository) GetContinueWatching(userID primitive.ObjectID, 
 		{{Key: "$match", Value: bson.M{
 			"user_id":          userID,
 			"completed":        false,
-			"progress_percent": bson.M{"$gt": 0, "$lt": 95},
+			"progress_percent": bson.M{"$gt": 0, "$lt": 90},
 		}}},
 		{{Key: "$addFields", Value: bson.M{
 			"effective_target_type": bson.M{
@@ -291,6 +291,30 @@ func (r *WatchHistoryRepository) GetContinueWatching(userID primitive.ObjectID, 
 		return []models.ContinueWatchingItem{}, nil
 	}
 	return results, nil
+}
+
+func (r *WatchHistoryRepository) GetProgress(
+	userID, targetID primitive.ObjectID,
+	targetType string,
+) (*models.WatchProgressResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var item models.WatchHistory
+	err := r.col.FindOne(ctx, r.watchLookupFilter(userID, targetID, targetType)).Decode(&item)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.WatchProgressResponse{
+		CurrentTime:     item.LastPositionSec,
+		Duration:        item.DurationSec,
+		ProgressPercent: item.ProgressPercent,
+		Completed:       item.Completed,
+	}, nil
 }
 
 // GetUserWatchHistory returns watch history for a user, sorted by watched_at descending.

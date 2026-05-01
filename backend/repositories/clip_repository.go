@@ -276,52 +276,67 @@ func clipFolderFromLocation(pathOrURL string) string {
 	return ""
 }
 
+func clipClassificationStages() mongo.Pipeline {
+	zero := primitive.NilObjectID
+	return mongo.Pipeline{
+		{{Key: "$addFields", Value: bson.M{
+			"episode_id_effective": bson.M{"$ifNull": []interface{}{"$episode_id", zero}},
+			"series_id_effective":  bson.M{"$ifNull": []interface{}{"$series_id", zero}},
+			"season_id_effective":  bson.M{"$ifNull": []interface{}{"$season_id", zero}},
+			"movie_id_effective":   bson.M{"$ifNull": []interface{}{"$movie_id", zero}},
+			"movie_code_trim":      bson.M{"$trim": bson.M{"input": bson.M{"$ifNull": []interface{}{"$movie_code", ""}}}},
+			"series_slug_trim":     bson.M{"$trim": bson.M{"input": bson.M{"$ifNull": []interface{}{"$series_slug", ""}}}},
+			"series_title_trim":    bson.M{"$trim": bson.M{"input": bson.M{"$ifNull": []interface{}{"$series_title", ""}}}},
+			"source_type_trim":     bson.M{"$trim": bson.M{"input": bson.M{"$ifNull": []interface{}{"$source_type", ""}}}},
+			"content_kind_trim":    bson.M{"$trim": bson.M{"input": bson.M{"$ifNull": []interface{}{"$content_kind", ""}}}},
+		}}},
+		{{Key: "$addFields", Value: bson.M{
+			"has_episode_ref": bson.M{"$ne": []interface{}{"$episode_id_effective", zero}},
+			"has_series_ref":  bson.M{"$ne": []interface{}{"$series_id_effective", zero}},
+			"has_season_ref": bson.M{"$or": []interface{}{
+				bson.M{"$ne": []interface{}{"$season_id_effective", zero}},
+				bson.M{"$gt": []interface{}{bson.M{"$ifNull": []interface{}{"$season_number", 0}}, 0}},
+			}},
+			"has_movie_ref": bson.M{"$or": []interface{}{
+				bson.M{"$ne": []interface{}{"$movie_id_effective", zero}},
+				bson.M{"$ne": []interface{}{"$movie_code_trim", ""}},
+				bson.M{"$eq": []interface{}{"$source_type_trim", "movie"}},
+				bson.M{"$eq": []interface{}{"$content_kind_trim", "movie"}},
+			}},
+			"has_series_text": bson.M{"$or": []interface{}{
+				bson.M{"$ne": []interface{}{"$series_slug_trim", ""}},
+				bson.M{"$ne": []interface{}{"$series_title_trim", ""}},
+			}},
+		}}},
+		{{Key: "$addFields", Value: bson.M{
+			"is_series": bson.M{"$or": []interface{}{
+				bson.M{"$eq": []interface{}{"$content_kind_trim", "series"}},
+				bson.M{"$eq": []interface{}{"$source_type_trim", "series_episode"}},
+				"$has_episode_ref",
+				bson.M{"$and": []interface{}{"$has_series_ref", "$has_series_text"}},
+				bson.M{"$and": []interface{}{"$has_season_ref", "$has_series_text"}},
+			}},
+			"is_movie": bson.M{"$or": []interface{}{
+				"$has_movie_ref",
+				bson.M{"$and": []interface{}{
+					bson.M{"$eq": []interface{}{"$has_episode_ref", false}},
+					bson.M{"$eq": []interface{}{"$has_season_ref", false}},
+					bson.M{"$or": []interface{}{
+						bson.M{"$eq": []interface{}{"$has_series_ref", false}},
+						bson.M{"$eq": []interface{}{"$has_series_text", false}},
+					}},
+				}},
+			}},
+		}}},
+	}
+}
+
 // GroupClips builds a (movies, series→season→episode) summary tree from the
 // clips collection. Only counts/metadata are returned — never the clip docs
 // themselves — so the response stays small even with 100k+ clips.
 func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []SeriesClipGroup, int64, error) {
 	totalClips, _ := r.col.CountDocuments(ctx, bson.M{})
-
-	classify := bson.D{{Key: "$addFields", Value: bson.M{
-		"has_episode_ref": bson.M{"$and": []interface{}{
-			bson.M{"$ne": []interface{}{"$episode_id", nil}},
-			bson.M{"$ne": []interface{}{"$episode_id", primitive.NilObjectID}},
-		}},
-		"has_series_ref": bson.M{"$and": []interface{}{
-			bson.M{"$ne": []interface{}{"$series_id", nil}},
-			bson.M{"$ne": []interface{}{"$series_id", primitive.NilObjectID}},
-		}},
-		"has_movie_ref": bson.M{"$or": []interface{}{
-			bson.M{"$and": []interface{}{
-				bson.M{"$ne": []interface{}{"$movie_id", nil}},
-				bson.M{"$ne": []interface{}{"$movie_id", primitive.NilObjectID}},
-			}},
-			bson.M{"$ne": []interface{}{bson.M{"$trim": bson.M{"input": bson.M{"$ifNull": []interface{}{"$movie_code", ""}}}}, ""}},
-			bson.M{"$eq": []interface{}{"$source_type", "movie"}},
-			bson.M{"$eq": []interface{}{"$content_kind", "movie"}},
-		}},
-		"is_series": bson.M{"$cond": []interface{}{
-			bson.M{"$or": []interface{}{
-				bson.M{"$eq": []interface{}{"$content_kind", "series"}},
-				bson.M{"$eq": []interface{}{"$source_type", "series_episode"}},
-				"$has_episode_ref",
-				"$has_series_ref",
-			}},
-			true, false,
-		}},
-		"is_movie": bson.M{"$cond": []interface{}{
-			bson.M{"$or": []interface{}{
-				bson.M{"$and": []interface{}{
-					bson.M{"$eq": []interface{}{"$has_episode_ref", false}},
-					bson.M{"$eq": []interface{}{"$has_series_ref", false}},
-					bson.M{"$eq": []interface{}{bson.M{"$ifNull": []interface{}{"$season_number", 0}}, 0}},
-					bson.M{"$eq": []interface{}{bson.M{"$ifNull": []interface{}{"$season_id", primitive.NilObjectID}}, primitive.NilObjectID}},
-				}},
-				"$has_movie_ref",
-			}},
-			true, false,
-		}},
-	}}}
+	classify := clipClassificationStages()
 
 	igFlag := bson.M{"$cond": []interface{}{
 		bson.M{"$gt": []interface{}{"$instagram_upload_count", 0}}, 1, 0,
@@ -329,7 +344,6 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 
 	// ── Movies ────────────────────────────────────────────────────────
 	moviePipeline := mongo.Pipeline{
-		classify,
 		{{Key: "$match", Value: bson.M{"is_movie": true}}},
 		{{Key: "$group", Value: bson.M{
 			"_id": bson.M{
@@ -350,6 +364,7 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 		}}},
 		{{Key: "$sort", Value: bson.D{{Key: "title", Value: 1}}}},
 	}
+	moviePipeline = append(classify, moviePipeline...)
 
 	movies := []MovieClipGroup{}
 	{
@@ -445,7 +460,6 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 
 	// ── Series → Season → Episode ─────────────────────────────────────
 	episodePipeline := mongo.Pipeline{
-		classify,
 		{{Key: "$match", Value: bson.M{"is_series": true}}},
 		{{Key: "$group", Value: bson.M{
 			"_id": bson.M{
@@ -464,6 +478,7 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 			"last_ig_upload_at": bson.M{"$max": "$last_instagram_upload_at"},
 		}}},
 	}
+	episodePipeline = append(classify, episodePipeline...)
 
 	// Group key priority: series_id > normalized series_slug > normalized
 	// series_title. This collapses Vonpis variants whose ObjectIDs differ
@@ -652,6 +667,149 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 	sort.Slice(series, func(i, j int) bool { return strings.ToLower(series[i].Title) < strings.ToLower(series[j].Title) })
 
 	return movies, series, totalClips, nil
+}
+
+func (r *ClipRepository) ClipGroupsDebug(ctx context.Context, sampleLimit int64) (bson.M, error) {
+	if sampleLimit <= 0 {
+		sampleLimit = 20
+	}
+
+	counts := bson.M{
+		"total_clips": r.mustCount(ctx, bson.M{}),
+		"episode_id_exists": r.mustCount(ctx, bson.M{
+			"episode_id": bson.M{"$exists": true, "$nin": bson.A{nil, primitive.NilObjectID}},
+		}),
+		"series_id_exists": r.mustCount(ctx, bson.M{
+			"series_id": bson.M{"$exists": true, "$nin": bson.A{nil, primitive.NilObjectID}},
+		}),
+		"movie_id_exists": r.mustCount(ctx, bson.M{
+			"movie_id": bson.M{"$exists": true, "$nin": bson.A{nil, primitive.NilObjectID}},
+		}),
+		"movie_code_exists": r.mustCount(ctx, bson.M{
+			"movie_code": bson.M{"$exists": true, "$nin": bson.A{nil, ""}},
+		}),
+		"no_series_id_and_no_episode_id": r.mustCount(ctx, bson.M{
+			"$and": bson.A{
+				bson.M{"$or": bson.A{
+					bson.M{"series_id": bson.M{"$exists": false}},
+					bson.M{"series_id": nil},
+					bson.M{"series_id": primitive.NilObjectID},
+				}},
+				bson.M{"$or": bson.A{
+					bson.M{"episode_id": bson.M{"$exists": false}},
+					bson.M{"episode_id": nil},
+					bson.M{"episode_id": primitive.NilObjectID},
+				}},
+			},
+		}),
+	}
+
+	sampleFilter := bson.M{
+		"$and": bson.A{
+			bson.M{"$or": bson.A{
+				bson.M{"series_id": bson.M{"$exists": false}},
+				bson.M{"series_id": nil},
+				bson.M{"series_id": primitive.NilObjectID},
+			}},
+			bson.M{"$or": bson.A{
+				bson.M{"episode_id": bson.M{"$exists": false}},
+				bson.M{"episode_id": nil},
+				bson.M{"episode_id": primitive.NilObjectID},
+			}},
+			bson.M{"$or": bson.A{
+				bson.M{"season_id": bson.M{"$exists": false}},
+				bson.M{"season_id": nil},
+				bson.M{"season_id": primitive.NilObjectID},
+			}},
+		},
+	}
+	projection := bson.M{
+		"_id":          1,
+		"title":        1,
+		"filename":     1,
+		"path":         1,
+		"url":          1,
+		"movie_id":     1,
+		"movie_code":   1,
+		"movie_slug":   1,
+		"series_id":    1,
+		"season_id":    1,
+		"episode_id":   1,
+		"source_type":  1,
+		"content_kind": 1,
+	}
+	opts := options.Find().SetLimit(sampleLimit)
+	cur, err := r.col.Find(ctx, sampleFilter, opts.SetProjection(projection))
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+
+	var docs []bson.M
+	if err := cur.All(ctx, &docs); err != nil {
+		return nil, err
+	}
+
+	movies, series, total, err := r.GroupClips(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return bson.M{
+		"counts":             counts,
+		"sample_docs":        docs,
+		"movie_group_count":  len(movies),
+		"series_group_count": len(series),
+		"total_groups":       len(movies) + len(series),
+		"total_clips":        total,
+		"movies_preview":     clipMoviePreview(movies, 5),
+		"series_preview":     clipSeriesPreview(series, 5),
+	}, nil
+}
+
+func (r *ClipRepository) mustCount(ctx context.Context, filter interface{}) int64 {
+	n, err := r.col.CountDocuments(ctx, filter)
+	if err != nil {
+		log.Printf("[ClipRepo] debug count failed filter=%v err=%v", filter, err)
+		return 0
+	}
+	return n
+}
+
+func clipMoviePreview(movies []MovieClipGroup, limit int) []bson.M {
+	if limit > len(movies) {
+		limit = len(movies)
+	}
+	out := make([]bson.M, 0, limit)
+	for i := 0; i < limit; i++ {
+		out = append(out, bson.M{
+			"title":      movies[i].Title,
+			"group_key":  movies[i].GroupKey,
+			"clip_count": movies[i].ClipCount,
+			"code":       movies[i].Code,
+			"slug":       movies[i].Slug,
+			"movie_id":   movies[i].MovieID,
+		})
+	}
+	return out
+}
+
+func clipSeriesPreview(series []SeriesClipGroup, limit int) []bson.M {
+	if limit > len(series) {
+		limit = len(series)
+	}
+	out := make([]bson.M, 0, limit)
+	for i := 0; i < limit; i++ {
+		out = append(out, bson.M{
+			"title":        series[i].Title,
+			"group_key":    series[i].GroupKey,
+			"clip_count":   series[i].ClipCount,
+			"season_count": len(series[i].Seasons),
+			"series_id":    series[i].SeriesID,
+			"series_slug":  series[i].Slug,
+		})
+	}
+	return out
 }
 
 func asString(v interface{}) string {
