@@ -164,6 +164,7 @@ function DirectVideoPlayer({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const hasAppliedInitialSeek = useRef(false);
+  const isDev = process.env.NODE_ENV !== "production";
 
   const handleError = () => {
     if (videoRef.current?.error) {
@@ -185,6 +186,32 @@ function DirectVideoPlayer({
     hasAppliedInitialSeek.current = false;
   }, [src, initialSeekTime]);
 
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || hasAppliedInitialSeek.current) return;
+    if (!initialSeekTime || initialSeekTime <= 0) {
+      if (isDev) {
+        console.log("[watch-progress] seek skipped", {
+          player: "direct",
+          reason: "no_initial_seek_time",
+        });
+      }
+      return;
+    }
+    if (!isFinite(video.duration) || video.duration <= 0 || video.readyState < 1) {
+      return;
+    }
+    video.currentTime = initialSeekTime;
+    hasAppliedInitialSeek.current = true;
+    if (isDev) {
+      console.log("[watch-progress] seek applied", {
+        player: "direct",
+        current_time: initialSeekTime,
+        duration: video.duration,
+      });
+    }
+  }, [initialSeekTime, isDev]);
+
   return (
     <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden">
       <video
@@ -201,6 +228,20 @@ function DirectVideoPlayer({
           if (!videoRef.current || hasAppliedInitialSeek.current) return;
           if (initialSeekTime && initialSeekTime > 0) {
             videoRef.current.currentTime = initialSeekTime;
+            if (isDev) {
+              console.log("[watch-progress] seek applied", {
+                player: "direct",
+                current_time: initialSeekTime,
+                duration: videoRef.current.duration,
+                trigger: "loadedmetadata",
+              });
+            }
+          } else if (isDev) {
+            console.log("[watch-progress] seek skipped", {
+              player: "direct",
+              reason: "no_initial_seek_time",
+              trigger: "loadedmetadata",
+            });
           }
           hasAppliedInitialSeek.current = true;
         }}
@@ -339,10 +380,38 @@ function HLSPlayer({
   const adInitializedRef = useRef(false);
   const resumeTimeRef = useRef(0);
   const hasAppliedInitialSeek = useRef(false);
+  const isDev = process.env.NODE_ENV !== "production";
 
   useEffect(() => {
     setSeekStep(loadSeekStep());
   }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || hasAppliedInitialSeek.current) return;
+    if (!initialSeekTime || initialSeekTime <= 0) {
+      if (isDev) {
+        console.log("[watch-progress] seek skipped", {
+          player: "hls",
+          reason: "no_initial_seek_time",
+        });
+      }
+      return;
+    }
+    if (!isFinite(video.duration) || video.duration <= 0 || video.readyState < 1) {
+      return;
+    }
+    video.currentTime = initialSeekTime;
+    hasAppliedInitialSeek.current = true;
+    if (isDev) {
+      console.log("[watch-progress] seek applied", {
+        player: "hls",
+        current_time: initialSeekTime,
+        duration: video.duration,
+        trigger: "effect",
+      });
+    }
+  }, [initialSeekTime, isDev]);
 
   const seekBy = useCallback((delta: number) => {
     const video = videoRef.current;
@@ -643,6 +712,20 @@ function HLSPlayer({
       if (!hasAppliedInitialSeek.current && initialSeekTime && initialSeekTime > 0) {
         video.currentTime = initialSeekTime;
         hasAppliedInitialSeek.current = true;
+        if (isDev) {
+          console.log("[watch-progress] seek applied", {
+            player: "hls",
+            current_time: initialSeekTime,
+            duration: video.duration,
+            trigger: "durationchange",
+          });
+        }
+      } else if (!hasAppliedInitialSeek.current && isDev) {
+        console.log("[watch-progress] seek skipped", {
+          player: "hls",
+          reason: "no_initial_seek_time",
+          trigger: "durationchange",
+        });
       }
       if (!adInitializedRef.current && isFinite(video.duration) && video.duration > 0) {
         adInitializedRef.current = true;

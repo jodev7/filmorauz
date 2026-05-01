@@ -308,6 +308,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   const localizedCountry = getLocalizedCountry(movie);
   const isPremiumViewer = isUserPremium(user);
   const targetType = movie.type === "episode" ? "episode" : "movie";
+  const isDev = process.env.NODE_ENV !== "production";
   const backHref = movie.type === "episode"
     ? movie.series_slug
       ? `/series/${movie.series_slug}`
@@ -370,18 +371,47 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
     if (!user || !token) return;
     getWatchProgress(token, movie.id, { targetType })
       .then((progress) => {
+        if (isDev) {
+          console.log("[watch-progress] fetched", {
+            target_type: targetType,
+            target_id: movie.id,
+            current_time: progress.current_time,
+            duration: progress.duration,
+            progress_percent: progress.progress_percent,
+            completed: progress.completed,
+          });
+        }
         const canResume =
           !progress.completed &&
-          progress.current_time > 30 &&
+          progress.current_time > 10 &&
           progress.duration > 0 &&
           progress.progress_percent < 90 &&
           progress.current_time < progress.duration - 60;
-        setResumePosition(canResume ? progress.current_time : 0);
-        setSelectedStartPosition(0);
+        const nextResume = canResume ? progress.current_time : 0;
+        setResumePosition(nextResume);
+        setSelectedStartPosition(nextResume);
         setResumePromptVisible(canResume);
+        if (isDev && !canResume) {
+          console.log("[watch-progress] resume skipped", {
+            reason:
+              progress.completed
+                ? "completed"
+                : progress.current_time <= 10
+                  ? "too_early"
+                  : progress.duration <= 0
+                    ? "no_duration"
+                    : progress.progress_percent >= 90
+                      ? "near_end"
+                      : progress.current_time >= progress.duration - 60
+                        ? "too_close_to_end"
+                        : "unknown",
+            target_type: targetType,
+            target_id: movie.id,
+          });
+        }
       })
       .catch(console.error);
-  }, [user, token, movie.id, targetType]);
+  }, [user, token, movie.id, targetType, isDev]);
 
   // Fetch recommendations
   useEffect(() => {
