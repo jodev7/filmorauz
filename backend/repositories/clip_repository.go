@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"log"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -231,6 +232,55 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+var (
+	sxxexxPrefixRE      = regexp.MustCompile(`(?i)^\s*s\d+\s*e\d+\s*[-:._]?\s*`)
+	qismPrefixRE        = regexp.MustCompile(`(?i)^\s*\d+\s*-\s*qism\s*[-:._]?\s*`)
+	genericSeriesNameRE = regexp.MustCompile(`(?i)^(serial|serials|seriallar|series)$`)
+)
+
+func isGenericSeriesLabel(s string) bool {
+	s = normalizeGroupKey(s)
+	return s != "" && genericSeriesNameRE.MatchString(s)
+}
+
+func cleanSeriesTitleCandidate(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || isGenericSeriesLabel(s) {
+		return ""
+	}
+	return s
+}
+
+func cleanSeriesSlugCandidate(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || isGenericSeriesLabel(s) {
+		return ""
+	}
+	return s
+}
+
+func cleanEpisodeTitleForSeries(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	s = sxxexxPrefixRE.ReplaceAllString(s, "")
+	s = qismPrefixRE.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+	if isGenericSeriesLabel(s) {
+		return ""
+	}
+	return s
+}
+
+func displayTitleFromSlug(slug string) string {
+	slug = cleanSeriesSlugCandidate(slug)
+	if slug == "" {
+		return ""
+	}
+	return strings.TrimSpace(strings.ReplaceAll(slug, "-", " "))
+}
+
 func appendUniqueObjectID(dst []primitive.ObjectID, id primitive.ObjectID) []primitive.ObjectID {
 	if id.IsZero() {
 		return dst
@@ -313,17 +363,23 @@ func clipClassificationStages() mongo.Pipeline {
 				bson.M{"$eq": []interface{}{"$content_kind_trim", "series"}},
 				bson.M{"$eq": []interface{}{"$source_type_trim", "series_episode"}},
 				"$has_episode_ref",
-				bson.M{"$and": []interface{}{"$has_series_ref", "$has_series_text"}},
-				bson.M{"$and": []interface{}{"$has_season_ref", "$has_series_text"}},
+				"$has_series_ref",
+				"$has_season_ref",
+				"$has_series_text",
 			}},
-			"is_movie": bson.M{"$or": []interface{}{
-				"$has_movie_ref",
-				bson.M{"$and": []interface{}{
-					bson.M{"$eq": []interface{}{"$has_episode_ref", false}},
-					bson.M{"$eq": []interface{}{"$has_season_ref", false}},
-					bson.M{"$or": []interface{}{
-						bson.M{"$eq": []interface{}{"$has_series_ref", false}},
-						bson.M{"$eq": []interface{}{"$has_series_text", false}},
+		}}},
+		{{Key: "$addFields", Value: bson.M{
+			"is_movie": bson.M{"$and": []interface{}{
+				bson.M{"$eq": []interface{}{"$is_series", false}},
+				bson.M{"$or": []interface{}{
+					"$has_movie_ref",
+					bson.M{"$and": []interface{}{
+						bson.M{"$eq": []interface{}{"$has_episode_ref", false}},
+						bson.M{"$eq": []interface{}{"$has_season_ref", false}},
+						bson.M{"$or": []interface{}{
+							bson.M{"$eq": []interface{}{"$has_series_ref", false}},
+							bson.M{"$eq": []interface{}{"$has_series_text", false}},
+						}},
 					}},
 				}},
 			}},
@@ -492,6 +548,10 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 	seriesAlias := map[string]string{}
 	seasonIdx := map[string]map[int]*seasonBuild{}
 	seriesOrder := []string{}
+	seriesMetaCache := map[primitive.ObjectID]struct {
+		Title string
+		Slug  string
+	}{}
 	{
 		cur, err := r.col.Aggregate(ctx, episodePipeline)
 		if err != nil {
@@ -509,10 +569,38 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 				continue
 			}
 			sID, _ := key["series_id"].(primitive.ObjectID)
-			seriesTitle := asString(row["series_title"])
-			seriesSlug := asString(row["series_slug"])
+			seriesTitle := cleanSeriesTitleCandidate(asString(row["series_title"]))
+			seriesSlug := cleanSeriesSlugCandidate(asString(row["series_slug"]))
 			contentKind := asString(row["content_kind"])
 			sourceType := asString(row["source_type"])
+			epTitle := cleanEpisodeTitleForSeries(asString(row["episode_title"]))
+
+			if !sID.IsZero() {
+				if _, ok := seriesMetaCache[sID]; !ok {
+					var doc struct {
+						Title string `bson:"title"`
+						Slug  string `bson:"slug"`
+					}
+					findErr := r.col.Database().Collection("series").FindOne(ctx, bson.M{"_id": sID}).Decode(&doc)
+					if findErr == nil {
+						seriesMetaCache[sID] = struct {
+							Title string
+							Slug  string
+						}{
+							Title: cleanSeriesTitleCandidate(doc.Title),
+							Slug:  cleanSeriesSlugCandidate(doc.Slug),
+						}
+					} else {
+						seriesMetaCache[sID] = struct {
+							Title string
+							Slug  string
+						}{}
+					}
+				}
+				meta := seriesMetaCache[sID]
+				seriesTitle = firstNonEmpty(meta.Title, seriesTitle)
+				seriesSlug = firstNonEmpty(meta.Slug, seriesSlug)
+			}
 
 			var primaryKey string
 			switch {
@@ -542,7 +630,6 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 			seasonNum := asInt(key["season_number"])
 			epID, _ := key["episode_id"].(primitive.ObjectID)
 			epNum := asInt(row["episode_number"])
-			epTitle := asString(row["episode_title"])
 			clipCount := asInt(row["clip_count"])
 			igCount := asInt(row["ig_uploaded_count"])
 			lastIG := asTimePtr(row["last_ig_upload_at"])
@@ -660,6 +747,22 @@ func (r *ClipRepository) GroupClips(ctx context.Context) ([]MovieClipGroup, []Se
 				return s.Episodes[i].EpisodeNumber < s.Episodes[j].EpisodeNumber
 			})
 			seasons = append(seasons, *s)
+		}
+		if sg.Title == "" {
+			for _, season := range seasons {
+				for _, episode := range season.Episodes {
+					if title := cleanEpisodeTitleForSeries(episode.Title); title != "" {
+						sg.Title = title
+						break
+					}
+				}
+				if sg.Title != "" {
+					break
+				}
+			}
+		}
+		if sg.Title == "" {
+			sg.Title = displayTitleFromSlug(sg.Slug)
 		}
 		sg.Seasons = seasons
 		series = append(series, *sg)
