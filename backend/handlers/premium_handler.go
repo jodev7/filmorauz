@@ -93,10 +93,18 @@ func (h *PremiumHandler) resolveValidatedSession(token string, telegramID int64)
 		return nil, nil, services.PremiumPackage{}, "session_not_found", nil
 	}
 	if time.Now().After(session.ExpiresAt) {
+		if session.Status == models.PremiumPurchaseSessionStatusPending {
+			_ = h.sessionRepo.MarkExpired(session.Token)
+		}
 		return nil, nil, services.PremiumPackage{}, "session_expired", nil
 	}
-	if session.Status == models.PremiumPurchaseSessionStatusCompleted {
-		return nil, nil, services.PremiumPackage{}, "session_completed", nil
+	switch session.Status {
+	case models.PremiumPurchaseSessionStatusPaid:
+		return nil, nil, services.PremiumPackage{}, "session_paid", nil
+	case models.PremiumPurchaseSessionStatusCancelled:
+		return nil, nil, services.PremiumPackage{}, "session_cancelled", nil
+	case models.PremiumPurchaseSessionStatusExpired:
+		return nil, nil, services.PremiumPackage{}, "session_expired", nil
 	}
 
 	user, err := h.loadSessionUser(session)
@@ -228,7 +236,58 @@ func (h *PremiumHandler) ValidateStarsSession(c *gin.Context) {
 		"duration_months": pkg.DurationMonths,
 		"stars_price":     pkg.StarsPrice,
 		"expires_at":      session.ExpiresAt.Format(time.RFC3339),
+		"premium_active":  user.IsPremiumActive(),
+		"premium_expires_at": func() *string {
+			if user.PremiumExpiresAt == nil {
+				return nil
+			}
+			value := user.PremiumExpiresAt.Format(time.RFC3339)
+			return &value
+		}(),
 	})
+}
+
+// CancelStarsSession POST /api/internal/premium/telegram-stars/session/cancel
+// Internal bot endpoint. Marks a pending session as cancelled so an abandoned
+// confirmation or stale deep link cannot later grant premium.
+func (h *PremiumHandler) CancelStarsSession(c *gin.Context) {
+	if !h.requireInternalToken(c) {
+		return
+	}
+
+	var req struct {
+		Token string `json:"token" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	session, err := h.sessionRepo.FindByToken(req.Token)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if session == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "session_not_found"})
+		return
+	}
+	if session.Status == models.PremiumPurchaseSessionStatusPaid {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_paid"})
+		return
+	}
+	if time.Now().After(session.ExpiresAt) {
+		_ = h.sessionRepo.MarkExpired(session.Token)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_expired"})
+		return
+	}
+	if session.Status != models.PremiumPurchaseSessionStatusCancelled {
+		if err := h.sessionRepo.MarkCancelled(session.Token); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // GrantTelegramStars POST /api/internal/premium/telegram-stars/grant
@@ -308,8 +367,8 @@ func (h *PremiumHandler) GrantTelegramStars(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if err := h.sessionRepo.MarkCompleted(session.Token, req.TelegramPaymentChargeID); err != nil {
-		log.Printf("[PREMIUM] failed to mark session completed token=%s charge=%s: %v", session.Token, req.TelegramPaymentChargeID, err)
+	if err := h.sessionRepo.MarkPaid(session.Token, req.TelegramPaymentChargeID); err != nil {
+		log.Printf("[PREMIUM] failed to mark session paid token=%s charge=%s: %v", session.Token, req.TelegramPaymentChargeID, err)
 	}
 
 	log.Printf("[PREMIUM] Stars grant ok user=%s package=%s expires=%s charge=%s",

@@ -15,6 +15,11 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
+const (
+	premiumExtendPrefix = "premium_extend:"
+	premiumCancelPrefix = "premium_cancel:"
+)
+
 // Bot represents the Telegram bot
 type Bot struct {
 	api                 *tgbotapi.BotAPI
@@ -56,6 +61,17 @@ func mustMarshalJSON(v interface{}) string {
 		return fmt.Sprintf("marshal_error=%v value=%#v", err, v)
 	}
 	return string(raw)
+}
+
+func formatPremiumDate(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return value
+	}
+	return t.Format("2006-01-02")
 }
 
 type minimalStarsInvoiceConfig struct {
@@ -657,13 +673,30 @@ func (b *Bot) handleCallback(callback *tgbotapi.CallbackQuery) {
 
 	log.Printf("Callback from user %d: %s", userID, data)
 
-	// Answer callback immediately
-	answer := tgbotapi.NewCallback(callback.ID, "")
-	b.api.Send(answer)
-
 	if data == "check_subscription" {
+		b.answerCallback(callback.ID, "", false)
 		b.handleCheckSubscription(chatID, userID)
+		return
 	}
+	if strings.HasPrefix(data, premiumExtendPrefix) {
+		b.answerCallback(callback.ID, "", false)
+		token := strings.TrimSpace(strings.TrimPrefix(data, premiumExtendPrefix))
+		b.handlePremiumInvoiceSend(chatID, userID, token)
+		return
+	}
+	if strings.HasPrefix(data, premiumCancelPrefix) {
+		token := strings.TrimSpace(strings.TrimPrefix(data, premiumCancelPrefix))
+		if token != "" {
+			if _, _, err := b.premiumClient.CancelStarsSession(services.CancelStarsSessionRequest{Token: token}); err != nil {
+				log.Printf("[PREMIUM] cancel session failed token=%s user=%d err=%v", token, userID, err)
+			}
+		}
+		b.answerCallback(callback.ID, "Bekor qilindi", false)
+		b.sendMessage(chatID, "Premium xaridi bekor qilindi.")
+		return
+	}
+
+	b.answerCallback(callback.ID, "", false)
 }
 
 // handleCheckSubscription handles the "Tekshirish" button press
@@ -851,6 +884,26 @@ func (b *Bot) sendPremiumAdminFallback(chatID int64, text string) {
 	)
 }
 
+func (b *Bot) answerCallback(callbackID, text string, alert bool) {
+	answer := tgbotapi.NewCallback(callbackID, text)
+	answer.ShowAlert = alert
+	b.api.Send(answer)
+}
+
+func (b *Bot) sendPremiumExtendConfirmation(chatID int64, expiresAt, token string) {
+	msg := tgbotapi.NewMessage(chatID, fmt.Sprintf(
+		"Sizda Premium allaqachon faol. Tugash sanasi: %s. Yana uzaytirmoqchimisiz?",
+		expiresAt,
+	))
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Ha, uzaytirish", premiumExtendPrefix+token),
+			tgbotapi.NewInlineKeyboardButtonData("Bekor qilish", premiumCancelPrefix+token),
+		),
+	)
+	b.api.Send(msg)
+}
+
 // parsePremiumStart returns the purchase session token from a "/start premium_<token>" command,
 // or "" if the message is not a premium deep link.
 func (b *Bot) parsePremiumStart(text string) string {
@@ -919,10 +972,57 @@ func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User
 			b.sendMessage(chatID, "❌ Bu Telegram akkaunt FilmoraUz profilingizga bog‘lanmagan. Iltimos saytga bog‘langan Telegram akkaunt bilan urinib ko‘ring.")
 		case "session_expired":
 			b.sendMessage(chatID, "❌ Premium sessiyasi muddati tugagan. Saytdan qayta premium tanlang.")
-		case "session_completed":
+		case "session_paid":
 			b.sendMessage(chatID, "❌ Bu premium havolasi allaqachon ishlatilgan. Saytdan yangi premium sessiyasi oching.")
+		case "session_cancelled":
+			b.sendMessage(chatID, "❌ Bu premium sessiyasi bekor qilingan. Saytdan qayta premium tanlang.")
 		case "user_not_linked":
 			b.sendMessage(chatID, "❌ Stars orqali premium olish uchun profilingizni Telegram bilan bog‘lang.")
+		default:
+			b.sendMessage(chatID, "❌ Premium havolasi yaroqsiz. Saytdan qayta urinib ko‘ring.")
+		}
+		return
+	}
+
+	if sessionResp.PremiumActive {
+		expiresAt := "mavjud"
+		if sessionResp.PremiumExpiresAt != nil {
+			if formatted := formatPremiumDate(*sessionResp.PremiumExpiresAt); formatted != "" {
+				expiresAt = formatted
+			}
+		}
+		b.sendPremiumExtendConfirmation(chatID, expiresAt, sessionToken)
+		return
+	}
+
+	b.handlePremiumInvoiceSend(chatID, userID, sessionToken)
+}
+
+func (b *Bot) handlePremiumInvoiceSend(chatID int64, userID int64, sessionToken string) {
+	sessionResp, status, err := b.premiumClient.ValidateStarsSession(services.ValidateStarsSessionRequest{
+		Token:      sessionToken,
+		TelegramID: userID,
+	})
+	if err != nil {
+		log.Printf("[PREMIUM] invoice validate failed telegram_id=%d token=%s err=%v", userID, sessionToken, err)
+		b.sendMessage(chatID, "❌ Premium sessiyasini tekshirishda xatolik. Saytdan qayta urinib ko'ring.")
+		return
+	}
+	if status != http.StatusOK || sessionResp == nil || !sessionResp.OK {
+		errCode := ""
+		if sessionResp != nil {
+			errCode = sessionResp.Error
+		}
+		log.Printf("[PREMIUM] invoice validate rejected telegram_id=%d token=%s status=%d error=%s", userID, sessionToken, status, errCode)
+		switch errCode {
+		case "telegram_mismatch":
+			b.sendMessage(chatID, "❌ Bu Telegram akkaunt FilmoraUz profilingizga bog‘lanmagan. Iltimos saytga bog‘langan Telegram akkaunt bilan urinib ko‘ring.")
+		case "session_expired":
+			b.sendMessage(chatID, "❌ Premium sessiyasi muddati tugagan. Saytdan qayta premium tanlang.")
+		case "session_paid":
+			b.sendMessage(chatID, "❌ Bu premium havolasi allaqachon ishlatilgan. Saytdan yangi premium sessiyasi oching.")
+		case "session_cancelled":
+			b.sendMessage(chatID, "❌ Bu premium sessiyasi bekor qilingan. Saytdan qayta premium tanlang.")
 		default:
 			b.sendMessage(chatID, "❌ Premium havolasi yaroqsiz. Saytdan qayta urinib ko‘ring.")
 		}
@@ -992,6 +1092,7 @@ func (b *Bot) handlePremiumStart(chatID int64, userID int64, from *tgbotapi.User
 	b.sendPremiumAdminFallback(chatID,
 		"ℹ️ Telegram Stars to'lovi Telegram mobil ilovasida yaxshiroq ishlaydi.\n\n"+
 			"Agar checkout ochilib, lekin to'lov ishlamasa, Telegram Stars to‘lovi hozircha sizning hisobingizda ishlamadi.\n\n"+
+			"To‘lov amalga oshmasa, premium faollashtirilmaydi.\n\n"+
 			"Agar Stars to‘lovi ishlamasa, admin orqali premium olishingiz mumkin.")
 }
 
@@ -1072,16 +1173,25 @@ func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
 			errMsg = resp.Error
 		}
 		log.Printf("[PREMIUM] Grant non-OK status=%d err=%s", status, errMsg)
+		if errMsg == "session_paid" {
+			b.sendMessage(chatID, "ℹ️ Bu to‘lov sessiyasi allaqachon qayta ishlangan. Premium ikkinchi marta uzaytirilmadi.")
+			return
+		}
 		b.sendPremiumAdminFallback(chatID, "⚠️ To'lov qabul qilindi, lekin premium faollashtirishda xatolik.\n\nAgar Stars to‘lovi ishlamasa, admin orqali premium olishingiz mumkin.")
 		return
 	}
 
 	if resp != nil && resp.AlreadyProcessed {
 		log.Printf("[PREMIUM] Duplicate charge ignored: %s", sp.TelegramPaymentChargeID)
+		b.sendMessage(chatID, "ℹ️ Bu to‘lov allaqachon qayta ishlangan. Premium qayta uzaytirilmadi.")
 		return
 	}
 
-	b.sendMessage(chatID, fmt.Sprintf(
-		"Premium faollashtirildi ✅\n\nFilmorauz.net da Premium afzalliklaridan foydalanishingiz mumkin.",
-	))
+	expiryText := ""
+	if resp != nil && strings.TrimSpace(resp.PremiumExpires) != "" {
+		if formatted := formatPremiumDate(resp.PremiumExpires); formatted != "" {
+			expiryText = "\nTugash sanasi: " + formatted
+		}
+	}
+	b.sendMessage(chatID, fmt.Sprintf("Premium faollashtirildi ✅%s", expiryText))
 }

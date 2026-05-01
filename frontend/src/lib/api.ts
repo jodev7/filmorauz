@@ -877,14 +877,23 @@ export async function saveUnifiedWatchProgress(
   duration: number,
   options?: TargetOptions
 ): Promise<WatchProgressSummary> {
+  const normalizedTargetId = String(targetId || "").trim();
+  const normalizedCurrentTime = Math.floor(currentTime);
+  const normalizedDuration = Math.floor(duration);
+  if (!normalizedTargetId) {
+    throw new Error("Missing target_id for watch progress");
+  }
+  if (!Number.isFinite(normalizedCurrentTime) || !Number.isFinite(normalizedDuration) || normalizedDuration <= 0) {
+    throw new Error("Watch progress requires finite current_time and duration");
+  }
   const res = await fetch(`${API_URL}/watch/progress`, {
     method: "POST",
     headers: authHeaders(token),
     body: JSON.stringify({
       target_type: options?.targetType || "movie",
-      target_id: targetId,
-      current_time: currentTime,
-      duration,
+      target_id: normalizedTargetId,
+      current_time: normalizedCurrentTime,
+      duration: normalizedDuration,
     }),
   });
   if (!res.ok) {
@@ -899,9 +908,13 @@ export async function getWatchProgress(
   targetId: string,
   options?: TargetOptions
 ): Promise<WatchProgressSummary> {
+  const normalizedTargetId = String(targetId || "").trim();
+  if (!normalizedTargetId) {
+    throw new Error("Missing target_id for watch progress");
+  }
   const params = new URLSearchParams({
     target_type: options?.targetType || "movie",
-    target_id: targetId,
+    target_id: normalizedTargetId,
   });
   const res = await fetch(`${API_URL}/watch/progress?${params.toString()}`, {
     headers: authHeaders(token),

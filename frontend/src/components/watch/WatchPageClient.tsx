@@ -208,6 +208,10 @@ function formatResumeTime(seconds: number): string {
   return `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
+function resolveProgressTargetId(movie: Movie): string {
+  return String(movie._id || movie.target_id || movie.episode_id || movie.id || "").trim();
+}
+
 interface WatchPageClientProps {
   movie: Movie | null;
   episodeNavigation?: {
@@ -309,6 +313,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   const isPremiumViewer = isUserPremium(user);
   const targetType = movie.type === "episode" ? "episode" : "movie";
   const isDev = process.env.NODE_ENV !== "production";
+  const progressTargetId = resolveProgressTargetId(movie);
   const backHref = movie.type === "episode"
     ? movie.series_slug
       ? `/series/${movie.series_slug}`
@@ -368,13 +373,13 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
 
   // Fetch watch progress for resume
   useEffect(() => {
-    if (!user || !token) return;
-    getWatchProgress(token, movie.id, { targetType })
+    if (!user || !token || !progressTargetId) return;
+    getWatchProgress(token, progressTargetId, { targetType })
       .then((progress) => {
         if (isDev) {
           console.log("[watch-progress] fetched", {
             target_type: targetType,
-            target_id: movie.id,
+            target_id: progressTargetId,
             current_time: progress.current_time,
             duration: progress.duration,
             progress_percent: progress.progress_percent,
@@ -406,12 +411,12 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
                         ? "too_close_to_end"
                         : "unknown",
             target_type: targetType,
-            target_id: movie.id,
+            target_id: progressTargetId,
           });
         }
       })
       .catch(console.error);
-  }, [user, token, movie.id, targetType, isDev]);
+  }, [user, token, progressTargetId, targetType, isDev]);
 
   // Fetch recommendations
   useEffect(() => {
@@ -422,24 +427,36 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   }, [movie.id]);
 
   const persistProgress = useCallback((force: boolean = false) => {
-    if (!user || !token) return;
+    if (!user || !token || !progressTargetId) return;
     const { currentTime, duration } = latestProgressRef.current;
+    if (!Number.isFinite(currentTime) || !Number.isFinite(duration)) return;
     if (duration <= 0 || currentTime <= 0) return;
     if (currentTime >= duration - 5) return;
     const now = Date.now();
     if (!force && now - lastSavedAtRef.current < 10000) return;
     lastSavedAtRef.current = now;
-    saveUnifiedWatchProgress(token, movie.id, Math.floor(currentTime), Math.floor(duration), { targetType }).catch(console.error);
-  }, [user, token, movie.id, targetType]);
+    if (isDev) {
+      console.log("[watch-progress] saving", {
+        target_type: targetType,
+        target_id: progressTargetId,
+        current_time: Math.floor(currentTime),
+        duration: Math.floor(duration),
+        force,
+      });
+    }
+    saveUnifiedWatchProgress(token, progressTargetId, currentTime, duration, { targetType }).catch(console.error);
+  }, [user, token, progressTargetId, targetType, isDev]);
 
   // Save progress periodically during playback
   const handleTimeUpdate = (currentTime: number, duration: number) => {
     if (!user || !token) return;
+    if (!Number.isFinite(currentTime) || !Number.isFinite(duration) || duration <= 0) return;
     latestProgressRef.current = { currentTime, duration };
     persistProgress(false);
   };
 
   const handlePauseSave = useCallback((currentTime: number, duration: number) => {
+    if (!Number.isFinite(currentTime) || !Number.isFinite(duration) || duration <= 0) return;
     latestProgressRef.current = { currentTime, duration };
     persistProgress(true);
   }, [persistProgress]);

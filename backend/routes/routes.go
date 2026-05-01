@@ -89,6 +89,7 @@ func Setup(r *gin.Engine, authHandler *handlers.AuthHandler, movieHandler *handl
 	// Internal: bot calls this after a Telegram Stars successful_payment.
 	// Auth via shared X-Internal-Token header (BOT_INTERNAL_TOKEN env).
 	api.POST("/internal/premium/telegram-stars/session/validate", premiumHandler.ValidateStarsSession)
+	api.POST("/internal/premium/telegram-stars/session/cancel", premiumHandler.CancelStarsSession)
 	api.POST("/internal/premium/telegram-stars/grant", premiumHandler.GrantTelegramStars)
 
 	// Watch progress (auth required)

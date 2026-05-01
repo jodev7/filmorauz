@@ -45,16 +45,27 @@ type ValidateStarsSessionRequest struct {
 }
 
 type ValidateStarsSessionResponse struct {
-	OK             bool   `json:"ok"`
-	Token          string `json:"token"`
-	UserID         string `json:"user_id"`
-	TelegramID     int64  `json:"telegram_id"`
-	Package        string `json:"package"`
-	Label          string `json:"label"`
-	DurationMonths int    `json:"duration_months"`
-	StarsPrice     int    `json:"stars_price"`
-	ExpiresAt      string `json:"expires_at"`
-	Error          string `json:"error"`
+	OK               bool    `json:"ok"`
+	Token            string  `json:"token"`
+	UserID           string  `json:"user_id"`
+	TelegramID       int64   `json:"telegram_id"`
+	Package          string  `json:"package"`
+	Label            string  `json:"label"`
+	DurationMonths   int     `json:"duration_months"`
+	StarsPrice       int     `json:"stars_price"`
+	ExpiresAt        string  `json:"expires_at"`
+	PremiumActive    bool    `json:"premium_active"`
+	PremiumExpiresAt *string `json:"premium_expires_at"`
+	Error            string  `json:"error"`
+}
+
+type CancelStarsSessionRequest struct {
+	Token string `json:"token"`
+}
+
+type CancelStarsSessionResponse struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error"`
 }
 
 // GrantTelegramStars calls the backend to grant premium for a successful Stars
@@ -106,6 +117,32 @@ func (c *PremiumClient) ValidateStarsSession(req ValidateStarsSessionRequest) (*
 	respBody, _ := io.ReadAll(resp.Body)
 
 	var out ValidateStarsSessionResponse
+	if len(respBody) > 0 {
+		_ = json.Unmarshal(respBody, &out)
+	}
+	return &out, resp.StatusCode, nil
+}
+
+func (c *PremiumClient) CancelStarsSession(req CancelStarsSessionRequest) (*CancelStarsSessionResponse, int, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	httpReq, err := http.NewRequest("POST", c.baseURL+"/api/internal/premium/telegram-stars/session/cancel", bytes.NewBuffer(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Internal-Token", c.internalToken)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, 0, fmt.Errorf("backend request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+
+	var out CancelStarsSessionResponse
 	if len(respBody) > 0 {
 		_ = json.Unmarshal(respBody, &out)
 	}

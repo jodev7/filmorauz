@@ -22,5 +22,7 @@ type PremiumPurchaseSession struct {
 
 const (
 	PremiumPurchaseSessionStatusPending   = "pending"
-	PremiumPurchaseSessionStatusCompleted = "completed"
+	PremiumPurchaseSessionStatusPaid      = "paid"
+	PremiumPurchaseSessionStatusExpired   = "expired"
+	PremiumPurchaseSessionStatusCancelled = "cancelled"
 )

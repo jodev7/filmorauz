@@ -60,18 +60,35 @@ func (r *PremiumPurchaseSessionRepository) FindByToken(token string) (*models.Pr
 	return &session, nil
 }
 
-func (r *PremiumPurchaseSessionRepository) MarkCompleted(token string, chargeID string) error {
+func (r *PremiumPurchaseSessionRepository) UpdateStatus(token string, status string, chargeID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	now := time.Now()
+	set := bson.M{
+		"status":     status,
+		"updated_at": now,
+	}
+	if chargeID != "" {
+		set["telegram_payment_charge_id"] = chargeID
+	}
+	if status == models.PremiumPurchaseSessionStatusPaid {
+		set["completed_at"] = now
+	}
 	_, err := r.col.UpdateOne(ctx, bson.M{"token": token}, bson.M{
-		"$set": bson.M{
-			"status":                     models.PremiumPurchaseSessionStatusCompleted,
-			"telegram_payment_charge_id": chargeID,
-			"completed_at":               now,
-			"updated_at":                 now,
-		},
+		"$set": set,
 	})
 	return err
+}
+
+func (r *PremiumPurchaseSessionRepository) MarkPaid(token string, chargeID string) error {
+	return r.UpdateStatus(token, models.PremiumPurchaseSessionStatusPaid, chargeID)
+}
+
+func (r *PremiumPurchaseSessionRepository) MarkExpired(token string) error {
+	return r.UpdateStatus(token, models.PremiumPurchaseSessionStatusExpired, "")
+}
+
+func (r *PremiumPurchaseSessionRepository) MarkCancelled(token string) error {
+	return r.UpdateStatus(token, models.PremiumPurchaseSessionStatusCancelled, "")
 }
