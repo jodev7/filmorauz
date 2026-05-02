@@ -1608,6 +1608,19 @@ function JobsTab({
             <p className="text-xs text-gray-500">
               {elapsedLabel}: {elapsedTime} • Last update: {lastUpdateText} ago • Retry: {safeJob.retry_count}
             </p>
+            {job.content_type === "serial_parent" && (
+              <p className="mt-1 text-xs text-blue-300">
+                Serial import • seasons: {job.seasons_count ?? 0} •
+                {" "}episodes: {job.episode_count ?? 0} •
+                {" "}new jobs: {job.child_jobs_created ?? 0}
+              </p>
+            )}
+            {job.content_type === "serial_parent" && job.status === "failed" && job.error && (
+              <p className="mt-1 flex items-start gap-1 text-xs text-red-400">
+                <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+                <span className="break-words">{job.error}</span>
+              </p>
+            )}
             {stuck && (
               <p className="mt-1 flex items-center gap-1 text-xs text-orange-400">
                 <AlertTriangle className="w-3 h-3" />

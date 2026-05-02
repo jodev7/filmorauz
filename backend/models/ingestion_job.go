@@ -116,6 +116,14 @@ type IngestionJob struct {
 	SeriesSlug    string             `bson:"series_slug,omitempty" json:"series_slug,omitempty"`
 	SeasonNumber  int                `bson:"season_number,omitempty" json:"season_number,omitempty"`
 	EpisodeNumber int                `bson:"episode_number,omitempty" json:"episode_number,omitempty"`
+
+	// Serial-parent specific summary fields. ContentType == "serial_parent" rows
+	// are created immediately by the import endpoint, then populated by the
+	// background extractor as it discovers seasons/episodes and fans out child
+	// jobs. UI shows these as a progress indicator while extraction runs.
+	SeasonsCount     int `bson:"seasons_count,omitempty"      json:"seasons_count,omitempty"`
+	EpisodeCount     int `bson:"episode_count,omitempty"      json:"episode_count,omitempty"`
+	ChildJobsCreated int `bson:"child_jobs_created,omitempty" json:"child_jobs_created,omitempty"`
 }
 
 // JobSteps tracks the completion status of each pipeline step

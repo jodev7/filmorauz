@@ -1806,11 +1806,17 @@ export interface IngestionJob {
   quality?: string;
   is_premium?: boolean;
   // Serial/episode identification
+  content_type?: string; // "" | "movie" | "episode" | "serial_parent"
   season_id?: string;
   episode_id?: string;
+  series_id?: string;
   series_slug?: string;
   season_number?: number;
   episode_number?: number;
+  // Serial parent summary (populated by background extractor)
+  seasons_count?: number;
+  episode_count?: number;
+  child_jobs_created?: number;
 }
 
 export interface SearchResult {
@@ -2081,22 +2087,24 @@ export async function createManualImport(
   return json.data;
 }
 
-// Import an item from the catalog
+// Import an item from the catalog. For series, the backend now returns 202
+// with {ok, job_id, message} after queueing a parent job; the heavy episode
+// extraction runs in the background.
 export async function importFromCatalog(
   token: string,
   input: CatalogImportInput
-): Promise<IngestionJob> {
+): Promise<{ job_id?: string; message?: string; queued: boolean } & Record<string, unknown>> {
   const res = await fetch(`${API_URL}/admin/ingestion/import`, {
     method: "POST",
     headers: { ...authHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
   if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || "Failed to import from catalog");
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Failed to import from catalog");
   }
-  const json = await res.json();
-  return json.data;
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  return { ...json, queued: res.status === 202 };
 }
 
 // Admin User types
