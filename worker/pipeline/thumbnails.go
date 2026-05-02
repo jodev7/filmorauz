@@ -66,16 +66,18 @@ func generateThumbnails(inputPath, outDir string, intervalSec int) (int, error) 
 	return count, nil
 }
 
-// thumbnailsBaseURLFromMaster turns a master playlist URL (…/master.m3u8) into
-// the directory URL where the thumbnail JPGs were uploaded (…/thumbnails/).
-// Returns empty string if streamingURL is empty or doesn't end in master.m3u8.
+// thumbnailsBaseURLFromMaster turns a master playlist URL (…/index.m3u8 or
+// the legacy …/master.m3u8) into the directory URL where the thumbnail JPGs
+// were uploaded (…/thumbnails/). Returns empty string if streamingURL is
+// empty or does not end in a recognised master playlist name.
 func thumbnailsBaseURLFromMaster(streamingURL string) string {
 	if streamingURL == "" {
 		return ""
 	}
-	const suffix = "/master.m3u8"
-	if !strings.HasSuffix(streamingURL, suffix) {
-		return ""
+	for _, suffix := range []string{"/" + MasterPlaylistName, "/master.m3u8"} {
+		if strings.HasSuffix(streamingURL, suffix) {
+			return strings.TrimSuffix(streamingURL, suffix) + "/thumbnails/"
+		}
 	}
-	return strings.TrimSuffix(streamingURL, suffix) + "/thumbnails/"
+	return ""
 }

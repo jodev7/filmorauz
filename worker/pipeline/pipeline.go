@@ -2827,7 +2827,8 @@ func (p *Pipeline) buildMovieURL(slug string) string {
 // validateAssetStorage verifies all assets are stored in the canonical movie folder
 // This prevents silent asset scattering across multiple directories
 //
-// NOTE: Updated for adaptive HLS - checks for master.m3u8 and rendition subdirectories
+// NOTE: Updated for adaptive HLS - checks for the master playlist (index.m3u8;
+// legacy master.m3u8 also tolerated) and rendition subdirectories
 func (p *Pipeline) validateAssetStorage(jobID, canonicalFolder, posterURL, backdropURL, streamingURL string) {
 	log.Printf("[VALIDATION] ===== ASSET STORAGE VALIDATION =====")
 	log.Printf("[VALIDATION] Canonical folder: %s", canonicalFolder)
@@ -2865,8 +2866,10 @@ func (p *Pipeline) validateAssetStorage(jobID, canonicalFolder, posterURL, backd
 		name := file.Name()
 		isDir := file.IsDir()
 
-		// Check for master playlist (adaptive HLS)
-		if name == "master.m3u8" {
+		// Check for master playlist (adaptive HLS) — index.m3u8 is the
+		// canonical name; master.m3u8 is the legacy name kept for older
+		// content that hasn't been re-ingested yet.
+		if name == MasterPlaylistName || name == "master.m3u8" {
 			hlsFound = true
 			log.Printf("[VALIDATION]   ✓ Master playlist: %s", name)
 		}

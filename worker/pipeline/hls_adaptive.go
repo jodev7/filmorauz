@@ -17,6 +17,20 @@ import (
 
 const DefaultMaxRenditionConcurrency = 2
 
+// MasterPlaylistName is the canonical filename for the HLS master playlist.
+// Standardized on index.m3u8 so the same name is used at every layer (master
+// + per-rendition). isMasterPlaylistName accepts the legacy master.m3u8 too
+// so previously-ingested content still resolves through the read paths.
+const MasterPlaylistName = "index.m3u8"
+
+func isMasterPlaylistName(name string) bool {
+	return name == MasterPlaylistName || name == "master.m3u8"
+}
+
+func isMasterPlaylistPath(p string) bool {
+	return strings.HasSuffix(p, "/"+MasterPlaylistName) || strings.HasSuffix(p, "/master.m3u8")
+}
+
 func getMaxRenditionConcurrency(maxConcurrent int) int {
 	if maxConcurrent > 0 {
 		return maxConcurrent
@@ -67,7 +81,7 @@ func DefaultRenditions() []RenditionConfig {
 // This function:
 // 1. First creates a clean base video with logo overlay applied
 // 2. Then generates multiple quality renditions from the base
-// 3. Creates a master.m3u8 playlist referencing all variants
+// 3. Creates an index.m3u8 master playlist referencing all variants
 // No watermark removal - use source video directly
 //
 // hlsFolderName is the canonical B2 folder (e.g. "some-movie_abcd1234" or
@@ -93,7 +107,7 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir, hlsFolderName
 
 	// Create output directory structure
 	// Structure: outputDir/
-	//   - master.m3u8
+	//   - index.m3u8         (master playlist — canonical name)
 	//   - 360p/
 	//     - index.m3u8
 	//     - segment_001.ts, ...
@@ -229,12 +243,31 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir, hlsFolderName
 
 	// Step 3: Create master playlist
 	log.Printf("[STAGE] master_playlist start")
-	masterPlaylistPath = filepath.Join(outputDir, "master.m3u8")
+	masterPlaylistPath = filepath.Join(outputDir, MasterPlaylistName)
 	log.Printf("[HLS_PATH] master_playlist_local=%s", masterPlaylistPath)
 	if err = p.createMasterPlaylist(masterPlaylistPath, renditions); err != nil {
 		return "", "", nil, fmt.Errorf("failed to create master playlist: %w", err)
 	}
 	log.Printf("[STAGE] master_playlist end")
+	log.Printf("[ffmpeg] done for job %s — all renditions and master playlist generated", jobID)
+
+	// Validate HLS output before signalling completion to the upload phase.
+	// Retries the master playlist regeneration once if it's missing/empty —
+	// the ffmpeg renditions already succeeded, so this is a cheap safety net
+	// against a partial write or a races we haven't seen but want to survive.
+	if vErr := p.validateHLSOutput(outputDir, renditions); vErr != nil {
+		log.Printf("[hls] ERROR: master playlist missing or invalid: %v — retrying createMasterPlaylist once", vErr)
+		if rmErr := os.Remove(masterPlaylistPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			log.Printf("[hls] WARNING: pre-retry cleanup of stale master failed: %v", rmErr)
+		}
+		if err = p.createMasterPlaylist(masterPlaylistPath, renditions); err != nil {
+			return "", "", nil, fmt.Errorf("master playlist retry failed: %w", err)
+		}
+		if vErr2 := p.validateHLSOutput(outputDir, renditions); vErr2 != nil {
+			return "", "", nil, fmt.Errorf("HLS validation failed after retry: %w", vErr2)
+		}
+		log.Printf("[hls] retry succeeded — master playlist now present")
+	}
 
 	// Report progress: HLS generation complete (~92%)
 	if jobStatusCallback != nil {
@@ -748,7 +781,44 @@ func parseBitrate(bitrate string) float64 {
 	return val
 }
 
-// createMasterPlaylist creates the master.m3u8 playlist referencing all renditions
+// validateHLSOutput sanity-checks the local HLS tree before upload begins.
+// Verifies: (a) the master index.m3u8 exists with non-zero size, and (b) at
+// least one .ts segment was produced (under any rendition). Returning an
+// error here causes the job to fail before we touch the storage backend, so
+// we never publish a half-baked stream that 404s on master playlist load.
+func (p *Pipeline) validateHLSOutput(outputDir string, renditions []RenditionConfig) error {
+	masterPath := filepath.Join(outputDir, MasterPlaylistName)
+	fi, err := os.Stat(masterPath)
+	if err != nil {
+		log.Printf("[hls] master playlist found: false (%s)", masterPath)
+		return fmt.Errorf("master playlist missing at %s: %w", masterPath, err)
+	}
+	if fi.Size() == 0 {
+		log.Printf("[hls] master playlist found: true but size=0 (%s)", masterPath)
+		return fmt.Errorf("master playlist empty at %s", masterPath)
+	}
+	log.Printf("[hls] master playlist found: true (%s, %d bytes)", masterPath, fi.Size())
+
+	segmentCount := 0
+	for _, r := range renditions {
+		entries, rerr := os.ReadDir(filepath.Join(outputDir, r.Name))
+		if rerr != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".ts") {
+				segmentCount++
+			}
+		}
+	}
+	log.Printf("[hls] segments count: %d", segmentCount)
+	if segmentCount == 0 {
+		return fmt.Errorf("no .ts segments produced under %s", outputDir)
+	}
+	return nil
+}
+
+// createMasterPlaylist writes the index.m3u8 master playlist referencing all renditions
 func (p *Pipeline) createMasterPlaylist(masterPath string, renditions []RenditionConfig) error {
 	log.Printf("[HLS] Creating master playlist: %s", masterPath)
 
@@ -787,7 +857,7 @@ func (p *Pipeline) createMasterPlaylist(masterPath string, renditions []Renditio
 // kept local for clip generation and deleted by the pipeline cleanup stage.
 // Final B2 layout:
 //
-//	videos/movies/<folder>/master.m3u8
+//	videos/movies/<folder>/index.m3u8                (master playlist)
 //	videos/movies/<folder>/<quality>/index.m3u8
 //	videos/movies/<folder>/<quality>/segment_*.ts   (uploaded by streaming uploader)
 func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir string, folderName string) (string, error) {
@@ -905,7 +975,7 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 			if r.Err != nil {
 				log.Printf("[HLS] Upload failed for %s: %v", r.RemotePath, r.Err)
 			}
-			if r.RemotePath == b2Root+"/"+folderName+"/master.m3u8" || strings.HasSuffix(r.RemotePath, "/master.m3u8") {
+			if isMasterPlaylistPath(r.RemotePath) {
 				streamingURL = r.URL
 				log.Printf("[HLS] Master playlist URL: %s", streamingURL)
 			}
@@ -986,9 +1056,11 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 
 			log.Printf("[HLS] Copied to local storage: %s", dstPath)
 
-			// Track master playlist URL
-			if relPath == "master.m3u8" {
-				streamingURL = p.config.StorageConfig.BaseURL + "/stream/" + kind + "/" + folderName + "/master.m3u8"
+			// Track master playlist URL — top-level playlist (no slash in relPath
+			// after filepath.ToSlash) is the master; per-rendition index.m3u8
+			// files live one directory deeper (e.g. "360p/index.m3u8").
+			if isMasterPlaylistName(filepath.ToSlash(relPath)) {
+				streamingURL = p.config.StorageConfig.BaseURL + "/stream/" + kind + "/" + folderName + "/" + MasterPlaylistName
 				log.Printf("[HLS] Master playlist URL: %s", streamingURL)
 			}
 

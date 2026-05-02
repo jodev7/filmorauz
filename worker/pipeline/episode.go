@@ -57,7 +57,7 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	}
 
 	// Folder layout under the videos/serials/ B2 root:
-	//   videos/serials/<slug>/season-N/episode-M/master.m3u8
+	//   videos/serials/<slug>/season-N/episode-M/index.m3u8
 	//   videos/serials/<slug>/season-N/episode-M/<quality>/index.m3u8
 	//   videos/serials/<slug>/season-N/episode-M/<quality>/segment_*.ts
 	// The "videos/serials" root is supplied by B2VideoRoot(job) at upload time,
@@ -88,7 +88,7 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	if err != nil {
 		return fmt.Errorf("episode uploadProcessedFiles failed: %w", err)
 	}
-	log.Printf("[EPISODE] b2_root=%s/%s master_b2_key=%s/%s/master.m3u8", B2VideoRootSerials, folderName, B2VideoRootSerials, folderName)
+	log.Printf("[EPISODE] b2_root=%s/%s master_b2_key=%s/%s/%s", B2VideoRootSerials, folderName, B2VideoRootSerials, folderName, MasterPlaylistName)
 	log.Printf("[EPISODE] streamingURL=%s", streamingURL)
 
 	mode := p.config.StorageConfig.Mode
