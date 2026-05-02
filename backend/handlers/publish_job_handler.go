@@ -112,7 +112,10 @@ func (h *PublishJobHandler) UploadNow(c *gin.Context) {
 			CreatedBy:   createdBy,
 		}
 		log.Printf("[PublishNow] clip=%s platform=%s account=%s", clipID.Hex(), j.Platform, j.AccountName)
-		uploadErr := services.ExecutePlatformUpload(h.parserURL, job)
+		// Allocate the job ID up-front so ExecutePlatformUpload can derive a
+		// stable publish_key for the sidecar.
+		job.ID = primitive.NewObjectID()
+		mediaID, postURL, uploadErr := services.ExecutePlatformUpload(h.parserURL, job)
 		if uploadErr != nil {
 			log.Printf("[PublishNow] failed platform=%s account=%s: %v", j.Platform, j.AccountName, uploadErr)
 			job.Status = models.PublishJobStatusFailed
@@ -131,6 +134,10 @@ func (h *PublishJobHandler) UploadNow(c *gin.Context) {
 		} else {
 			log.Printf("[PublishNow] success platform=%s account=%s", j.Platform, j.AccountName)
 			job.Status = models.PublishJobStatusSuccess
+			job.InstagramMediaID = mediaID
+			job.InstagramPostURL = postURL
+			now := time.Now().UTC()
+			job.PublishedAt = &now
 			results = append(results, jobResult{
 				Platform:    j.Platform,
 				AccountName: j.AccountName,

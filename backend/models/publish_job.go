@@ -36,4 +36,11 @@ type PublishJob struct {
 	UpdatedAt    time.Time          `bson:"updated_at"            json:"updated_at"`
 	ExecutedAt   *time.Time         `bson:"executed_at,omitempty" json:"executed_at,omitempty"`
 	Error        string             `bson:"error,omitempty"       json:"error,omitempty"`
+	// Instagram-specific publish tracking. Populated when a successful
+	// upload response is received OR when a sidecar success is recovered
+	// after a proxy timeout. Once set, MarkFailed must NOT clear them.
+	InstagramMediaID string     `bson:"instagram_media_id,omitempty" json:"instagram_media_id,omitempty"`
+	InstagramPostURL string     `bson:"instagram_post_url,omitempty" json:"instagram_post_url,omitempty"`
+	PublishedAt      *time.Time `bson:"published_at,omitempty"       json:"published_at,omitempty"`
+	RetryCount       int        `bson:"retry_count,omitempty"        json:"retry_count,omitempty"`
 }

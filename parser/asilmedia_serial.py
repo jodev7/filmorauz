@@ -263,6 +263,14 @@ class AsilmediaSerialParser:
             f"episodes_found={len(flat_episodes)} missing_numbers={missing_numbers} duplicates_removed={duplicates_removed}"
         )
         logger.info(
+            f"[episode extractor] source=asilmedia found_visible={len(flat_episodes)} "
+            f"found_script=0 found_pattern=0 final={len(flat_episodes)}"
+        )
+        warnings: List[str] = []
+        if missing_numbers:
+            warnings.append("Possible missing episodes: " + ",".join(str(n) for n in missing_numbers))
+            logger.warning(f"[episode extractor] missing numbers={missing_numbers}")
+        logger.info(
             f"[ASILMEDIA SERIAL] done title={title!r} episodes={len(flat_episodes)} resolved={resolved}"
         )
 
@@ -277,6 +285,8 @@ class AsilmediaSerialParser:
             "description": description,
             "episodes": flat_episodes,
             "seasons": seasons,
+            "warnings": warnings,
+            "missing_numbers": missing_numbers,
         }
 
     def _compute_missing_numbers(self, episodes: List[Dict]) -> List[int]:

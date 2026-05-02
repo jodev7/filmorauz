@@ -78,6 +78,7 @@ class UzmoviSerialParser:
         resp = self.session.get(url, timeout=30)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
+        self._serial_url = url
 
         title = _text(soup.select_one("h1")) or _text(soup.select_one("title"))
         title = title.strip()
@@ -101,7 +102,7 @@ class UzmoviSerialParser:
 
         year = _extract_year(title) or _extract_year(resp.text[:4000])
 
-        episode_candidates = self._collect_episode_candidates(soup, resp.text)
+        episode_candidates, source_counts = self._collect_episode_candidates(soup, resp.text)
         if not episode_candidates:
             return {
                 "success": False,
@@ -138,6 +139,53 @@ class UzmoviSerialParser:
                 )
             )
             inventory.append(choices[0])
+
+        # 4) URL pattern fallback: for the dominant translation group, fill
+        # any missing episode numbers between min and max (and probe slightly
+        # past the observed max to detect episodes hidden from the rendered DOM).
+        pattern_added = 0
+        if group_priority:
+            top_group_id = max(group_priority, key=lambda g: group_priority[g])
+            in_top: Dict[tuple[int, int], Dict] = {
+                (it["season"], it["episode"]): it for it in inventory if it["_group_id"] == top_group_id
+            }
+            if in_top:
+                eps_in_top = [ep for (_, ep) in in_top.keys()]
+                min_ep, max_ep = min(eps_in_top), max(eps_in_top)
+                # Probe upward past the observed max (cap probe range for safety).
+                probe_max = self._probe_upper_bound(top_group_id, max_ep, hard_cap=max(max_ep + 30, 500))
+                if probe_max > max_ep:
+                    logger.info(
+                        f"[UZMOVI SERIAL] probe extended max {max_ep} -> {probe_max} for group={top_group_id}"
+                    )
+                    max_ep = probe_max
+                # Assume single-season layout for the top translation group;
+                # if existing inventory carries multiple seasons we leave them
+                # alone and only fill gaps within season 1 of this group.
+                fill_season = next(iter(in_top.keys()))[0] if len(set(s for s, _ in in_top.keys())) == 1 else 1
+                for n in range(min_ep, max_ep + 1):
+                    key = (fill_season, n)
+                    if key in {(it["season"], it["episode"]) for it in inventory}:
+                        continue
+                    href = f"{self.base_url.rstrip('/')}/episode/{top_group_id}/{n}.html"
+                    inventory.append(
+                        {
+                            "season": fill_season,
+                            "episode": n,
+                            "title": f"{n}-qism",
+                            "episode_url": href,
+                            "_group_id": top_group_id,
+                            "_synthesized": True,
+                        }
+                    )
+                    pattern_added += 1
+                inventory.sort(key=lambda it: (it["season"], it["episode"]))
+
+        logger.info(
+            f"[episode extractor] source=uzmovi found_visible={source_counts.get('visible', 0)} "
+            f"found_script={source_counts.get('script', 0)} found_pattern={pattern_added} "
+            f"final={len(inventory)}"
+        )
 
         resolved_rows: List[Dict] = []
         seen_final: set[tuple[int, int, str]] = set()
@@ -201,6 +249,11 @@ class UzmoviSerialParser:
             f"[serial-details] source=uzmovi title={title!r} seasons={len(seasons)} "
             f"episodes_found={len(resolved_rows)} missing_numbers={missing_numbers} duplicates_removed={duplicates_removed}"
         )
+        warnings: List[str] = []
+        if missing_numbers:
+            warning_text = "Possible missing episodes: " + ",".join(str(n) for n in missing_numbers)
+            warnings.append(warning_text)
+            logger.warning(f"[episode extractor] missing numbers={missing_numbers}")
 
         resolved = sum(1 for ep in resolved_rows if ep["video_url"])
         logger.info(
@@ -218,12 +271,15 @@ class UzmoviSerialParser:
             "description": description,
             "episodes": resolved_rows,
             "seasons": seasons,
+            "warnings": warnings,
+            "missing_numbers": missing_numbers,
         }
 
-    def _collect_episode_candidates(self, soup: BeautifulSoup, html: str) -> List[Dict]:
+    def _collect_episode_candidates(self, soup: BeautifulSoup, html: str) -> tuple[List[Dict], Dict[str, int]]:
         per_group: Dict[str, Dict[tuple[int, int], Dict]] = {}
+        counts = {"visible": 0, "script": 0}
 
-        def add_candidate(href: str, label: str = "", season_hint: Optional[int] = None) -> None:
+        def add_candidate(href: str, label: str = "", season_hint: Optional[int] = None, bucket: str = "visible") -> None:
             parsed = _parse_episode_href(href)
             if not parsed:
                 return
@@ -243,6 +299,7 @@ class UzmoviSerialParser:
                 "episode_url": full,
                 "_group_id": group_id,
             }
+            counts[bucket] = counts.get(bucket, 0) + 1
 
         # 1) Parsed DOM anchors, including hidden tabs/accordions still in HTML.
         for a in soup.find_all("a", href=True):
@@ -271,7 +328,7 @@ class UzmoviSerialParser:
             season_hint = 1
             prefix = (html or "")[max(0, m.start() - 120):m.start()]
             season_hint = _parse_season_number(prefix) or 1
-            add_candidate(raw_href, label="", season_hint=season_hint)
+            add_candidate(raw_href, label="", season_hint=season_hint, bucket="script")
 
         flat: List[Dict] = []
         for gid, gmap in sorted(per_group.items(), key=lambda kv: len(kv[1]), reverse=True):
@@ -279,7 +336,33 @@ class UzmoviSerialParser:
                 f"[UZMOVI SERIAL] translation group_id={gid} total_in_group={len(gmap)}"
             )
             flat.extend(gmap.values())
-        return flat
+        return flat, counts
+
+    def _probe_upper_bound(self, group_id: str, observed_max: int, hard_cap: int) -> int:
+        """HEAD-probe sequential episode URLs past observed_max; stop after 3 consecutive misses."""
+        best = observed_max
+        misses = 0
+        n = observed_max + 1
+        referer = getattr(self, "_serial_url", self.base_url)
+        while n <= hard_cap and misses < 3:
+            url = f"{self.base_url.rstrip('/')}/episode/{group_id}/{n}.html"
+            ok = False
+            try:
+                r = self.session.head(url, timeout=10, allow_redirects=True, headers={"Referer": referer})
+                if r.status_code == 200:
+                    ok = True
+                elif r.status_code in (405, 403):
+                    g = self.session.get(url, timeout=15, headers={"Referer": referer})
+                    ok = g.status_code == 200 and "/episode/" in g.url
+            except Exception as e:
+                logger.debug(f"[UZMOVI SERIAL] probe error n={n} err={e}")
+            if ok:
+                best = n
+                misses = 0
+            else:
+                misses += 1
+            n += 1
+        return best
 
     def _compute_missing_numbers(self, episodes: List[Dict]) -> List[int]:
         if not episodes:

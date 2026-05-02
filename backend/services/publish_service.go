@@ -18,30 +18,37 @@ func BuildYouTubeDescription(movieCode string) string {
 }
 
 // ExecutePlatformUpload dispatches the upload to the correct platform service
-// based on job.Platform. Returns nil on success.
-func ExecutePlatformUpload(parserURL string, job *models.PublishJob) error {
+// based on job.Platform. For Instagram, mediaID/postURL are populated when
+// available (including via sidecar recovery). For other platforms they stay
+// empty.
+func ExecutePlatformUpload(parserURL string, job *models.PublishJob) (mediaID, postURL string, err error) {
 	caption := BuildPublishCaption(job.MovieTitle, job.MovieCode)
 	switch job.Platform {
 	case models.PublishPlatformInstagram:
 		account := GetInstagramAccount(job.AccountName)
 		if account == nil {
-			return fmt.Errorf("instagram account not configured: %s", job.AccountName)
+			return "", "", fmt.Errorf("instagram account not configured: %s", job.AccountName)
 		}
-		return UploadReelToInstagram(parserURL, job.ClipURL, caption, account)
+		publishKey := "pj_" + job.ID.Hex()
+		result, uerr := UploadReelToInstagram(parserURL, job.ClipURL, caption, publishKey, account)
+		if uerr != nil {
+			return "", "", uerr
+		}
+		return result.MediaID, result.PostURL, nil
 	case models.PublishPlatformYouTube:
 		account := GetYouTubeAccount(job.AccountName)
 		if account == nil {
-			return fmt.Errorf("youtube account not configured: %s", job.AccountName)
+			return "", "", fmt.Errorf("youtube account not configured: %s", job.AccountName)
 		}
 		ytDesc := BuildYouTubeDescription(job.MovieCode)
-		return UploadShortToYouTube(parserURL, job.ClipURL, job.MovieTitle, ytDesc, account)
+		return "", "", UploadShortToYouTube(parserURL, job.ClipURL, job.MovieTitle, ytDesc, account)
 	case models.PublishPlatformTikTok:
 		account := GetTikTokAccount(job.AccountName)
 		if account == nil {
-			return fmt.Errorf("tiktok account not configured: %s", job.AccountName)
+			return "", "", fmt.Errorf("tiktok account not configured: %s", job.AccountName)
 		}
-		return UploadVideoToTikTok(parserURL, job.ClipURL, caption, account)
+		return "", "", UploadVideoToTikTok(parserURL, job.ClipURL, caption, account)
 	default:
-		return fmt.Errorf("unknown platform: %s", job.Platform)
+		return "", "", fmt.Errorf("unknown platform: %s", job.Platform)
 	}
 }

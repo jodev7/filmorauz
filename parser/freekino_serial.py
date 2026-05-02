@@ -82,7 +82,45 @@ class FreekinoSerialParser:
         if year_el:
             year = extract_year(year_el.get_text()) or 0
 
-        ep_links, duplicates_removed = self._collect_episode_links(soup, resp.text)
+        ep_links, duplicates_removed, source_counts = self._collect_episode_links(soup, resp.text)
+
+        # URL pattern fallback: derive a template from the longest-matching
+        # existing episode URL and fill any gaps between min..max episode.
+        pattern_added = 0
+        if ep_links:
+            by_season: Dict[int, List[tuple[str, int, int, str]]] = {}
+            for it in ep_links:
+                by_season.setdefault(it[1], []).append(it)
+            template_pat = re.compile(
+                r"^(?P<prefix>https?://[^/]+/serie/\d+-[a-z0-9\-]*?)"
+                r"(?:-(?P<season>\d+)-fasl)?-(?P<ep>\d+)-qism(?P<suffix>[a-z0-9\-/.]*)$",
+                re.IGNORECASE,
+            )
+            new_items: List[tuple[str, int, int, str]] = []
+            for season, items in by_season.items():
+                eps = sorted({i[2] for i in items})
+                lo, hi = eps[0], eps[-1]
+                template_url = items[0][0]
+                m = template_pat.match(template_url)
+                if not m:
+                    continue
+                prefix = m.group("prefix")
+                suffix = m.group("suffix") or ""
+                season_seg = f"-{season}-fasl" if m.group("season") else ""
+                for n in range(lo, hi + 1):
+                    if n in eps:
+                        continue
+                    href = f"{prefix}{season_seg}-{n}-qism{suffix}"
+                    new_items.append((href, season, n, f"{n}-qism"))
+                    pattern_added += 1
+            ep_links.extend(new_items)
+            ep_links.sort(key=lambda x: (x[1], x[2]))
+
+        logger.info(
+            f"[episode extractor] source=freekino found_visible={source_counts.get('visible', 0)} "
+            f"found_script={source_counts.get('script', 0)} found_pattern={pattern_added} "
+            f"final={len(ep_links)}"
+        )
 
         if not ep_links:
             return {
@@ -158,6 +196,10 @@ class FreekinoSerialParser:
             f"[serial-details] source=freekino title={title!r} seasons={len(seasons)} "
             f"episodes_found={len(episodes)} missing_numbers={missing_numbers} duplicates_removed={duplicates_removed}"
         )
+        warnings: List[str] = []
+        if missing_numbers:
+            warnings.append("Possible missing episodes: " + ",".join(str(n) for n in missing_numbers))
+            logger.warning(f"[episode extractor] missing numbers={missing_numbers}")
 
         resolved = sum(1 for ep in episodes if ep["video_url"])
         logger.info(
@@ -175,13 +217,16 @@ class FreekinoSerialParser:
             "description": description,
             "episodes": episodes,
             "seasons": seasons,
+            "warnings": warnings,
+            "missing_numbers": missing_numbers,
         }
 
-    def _collect_episode_links(self, soup: BeautifulSoup, html: str) -> tuple[List[tuple[str, int, int, str]], int]:
+    def _collect_episode_links(self, soup: BeautifulSoup, html: str) -> tuple[List[tuple[str, int, int, str]], int, Dict[str, int]]:
         by_key: Dict[tuple[int, int], tuple[str, int, int, str]] = {}
         duplicates_removed = 0
+        counts = {"visible": 0, "script": 0}
 
-        def add_candidate(raw_href: str, label: str = "") -> None:
+        def add_candidate(raw_href: str, label: str = "", bucket: str = "visible") -> None:
             nonlocal duplicates_removed
             href = normalize_url(self._movie.BASE_URL, raw_href)
             parsed = _parse_season_episode(href)
@@ -193,29 +238,29 @@ class FreekinoSerialParser:
             if key in by_key:
                 existing = by_key[key]
                 duplicates_removed += 1
-                # Prefer richer link text, then shorter URL stability.
                 if len(candidate[3]) > len(existing[3]) or (not existing[3] and candidate[3]):
                     by_key[key] = candidate
                 return
             by_key[key] = candidate
+            counts[bucket] = counts.get(bucket, 0) + 1
 
         for a in soup.find_all("a", href=True):
             href = a["href"]
             if "/serie/" in href:
-                add_candidate(href, a.get_text(" ", strip=True))
+                add_candidate(href, a.get_text(" ", strip=True), "visible")
 
         for el in soup.find_all(True):
             label = el.get_text(" ", strip=True)
             for attr in ("data-href", "data-url", "data-link", "data-episode-url", "href"):
                 href = el.get(attr) if hasattr(el, "get") else None
                 if href and "/serie/" in str(href):
-                    add_candidate(str(href), label)
+                    add_candidate(str(href), label, "visible")
 
         for m in _EP_URL_ANY_RE.finditer(html or ""):
-            add_candidate(m.group(0), "")
+            add_candidate(m.group(0), "", "script")
 
         items = sorted(by_key.values(), key=lambda x: (x[1], x[2], x[0]))
-        return items, duplicates_removed
+        return items, duplicates_removed, counts
 
     def _compute_missing_numbers(self, episodes: List[Dict]) -> List[int]:
         by_season: Dict[int, set[int]] = {}

@@ -54,9 +54,11 @@ type parserSerialResponse struct {
 	Poster      string                `json:"poster"`
 	Backdrop    string                `json:"backdrop"`
 	Description string                `json:"description"`
-	Episodes    []parserSerialEpisode `json:"episodes"`
-	Seasons     []parserSerialSeason  `json:"seasons"`
-	Error       string                `json:"error"`
+	Episodes       []parserSerialEpisode `json:"episodes"`
+	Seasons        []parserSerialSeason  `json:"seasons"`
+	Warnings       []string              `json:"warnings"`
+	MissingNumbers []int                 `json:"missing_numbers"`
+	Error          string                `json:"error"`
 }
 
 var serialSlugCleanRe = regexp.MustCompile(`[^a-z0-9]+`)
@@ -187,6 +189,10 @@ func (h *IngestionHandler) importSerial(c *gin.Context, source, sourceID, detail
 
 	log.Printf("[INGESTION] SERIAL: done series=%s created_jobs=%d skipped=%d", series.ID.Hex(), len(createdJobs), len(skipped))
 
+	if len(payload.Warnings) > 0 {
+		log.Printf("[INGESTION] SERIAL: parser warnings=%v", payload.Warnings)
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
 		"message":           "Serial ingestion started",
 		"series_id":         series.ID.Hex(),
@@ -196,6 +202,8 @@ func (h *IngestionHandler) importSerial(c *gin.Context, source, sourceID, detail
 		"jobs_created":      len(createdJobs),
 		"jobs":              createdJobs,
 		"skipped":           skipped,
+		"warnings":          payload.Warnings,
+		"missing_numbers":   payload.MissingNumbers,
 	})
 }
 

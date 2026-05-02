@@ -113,28 +113,45 @@ func (r *InstagramScheduleRepository) ClaimDue() (*models.InstagramSchedule, err
 	return &s, nil
 }
 
-func (r *InstagramScheduleRepository) MarkSuccess(id primitive.ObjectID) error {
+func (r *InstagramScheduleRepository) MarkSuccess(id primitive.ObjectID, mediaID, postURL string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	now := time.Now().UTC()
-	_, err := r.col.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
-		"status":      models.InstagramScheduleStatusSuccess,
-		"executed_at": now,
-		"updated_at":  now,
-	}})
+	set := bson.M{
+		"status":       models.InstagramScheduleStatusSuccess,
+		"executed_at":  now,
+		"updated_at":   now,
+		"published_at": now,
+		"error":        "", // clear any earlier 504/transport message
+	}
+	if mediaID != "" {
+		set["instagram_media_id"] = mediaID
+	}
+	if postURL != "" {
+		set["instagram_post_url"] = postURL
+	}
+	_, err := r.col.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": set})
 	return err
 }
 
+// MarkFailed only flips a non-success row to failed. A row already marked
+// success (e.g. via sidecar recovery) must not be downgraded by a later
+// transport-layer error.
 func (r *InstagramScheduleRepository) MarkFailed(id primitive.ObjectID, errMsg string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	now := time.Now().UTC()
-	_, err := r.col.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
-		"status":      models.InstagramScheduleStatusFailed,
-		"error":       errMsg,
-		"executed_at": now,
-		"updated_at":  now,
-	}})
+	_, err := r.col.UpdateOne(ctx,
+		bson.M{"_id": id, "status": bson.M{"$ne": models.InstagramScheduleStatusSuccess}},
+		bson.M{
+			"$set": bson.M{
+				"status":      models.InstagramScheduleStatusFailed,
+				"error":       errMsg,
+				"executed_at": now,
+				"updated_at":  now,
+			},
+			"$inc": bson.M{"retry_count": 1},
+		})
 	return err
 }
 

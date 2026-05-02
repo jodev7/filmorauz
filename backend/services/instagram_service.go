@@ -21,6 +21,20 @@ import (
 // hence 15m rather than a short admin-API timeout.
 var parserUploadClient = &http.Client{Timeout: 15 * time.Minute}
 
+// parserStatusClient is used for the short sidecar status lookup that we run
+// after a transport-layer error from /instagram/upload. It must NOT share the
+// 15-minute timeout above — we want a fast fail/recover loop here.
+var parserStatusClient = &http.Client{Timeout: 8 * time.Second}
+
+// InstagramUploadResult is returned on success — populated either from the
+// parser response directly or recovered from the sidecar after a 504.
+type InstagramUploadResult struct {
+	MediaID  string
+	PostURL  string
+	Account  string
+	Recovered bool // true when result came from sidecar after a transport error
+}
+
 type InstagramAccount struct {
 	Name     string `json:"name"`
 	Username string `json:"username"`
@@ -149,8 +163,11 @@ func resolveInstagramClipURL(raw string) string {
 }
 
 // UploadReelToInstagram calls the parser service /instagram/upload endpoint.
-// Returns *InstagramUploadError on failure (with classified ErrorType) or nil on success.
-func UploadReelToInstagram(parserURL, videoURL, caption string, account *InstagramAccount) error {
+// publishKey is opaque to the parser; we use it as a sidecar key so that, if
+// the parser HTTP response is lost to a 504 / proxy timeout, we can recover
+// the actual upload outcome via /instagram/upload/status?publish_key=...
+// Returns (result, nil) on success, (nil, *InstagramUploadError) on failure.
+func UploadReelToInstagram(parserURL, videoURL, caption, publishKey string, account *InstagramAccount) (*InstagramUploadResult, *InstagramUploadError) {
 	resolvedVideoURL := resolveInstagramClipURL(videoURL)
 	payload := map[string]string{
 		"account_name": account.Name,
@@ -158,20 +175,30 @@ func UploadReelToInstagram(parserURL, videoURL, caption string, account *Instagr
 		"password":     account.Password,
 		"video_url":    resolvedVideoURL,
 		"caption":      caption,
+		"publish_key":  publishKey,
 	}
 	body, _ := json.Marshal(payload)
 
 	endpoint := parserURL + "/instagram/upload?account=" + url.QueryEscape(account.Name)
-	log.Printf("[Instagram] POST %s account=%s raw_video_url=%s resolved_video_url=%s",
-		endpoint, account.Name, videoURL, resolvedVideoURL)
+	log.Printf("[instagram publish] start publish_key=%s account=%s raw_video_url=%s resolved_video_url=%s",
+		publishKey, account.Name, videoURL, resolvedVideoURL)
 
 	start := time.Now()
 	resp, err := parserUploadClient.Post(endpoint, "application/json", bytes.NewReader(body))
 	latency := time.Since(start)
 	if err != nil {
-		log.Printf("[Instagram] parser request FAILED account=%s latency=%s err=%v",
-			account.Name, latency, err)
-		return &InstagramUploadError{
+		log.Printf("[instagram publish] transport error publish_key=%s account=%s latency=%s err=%v",
+			publishKey, account.Name, latency, err)
+		// Recovery path: the upload may have succeeded server-side. Poll the
+		// sidecar status endpoint before reporting failure.
+		if rec := pollInstagramSidecar(parserURL, publishKey); rec != nil {
+			log.Printf("[instagram publish] timeout but previous success exists, keep completed publish_key=%s media_id=%s",
+				publishKey, rec.MediaID)
+			rec.Account = account.Name
+			rec.Recovered = true
+			return rec, nil
+		}
+		return nil, &InstagramUploadError{
 			ErrorType:    "network_error",
 			HumanMessage: humanMessage("network_error"),
 			RawError:     fmt.Sprintf("parser unreachable: %v", err),
@@ -184,8 +211,8 @@ func UploadReelToInstagram(parserURL, videoURL, caption string, account *Instagr
 	if len(bodyPreview) > 500 {
 		bodyPreview = bodyPreview[:500] + "...(truncated)"
 	}
-	log.Printf("[Instagram] parser response account=%s http_status=%d latency=%s body=%s",
-		account.Name, resp.StatusCode, latency, bodyPreview)
+	log.Printf("[instagram publish] parser response publish_key=%s account=%s http_status=%d latency=%s body=%s",
+		publishKey, account.Name, resp.StatusCode, latency, bodyPreview)
 
 	var result struct {
 		Status         string `json:"status"`
@@ -193,9 +220,26 @@ func UploadReelToInstagram(parserURL, videoURL, caption string, account *Instagr
 		ErrorType      string `json:"error_type"`
 		ActionRequired string `json:"action_required"`
 		MediaID        string `json:"media_id"`
+		MediaCode      string `json:"media_code"`
+		PostURL        string `json:"post_url"`
 	}
-	if err := json.Unmarshal(data, &result); err != nil {
-		return &InstagramUploadError{
+	parseErr := json.Unmarshal(data, &result)
+
+	// Whatever the HTTP status / decode outcome: if a sidecar success exists,
+	// trust it. Covers the 504-from-proxy case where the body is HTML.
+	if resp.StatusCode >= 500 || parseErr != nil || result.Status != "success" {
+		if rec := pollInstagramSidecar(parserURL, publishKey); rec != nil {
+			log.Printf("[instagram publish] non-success http=%d but sidecar success exists publish_key=%s media_id=%s",
+				resp.StatusCode, publishKey, rec.MediaID)
+			rec.Account = account.Name
+			rec.Recovered = true
+			return rec, nil
+		}
+	}
+
+	if parseErr != nil {
+		log.Printf("[instagram publish] failed reason=bad_parser_response publish_key=%s http=%d", publishKey, resp.StatusCode)
+		return nil, &InstagramUploadError{
 			ErrorType:      "publish_failed",
 			HumanMessage:   humanMessage("publish_failed"),
 			ActionRequired: actionRequired("publish_failed"),
@@ -211,12 +255,54 @@ func UploadReelToInstagram(parserURL, videoURL, caption string, account *Instagr
 		if action == "" {
 			action = actionRequired(errType)
 		}
-		return &InstagramUploadError{
+		log.Printf("[instagram publish] failed reason=%s publish_key=%s err=%s", errType, publishKey, result.Error)
+		return nil, &InstagramUploadError{
 			ErrorType:      errType,
 			HumanMessage:   humanMessage(errType),
 			ActionRequired: action,
 			RawError:       result.Error,
 		}
 	}
-	return nil
+	log.Printf("[instagram publish] success publish_key=%s media_id=%s", publishKey, result.MediaID)
+	return &InstagramUploadResult{
+		MediaID: result.MediaID,
+		PostURL: result.PostURL,
+		Account: account.Name,
+	}, nil
+}
+
+// pollInstagramSidecar asks the parser whether a publish_key has a recorded
+// success. The parser writes the sidecar inside instagrapi success, so even
+// when the upload HTTP response is lost we can recover the media_id. We poll
+// a few times because the sidecar may be written a few seconds after the
+// transport timeout fires on the backend side.
+func pollInstagramSidecar(parserURL, publishKey string) *InstagramUploadResult {
+	if publishKey == "" || parserURL == "" {
+		return nil
+	}
+	endpoint := strings.TrimRight(parserURL, "/") + "/instagram/upload/status?publish_key=" + url.QueryEscape(publishKey)
+	deadline := time.Now().Add(45 * time.Second)
+	delay := 3 * time.Second
+	for attempt := 1; ; attempt++ {
+		resp, err := parserStatusClient.Get(endpoint)
+		if err == nil {
+			data, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			var rec struct {
+				Status   string `json:"status"`
+				MediaID  string `json:"media_id"`
+				PostURL  string `json:"post_url"`
+				MediaCode string `json:"media_code"`
+			}
+			if json.Unmarshal(data, &rec) == nil && rec.Status == "success" && rec.MediaID != "" {
+				return &InstagramUploadResult{MediaID: rec.MediaID, PostURL: rec.PostURL}
+			}
+		} else {
+			log.Printf("[instagram publish] sidecar poll attempt=%d err=%v", attempt, err)
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		time.Sleep(delay)
+	}
 }

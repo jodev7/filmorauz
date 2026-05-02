@@ -1570,7 +1570,7 @@ export default function AdminClipsPage() {
                           </>
                         )}
                       </div>
-                      {j.error && (
+                      {j.error && j.status === "failed" && (
                         <p className="text-xs text-red-400 mt-1 truncate">{j.error}</p>
                       )}
                     </div>

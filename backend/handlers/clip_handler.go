@@ -471,24 +471,17 @@ func (h *ClipHandler) UploadToInstagram(c *gin.Context) {
 			continue
 		}
 		log.Printf("[Instagram] uploading clip=%s to account=%s url=%s", clip.ID.Hex(), name, clip.URL)
-		uploadErr := services.UploadReelToInstagram(h.parserURL, clip.URL, caption, account)
-		if uploadErr != nil {
-			errorType := "publish_failed"
-			humanMsg := "Yuklash muvaffaqiyatsiz tugadi"
-			actionReq := ""
-			if igErr, ok := uploadErr.(*services.InstagramUploadError); ok {
-				errorType = igErr.ErrorType
-				humanMsg = igErr.HumanMessage
-				actionReq = igErr.ActionRequired
-			}
-			log.Printf("[Instagram] upload failed account=%s type=%s: %v", name, errorType, uploadErr)
+		publishKey := fmt.Sprintf("now_%s_%s_%d", clip.ID.Hex(), name, time.Now().UnixNano())
+		_, igErr := services.UploadReelToInstagram(h.parserURL, clip.URL, caption, publishKey, account)
+		if igErr != nil {
+			log.Printf("[Instagram] upload failed account=%s type=%s: %v", name, igErr.ErrorType, igErr)
 			results = append(results, accountResult{
 				Account:        name,
 				Status:         "failed",
-				ErrorType:      errorType,
-				HumanMessage:   humanMsg,
-				ActionRequired: actionReq,
-				Error:          uploadErr.Error(),
+				ErrorType:      igErr.ErrorType,
+				HumanMessage:   igErr.HumanMessage,
+				ActionRequired: igErr.ActionRequired,
+				Error:          igErr.Error(),
 			})
 			overallStatus = "failed"
 		} else {

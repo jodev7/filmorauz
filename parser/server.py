@@ -16,6 +16,7 @@ import socketserver
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
+from typing import Optional
 import sys
 import hashlib
 import requests
@@ -133,6 +134,54 @@ _active_downloads = {}
 _downloads_lock = threading.Lock()
 IG_SESSION_DIR = Path(__file__).parent / "ig_sessions"
 IG_SESSION_DIR.mkdir(exist_ok=True)
+# Sidecar directory: holds per-publish_key result files so backend can recover
+# the upload outcome after a proxy 504 / client-side timeout. The instagrapi
+# upload itself often completes successfully even when the HTTP response is
+# never delivered to the caller; without this sidecar the backend would mark
+# the schedule failed even though the post is live on Instagram.
+IG_PUBLISH_STATE_DIR = Path(__file__).parent / "ig_publish_state"
+IG_PUBLISH_STATE_DIR.mkdir(exist_ok=True)
+
+
+def _ig_safe_key(raw: str) -> str:
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    return re.sub(r"[^A-Za-z0-9_\-]", "_", raw)[:128]
+
+
+def _ig_publish_state_path(publish_key: str) -> Optional[Path]:
+    safe = _ig_safe_key(publish_key)
+    if not safe:
+        return None
+    return IG_PUBLISH_STATE_DIR / f"{safe}.json"
+
+
+def _ig_save_publish_success(publish_key: str, payload: dict) -> None:
+    path = _ig_publish_state_path(publish_key)
+    if not path:
+        return
+    try:
+        record = dict(payload)
+        record["status"] = "success"
+        record["saved_at"] = int(time.time())
+        tmp_path = path.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(record))
+        tmp_path.replace(path)
+        logger.info(f"[Instagram] sidecar saved key={publish_key} media_id={record.get('media_id')}")
+    except Exception as exc:
+        logger.warning(f"[Instagram] sidecar write failed key={publish_key}: {exc}")
+
+
+def _ig_load_publish_success(publish_key: str) -> Optional[dict]:
+    path = _ig_publish_state_path(publish_key)
+    if not path or not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception as exc:
+        logger.warning(f"[Instagram] sidecar read failed key={publish_key}: {exc}")
+        return None
 IG_UPLOAD_BACKOFFS = (5, 15, 45)
 IG_PRE_UPLOAD_SLEEP_RANGE = (3, 8)
 IG_UPLOAD_COOLDOWN_SECONDS = int(os.environ.get("IG_UPLOAD_COOLDOWN_SECONDS", "60"))
@@ -412,7 +461,7 @@ def _ig_upload_once(cl, account_config, video_path: Path, caption: str):
     return media
 
 
-def _ig_upload_for_account(account_config, video_path: Path, caption: str):
+def _ig_upload_for_account(account_config, video_path: Path, caption: str, publish_key: str = ""):
     account = account_config["account"]
     cl = _ig_validate_or_relogin(account_config)
     last_error = None
@@ -425,7 +474,20 @@ def _ig_upload_for_account(account_config, video_path: Path, caption: str):
         try:
             media = _ig_upload_once(cl, account_config, video_path, caption)
             logger.info(f"[Instagram] final success account={account} media_id={media.pk}")
-            return {"status": "success", "account": account, "media_id": str(media.pk)}
+            media_code = getattr(media, "code", "") or ""
+            post_url = f"https://www.instagram.com/reel/{media_code}/" if media_code else ""
+            result = {
+                "status": "success",
+                "account": account,
+                "media_id": str(media.pk),
+                "media_code": media_code,
+                "post_url": post_url,
+            }
+            # Persist the success BEFORE returning so backend can recover via
+            # /instagram/upload/status if the response never reaches it.
+            if publish_key:
+                _ig_save_publish_success(publish_key, result)
+            return result
         except Exception as exc:
             error_type = _ig_classify_error(exc)
             last_error = InstagramUploadError(
@@ -1081,6 +1143,24 @@ class ParserHandler(BaseHTTPRequestHandler):
         # Routes
         if path == "/health":
             self._send_json({"status": "ok"})
+            return
+
+        # Instagram publish status sidecar lookup.
+        # GET /instagram/upload/status?publish_key=<key>
+        # Returns {"status":"success", media_id, media_code, post_url, ...} if
+        # an upload tagged with that key has previously succeeded; otherwise
+        # {"status":"unknown"}. Used by the backend to recover from proxy 504s
+        # where instagrapi succeeded but the HTTP response never made it back.
+        elif path == "/instagram/upload/status":
+            publish_key = query.get("publish_key", [""])[0].strip() or query.get("key", [""])[0].strip()
+            if not publish_key:
+                self._send_error("publish_key is required", 400)
+                return
+            existing = _ig_load_publish_success(publish_key)
+            if existing and existing.get("status") == "success":
+                self._send_json(existing)
+            else:
+                self._send_json({"status": "unknown", "publish_key": publish_key})
             return
         
         # Progress: /progress/{job_id}
@@ -2502,6 +2582,19 @@ class ParserHandler(BaseHTTPRequestHandler):
                 password = body.get("password", "")
                 video_url = body.get("video_url", "")
                 caption = body.get("caption", "")
+                publish_key = (body.get("publish_key") or query.get("publish_key", [""])[0] or "").strip()
+
+                # Idempotency: if we already published for this publish_key,
+                # return the saved success record without re-uploading.
+                if publish_key:
+                    existing = _ig_load_publish_success(publish_key)
+                    if existing and existing.get("status") == "success":
+                        logger.info(
+                            f"[Instagram] idempotent hit publish_key={publish_key} "
+                            f"media_id={existing.get('media_id')}"
+                        )
+                        self._send_json(existing)
+                        return
 
                 if not video_url:
                     self._send_error("video_url is required", 400)
@@ -2551,7 +2644,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                             f"exists={account_config['session_file'].exists()}"
                         )
                         try:
-                            result = _ig_upload_for_account(account_config, video_path, caption)
+                            result = _ig_upload_for_account(account_config, video_path, caption, publish_key=publish_key)
                             self._send_json(result)
                             return
                         except InstagramUploadError as exc:

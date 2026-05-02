@@ -450,7 +450,11 @@ func executeInstagramSchedule(
 	parserURL string,
 ) {
 	caption := fmt.Sprintf("%s\n\nKinoni profildagi bot orqali toping!\nKino Kodi: %s", schedule.MovieTitle, schedule.MovieCode)
+	log.Printf("[instagram publish] start schedule_id=%s clip=%s accounts=%v",
+		schedule.ID.Hex(), schedule.ClipID.Hex(), schedule.AccountNames)
+
 	var uploadErrors []string
+	var firstResult *services.InstagramUploadResult
 
 	for _, accountName := range schedule.AccountNames {
 		account := services.GetInstagramAccount(accountName)
@@ -458,32 +462,44 @@ func executeInstagramSchedule(
 			uploadErrors = append(uploadErrors, fmt.Sprintf("%s: account not configured", accountName))
 			continue
 		}
-		if err := services.UploadReelToInstagram(parserURL, schedule.ClipURL, caption, account); err != nil {
-			uploadErrors = append(uploadErrors, fmt.Sprintf("%s: %v", accountName, err))
+		// Per-account publish_key so each upload has its own sidecar entry.
+		publishKey := fmt.Sprintf("igs_%s_%s", schedule.ID.Hex(), accountName)
+		result, uerr := services.UploadReelToInstagram(parserURL, schedule.ClipURL, caption, publishKey, account)
+		if uerr != nil {
+			uploadErrors = append(uploadErrors, fmt.Sprintf("%s: %v", accountName, uerr))
+			continue
+		}
+		if firstResult == nil {
+			firstResult = result
 		}
 	}
 
 	ctx := context.Background()
-	if len(uploadErrors) > 0 {
-		errMsg := strings.Join(uploadErrors, "; ")
-		if err := scheduleRepo.MarkFailed(schedule.ID, errMsg); err != nil {
-			log.Printf("[IGScheduler] MarkFailed error schedule=%s: %v", schedule.ID.Hex(), err)
-		}
-		// Persist upload failure on the clip document so the clips list reflects it
-		if err := clipRepo.RecordInstagramUpload(ctx, schedule.ClipID, "failed"); err != nil {
-			log.Printf("[IGScheduler] RecordInstagramUpload(failed) error clip=%s: %v", schedule.ClipID.Hex(), err)
-		}
-		log.Printf("[IGScheduler] schedule=%s failed: %s", schedule.ID.Hex(), errMsg)
-	} else {
-		if err := scheduleRepo.MarkSuccess(schedule.ID); err != nil {
+	// Success precedence: if at least one account uploaded successfully (or was
+	// recovered via the sidecar), the schedule is completed. Per-account failures
+	// after that point are noise and must not flip the schedule to "failed".
+	if firstResult != nil {
+		if err := scheduleRepo.MarkSuccess(schedule.ID, firstResult.MediaID, firstResult.PostURL); err != nil {
 			log.Printf("[IGScheduler] MarkSuccess error schedule=%s: %v", schedule.ID.Hex(), err)
 		}
-		// Persist upload success on the clip document so the clips list reflects it after refresh
 		if err := clipRepo.RecordInstagramUpload(ctx, schedule.ClipID, "success"); err != nil {
-			log.Printf("[IGScheduler] RecordInstagramUpload(success) error clip=%s: %v", schedule.ClipID.Hex(), err)
+			log.Printf("[IGScheduler] RecordInstagramUpload(success) clip=%s: %v", schedule.ClipID.Hex(), err)
 		}
-		log.Printf("[IGScheduler] schedule=%s success", schedule.ID.Hex())
+		log.Printf("[instagram publish] success schedule_id=%s media_id=%s recovered=%v",
+			schedule.ID.Hex(), firstResult.MediaID, firstResult.Recovered)
+		return
 	}
+	errMsg := strings.Join(uploadErrors, "; ")
+	if errMsg == "" {
+		errMsg = "no accounts configured"
+	}
+	if err := scheduleRepo.MarkFailed(schedule.ID, errMsg); err != nil {
+		log.Printf("[IGScheduler] MarkFailed error schedule=%s: %v", schedule.ID.Hex(), err)
+	}
+	if err := clipRepo.RecordInstagramUpload(ctx, schedule.ClipID, "failed"); err != nil {
+		log.Printf("[IGScheduler] RecordInstagramUpload(failed) clip=%s: %v", schedule.ClipID.Hex(), err)
+	}
+	log.Printf("[instagram publish] failed schedule_id=%s reason=%s", schedule.ID.Hex(), errMsg)
 }
 
 // startPublishJobScheduler runs a background goroutine that executes due multi-platform publish jobs.
@@ -519,7 +535,7 @@ func executePublishJob(
 	job *models.PublishJob,
 	parserURL string,
 ) {
-	uploadErr := services.ExecutePlatformUpload(parserURL, job)
+	mediaID, postURL, uploadErr := services.ExecutePlatformUpload(parserURL, job)
 
 	ctx := context.Background()
 	if uploadErr != nil {
@@ -532,18 +548,18 @@ func executePublishJob(
 				log.Printf("[PublishScheduler] RecordInstagramUpload(failed) clip=%s: %v", job.ClipID.Hex(), err)
 			}
 		}
-		log.Printf("[PublishScheduler] job=%s failed: %s", job.ID.Hex(), errMsg)
-	} else {
-		if err := jobRepo.MarkSuccess(job.ID); err != nil {
-			log.Printf("[PublishScheduler] MarkSuccess error job=%s: %v", job.ID.Hex(), err)
-		}
-		if job.Platform == models.PublishPlatformInstagram {
-			if err := clipRepo.RecordInstagramUpload(ctx, job.ClipID, "success"); err != nil {
-				log.Printf("[PublishScheduler] RecordInstagramUpload(success) clip=%s: %v", job.ClipID.Hex(), err)
-			}
-		}
-		log.Printf("[PublishScheduler] job=%s success", job.ID.Hex())
+		log.Printf("[instagram publish] failed reason=%s job=%s", errMsg, job.ID.Hex())
+		return
 	}
+	if err := jobRepo.MarkSuccess(job.ID, mediaID, postURL); err != nil {
+		log.Printf("[PublishScheduler] MarkSuccess error job=%s: %v", job.ID.Hex(), err)
+	}
+	if job.Platform == models.PublishPlatformInstagram {
+		if err := clipRepo.RecordInstagramUpload(ctx, job.ClipID, "success"); err != nil {
+			log.Printf("[PublishScheduler] RecordInstagramUpload(success) clip=%s: %v", job.ClipID.Hex(), err)
+		}
+	}
+	log.Printf("[instagram publish] success job=%s platform=%s media_id=%s", job.ID.Hex(), job.Platform, mediaID)
 }
 
 // startPremiumCleanupJob runs a background goroutine that cleans up expired premium subscriptions.

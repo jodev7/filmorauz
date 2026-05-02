@@ -53,7 +53,9 @@ func (r *PublishJobRepository) RecordCompleted(job *models.PublishJob) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	now := time.Now().UTC()
-	job.ID = primitive.NewObjectID()
+	if job.ID.IsZero() {
+		job.ID = primitive.NewObjectID()
+	}
 	job.CreatedAt = now
 	job.UpdatedAt = now
 	if job.ScheduledFor.IsZero() {
@@ -129,28 +131,43 @@ func (r *PublishJobRepository) ClaimDue() (*models.PublishJob, error) {
 	return &j, nil
 }
 
-func (r *PublishJobRepository) MarkSuccess(id primitive.ObjectID) error {
+func (r *PublishJobRepository) MarkSuccess(id primitive.ObjectID, mediaID, postURL string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	now := time.Now().UTC()
-	_, err := r.col.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
-		"status":      models.PublishJobStatusSuccess,
-		"executed_at": now,
-		"updated_at":  now,
-	}})
+	set := bson.M{
+		"status":       models.PublishJobStatusSuccess,
+		"executed_at":  now,
+		"updated_at":   now,
+		"published_at": now,
+		"error":        "",
+	}
+	if mediaID != "" {
+		set["instagram_media_id"] = mediaID
+	}
+	if postURL != "" {
+		set["instagram_post_url"] = postURL
+	}
+	_, err := r.col.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": set})
 	return err
 }
 
+// MarkFailed will not overwrite a row that has already been marked success.
 func (r *PublishJobRepository) MarkFailed(id primitive.ObjectID, errMsg string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	now := time.Now().UTC()
-	_, err := r.col.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
-		"status":      models.PublishJobStatusFailed,
-		"error":       errMsg,
-		"executed_at": now,
-		"updated_at":  now,
-	}})
+	_, err := r.col.UpdateOne(ctx,
+		bson.M{"_id": id, "status": bson.M{"$ne": models.PublishJobStatusSuccess}},
+		bson.M{
+			"$set": bson.M{
+				"status":      models.PublishJobStatusFailed,
+				"error":       errMsg,
+				"executed_at": now,
+				"updated_at":  now,
+			},
+			"$inc": bson.M{"retry_count": 1},
+		})
 	return err
 }
 
