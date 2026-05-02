@@ -11,7 +11,6 @@ import {
   AlertTriangle,
   RefreshCw,
   Settings,
-  ChevronDown,
   Crown,
   Lock,
   RotateCcw,
@@ -368,11 +367,10 @@ function HLSPlayer({
   const [qualities, setQualities] = useState<QualityLevel[]>([]);
   const [selectedQuality, setSelectedQuality] = useState(-1); // -1 = Auto
   const [selectedSpeed, setSelectedSpeed] = useState(1);
-  const [showQualityMenu, setShowQualityMenu] = useState(false);
-  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [showPremiumPrompt, setShowPremiumPrompt] = useState(false);
   const [seekStep, setSeekStep] = useState(10);
-  const [showSeekStepMenu, setShowSeekStepMenu] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsPane, setSettingsPane] = useState<"root" | "quality" | "speed" | "seek">("root");
 
   // Progress hover preview
   const progressContainerRef = useRef<HTMLDivElement>(null);
@@ -437,7 +435,7 @@ function HLSPlayer({
 
   const handleSeekStepChange = useCallback((step: number) => {
     setSeekStep(step);
-    setShowSeekStepMenu(false);
+    setSettingsPane("root");
     if (typeof window !== "undefined") {
       window.localStorage.setItem(SEEK_STEP_STORAGE_KEY, String(step));
     }
@@ -626,7 +624,7 @@ function HLSPlayer({
   }, [src, isPremiumUser, shouldAutoPlay]);
 
   const handleQualityChange = useCallback((quality: QualityLevel) => {
-    setShowQualityMenu(false);
+    setSettingsPane("root");
     if (quality.locked) {
       setShowPremiumPrompt(true);
       return;
@@ -1016,6 +1014,42 @@ function HLSPlayer({
         </div>
       )}
 
+      {/* Center playback controls — YouTube-style: rewind / play / forward.
+          stopPropagation so the click doesn't fall through to the container's
+          play-toggle handler. */}
+      <div
+        className={`pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-8 sm:gap-14 transition-opacity duration-200 ${
+          showControls && !adActive ? "opacity-100" : "opacity-0"
+        }`}
+      >
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); seekBy(-seekStep); resetControlsTimer(); }}
+          className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full bg-black/45 text-white transition hover:bg-black/65 sm:h-14 sm:w-14"
+          aria-label={`Rewind ${seekStep} seconds`}
+          title={`Rewind ${seekStep}s`}
+        >
+          <RotateCcw size={24} />
+        </button>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); togglePlay(); resetControlsTimer(); }}
+          className="pointer-events-auto flex h-16 w-16 items-center justify-center rounded-full bg-black/55 text-white transition hover:bg-black/75 sm:h-20 sm:w-20"
+          aria-label={playing ? "Pause" : "Play"}
+        >
+          {playing ? <Pause size={32} fill="white" /> : <Play size={32} fill="white" className="ml-1" />}
+        </button>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); seekBy(seekStep); resetControlsTimer(); }}
+          className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full bg-black/45 text-white transition hover:bg-black/65 sm:h-14 sm:w-14"
+          aria-label={`Forward ${seekStep} seconds`}
+          title={`Forward ${seekStep}s`}
+        >
+          <RotateCw size={24} />
+        </button>
+      </div>
+
       {/* Controls overlay — transparent area passes clicks through to container toggle */}
       <div
         className={`absolute inset-0 flex flex-col justify-end transition-opacity duration-200 ${
@@ -1094,35 +1128,9 @@ function HLSPlayer({
             />
           </div>
 
-          {/* Buttons row */}
+          {/* Buttons row — clean: volume / time on the left, settings + fullscreen on the right.
+              Play/Pause and seek are in the center overlay above. */}
           <div className="flex items-center gap-3">
-            {/* Play/Pause */}
-            <button onClick={togglePlay} className="text-white hover:text-brand-red transition-colors">
-              {playing ? <Pause size={20} fill="white" /> : <Play size={20} fill="white" />}
-            </button>
-
-            {/* Rewind */}
-            <button
-              onClick={() => { seekBy(-seekStep); resetControlsTimer(); }}
-              className="flex items-center gap-0.5 text-white hover:text-brand-red transition-colors"
-              aria-label={`Rewind ${seekStep} seconds`}
-              title={`Rewind ${seekStep}s`}
-            >
-              <RotateCcw size={18} />
-              <span className="text-[10px] tabular-nums">{seekStep}s</span>
-            </button>
-
-            {/* Forward */}
-            <button
-              onClick={() => { seekBy(seekStep); resetControlsTimer(); }}
-              className="flex items-center gap-0.5 text-white hover:text-brand-red transition-colors"
-              aria-label={`Forward ${seekStep} seconds`}
-              title={`Forward ${seekStep}s`}
-            >
-              <span className="text-[10px] tabular-nums">{seekStep}s</span>
-              <RotateCw size={18} />
-            </button>
-
             {/* Volume */}
             <div className="flex items-center gap-1.5">
               <button onClick={toggleMute} className="text-white hover:text-brand-red transition-colors">
@@ -1149,89 +1157,118 @@ function HLSPlayer({
 
             <div className="flex-1" />
 
-            {/* Seek step selector */}
+            {/* Settings — single gear with submenu pattern (root → quality / speed / seek). */}
             <div className="relative">
               <button
-                onClick={() => { setShowSeekStepMenu((v) => !v); setShowSpeedMenu(false); setShowQualityMenu(false); }}
-                className="flex items-center gap-1 text-white text-xs hover:text-brand-red transition-colors"
-                title="Seek step"
+                onClick={() => {
+                  setShowSettings((v) => !v);
+                  setSettingsPane("root");
+                }}
+                className="flex items-center gap-1 text-white hover:text-brand-red transition-colors"
+                aria-label="Settings"
+                title="Settings"
               >
-                <RotateCw size={14} />
-                {seekStep}s
-                <ChevronDown size={12} />
+                <Settings size={18} />
               </button>
-              {showSeekStepMenu && (
-                <div className="absolute bottom-full right-0 mb-2 bg-black/90 border border-white/10 rounded-lg overflow-hidden text-xs min-w-[80px]">
-                  {SEEK_STEPS.map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => handleSeekStepChange(s)}
-                      className={`block w-full px-3 py-1.5 text-left hover:bg-white/10 transition-colors ${
-                        s === seekStep ? "text-brand-red font-semibold" : "text-white"
-                      }`}
-                    >
-                      {s}s
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Speed selector */}
-            <div className="relative">
-              <button
-                onClick={() => { setShowSpeedMenu((v) => !v); setShowQualityMenu(false); setShowSeekStepMenu(false); }}
-                className="flex items-center gap-1 text-white text-xs hover:text-brand-red transition-colors"
-              >
-                <Settings size={14} />
-                {selectedSpeed}x
-                <ChevronDown size={12} />
-              </button>
-              {showSpeedMenu && (
-                <div className="absolute bottom-full right-0 mb-2 bg-black/90 border border-white/10 rounded-lg overflow-hidden text-xs min-w-[80px]">
-                  {SPEEDS.map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => { setSelectedSpeed(s); setShowSpeedMenu(false); }}
-                      className={`block w-full px-3 py-1.5 text-left hover:bg-white/10 transition-colors ${
-                        s === selectedSpeed ? "text-brand-red font-semibold" : "text-white"
-                      }`}
-                    >
-                      {s}x
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Quality selector */}
-            {qualities.length > 1 && (
-              <div className="relative">
-                <button
-                  onClick={() => { setShowQualityMenu((v) => !v); setShowSpeedMenu(false); setShowSeekStepMenu(false); }}
-                  className="flex items-center gap-1 text-white text-xs hover:text-brand-red transition-colors"
-                >
-                  {qualityLabel}
-                  <ChevronDown size={12} />
-                </button>
-                {showQualityMenu && (
-                  <div className="absolute bottom-full right-0 mb-2 min-w-[140px] overflow-hidden rounded-lg border border-white/10 bg-black/90 text-xs">
-                    {qualities.map((q) => (
+              {showSettings && (
+                <div className="absolute bottom-full right-0 mb-2 min-w-[200px] overflow-hidden rounded-lg border border-white/10 bg-black/95 text-xs shadow-xl">
+                  {settingsPane === "root" && (
+                    <div className="py-1">
+                      {qualities.length > 1 && (
+                        <button
+                          onClick={() => setSettingsPane("quality")}
+                          className="flex w-full items-center justify-between px-3 py-2 text-left text-white hover:bg-white/10"
+                        >
+                          <span>Sifat</span>
+                          <span className="text-white/60">{qualityLabel}</span>
+                        </button>
+                      )}
                       <button
-                        key={q.index}
-                        onClick={() => handleQualityChange(q)}
-                        className={`flex w-full items-center justify-between px-3 py-1.5 text-left transition-colors hover:bg-white/10 ${
-                          q.index === selectedQuality ? "text-brand-red font-semibold" : "text-white"
-                        }`}
+                        onClick={() => setSettingsPane("speed")}
+                        className="flex w-full items-center justify-between px-3 py-2 text-left text-white hover:bg-white/10"
                       >
-                        <span>{q.locked ? `${q.label} 🔒 Premium` : q.label}</span>
-                        {q.locked && <Lock size={12} className="text-yellow-400" />}
+                        <span>Tezlik</span>
+                        <span className="text-white/60">{selectedSpeed}x</span>
                       </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+                      <button
+                        onClick={() => setSettingsPane("seek")}
+                        className="flex w-full items-center justify-between px-3 py-2 text-left text-white hover:bg-white/10"
+                      >
+                        <span>Olg‘a/orqa qadami</span>
+                        <span className="text-white/60">{seekStep}s</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {settingsPane === "quality" && (
+                    <div className="py-1">
+                      <button
+                        onClick={() => setSettingsPane("root")}
+                        className="block w-full px-3 py-2 text-left text-white/70 hover:bg-white/10"
+                      >
+                        ‹ Sifat
+                      </button>
+                      {qualities.map((q) => (
+                        <button
+                          key={q.index}
+                          onClick={() => handleQualityChange(q)}
+                          className={`flex w-full items-center justify-between px-3 py-1.5 text-left transition-colors hover:bg-white/10 ${
+                            q.index === selectedQuality ? "text-brand-red font-semibold" : "text-white"
+                          }`}
+                        >
+                          <span>{q.locked ? `${q.label} 🔒 Premium` : q.label}</span>
+                          {q.locked && <Lock size={12} className="text-yellow-400" />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {settingsPane === "speed" && (
+                    <div className="py-1">
+                      <button
+                        onClick={() => setSettingsPane("root")}
+                        className="block w-full px-3 py-2 text-left text-white/70 hover:bg-white/10"
+                      >
+                        ‹ Tezlik
+                      </button>
+                      {SPEEDS.map((s) => (
+                        <button
+                          key={s}
+                          onClick={() => { setSelectedSpeed(s); setSettingsPane("root"); }}
+                          className={`block w-full px-3 py-1.5 text-left hover:bg-white/10 transition-colors ${
+                            s === selectedSpeed ? "text-brand-red font-semibold" : "text-white"
+                          }`}
+                        >
+                          {s}x
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {settingsPane === "seek" && (
+                    <div className="py-1">
+                      <button
+                        onClick={() => setSettingsPane("root")}
+                        className="block w-full px-3 py-2 text-left text-white/70 hover:bg-white/10"
+                      >
+                        ‹ Olg‘a/orqa qadami
+                      </button>
+                      {SEEK_STEPS.map((s) => (
+                        <button
+                          key={s}
+                          onClick={() => handleSeekStepChange(s)}
+                          className={`block w-full px-3 py-1.5 text-left hover:bg-white/10 transition-colors ${
+                            s === seekStep ? "text-brand-red font-semibold" : "text-white"
+                          }`}
+                        >
+                          {s}s
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {/* Fullscreen */}
             <button onClick={toggleFullscreen} className="text-white hover:text-brand-red transition-colors">

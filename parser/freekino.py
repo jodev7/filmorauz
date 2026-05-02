@@ -256,19 +256,37 @@ class FreekinoParser:
         slug = slug.replace(".html", "").replace(".htm", "")
         return slug
 
-    def _normalize_content_type(self, detail_url: str) -> str:
-        from helpers import detect_content_type as _detect_ct
-        ct, _ = _detect_ct(detail_url, "freekino")
-        return "series" if ct == "serial" else "movie"
+    def _normalize_content_type(self, detail_url: str, card=None) -> str:
+        """Resolve a card to "series" | "movie" | "unknown".
 
-    def _build_result_payload(self, title: str, detail_url: str, poster_url: str, year: Any) -> Optional[Dict[str, Any]]:
+        Returning "unknown" lets the admin UI render an "Aniqlanmoqda" badge
+        and re-fetch /details before importing — preferable to confidently
+        mis-classifying a serial card as a movie because its URL slug looked
+        film-shaped.
+        """
+        from helpers import detect_content_type as _detect_ct
+        ct, _ = _detect_ct(detail_url, "freekino", soup=card)
+        if ct == "serial":
+            return "series"
+        if ct == "movie":
+            return "movie"
+        return "unknown"
+
+    def _build_result_payload(self, title: str, detail_url: str, poster_url: str, year: Any, card=None) -> Optional[Dict[str, Any]]:
         detail_url = normalize_url(self.BASE_URL, detail_url)
         source_id = self._extract_source_id(detail_url)
         if not title or not detail_url or not source_id:
             return None
 
-        content_type = self._normalize_content_type(detail_url)
-        item_type = "serial" if content_type == "series" else "movie"
+        content_type = self._normalize_content_type(detail_url, card=card)
+        # "unknown" propagates so the admin UI can render an "Aniqlanmoqda"
+        # badge and the backend can re-resolve via /details on import.
+        if content_type == "series":
+            item_type = "serial"
+        elif content_type == "movie":
+            item_type = "movie"
+        else:
+            item_type = "unknown"
         poster_url = normalize_url(self.BASE_URL, poster_url) if poster_url else ""
         year_value = str(year) if year else ""
 
@@ -546,7 +564,7 @@ class FreekinoParser:
             extracted_year = extract_year(card_text)
             year = str(extracted_year) if extracted_year else ""
 
-        result = self._build_result_payload(title=title, detail_url=link, poster_url=img, year=year)
+        result = self._build_result_payload(title=title, detail_url=link, poster_url=img, year=year, card=card)
         if result:
             result["quality"] = extract_quality(card.get_text()) if not year else ""
         return result
@@ -735,8 +753,53 @@ class FreekinoParser:
             logger.info(f"[FREEKINO] extracted url - pattern=script_fallback, count={len(entries)}, url={entries[0]['url'][:120]}")
             return entries, quality_urls
 
+        # === LAST-RESORT: scan the entire raw HTML for any absolute
+        # m3u8/mp4 URL. Some freekino pages inline the player config in
+        # comments / data-attrs / inline JSON outside <script> tags; the
+        # script-only fallback above misses those. Whatever we return here
+        # MUST be a direct media URL — never the page URL — so the worker's
+        # downloader can hand it to N_m3u8DL-RE / ffmpeg directly.
+        entries, quality_urls = self._extract_raw_html_fallback(soup, page_url or self.BASE_URL)
+        if entries:
+            logger.info(f"[FREEKINO] extracted url - pattern=raw_html, count={len(entries)}, url={entries[0]['url'][:120]}")
+            return entries, quality_urls
+
         logger.warning("[FREEKINO] script candidates found - 0")
         return [], {}
+
+    def _extract_raw_html_fallback(self, soup, base_url: str = ""):
+        """
+        Search the entire serialized HTML (not just <script> tags) for any
+        direct m3u8 or mp4 URL. Used only when every structured extractor
+        failed — guarantees we never fall back to returning the page URL as
+        video_url, since the worker would then hand an HTML page to the
+        downloader and time out.
+        """
+        try:
+            raw = str(soup)
+        except Exception:
+            return [], {}
+
+        seen: set = set()
+        entries: list = []
+        # Prefer https first (CDNs default to https); accept // protocol-relative.
+        url_pattern = re.compile(
+            r'(?:https?:)?//[A-Za-z0-9._~:/?#@!$&()*+;=%-]+?\.(?:m3u8|mp4|mpd)(?:\?[A-Za-z0-9._~:/?#@!$&()*+;=%-]*)?',
+            re.I,
+        )
+        for match in url_pattern.findall(raw):
+            entry = self._entry_from_url(match, base_url or self.BASE_URL, "auto")
+            if not entry or entry["url"] in seen:
+                continue
+            seen.add(entry["url"])
+            entries.append(entry)
+
+        quality_urls: Dict[int, str] = {}
+        for e in entries:
+            res = self._label_to_int(e.get("quality", ""))
+            if res:
+                quality_urls.setdefault(res, e["url"])
+        return entries, quality_urls
 
     def _extract_freekino_player(self, soup, base_url: str = ""):
         """
@@ -1302,7 +1365,7 @@ class FreekinoParser:
             extracted_year = extract_year(card.get_text())
             year = str(extracted_year) if extracted_year else ""
 
-        payload = self._build_result_payload(title=title, detail_url=detail_url, poster_url=poster, year=year)
+        payload = self._build_result_payload(title=title, detail_url=detail_url, poster_url=poster, year=year, card=card)
         if not payload:
             return None
 

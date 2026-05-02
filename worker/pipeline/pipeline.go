@@ -798,14 +798,21 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 // callParserDownload calls the parser /download endpoint to start download
 // Then polls /progress until download completes
 func (p *Pipeline) callParserDownload(jobID, videoURL string) (string, error) {
+	return p.callParserDownloadWithReferer(jobID, videoURL, "")
+}
+
+func (p *Pipeline) callParserDownloadWithReferer(jobID, videoURL, referer string) (string, error) {
 	jobIDCopy := jobID
-	log.Printf("[WORKER] download start — job_id=%s, url=%s", jobIDCopy, safeTruncate(videoURL, 80))
+	log.Printf("[WORKER] download start — job_id=%s, url=%s, referer=%s", jobIDCopy, safeTruncate(videoURL, 80), safeTruncate(referer, 80))
 
 	// Build download endpoint URL
 	parserEndpoint := fmt.Sprintf("%s/download", p.config.ParserURL)
 	params := url.Values{}
 	params.Set("video_url", videoURL)
 	params.Set("job_id", jobIDCopy)
+	if referer != "" {
+		params.Set("referer", referer)
+	}
 	safeName := regexp.MustCompile(`[^\w\s-]`).ReplaceAllString(jobIDCopy, "")
 	safeName = regexp.MustCompile(`[-\s]+`).ReplaceAllString(safeName, "_")
 	params.Set("output_name", safeName+".mp4")
@@ -950,14 +957,27 @@ func (p *Pipeline) callParserDownload(jobID, videoURL string) (string, error) {
 func (p *Pipeline) startDownloadAndPoll(ctx context.Context, job *models.IngestionJob) (string, error) {
 	jobID := job.ID.Hex()
 	videoURL := job.VideoURL
+	// Pass the source page as Referer — freekino/uzmovi/asilmedia CDNs reject
+	// segment requests without it. Fall back from the explicit video_page_url
+	// (set by /details) to the listing detail_url.
+	var referer string
+	if job.Metadata != nil {
+		referer = strings.TrimSpace(job.Metadata.VideoPageURL)
+	}
+	if referer == "" {
+		referer = strings.TrimSpace(job.DetailURL)
+	}
 
-	log.Printf("[WORKER] startDownloadAndPoll — job_id=%s, url=%s", jobID, safeTruncate(videoURL, 60))
+	log.Printf("[WORKER] startDownloadAndPoll — job_id=%s, url=%s, referer=%s", jobID, safeTruncate(videoURL, 60), safeTruncate(referer, 60))
 
 	// Build download endpoint URL
 	parserEndpoint := fmt.Sprintf("%s/download", p.config.ParserURL)
 	params := url.Values{}
 	params.Set("video_url", videoURL)
 	params.Set("job_id", jobID)
+	if referer != "" {
+		params.Set("referer", referer)
+	}
 	safeName := regexp.MustCompile(`[^\w\s-]`).ReplaceAllString(jobID, "")
 	safeName = regexp.MustCompile(`[-\s]+`).ReplaceAllString(safeName, "_")
 	params.Set("output_name", safeName+".mp4")
@@ -1018,11 +1038,15 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 	jobID := job.ID.Hex()
 
 	const (
-		// Hard ceiling reduced from 7200s for testing — the watchdog should
-		// catch stuck downloads long before this fires.
-		maxPollSeconds        = 900
-		pollInterval          = 1 * time.Second
-		noProgressTimeout     = 60 * time.Second
+		// Hard ceiling: 2 hours. Long-form HLS downloads (films) frequently take
+		// 30–60 minutes; the no-progress watchdog catches actual stalls so this
+		// is just a final safety net.
+		maxPollSeconds = 7200
+		pollInterval   = 1 * time.Second
+		// Only consider the download stalled if the parser stops advancing
+		// downloaded_bytes for 5 minutes. Shorter windows were tripping mid-
+		// download on slow segments and recycling the job in a loop.
+		noProgressTimeout     = 5 * time.Minute
 		consecutiveErrorLimit = 5
 	)
 

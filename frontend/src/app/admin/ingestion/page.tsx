@@ -746,12 +746,17 @@ function CatalogTab({
     setError("");
     
     try {
+      // Send empty type when parser flagged it "unknown" so the backend re-
+      // detects via /details (which fetches the page and runs the strong
+      // soup heuristics) instead of refusing the import.
+      const rawType = (item.type || "").toLowerCase();
+      const importType = (rawType === "movie" || rawType === "serial" || rawType === "series") ? rawType : "";
       await importFromCatalog(token, {
         source: source.id,
         source_id: item.source_id,
         detail_url: item.detail_url,
         title: item.title,
-        type: item.type as "movie" | "serial",
+        type: importType as "movie" | "serial",
       });
       onImportSuccess();
     } catch (err) {
@@ -768,14 +773,16 @@ function CatalogTab({
     setError("");
     
     try {
+      // Pass detected type from search; if the parser flagged it "unknown"
+      // or left it blank, send empty so the backend re-detects via /details.
+      const rawType = (((result as any).type || (result as any).content_type || "") + "").toLowerCase();
+      const importType = (rawType === "movie" || rawType === "serial" || rawType === "series") ? rawType : "";
       await importFromCatalog(token, {
         source: result.source,
         source_id: result.source_id,
         detail_url: result.detail_url,
         title: result.title,
-        // Pass detected type from search; if the parser couldn't classify,
-        // leave empty so backend re-detects via /details and rejects unknown.
-        type: ((result as any).type || (result as any).content_type || "") as "movie" | "serial",
+        type: importType as "movie" | "serial",
       });
       onImportSuccess();
     } catch (err) {
@@ -947,7 +954,10 @@ function CatalogTab({
                         if (t === "movie") {
                           return <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-600 text-white">Movie</span>;
                         }
-                        return <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-600 text-white">Unknown</span>;
+                        // Parser couldn't classify — show "Aniqlanmoqda" so the
+                        // operator knows the import will trigger a /details
+                        // re-fetch to determine movie vs serial.
+                        return <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-600 text-white">Aniqlanmoqda</span>;
                       })()}
                     </div>
                     <button
@@ -1016,15 +1026,28 @@ function CatalogTab({
                     </div>
                   )}
                   {/* Type badge */}
-                  <div className={`absolute top-2 right-2 px-2 py-0.5 rounded text-xs font-medium ${
-                    item.type === "serial" ? "bg-blue-600 text-white" : "bg-green-600 text-white"
-                  }`}>
-                    {item.type === "serial" ? (
-                      <span className="flex items-center gap-1"><Tv className="w-3 h-3" /> Serial</span>
-                    ) : (
-                      <span className="flex items-center gap-1"><Film className="w-3 h-3" /> Movie</span>
-                    )}
-                  </div>
+                  {(() => {
+                    const t = (item.type || "").toLowerCase();
+                    if (t === "serial" || t === "series") {
+                      return (
+                        <div className="absolute top-2 right-2 px-2 py-0.5 rounded text-xs font-medium bg-blue-600 text-white">
+                          <span className="flex items-center gap-1"><Tv className="w-3 h-3" /> Serial</span>
+                        </div>
+                      );
+                    }
+                    if (t === "movie") {
+                      return (
+                        <div className="absolute top-2 right-2 px-2 py-0.5 rounded text-xs font-medium bg-green-600 text-white">
+                          <span className="flex items-center gap-1"><Film className="w-3 h-3" /> Movie</span>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="absolute top-2 right-2 px-2 py-0.5 rounded text-xs font-medium bg-amber-600 text-white">
+                        <span>Aniqlanmoqda</span>
+                      </div>
+                    );
+                  })()}
                 </div>
                 <div className="p-3">
                   <h3 className="font-semibold text-white text-sm line-clamp-2">{item.title}</h3>

@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 
 _EP_HREF_RE = re.compile(r"/episode/(\d+)/(\d+)\.html", re.IGNORECASE)
 _FILE_RE = re.compile(r'file\s*:\s*["\']([^"\']+)["\']', re.IGNORECASE)
+# Episode-button text patterns used by uzmovi's "Qismlardan tanlash" grid.
+# We use these to count the maximum episode number the page advertises so we
+# can detect under-extraction (e.g. parser saw 77 but page lists 90 buttons).
+_EP_LABEL_RE = re.compile(r"(\d{1,3})\s*-\s*qism", re.IGNORECASE)
+_EP_DATA_ATTR_RE = re.compile(r'\bdata-(?:episode|qism|number)\s*=\s*["\']?(\d{1,3})', re.IGNORECASE)
 
 
 def _text(el) -> str:
@@ -69,10 +74,17 @@ class UzmoviSerialParser:
 
         year = _extract_year(title) or _extract_year(resp.text[:4000])
 
-        # Collect episode links, picking a single group_id (first seen) so we
-        # don't double-count translation variants.
-        chosen_group: Optional[str] = None
-        per_episode: Dict[int, Dict] = {}
+        # Collect every /episode/<group>/<n>.html link on the page. Uzmovi
+        # frequently splits a long-running series across multiple translation
+        # groups (e.g. group A covers 1–77, group B covers 78–90); the old
+        # "first group wins" rule silently dropped everything from later
+        # groups, which is exactly the Dexter 90→77 symptom.
+        #
+        # New strategy: merge by episode_number across all groups. Per
+        # episode_number, prefer the group_id that has the highest episode
+        # coverage so we keep the canonical run intact while still picking
+        # up tail episodes from a secondary group.
+        per_group: Dict[str, Dict[int, Dict]] = {}
 
         for a in soup.find_all("a", href=True):
             href = a["href"]
@@ -80,29 +92,85 @@ class UzmoviSerialParser:
             if not m:
                 continue
             group_id, ep_no = m.group(1), int(m.group(2))
-            if chosen_group is None:
-                chosen_group = group_id
-                logger.info(f"[UZMOVI SERIAL] chose translation group_id={group_id}")
-            if group_id != chosen_group:
-                continue
             full = href if href.startswith("http") else f"{self.base_url.rstrip('/')}{href}"
-            if ep_no in per_episode:
-                continue
-            per_episode[ep_no] = {
+            group_map = per_group.setdefault(group_id, {})
+            if ep_no in group_map:
+                continue  # duplicate within the same group — drop, but
+                # NEVER drop just because another group also has this number.
+            group_map[ep_no] = {
                 "episode": ep_no,
                 "season": 1,
                 "title": a.get_text(strip=True) or f"{ep_no}-qism",
                 "episode_url": full,
+                "_group_id": group_id,
             }
 
+        # Sort groups by coverage size desc, then merge: the largest group
+        # provides the baseline; smaller groups fill any gaps it has.
+        sorted_groups = sorted(per_group.items(), key=lambda kv: len(kv[1]), reverse=True)
+        per_episode: Dict[int, Dict] = {}
+        for gid, gmap in sorted_groups:
+            added = 0
+            for ep_no, entry in gmap.items():
+                if ep_no in per_episode:
+                    continue
+                per_episode[ep_no] = entry
+                added += 1
+            logger.info(
+                f"[UZMOVI SERIAL] translation group_id={gid} contributes={added} total_in_group={len(gmap)}"
+            )
+
+        # Sanity-check against episode-button labels on the page. If the page
+        # advertises "90-qism" anywhere but we only found 77 hrefs, something
+        # is hiding behind JS / a collapsed tab — fall back to a raw-HTML
+        # scan to surface those numbers (without a URL we can't fetch them,
+        # but logging it loud beats silently shipping a 77-episode import).
+        max_label_no = 0
+        try:
+            for el in soup.find_all(True):
+                t = el.get_text(" ", strip=True)
+                for mm in _EP_LABEL_RE.finditer(t or ""):
+                    n = int(mm.group(1))
+                    if 0 < n < 1000 and n > max_label_no:
+                        max_label_no = n
+                for attr in ("data-episode", "data-qism", "data-number", "data-id"):
+                    val = el.get(attr) if hasattr(el, "get") else None
+                    if val and str(val).isdigit():
+                        n = int(val)
+                        if 0 < n < 1000 and n > max_label_no:
+                            max_label_no = n
+        except Exception:
+            pass
+
+        if not per_episode and max_label_no == 0:
+            # Last-ditch: regex over the raw HTML for "N-qism" labels that
+            # weren't inside <a> elements (collapsed accordions, JS-rendered
+            # buttons serialised in inline scripts, etc.).
+            for mm in _EP_LABEL_RE.finditer(resp.text or ""):
+                n = int(mm.group(1))
+                if 0 < n < 1000 and n > max_label_no:
+                    max_label_no = n
+
         ep_nos = sorted(per_episode.keys())
-        logger.info(f"[UZMOVI SERIAL] title={title!r} episodes_found={len(ep_nos)}")
+        max_parsed_no = ep_nos[-1] if ep_nos else 0
+        logger.info(
+            f"[UZMOVI SERIAL] title={title!r} episodes_found={len(ep_nos)} "
+            f"max_parsed={max_parsed_no} max_label_seen={max_label_no} groups={len(per_group)}"
+        )
+
+        if max_label_no and (len(ep_nos) < max_label_no or max_parsed_no < max_label_no):
+            logger.warning(
+                f"[UZMOVI SERIAL] under-extraction detected: page advertises up to "
+                f"{max_label_no}-qism but parser found {len(ep_nos)} episodes "
+                f"(max number {max_parsed_no}); check translation groups / hidden tabs"
+            )
 
         if not ep_nos:
             return {
                 "success": False,
                 "error": "no episodes found on serial page",
                 "provider": "uzmovi",
+                "max_label_no": max_label_no,
             }
 
         episodes: List[Dict] = []
@@ -119,6 +187,7 @@ class UzmoviSerialParser:
                 )
             entry["video_url"] = video_url
             entry["poster"] = poster
+            entry.pop("_group_id", None)  # internal; don't ship to API consumers
             episodes.append(entry)
 
         resolved = sum(1 for ep in episodes if ep["video_url"])

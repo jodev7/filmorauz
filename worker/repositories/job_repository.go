@@ -722,21 +722,39 @@ var activeIngestionStatuses = []interface{}{
 }
 
 func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
+	// Processing/uploading watchdog stays at the historical 180 min — those
+	// stages don't update last_progress_at and are dominated by ffmpeg runs
+	// that legitimately take a long time.
 	staleThreshold := 180 * time.Minute
 	staleCutoff := time.Now().Add(-staleThreshold)
+	// Downloads have their own per-byte heartbeat (last_progress_at). Only
+	// recycle a downloading job if the parser has not reported any byte
+	// progress in the last 5 minutes — otherwise an actively-downloading job
+	// can get yanked back to queue and loop forever.
+	downloadStaleThreshold := 5 * time.Minute
+	downloadStaleCutoff := time.Now().Add(-downloadStaleThreshold)
 	now := time.Now()
 	totalRecovered := int64(0)
 
+	// Match downloading jobs that either never reported progress (no
+	// last_progress_at field) and were last updated > download stale window
+	// ago, OR have a last_progress_at older than the window.
 	downloadResult, err := r.collection.UpdateMany(ctx, bson.M{
-		"status":     models.IngestionStatusDownloading,
-		"updated_at": bson.M{"$lt": staleCutoff},
+		"status": models.IngestionStatusDownloading,
+		"$or": []bson.M{
+			{"last_progress_at": bson.M{"$lt": downloadStaleCutoff}},
+			{
+				"last_progress_at": bson.M{"$exists": false},
+				"updated_at":       bson.M{"$lt": downloadStaleCutoff},
+			},
+		},
 	}, bson.M{
 		"$set": bson.M{
 			"status":     models.IngestionStatusQueued,
 			"stage":      "queued",
 			"progress":   0,
 			"updated_at": now,
-			"error":      "Recovered stale download job after timeout; returned to queue automatically",
+			"error":      "Recovered stale download job after no progress for 5 minutes; returned to queue automatically",
 		},
 		"$unset": bson.M{
 			"completed_at": "",

@@ -432,9 +432,16 @@ class AsilmediaParser(BaseParser):
             from helpers import detect_content_type as _detect_ct
             new_results = []
             for r in dict_results:
-                ct, reason = _detect_ct(r["link"], "asilmedia")
-                if ct == "unknown":
-                    ct = "movie"
+                # Synthesize a tiny soup from title+description so the strong
+                # keyword scanner ("serial", "fasl", "barcha qismlar", N-qism)
+                # can fire even though we don't have the full DOM card here.
+                try:
+                    from bs4 import BeautifulSoup as _BS
+                    sniff_html = (r.get("title") or "") + " \n " + (r.get("description") or "")
+                    sniff_soup = _BS(f"<div>{sniff_html}</div>", "lxml")
+                except Exception:
+                    sniff_soup = None
+                ct, reason = _detect_ct(r["link"], "asilmedia", soup=sniff_soup)
                 logger.info(f"[SEARCH] source=asilmedia result={r['link'][:80]} content_type={ct} reason={reason}")
                 new_results.append(SearchResult(
                     title=r["title"], year=r["year"], poster=r["poster"],
@@ -520,9 +527,10 @@ class AsilmediaParser(BaseParser):
                         break
         
         from helpers import detect_content_type as _detect_ct
-        ct, reason = _detect_ct(detail_url, "asilmedia")
-        if ct == "unknown":
-            ct = "movie"
+        # Pass the card itself as soup so strong serial signals (badges like
+        # "1-3 fasllar to'liq", "barcha qismlar", season buttons) can flip
+        # an asilmedia /films/<sub>/ URL away from a wrong "movie" verdict.
+        ct, reason = _detect_ct(detail_url, "asilmedia", soup=card)
         logger.info(f"[SEARCH] source=asilmedia result={detail_url[:80]} content_type={ct} reason={reason}")
 
         return SearchResult(
@@ -746,11 +754,92 @@ class AsilmediaParser(BaseParser):
             type=ct
         )
     
+    @staticmethod
+    def _sanitize_video_url(raw_url: str) -> str:
+        """Percent-encode the path/query of a URL while leaving the scheme,
+        host, and existing percent-escapes intact.
+
+        Asilmedia detail pages occasionally embed download links with the
+        original filename (spaces, apostrophes, Cyrillic, parentheses) inlined
+        unencoded — e.g. ``https://fayllar1.ru/.../Interstellar 1080p O'zbek
+        tilida (asilmedia.net).mp4``. Returning that string verbatim makes the
+        worker's downloader hit a malformed URL or 404. Encoding the path
+        produces a URL the CDN actually serves.
+        """
+        if not raw_url:
+            return ""
+        try:
+            from urllib.parse import urlsplit, urlunsplit, quote
+        except Exception:
+            return raw_url
+        try:
+            parts = urlsplit(raw_url.strip())
+        except Exception:
+            return raw_url
+        if not parts.scheme or not parts.netloc:
+            return raw_url
+        # safe="/%" preserves slash separators and existing %XX escapes so
+        # already-encoded URLs aren't double-encoded.
+        safe_path = quote(parts.path, safe="/%:@!$&()*+,;=~-._")
+        safe_query = quote(parts.query, safe="=&%:@!$()*+,;~-._/?") if parts.query else ""
+        return urlunsplit((parts.scheme, parts.netloc, safe_path, safe_query, parts.fragment))
+
+    def _validate_video_url(self, url: str, referer: str = "") -> bool:
+        """Probe a candidate video URL with HEAD (then a 1-byte ranged GET as
+        fallback — many CDNs reject HEAD). Returns True iff the origin
+        actually serves the bytes (200/206), so we only hand the worker URLs
+        that aren't fakes/404s.
+        """
+        if not url or not url.lower().startswith(("http://", "https://")):
+            return False
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Referer": referer or self.BASE_URL + "/",
+        }
+        # m3u8 manifests must contain #EXTM3U; a 200 with HTML body is a fake.
+        is_manifest = ".m3u8" in url.lower()
+        try:
+            try:
+                r = self.session.head(url, headers=headers, timeout=10, allow_redirects=True)
+            except Exception:
+                r = None
+            if r is not None and r.status_code in (200, 206):
+                if is_manifest:
+                    # HEAD on m3u8 doesn't tell us the body — fall through to GET.
+                    pass
+                else:
+                    return True
+            # Fallback: tiny ranged GET. Works around HEAD-blocking CDNs and
+            # gives us the first bytes for manifest sniffing.
+            r = self.session.get(
+                url,
+                headers={**headers, "Range": "bytes=0-2047"},
+                timeout=12,
+                stream=True,
+                allow_redirects=True,
+            )
+            try:
+                if r.status_code not in (200, 206):
+                    return False
+                if is_manifest:
+                    chunk = next(r.iter_content(chunk_size=2048), b"") or b""
+                    return chunk.lstrip().startswith(b"#EXTM3U")
+                return True
+            finally:
+                try:
+                    r.close()
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.info(f"[ASILMEDIA] validation probe failed url={url[:80]} err={exc}")
+            return False
+
     def _extract_video_urls(self, soup, page_url: str) -> List[Dict[str, str]]:
         """
         Extract video URLs from the detail page.
         This is critical - we need to get actual video URLs, not iframe URLs.
-        
+
         Enhanced to detect and extract quality-labeled download/watch links from the page.
         """
         video_urls = []
@@ -825,15 +914,44 @@ class AsilmediaParser(BaseParser):
             script_videos = self._extract_video_from_scripts(soup, page_url)
             video_urls.extend(script_videos)
         
+        # Sanitize: percent-encode paths so URLs with spaces/apostrophes/parens
+        # — common in Asilmedia's download links built from the movie title —
+        # become RFC-valid. Drop entries that still look like obvious fakes
+        # (plain page slugs, no extension).
+        for v in video_urls:
+            if v.get("url"):
+                v["url"] = self._sanitize_video_url(v["url"])
+
         # Deduplicate
         seen = set()
         unique = []
         for v in video_urls:
-            if v["url"] not in seen and v["url"]:
+            if v["url"] and v["url"] not in seen:
                 seen.add(v["url"])
                 unique.append(v)
-        
-        return unique
+
+        # Validate against the origin so callers never see a URL that 404s.
+        # We probe in best-quality-first order and stop after the first
+        # validated entry per origin — failed entries are dropped, not
+        # retried by the worker. If everything fails, return [] so get_detail
+        # surfaces "real video URL not found" instead of handing the worker a
+        # broken link.
+        validated: List[Dict[str, str]] = []
+        for v in unique:
+            url = v.get("url", "")
+            if not url:
+                continue
+            if self._validate_video_url(url, referer=page_url):
+                validated.append(v)
+            else:
+                logger.warning(f"[ASILMEDIA] dropping unreachable video URL quality={v.get('quality','?')} url={url[:120]}")
+
+        if not validated and unique:
+            logger.error(
+                f"[ASILMEDIA] all {len(unique)} extracted video URLs failed validation — page={page_url}"
+            )
+
+        return validated
     
     def _extract_quality_links(self, soup, page_url: str) -> tuple[List[Dict[str, str]], dict]:
         """

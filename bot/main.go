@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/filmorauz/bot/config"
@@ -18,7 +19,20 @@ import (
 const (
 	premiumExtendPrefix = "premium_extend:"
 	premiumCancelPrefix = "premium_cancel:"
+
+	pendingInvoiceTTL          = 10 * time.Minute
+	pendingInvoiceCleanupEvery = 30 * time.Second
 )
+
+// pendingInvoice tracks the messages we sent for a premium Stars purchase
+// session so we can clean them up after payment success or expiry.
+type pendingInvoice struct {
+	chatID    int64
+	userID    int64
+	msgIDs    []int
+	createdAt time.Time
+	resolved  bool // true once paid or expired — cleanup is idempotent
+}
 
 // Bot represents the Telegram bot
 type Bot struct {
@@ -28,6 +42,9 @@ type Bot struct {
 	authClient          *services.AuthClient
 	premiumClient       *services.PremiumClient
 	httpClient          *http.Client
+
+	pendingMu       sync.Mutex
+	pendingInvoices map[string]*pendingInvoice
 }
 
 // MovieCodeResponse represents the response from backend API
@@ -118,6 +135,7 @@ func main() {
 	log.Printf("Bot started as @%s", bot.api.Self.UserName)
 
 	// Start polling for updates
+	go bot.startPendingInvoiceJanitor()
 	bot.startPolling()
 }
 
@@ -153,6 +171,7 @@ func NewBot(cfg *config.Config) (*Bot, error) {
 		authClient:          authClient,
 		premiumClient:       premiumClient,
 		httpClient:          &http.Client{Timeout: 10 * time.Second},
+		pendingInvoices:     make(map[string]*pendingInvoice),
 	}, nil
 }
 
@@ -864,6 +883,123 @@ func (b *Bot) sendMessage(chatID int64, text string) {
 	b.api.Send(msg)
 }
 
+// sendMessageReturn sends a text message and returns the resulting message
+// (or nil if Telegram rejected it). Used when we need the message ID later.
+func (b *Bot) sendMessageReturn(chatID int64, text string) *tgbotapi.Message {
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = "HTML"
+	sent, err := b.api.Send(msg)
+	if err != nil {
+		log.Printf("[PREMIUM] sendMessage failed chat=%d err=%v", chatID, err)
+		return nil
+	}
+	return &sent
+}
+
+func (b *Bot) sendMessageWithURLButtonReturn(chatID int64, text, buttonText, url string) *tgbotapi.Message {
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = "HTML"
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonURL(buttonText, url),
+		),
+	)
+	sent, err := b.api.Send(msg)
+	if err != nil {
+		log.Printf("[PREMIUM] sendMessageWithURLButton failed chat=%d err=%v", chatID, err)
+		return nil
+	}
+	return &sent
+}
+
+// trackInvoiceMessage records a message ID under the given session token so the
+// janitor / payment handler can later delete it. Safe to call with id<=0.
+func (b *Bot) trackInvoiceMessage(token string, chatID, userID int64, messageID int) {
+	if token == "" || messageID <= 0 {
+		return
+	}
+	b.pendingMu.Lock()
+	defer b.pendingMu.Unlock()
+	pi, ok := b.pendingInvoices[token]
+	if !ok {
+		pi = &pendingInvoice{
+			chatID:    chatID,
+			userID:    userID,
+			createdAt: time.Now(),
+		}
+		b.pendingInvoices[token] = pi
+	}
+	pi.msgIDs = append(pi.msgIDs, messageID)
+}
+
+// claimPendingInvoice atomically pulls a session out of the pending map so that
+// only one caller cleans it up. Returns nil if it was already resolved/missing.
+func (b *Bot) claimPendingInvoice(token string) *pendingInvoice {
+	b.pendingMu.Lock()
+	defer b.pendingMu.Unlock()
+	pi, ok := b.pendingInvoices[token]
+	if !ok || pi.resolved {
+		return nil
+	}
+	pi.resolved = true
+	delete(b.pendingInvoices, token)
+	return pi
+}
+
+// deleteInvoiceMessages removes the tracked invoice/info messages from the chat.
+// Errors are logged but never block the caller — Telegram returns errors for
+// already-deleted or too-old messages and we don't want to surface those.
+func (b *Bot) deleteInvoiceMessages(pi *pendingInvoice) {
+	if pi == nil {
+		return
+	}
+	for _, id := range pi.msgIDs {
+		if _, err := b.api.Request(tgbotapi.NewDeleteMessage(pi.chatID, id)); err != nil {
+			log.Printf("[PREMIUM] deleteMessage chat=%d msg=%d failed: %v", pi.chatID, id, err)
+		}
+	}
+}
+
+// startPendingInvoiceJanitor expires Stars purchase sessions that the user
+// never paid within pendingInvoiceTTL: deletes their invoice messages, cancels
+// the backend session, and posts a single expiry notice.
+func (b *Bot) startPendingInvoiceJanitor() {
+	ticker := time.NewTicker(pendingInvoiceCleanupEvery)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now()
+		var expired []*pendingInvoice
+		var expiredTokens []string
+		b.pendingMu.Lock()
+		for token, pi := range b.pendingInvoices {
+			if pi.resolved {
+				continue
+			}
+			if now.Sub(pi.createdAt) >= pendingInvoiceTTL {
+				pi.resolved = true
+				expired = append(expired, pi)
+				expiredTokens = append(expiredTokens, token)
+			}
+		}
+		for _, t := range expiredTokens {
+			delete(b.pendingInvoices, t)
+		}
+		b.pendingMu.Unlock()
+
+		for i, pi := range expired {
+			token := expiredTokens[i]
+			log.Printf("[PREMIUM] invoice session expired token=%s user=%d", token, pi.userID)
+			b.deleteInvoiceMessages(pi)
+			if b.config.BotInternalToken != "" {
+				if _, _, err := b.premiumClient.CancelStarsSession(services.CancelStarsSessionRequest{Token: token}); err != nil {
+					log.Printf("[PREMIUM] CancelStarsSession on expiry failed token=%s err=%v", token, err)
+				}
+			}
+			b.sendMessage(pi.chatID, "To‘lov muddati tugadi. Qayta urinib ko‘ring.")
+		}
+	}
+}
+
 func (b *Bot) sendMessageWithURLButton(chatID int64, text, buttonText, url string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ParseMode = "HTML"
@@ -1033,7 +1169,9 @@ func (b *Bot) handlePremiumInvoiceSend(chatID int64, userID int64, sessionToken 
 		"⭐ <b>FilmoraUz Premium — %s</b>\n\nNarx: <b>%d Stars</b>\nMuddat: <b>%d oy</b>\n\nTo'lovni amalga oshirish uchun pastdagi tugmani bosing.",
 		sessionResp.Label, sessionResp.StarsPrice, sessionResp.DurationMonths,
 	)
-	b.sendMessage(chatID, intro)
+	if introMsg := b.sendMessageReturn(chatID, intro); introMsg != nil {
+		b.trackInvoiceMessage(sessionToken, chatID, userID, introMsg.MessageID)
+	}
 
 	// Telegram Stars: empty provider token + currency "XTR".
 	// For XTR, amount equals the raw star count (NOT multiplied by 100).
@@ -1089,11 +1227,28 @@ func (b *Bot) handlePremiumInvoiceSend(chatID int64, userID int64, sessionToken 
 		return
 	}
 	log.Printf("[PREMIUM] sendInvoice OK user=%d token=%s pkg=%s request_json=%s response_body=%s", userID, sessionToken, sessionResp.Package, string(requestJSON), mustMarshalJSON(resp))
-	b.sendPremiumAdminFallback(chatID,
+
+	// Capture the invoice message_id from sendInvoice response so we can delete
+	// the "Pay 100 Stars" button after success or expiry.
+	if resp != nil && len(resp.Result) > 0 {
+		var invoiceMsg tgbotapi.Message
+		if err := json.Unmarshal(resp.Result, &invoiceMsg); err == nil && invoiceMsg.MessageID > 0 {
+			b.trackInvoiceMessage(sessionToken, chatID, userID, invoiceMsg.MessageID)
+		} else if err != nil {
+			log.Printf("[PREMIUM] invoice message_id parse failed token=%s err=%v", sessionToken, err)
+		}
+	}
+
+	if fallbackMsg := b.sendMessageWithURLButtonReturn(chatID,
 		"ℹ️ Telegram Stars to'lovi Telegram mobil ilovasida yaxshiroq ishlaydi.\n\n"+
 			"Agar checkout ochilib, lekin to'lov ishlamasa, Telegram Stars to‘lovi hozircha sizning hisobingizda ishlamadi.\n\n"+
 			"To‘lov amalga oshmasa, premium faollashtirilmaydi.\n\n"+
-			"Agar Stars to‘lovi ishlamasa, admin orqali premium olishingiz mumkin.")
+			"Agar Stars to‘lovi ishlamasa, admin orqali premium olishingiz mumkin.",
+		"Admin orqali premium olish",
+		"https://t.me/filmorauznet?direct",
+	); fallbackMsg != nil {
+		b.trackInvoiceMessage(sessionToken, chatID, userID, fallbackMsg.MessageID)
+	}
 }
 
 // handlePreCheckout approves all incoming pre-checkout queries.
@@ -1133,6 +1288,15 @@ func (b *Bot) handleSuccessfulPayment(msg *tgbotapi.Message) {
 		return
 	}
 	sessionToken := parts[1]
+
+	// Best-effort cleanup of the package info / invoice / fallback messages we
+	// sent earlier for this session. Idempotent: claimPendingInvoice removes
+	// the entry so a duplicate successful_payment cannot re-delete the success
+	// message we are about to send.
+	if pi := b.claimPendingInvoice(sessionToken); pi != nil {
+		b.deleteInvoiceMessages(pi)
+	}
+
 	if sp.Currency != "XTR" {
 		log.Printf("[PREMIUM] Unexpected currency: %s", sp.Currency)
 		// Still attempt grant — backend is the source of truth — but log loudly.

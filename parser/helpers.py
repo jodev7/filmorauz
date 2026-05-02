@@ -281,94 +281,118 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
     Returns: (content_type, reason) where content_type is "movie" | "serial" | "unknown"
     and reason is a short string explaining the decision (used in logs).
 
-    Order:
-      1) URL pattern (cheap, reliable for our 3 sources).
-      2) DOM/soup hints if a soup is supplied (seasons/episodes blocks).
+    Priority (soup signals beat URL — URLs lie, especially Asilmedia's generic
+    /films/<category>/ which buckets serials under a film-y looking path):
+      1) Strong soup signals — single hit on an explicit serial keyword
+         ("fasl", "mavsum", "barcha qismlar", "N-qism", "N-fasl", "season N",
+         "episode N", "сериал", ...) OR a season/episode DOM block.
+      2) URL pattern (only used when soup gave nothing).
+
+    Returning "unknown" is intentional — the caller (parser card extractor or
+    backend /import handler) can decide to show "Aniqlanmoqda" in the badge or
+    re-fetch /details before committing to a movie/serial pipeline.
     """
+    import re as _re
+
     u = (url or "").lower()
     src = (source or "").lower()
 
-    # Source-specific URL patterns. Be explicit per source to avoid false positives.
-    if src == "uzmovi":
-        # Serials: /serialar/, /serial/, /seriallar/, /uzbek-serial/, /turk-serial/, etc.
-        if any(seg in u for seg in (
-            "/serialar/", "/seriallar/", "/serial/", "/uzbek-serial",
-            "/turk-serial", "/korea-serial", "/koreya-serial", "/hind-serial",
-            "/yapon-serial", "/multserial",
-        )):
-            return ("serial", "uzmovi url path matches serial segment")
-        # Movies: /tarjima-kinolar/, /kinolar/, /film/
-        if any(seg in u for seg in (
-            "/tarjima-kinolar/", "/tarjima-kino", "/kinolar/", "/film/",
-            "/uzbek-kino", "/hind-kino", "/turk-kino", "/multfilm",
-        )):
-            return ("movie", "uzmovi url path matches movie segment")
-
-    elif src == "freekino":
-        # /serial/<id>-... → serial. /movie/<id>-... or /film/ → movie.
-        if "/serial/" in u or "/seriallar" in u:
-            return ("serial", "freekino url contains /serial/")
-        if "/movie/" in u or "/film/" in u:
-            return ("movie", "freekino url contains /movie/ or /film/")
-
-    elif src == "asilmedia":
-        # asilmedia.org uses /films/<category>/<id>-...html for everything,
-        # but category slug carries the type: /films/seriallar/, /serial/.
-        if any(seg in u for seg in (
-            "/seriallar/", "/serial/", "/uzbek-seriallar", "/hind-seriallar",
-            "/turk-seriallar", "/korea-seriallar", "/multseriallar",
-        )):
-            return ("serial", "asilmedia url path contains serial category")
-        if any(seg in u for seg in (
-            "/kinolar/", "/film/", "/films/", "/multfilmlar/",
-            "/uzbek-kinolari", "/hind-kinolari", "/turk-kinolari",
-        )):
-            # Films category is the generic listing — fall through to soup
-            # if nothing else gives us a stronger signal below.
-            url_hint = ("movie", "asilmedia url path matches movie category")
-        else:
-            url_hint = None
-    else:
-        url_hint = None
-
-    if 'url_hint' not in locals():
-        url_hint = None
-
-    # Page/DOM heuristics (only if soup supplied)
+    # ── Soup signals first ────────────────────────────────────────────────
     if soup is not None:
         try:
             text_lower = soup.get_text(" ", strip=True).lower() if soup else ""
         except Exception:
             text_lower = ""
 
-        # Strong serial signals: explicit episode/season blocks or playerjs
-        # multi-file lists labeled "Episode N" / "Qism N" / "Seriya N".
-        serial_dom_signals = [
-            "qism", "qismi", "qisim",            # uz "episode"
-            "серия", "серии", "сезон",           # ru "episode/season"
-            "epizod", "episode", "season",
-        ]
         if text_lower:
-            hits = [s for s in serial_dom_signals if s in text_lower]
-            # require at least 2 distinct signals (e.g. "qism" and "sezon"),
-            # OR a single very explicit one combined with a list of episodes
-            if len(hits) >= 2:
-                return ("serial", f"page text mentions serial signals: {hits[:3]}")
+            # Strong single-hit serial keywords. Hitting any of these means
+            # the page is talking about episodes/seasons explicitly.
+            strong_keywords = (
+                "barcha qismlar", "barcha qismlari",
+                "qismlardan tanlash", "qismlar to'liq", "qismlar to`liq",
+                "fasl", "mavsum",            # uz "season"
+                "сезон", "сериал", "серии",  # ru
+                "seriallar",
+                "season ", "episode ", "episodes ",
+            )
+            hit = next((kw for kw in strong_keywords if kw in text_lower), None)
+            if hit:
+                return ("serial", f"page text strong serial keyword: {hit!r}")
 
-        # Episode/season DOM blocks
-        for sel in (
-            ".series-list", ".episodes", ".episode-list", ".seasons", ".season-list",
-            "[class*='episode']", "[class*='season']",
-            "ul.serii", "ol.episodes",
-        ):
+            # "1-qism", "2-qism", "1-fasl", "1-mavsum", "season 2", "episode 7"
+            episode_patterns = (
+                r'\b\d+\s*-\s*qism\b',
+                r'\b\d+\s*-\s*fasl\b',
+                r'\b\d+\s*-\s*mavsum\b',
+                r'\bseason\s+\d+\b',
+                r'\bepisode\s+\d+\b',
+                r'\bseriya\s+\d+\b',
+                r'\bсерия\s+\d+\b',
+            )
+            for pat in episode_patterns:
+                if _re.search(pat, text_lower):
+                    return ("serial", f"page text matches episode pattern: {pat}")
+
+            # Weak keyword — needs at least 2 distinct hits to count.
+            weak_keywords = ("qism", "qismi", "qisim", "qismlar", "epizod")
+            weak_hits = [k for k in weak_keywords if k in text_lower]
+            if len(weak_hits) >= 2:
+                return ("serial", f"page text weak serial signals: {weak_hits[:3]}")
+
+        # DOM blocks that almost certainly mean season/episode UI.
+        dom_selectors = (
+            ".series-list", ".episodes", ".episode-list",
+            ".seasons", ".season-list", ".season-tabs",
+            "[class*='episode']", "[class*='season']", "[class*='qismlar']",
+            "[class*='fasl']", "ul.serii", "ol.episodes",
+            "a[href*='/episode/']", "a[title*='-qism']", "a[title*='-fasl']",
+            ".batcoh-list", ".batcoh-item",
+        )
+        for sel in dom_selectors:
             try:
                 if soup.select_one(sel):
                     return ("serial", f"page has DOM block matching {sel}")
             except Exception:
                 pass
 
-    if url_hint:
-        return url_hint
+    # ── URL fallback ──────────────────────────────────────────────────────
+    if src == "uzmovi":
+        if any(seg in u for seg in (
+            "/serialar/", "/seriallar/", "/serial/", "/uzbek-serial",
+            "/turk-serial", "/korea-serial", "/koreya-serial", "/hind-serial",
+            "/yapon-serial", "/multserial",
+        )):
+            return ("serial", "uzmovi url path matches serial segment")
+        if any(seg in u for seg in (
+            "/tarjima-kinolar/", "/tarjima-kino", "/kinolar/", "/film/",
+            "/uzbek-kino", "/hind-kino", "/turk-kino", "/multfilm",
+        )):
+            return ("movie", "uzmovi url path matches movie segment")
+        return ("unknown", "uzmovi url path did not match")
+
+    if src == "freekino":
+        if "/serial/" in u or "/seriallar" in u:
+            return ("serial", "freekino url contains /serial/")
+        if "/movie/" in u or "/film/" in u:
+            return ("movie", "freekino url contains /movie/ or /film/")
+        return ("unknown", "freekino url path did not match")
+
+    if src == "asilmedia":
+        if any(seg in u for seg in (
+            "/seriallar/", "/serial/", "/uzbek-seriallar", "/hind-seriallar",
+            "/turk-seriallar", "/korea-seriallar", "/multseriallar",
+        )):
+            return ("serial", "asilmedia url path contains serial category")
+        # Asilmedia bundles serials under /films/<sub>/ too — never trust the
+        # film-y URL when soup gave us no signal. Force "unknown" so callers
+        # re-check via /details rather than mis-importing as a movie.
+        if any(seg in u for seg in (
+            "/kinolar/", "/film/", "/films/", "/multfilmlar/",
+            "/uzbek-kinolari", "/hind-kinolari", "/turk-kinolari",
+        )):
+            if soup is None:
+                return ("unknown", "asilmedia film-category url, no soup to confirm — defer to detail")
+            return ("movie", "asilmedia url film-category and no serial signal in soup")
 
     return ("unknown", "no url or page signal matched")
 
