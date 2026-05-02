@@ -53,6 +53,9 @@ ASILMEDIA_CHINAKAM_HTML = """
   </div>
   <h1 class="fs-title">Chinakam izquvar Barcha qismlar</h1>
   <div class="fs-meta"><span>Seriallar</span></div>
+  <div class="fs-description">
+    Birinchi mavsum. Ikkinchi fasl. Uchinchi fasl.
+  </div>
   <div class="fs-episodes" id="episodes-section">
     <div class="fs-episodes__header">Qismlar</div>
     <div id="episodes-raw-data">
@@ -92,6 +95,7 @@ class ContentTypeDetectionTests(unittest.TestCase):
 
         self.assertEqual(content_type, "serial")
         self.assertIn("Qismlar section", evidence)
+        self.assertIn("metadata serial", evidence)
 
     def test_uzmovi_dexter_is_series(self):
         content_type, _ = detect_content_type(
@@ -127,6 +131,28 @@ class ContentTypeDetectionTests(unittest.TestCase):
         )
         self.assertEqual(content_type, "movie")
         self.assertIn("no Qismlar section found", reason)
+
+    def test_asilmedia_barcha_qismlar_plus_season_text_is_series(self):
+        parser = AsilmediaParser()
+        parser.session.get = Mock(return_value=FakeResponse(
+            """
+            <article class="fullstory" itemscope itemtype="https://schema.org/Movie">
+              <h1 class="fs-title">True Detective Barcha qismlar</h1>
+              <div class="fs-description">Birinchi mavsum. Ikkinchi fasl. Uchinchi fasl.</div>
+            </article>
+            """
+        ))
+
+        content_type, evidence = parser._resolve_search_result_content_type(
+            detail_url="https://asilmedia.org/16564-true-detective.html",
+            title="True Detective",
+            description="",
+            query="true detective",
+        )
+
+        self.assertEqual(content_type, "serial")
+        self.assertIn("season text", evidence)
+        self.assertIn("barcha qismlar", evidence)
 
     def test_search_card_defaults_to_movie(self):
         parser = AsilmediaParser()

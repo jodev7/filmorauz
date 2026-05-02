@@ -370,6 +370,19 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
             return (False, "failed to inspect Qismlar section")
         return (False, "Qismlar section has no real episode controls")
 
+    def _iter_asilmedia_control_labels(node):
+        if node is None:
+            return
+        for item in node.find_all(["a", "button"]):
+            for raw_label in (
+                item.get_text(" ", strip=True),
+                item.get("title", ""),
+                item.get("data-label", ""),
+                item.get("onclick", ""),
+            ):
+                if raw_label:
+                    yield clean_text(raw_label).lower()
+
     # ── Soup signals first ────────────────────────────────────────────────
     if soup is not None:
         analysis_root = _scope_asilmedia_soup(soup) if src == "asilmedia" else soup
@@ -381,8 +394,85 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
         if src == "asilmedia" and analysis_root is not None:
             episode_section = _find_asilmedia_episode_section(analysis_root)
             has_controls, reason = _asilmedia_has_real_episode_controls(episode_section)
+            evidence = []
             if has_controls:
-                return ("serial", reason)
+                evidence.append(reason)
+
+            ignore_words = ("360p", "480p", "720p", "1080p", "yuklab olish", "onlayn ko'rish", "skrinshotlar")
+            season_re = _re.compile(r"^\d+\s*-\s*fasl$", _re.IGNORECASE)
+            episode_re = _re.compile(r"^\d+\s*-\s*qism$", _re.IGNORECASE)
+            season_text_re = _re.compile(
+                r"\b(birinchi mavsum|ikkinchi fasl|uchinchi fasl|to'rtinchi fasl|beshinchi fasl|"
+                r"birinchi fasl|ikkinchi mavsum|uchinchi mavsum)\b",
+                _re.IGNORECASE,
+            )
+            multi_season_badge_re = _re.compile(r"\b\d+\s*-\s*\d+\s*fasllar\b", _re.IGNORECASE)
+
+            for label in _iter_asilmedia_control_labels(analysis_root):
+                if any(word in label for word in ignore_words):
+                    continue
+                if season_re.fullmatch(label):
+                    evidence.append(f"season button {label!r}")
+                    break
+
+            for label in _iter_asilmedia_control_labels(analysis_root):
+                if any(word in label for word in ignore_words):
+                    continue
+                if episode_re.fullmatch(label):
+                    evidence.append(f"episode button {label!r}")
+                    break
+
+            try:
+                poster_badge = analysis_root.select_one(".fs-poster__serial-badge, .badge--series")
+            except Exception:
+                poster_badge = None
+            if poster_badge is not None:
+                badge_text = clean_text(poster_badge.get_text(" ", strip=True)).lower()
+                if "fasl" in badge_text or "qism" in badge_text or multi_season_badge_re.search(badge_text):
+                    evidence.append("badge fasllar/qism")
+
+            metadata_parts = []
+            for sel in (".fs-meta", ".card__meta", "[itemprop='genre']", ".breadcrumbs"):
+                try:
+                    metadata_parts.extend(
+                        clean_text(el.get_text(" ", strip=True)).lower()
+                        for el in analysis_root.select(sel)
+                        if el.get_text(" ", strip=True)
+                    )
+                except Exception:
+                    pass
+            metadata_text = " ".join(metadata_parts)
+            if _re.search(r"\bserial\b|\bseriali\b|\bseriallar\b", metadata_text, _re.IGNORECASE):
+                evidence.append("metadata serial")
+
+            description_parts = []
+            for sel in (".fs-description", ".full-story", ".short-story", ".description", "[itemprop='description']"):
+                try:
+                    description_parts.extend(
+                        clean_text(el.get_text(" ", strip=True)).lower()
+                        for el in analysis_root.select(sel)
+                        if el.get_text(" ", strip=True)
+                    )
+                except Exception:
+                    pass
+            description_text = " ".join(description_parts)
+            if season_text_re.search(description_text):
+                evidence.append("season text")
+
+            title_text = ""
+            try:
+                title_node = analysis_root.select_one("h1, .fs-title")
+                title_text = clean_text(title_node.get_text(" ", strip=True)).lower() if title_node else ""
+            except Exception:
+                title_text = ""
+            has_barcha_qismlar = "barcha qismlar" in title_text or "barcha qismlar" in description_text
+            if has_barcha_qismlar:
+                evidence.append("barcha qismlar")
+
+            if has_barcha_qismlar and "season text" in evidence:
+                return ("serial", ", ".join(evidence))
+            if evidence:
+                return ("serial", ", ".join(evidence))
 
             if _is_asilmedia_detail_root(analysis_root):
                 return ("movie", reason)

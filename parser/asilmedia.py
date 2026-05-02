@@ -2,6 +2,7 @@
 Asilmedia (asilmedia.org) Parser
 DataLife Engine (DLE) based website - uses POST form submission for search
 """
+import json
 import logging
 import os
 import re
@@ -113,6 +114,97 @@ def _has_real_episode_controls(section: BeautifulSoup) -> tuple[bool, str]:
                 return (True, f"Qismlar section has season button {label!r}")
 
     return (False, "Qismlar section has no real episode controls")
+
+
+def _iter_asilmedia_control_labels(node: BeautifulSoup):
+    if node is None:
+        return
+    for item in node.find_all(["a", "button"]):
+        for raw_label in (
+            item.get_text(" ", strip=True),
+            item.get("title", ""),
+            item.get("data-label", ""),
+            item.get("onclick", ""),
+        ):
+            if raw_label:
+                yield clean_text(raw_label).lower()
+
+
+def _detect_asilmedia_main_content_type(main_content: BeautifulSoup, title: str = "") -> tuple[str, list[str]]:
+    if main_content is None:
+        return ("movie", ["no main detail content found"])
+
+    ignore_words = ("360p", "480p", "720p", "1080p", "yuklab olish", "onlayn ko'rish", "skrinshotlar")
+    episode_re = re.compile(r"^\d+\s*-\s*qism$", re.IGNORECASE)
+    season_re = re.compile(r"^\d+\s*-\s*fasl$", re.IGNORECASE)
+    season_text_re = re.compile(
+        r"\b(birinchi mavsum|ikkinchi fasl|uchinchi fasl|to'rtinchi fasl|beshinchi fasl|"
+        r"birinchi fasl|ikkinchi mavsum|uchinchi mavsum)\b",
+        re.IGNORECASE,
+    )
+    multi_season_badge_re = re.compile(r"\b\d+\s*-\s*\d+\s*fasllar\b", re.IGNORECASE)
+
+    evidence: list[str] = []
+
+    episode_section = _find_asilmedia_episode_section(main_content)
+    has_controls, control_reason = _has_real_episode_controls(episode_section)
+    if has_controls:
+        evidence.append(control_reason)
+
+    for label in _iter_asilmedia_control_labels(main_content):
+        if any(word in label for word in ignore_words):
+            continue
+        if season_re.fullmatch(label):
+            evidence.append(f"season button {label!r}")
+            break
+
+    for label in _iter_asilmedia_control_labels(main_content):
+        if any(word in label for word in ignore_words):
+            continue
+        if episode_re.fullmatch(label):
+            evidence.append(f"episode button {label!r}")
+            break
+
+    poster_badge = main_content.select_one(".fs-poster__serial-badge, .badge--series")
+    if poster_badge is not None:
+        badge_text = clean_text(poster_badge.get_text(" ", strip=True)).lower()
+        if "fasl" in badge_text or "qism" in badge_text or multi_season_badge_re.search(badge_text):
+            evidence.append("badge fasllar/qism")
+
+    metadata_parts = []
+    for sel in (".fs-meta", ".card__meta", "[itemprop='genre']", ".breadcrumbs"):
+        for el in main_content.select(sel):
+            text = clean_text(el.get_text(" ", strip=True)).lower()
+            if text:
+                metadata_parts.append(text)
+    metadata_text = " ".join(metadata_parts)
+    if re.search(r"\bserial\b|\bseriali\b|\bseriallar\b", metadata_text, re.IGNORECASE):
+        evidence.append("metadata serial")
+
+    description_parts = []
+    for sel in (".fs-description", ".full-story", ".short-story", ".description", "[itemprop='description']"):
+        for el in main_content.select(sel):
+            text = clean_text(el.get_text(" ", strip=True)).lower()
+            if text:
+                description_parts.append(text)
+    description_text = " ".join(description_parts)
+    if season_text_re.search(description_text):
+        evidence.append("season text")
+
+    title_text = clean_text(title or "").lower()
+    main_title = clean_text((main_content.select_one("h1, .fs-title") or main_content).get_text(" ", strip=True)).lower()
+    combined_title = " ".join(part for part in (title_text, main_title) if part)
+    has_barcha_qismlar = "barcha qismlar" in combined_title or "barcha qismlar" in description_text
+    if has_barcha_qismlar:
+        evidence.append("barcha qismlar")
+
+    if has_barcha_qismlar and "season text" in evidence:
+        return ("serial", evidence)
+
+    if evidence:
+        return ("serial", evidence)
+
+    return ("movie", [control_reason])
 
 
 class AsilmediaParser(BaseParser):
@@ -525,7 +617,7 @@ class AsilmediaParser(BaseParser):
             )
             if response.ok:
                 soup = BeautifulSoup(response.text, "lxml")
-                detail_ct, detail_reason = self._detect_search_detail_content_type(soup)
+                detail_ct, detail_reason = self._detect_search_detail_content_type(soup, title=title)
                 logger.info(
                     f"[ASILMEDIA] source=asilmedia query={query!r} request_url={detail_url} "
                     f"raw result count=1 parsed count=1 content_type={detail_ct} reason={detail_reason}"
@@ -543,17 +635,10 @@ class AsilmediaParser(BaseParser):
         )
         return default_type, default_evidence
 
-    def _detect_search_detail_content_type(self, soup: BeautifulSoup) -> tuple[str, str]:
+    def _detect_search_detail_content_type(self, soup: BeautifulSoup, title: str = "") -> tuple[str, str]:
         main_content = _get_asilmedia_main_content(soup)
-        if main_content is None:
-            return ("movie", "no main detail content found")
-
-        episode_section = _find_asilmedia_episode_section(main_content)
-        has_controls, evidence = _has_real_episode_controls(episode_section)
-        if has_controls:
-            return ("serial", evidence)
-
-        return ("movie", evidence)
+        content_type, evidence = _detect_asilmedia_main_content_type(main_content, title=title)
+        return (content_type, json.dumps(evidence, ensure_ascii=False))
     
     def _extract_dle_card(self, card) -> Optional[SearchResult]:
         """
@@ -826,11 +911,12 @@ class AsilmediaParser(BaseParser):
                 logger.info(f"[ASILMEDIA DLE]   - type={v['type']}, url={v['url'][:80]}")
         
         from helpers import detect_content_type as _detect_ct
-        ct, ct_reason = _detect_ct(url, "asilmedia", soup=soup)
+        main_content = _get_asilmedia_main_content(soup)
+        ct, ct_evidence = _detect_asilmedia_main_content_type(main_content, title=title)
         if ct == "unknown":
             ct = "movie"
-            ct_reason = "fallback default movie (no signals)"
-        logger.info(f"[asilmedia type] title={title!r} type={ct} evidence={ct_reason}")
+            ct_evidence = ["fallback default movie (no signals)"]
+        logger.info(f'[asilmedia type] title="{title}" type={ct} evidence={json.dumps(ct_evidence, ensure_ascii=False)}')
 
         return MovieDetails(
             title=title,
