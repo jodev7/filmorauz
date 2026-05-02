@@ -60,7 +60,7 @@ class ContentTypeDetectionTests(unittest.TestCase):
         parser = AsilmediaParser()
         parser.session.get = Mock(return_value=FakeResponse(ASILMEDIA_INTERSTELLAR_HTML))
 
-        content_type = parser._resolve_search_result_content_type(
+        content_type, evidence = parser._resolve_search_result_content_type(
             detail_url="https://asilmedia.org/9140-interstellar-uzbek-tarjima-2014-hd-ozbek-tilida-tas-ix-skachat.html",
             title="Interstellar Uzbek tarjima 2014",
             description="",
@@ -68,12 +68,13 @@ class ContentTypeDetectionTests(unittest.TestCase):
         )
 
         self.assertEqual(content_type, "movie")
+        self.assertIn("no strong series evidence", evidence)
 
     def test_asilmedia_chinakam_izquvar_is_series(self):
         parser = AsilmediaParser()
         parser.session.get = Mock(return_value=FakeResponse(ASILMEDIA_CHINAKAM_HTML))
 
-        content_type = parser._resolve_search_result_content_type(
+        content_type, evidence = parser._resolve_search_result_content_type(
             detail_url="https://asilmedia.org/16564-chinakam-izquvar-barcha-qismlar-ozbek-tilida-2014-uzbekcha-tarjima.html",
             title="Chinakam izquvar",
             description="",
@@ -81,6 +82,7 @@ class ContentTypeDetectionTests(unittest.TestCase):
         )
 
         self.assertEqual(content_type, "serial")
+        self.assertIn("Qismlar section", evidence)
 
     def test_uzmovi_dexter_is_series(self):
         content_type, _ = detect_content_type(
@@ -106,6 +108,24 @@ class ContentTypeDetectionTests(unittest.TestCase):
             soup=soup,
         )
         self.assertEqual(content_type, "movie")
+
+    def test_search_card_defaults_to_movie(self):
+        parser = AsilmediaParser()
+        card_soup = BeautifulSoup(
+            """
+            <article class="shortstory-item moviebox">
+              <div class="sidebar-hint">Seriallar</div>
+              <a href="/9140-interstellar-uzbek-tarjima-2014-hd-ozbek-tilida-tas-ix-skachat.html">
+                Interstellar Uzbek tarjima 2014
+              </a>
+            </article>
+            """,
+            "lxml",
+        )
+
+        result = parser._extract_dle_card(card_soup.select_one("article"))
+        self.assertIsNotNone(result)
+        self.assertEqual(result.content_type, "movie")
 
 
 if __name__ == "__main__":

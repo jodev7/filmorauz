@@ -53,6 +53,16 @@ def _parse_quality_label(label: str) -> str:
     return label
 
 
+def _get_asilmedia_main_content(soup: BeautifulSoup):
+    if soup is None:
+        return None
+    return soup.select_one(
+        "article.fullstory, .fullstory, "
+        "article[itemtype*='schema.org/Movie'], "
+        "article[itemtype*='schema.org/TVSeries']"
+    )
+
+
 class AsilmediaParser(BaseParser):
     """Parser for asilmedia.org - DLE-based website"""
     
@@ -432,13 +442,16 @@ class AsilmediaParser(BaseParser):
             new_results = []
             logger.info(f"[ASILMEDIA] source=asilmedia query={query!r} raw result count={len(dict_results)}")
             for r in dict_results:
-                ct = self._resolve_search_result_content_type(
+                ct, evidence = self._resolve_search_result_content_type(
                     detail_url=r["link"],
                     title=r.get("title", ""),
                     description=r.get("description", ""),
                     query=query,
                 )
-                logger.info(f"[SEARCH] source=asilmedia query={query!r} result={r['link'][:80]} content_type={ct}")
+                logger.info(
+                    f"[ASILMEDIA] result_debug title={r['title']!r} detail_url={r['link']} "
+                    f"detected_type={ct} evidence={evidence}"
+                )
                 new_results.append(SearchResult(
                     title=r["title"], year=r["year"], poster=r["poster"],
                     description=r["description"], source_id=r["source_id"],
@@ -449,29 +462,9 @@ class AsilmediaParser(BaseParser):
 
         return results
 
-    def _resolve_search_result_content_type(self, detail_url: str, title: str, description: str, query: str) -> str:
-        from helpers import detect_content_type as _detect_ct
-
-        try:
-            from bs4 import BeautifulSoup as _BS
-            sniff_html = (title or "") + " \n " + (description or "")
-            sniff_soup = _BS(f"<div>{sniff_html}</div>", "lxml")
-        except Exception:
-            sniff_soup = None
-
-        ct, reason = _detect_ct(detail_url, "asilmedia", soup=sniff_soup)
-        needs_detail_check = (
-            ct == "unknown" or
-            (ct == "movie" and "/films/" in (detail_url or "").lower())
-        )
-
-        if not needs_detail_check:
-            logger.info(
-                f"[ASILMEDIA] source=asilmedia query={query!r} request_url={detail_url} "
-                f"status=skip raw result count=1 parsed count=1 content_type={ct} reason={reason}"
-            )
-            return ct
-
+    def _resolve_search_result_content_type(self, detail_url: str, title: str, description: str, query: str) -> tuple[str, str]:
+        default_type = "movie"
+        default_evidence = "default movie search result"
         try:
             response = self.session.get(detail_url, timeout=30, headers={"Referer": self.BASE_URL + "/"})
             status = response.status_code
@@ -480,24 +473,68 @@ class AsilmediaParser(BaseParser):
             )
             if response.ok:
                 soup = BeautifulSoup(response.text, "lxml")
-                detail_ct, detail_reason = _detect_ct(detail_url, "asilmedia", soup=soup)
-                if detail_ct != "unknown":
-                    logger.info(
-                        f"[ASILMEDIA] source=asilmedia query={query!r} request_url={detail_url} "
-                        f"raw result count=1 parsed count=1 content_type={detail_ct} reason={detail_reason}"
-                    )
-                    return detail_ct
+                detail_ct, detail_reason = self._detect_search_detail_content_type(soup)
+                logger.info(
+                    f"[ASILMEDIA] source=asilmedia query={query!r} request_url={detail_url} "
+                    f"raw result count=1 parsed count=1 content_type={detail_ct} reason={detail_reason}"
+                )
+                return detail_ct, detail_reason
         except Exception as exc:
             logger.warning(
                 f"[ASILMEDIA] source=asilmedia query={query!r} request_url={detail_url} "
-                f"status=error content_type={ct} err={exc}"
+                f"status=error content_type={default_type} err={exc}"
             )
 
         logger.info(
             f"[ASILMEDIA] source=asilmedia query={query!r} request_url={detail_url} "
-            f"raw result count=1 parsed count=1 content_type={ct} reason={reason}"
+            f"raw result count=1 parsed count=1 content_type={default_type} reason={default_evidence}"
         )
-        return ct
+        return default_type, default_evidence
+
+    def _detect_search_detail_content_type(self, soup: BeautifulSoup) -> tuple[str, str]:
+        main_content = _get_asilmedia_main_content(soup)
+        if main_content is None:
+            return ("movie", "no main detail content found")
+
+        main_html = str(main_content).lower()
+        main_text = clean_text(main_content.get_text(" ", strip=True)).lower()
+
+        episode_section = main_content.select_one(".fs-episodes, #episodes-section, #episodes-raw-data")
+        if episode_section is not None:
+            section_text = clean_text(episode_section.get_text(" ", strip=True)).lower()
+            section_html = str(episode_section).lower()
+            has_qismlar_header = "qismlar" in section_text
+            has_episode_buttons = (
+                "data-label" in section_html or
+                bool(re.search(r"\b\d+\s*-\s*qism\b", section_text))
+            )
+            has_season_buttons = bool(re.search(r"\b[123]\s*-\s*fasl\b", section_text))
+            if has_qismlar_header and (has_episode_buttons or has_season_buttons):
+                return ("serial", "main content Qismlar section has episode or season buttons")
+
+        poster_badge = main_content.select_one(".fs-poster__serial-badge, .badge--series")
+        if poster_badge is not None:
+            badge_text = clean_text(poster_badge.get_text(" ", strip=True)).lower()
+            if "fasl" in badge_text or "qism" in badge_text:
+                return ("serial", "main content poster badge contains fasl/qism")
+
+        metadata_parts = []
+        for sel in (".fs-meta", ".card__meta", "[itemprop='genre']", ".breadcrumbs", "h1", ".fs-title"):
+            for el in main_content.select(sel):
+                text = clean_text(el.get_text(" ", strip=True)).lower()
+                if text:
+                    metadata_parts.append(text)
+        metadata_text = " ".join(metadata_parts)
+        if "serial" in metadata_text or "seriali" in metadata_text:
+            return ("serial", "main metadata genre/category contains serial")
+
+        if re.search(r"\b[123]\s*-\s*fasl\b", main_text):
+            return ("serial", "main content contains season tabs/buttons")
+
+        if "itemtype=\"https://schema.org/tvseries\"" in main_html:
+            return ("serial", "main content schema marks tvseries")
+
+        return ("movie", "main content has no strong series evidence")
     
     def _extract_dle_card(self, card) -> Optional[SearchResult]:
         """
@@ -573,13 +610,6 @@ class AsilmediaParser(BaseParser):
                     if year:
                         break
         
-        from helpers import detect_content_type as _detect_ct
-        # Pass the card itself as soup so strong serial signals (badges like
-        # "1-3 fasllar to'liq", "barcha qismlar", season buttons) can flip
-        # an asilmedia /films/<sub>/ URL away from a wrong "movie" verdict.
-        ct, reason = _detect_ct(detail_url, "asilmedia", soup=card)
-        logger.info(f"[SEARCH] source=asilmedia result={detail_url[:80]} content_type={ct} reason={reason}")
-
         return SearchResult(
             title=title,
             year=year,
@@ -588,7 +618,7 @@ class AsilmediaParser(BaseParser):
             source_id=source_id,
             detail_url=detail_url,
             source=self.source_name,
-            content_type=ct
+            content_type="movie"
         )
     
     def _is_movie_link(self, href: str) -> bool:
