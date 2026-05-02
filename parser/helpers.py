@@ -325,6 +325,51 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
         except Exception:
             return False
 
+    def _find_asilmedia_episode_section(node):
+        if node is None:
+            return None
+        try:
+            for sel in (".fs-episodes", "#episodes-section", "#episodes-raw-data"):
+                for candidate in node.select(sel):
+                    text = clean_text(candidate.get_text(" ", strip=True)).lower()
+                    if "qismlar" in text:
+                        return candidate
+            for candidate in node.find_all(["section", "div", "article"]):
+                text = clean_text(candidate.get_text(" ", strip=True)).lower()
+                if "qismlar" in text:
+                    return candidate
+        except Exception:
+            return None
+        return None
+
+    def _asilmedia_has_real_episode_controls(section):
+        if section is None:
+            return (False, "no Qismlar section found")
+        ignore_words = ("360p", "480p", "720p", "1080p", "yuklab olish", "onlayn ko'rish", "skrinshotlar")
+        episode_re = _re.compile(r"^\d+\s*-\s*qism$", _re.IGNORECASE)
+        season_re = _re.compile(r"^\d+\s*-\s*fasl$", _re.IGNORECASE)
+        try:
+            for node in section.find_all(["a", "button"]):
+                label_parts = [
+                    node.get_text(" ", strip=True),
+                    node.get("title", ""),
+                    node.get("data-label", ""),
+                    node.get("onclick", ""),
+                ]
+                for raw_label in label_parts:
+                    if not raw_label:
+                        continue
+                    label = clean_text(raw_label).lower()
+                    if not label or any(word in label for word in ignore_words):
+                        continue
+                    if episode_re.fullmatch(label):
+                        return (True, f"Qismlar section has episode button {label!r}")
+                    if season_re.fullmatch(label):
+                        return (True, f"Qismlar section has season button {label!r}")
+        except Exception:
+            return (False, "failed to inspect Qismlar section")
+        return (False, "Qismlar section has no real episode controls")
+
     # ── Soup signals first ────────────────────────────────────────────────
     if soup is not None:
         analysis_root = _scope_asilmedia_soup(soup) if src == "asilmedia" else soup
@@ -334,40 +379,13 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
             text_lower = ""
 
         if src == "asilmedia" and analysis_root is not None:
-            asilmedia_dom_selectors = (
-                ".fs-episodes", "#episodes-section", "#episodes-raw-data",
-                ".fs-poster__serial-badge", ".badge--series",
-                "[itemtype*='TVSeries']",
-            )
-            for sel in asilmedia_dom_selectors:
-                try:
-                    if analysis_root.select_one(sel):
-                        return ("serial", f"asilmedia main content has serial UI: {sel}")
-                except Exception:
-                    pass
-
-            metadata_parts = []
-            for sel in ("h1", ".fs-title", ".breadcrumbs", ".card__meta", ".fs-meta", "[itemprop='genre']"):
-                try:
-                    metadata_parts.extend(
-                        clean_text(el.get_text(" ", strip=True)).lower()
-                        for el in analysis_root.select(sel)
-                        if el.get_text(" ", strip=True)
-                    )
-                except Exception:
-                    pass
-            metadata_text = " ".join(metadata_parts)
-            if "serial" in metadata_text or "seriali" in metadata_text:
-                return ("serial", "asilmedia main metadata contains serial keyword")
-
-            if text_lower:
-                if "qismlar" in text_lower and ("data-label" in str(analysis_root).lower() or "1-qism" in text_lower):
-                    return ("serial", "asilmedia main content contains episode list")
-                if _re.search(r'\b\d+\s*-\s*fasl\b', text_lower) or _re.search(r'\b\d+\s*-\s*qism\b', text_lower):
-                    return ("serial", "asilmedia main content contains season/episode button")
+            episode_section = _find_asilmedia_episode_section(analysis_root)
+            has_controls, reason = _asilmedia_has_real_episode_controls(episode_section)
+            if has_controls:
+                return ("serial", reason)
 
             if _is_asilmedia_detail_root(analysis_root):
-                return ("movie", "asilmedia main content has no episode or season UI")
+                return ("movie", reason)
 
         if text_lower:
             # Strong single-hit serial keywords. Hitting any of these means

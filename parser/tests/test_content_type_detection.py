@@ -31,6 +31,15 @@ ASILMEDIA_INTERSTELLAR_HTML = """
   <div class="fs-description">
     Fazoda omon qolish haqida kino.
   </div>
+  <div class="download-tabs">
+    <button>360p</button>
+    <button>480p</button>
+    <button>720p</button>
+    <button>1080p</button>
+    <a href="/watch">Onlayn ko'rish</a>
+    <a href="/download">Yuklab olish</a>
+    <span>Skrinshotlar</span>
+  </div>
 </article>
 <div class="related">
   <a href="/films/serial/">Seriallar</a>
@@ -47,8 +56,8 @@ ASILMEDIA_CHINAKAM_HTML = """
   <div class="fs-episodes" id="episodes-section">
     <div class="fs-episodes__header">Qismlar</div>
     <div id="episodes-raw-data">
-      <a href="https://cdn.example/episode1.mp4" data-label="1-qism 1080p">1</a>
-      <a href="https://cdn.example/episode2.mp4" data-label="2-fasl 1-qism 1080p">2</a>
+      <button>1-qism</button>
+      <button>2-fasl</button>
     </div>
   </div>
 </article>
@@ -68,7 +77,7 @@ class ContentTypeDetectionTests(unittest.TestCase):
         )
 
         self.assertEqual(content_type, "movie")
-        self.assertIn("no strong series evidence", evidence)
+        self.assertIn("no Qismlar section found", evidence)
 
     def test_asilmedia_chinakam_izquvar_is_series(self):
         parser = AsilmediaParser()
@@ -108,6 +117,16 @@ class ContentTypeDetectionTests(unittest.TestCase):
             soup=soup,
         )
         self.assertEqual(content_type, "movie")
+
+    def test_asilmedia_quality_buttons_do_not_count_as_series(self):
+        soup = BeautifulSoup(ASILMEDIA_INTERSTELLAR_HTML, "lxml")
+        content_type, reason = detect_content_type(
+            "https://asilmedia.org/9140-interstellar-uzbek-tarjima-2014-hd-ozbek-tilida-tas-ix-skachat.html",
+            "asilmedia",
+            soup=soup,
+        )
+        self.assertEqual(content_type, "movie")
+        self.assertIn("no Qismlar section found", reason)
 
     def test_search_card_defaults_to_movie(self):
         parser = AsilmediaParser()

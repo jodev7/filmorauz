@@ -63,6 +63,58 @@ def _get_asilmedia_main_content(soup: BeautifulSoup):
     )
 
 
+def _find_asilmedia_episode_section(main_content: BeautifulSoup):
+    if main_content is None:
+        return None
+
+    candidate_selectors = (
+        ".fs-episodes",
+        "#episodes-section",
+        "#episodes-raw-data",
+    )
+    for sel in candidate_selectors:
+        for node in main_content.select(sel):
+            text = clean_text(node.get_text(" ", strip=True)).lower()
+            if "qismlar" in text:
+                return node
+
+    for node in main_content.find_all(["section", "div", "article"]):
+        text = clean_text(node.get_text(" ", strip=True)).lower()
+        if "qismlar" in text:
+            return node
+
+    return None
+
+
+def _has_real_episode_controls(section: BeautifulSoup) -> tuple[bool, str]:
+    if section is None:
+        return (False, "no Qismlar section found")
+
+    ignore_words = ("360p", "480p", "720p", "1080p", "yuklab olish", "onlayn ko'rish", "skrinshotlar")
+    episode_re = re.compile(r"^\d+\s*-\s*qism$", re.IGNORECASE)
+    season_re = re.compile(r"^\d+\s*-\s*fasl$", re.IGNORECASE)
+
+    for node in section.find_all(["a", "button"]):
+        label_parts = [
+            node.get_text(" ", strip=True),
+            node.get("title", ""),
+            node.get("data-label", ""),
+            node.get("onclick", ""),
+        ]
+        for raw_label in label_parts:
+            if not raw_label:
+                continue
+            label = clean_text(raw_label).lower()
+            if not label or any(word in label for word in ignore_words):
+                continue
+            if episode_re.fullmatch(label):
+                return (True, f"Qismlar section has episode button {label!r}")
+            if season_re.fullmatch(label):
+                return (True, f"Qismlar section has season button {label!r}")
+
+    return (False, "Qismlar section has no real episode controls")
+
+
 class AsilmediaParser(BaseParser):
     """Parser for asilmedia.org - DLE-based website"""
     
@@ -496,45 +548,12 @@ class AsilmediaParser(BaseParser):
         if main_content is None:
             return ("movie", "no main detail content found")
 
-        main_html = str(main_content).lower()
-        main_text = clean_text(main_content.get_text(" ", strip=True)).lower()
+        episode_section = _find_asilmedia_episode_section(main_content)
+        has_controls, evidence = _has_real_episode_controls(episode_section)
+        if has_controls:
+            return ("serial", evidence)
 
-        episode_section = main_content.select_one(".fs-episodes, #episodes-section, #episodes-raw-data")
-        if episode_section is not None:
-            section_text = clean_text(episode_section.get_text(" ", strip=True)).lower()
-            section_html = str(episode_section).lower()
-            has_qismlar_header = "qismlar" in section_text
-            has_episode_buttons = (
-                "data-label" in section_html or
-                bool(re.search(r"\b\d+\s*-\s*qism\b", section_text))
-            )
-            has_season_buttons = bool(re.search(r"\b[123]\s*-\s*fasl\b", section_text))
-            if has_qismlar_header and (has_episode_buttons or has_season_buttons):
-                return ("serial", "main content Qismlar section has episode or season buttons")
-
-        poster_badge = main_content.select_one(".fs-poster__serial-badge, .badge--series")
-        if poster_badge is not None:
-            badge_text = clean_text(poster_badge.get_text(" ", strip=True)).lower()
-            if "fasl" in badge_text or "qism" in badge_text:
-                return ("serial", "main content poster badge contains fasl/qism")
-
-        metadata_parts = []
-        for sel in (".fs-meta", ".card__meta", "[itemprop='genre']", ".breadcrumbs", "h1", ".fs-title"):
-            for el in main_content.select(sel):
-                text = clean_text(el.get_text(" ", strip=True)).lower()
-                if text:
-                    metadata_parts.append(text)
-        metadata_text = " ".join(metadata_parts)
-        if "serial" in metadata_text or "seriali" in metadata_text:
-            return ("serial", "main metadata genre/category contains serial")
-
-        if re.search(r"\b[123]\s*-\s*fasl\b", main_text):
-            return ("serial", "main content contains season tabs/buttons")
-
-        if "itemtype=\"https://schema.org/tvseries\"" in main_html:
-            return ("serial", "main content schema marks tvseries")
-
-        return ("movie", "main content has no strong series evidence")
+        return ("movie", evidence)
     
     def _extract_dle_card(self, card) -> Optional[SearchResult]:
         """
@@ -811,7 +830,7 @@ class AsilmediaParser(BaseParser):
         if ct == "unknown":
             ct = "movie"
             ct_reason = "fallback default movie (no signals)"
-        logger.info(f"[PARSER] detected content_type={ct} reason={ct_reason} url={url}")
+        logger.info(f"[asilmedia type] title={title!r} type={ct} evidence={ct_reason}")
 
         return MovieDetails(
             title=title,

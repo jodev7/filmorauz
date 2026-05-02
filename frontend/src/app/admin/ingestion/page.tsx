@@ -27,6 +27,14 @@ type JobGroup =
   | { type: "single"; job: IngestionJob }
   | { type: "serial"; id: string; title: string; seasons: SeasonGroup[]; expanded: boolean; totalEpisodes: number; totalSeasons: number };
 
+function getSearchResultContentType(result: SearchResult): "movie" | "serial" | "" {
+  const rawType = (((result as any).type || (result as any).content_type || "") + "").toLowerCase();
+  if (rawType === "serial" || rawType === "series") return "serial";
+  if (rawType === "movie") return "movie";
+  if ((result.source || "").toLowerCase() === "asilmedia") return "movie";
+  return "";
+}
+
 const JOB_STATUS_ORDER: Record<string, number> = {
   downloading: 0,
   processing: 1,
@@ -773,10 +781,7 @@ function CatalogTab({
     setError("");
     
     try {
-      // Pass detected type from search; if the parser flagged it "unknown"
-      // or left it blank, send empty so the backend re-detects via /details.
-      const rawType = (((result as any).type || (result as any).content_type || "") + "").toLowerCase();
-      const importType = (rawType === "movie" || rawType === "serial" || rawType === "series") ? rawType : "";
+      const importType = getSearchResultContentType(result);
       await importFromCatalog(token, {
         source: result.source,
         source_id: result.source_id,
@@ -947,16 +952,13 @@ function CatalogTab({
                         <span className="text-xs text-gray-400">{result.year}</span>
                       )}
                       {(() => {
-                        const t = ((result as any).type || (result as any).content_type || "").toLowerCase();
-                        if (t === "serial" || t === "series") {
+                        const t = getSearchResultContentType(result);
+                        if (t === "serial") {
                           return <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-600 text-white">Serial</span>;
                         }
                         if (t === "movie") {
                           return <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-600 text-white">Movie</span>;
                         }
-                        // Parser couldn't classify — show "Aniqlanmoqda" so the
-                        // operator knows the import will trigger a /details
-                        // re-fetch to determine movie vs serial.
                         return <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-600 text-white">Aniqlanmoqda</span>;
                       })()}
                     </div>
