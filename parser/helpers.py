@@ -297,12 +297,77 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
     u = (url or "").lower()
     src = (source or "").lower()
 
+    def _scope_asilmedia_soup(node):
+        if node is None:
+            return None
+        try:
+            if getattr(node, "get", None):
+                itemtype = (node.get("itemtype") or "").lower()
+                classes = " ".join(node.get("class", []) if node.get("class") else []).lower()
+                if "schema.org/movie" in itemtype or "schema.org/tvseries" in itemtype or "fullstory" in classes:
+                    return node
+            scoped = node.select_one("article.fullstory, .fullstory, article[itemtype*='schema.org/Movie'], article[itemtype*='schema.org/TVSeries']")
+            return scoped or node
+        except Exception:
+            return node
+
+    def _is_asilmedia_detail_root(node):
+        if node is None or not getattr(node, "get", None):
+            return False
+        try:
+            itemtype = (node.get("itemtype") or "").lower()
+            classes = " ".join(node.get("class", []) if node.get("class") else []).lower()
+            return (
+                "schema.org/movie" in itemtype or
+                "schema.org/tvseries" in itemtype or
+                "fullstory" in classes
+            )
+        except Exception:
+            return False
+
     # ── Soup signals first ────────────────────────────────────────────────
     if soup is not None:
+        analysis_root = _scope_asilmedia_soup(soup) if src == "asilmedia" else soup
         try:
-            text_lower = soup.get_text(" ", strip=True).lower() if soup else ""
+            text_lower = analysis_root.get_text(" ", strip=True).lower() if analysis_root else ""
         except Exception:
             text_lower = ""
+
+        if src == "asilmedia" and analysis_root is not None:
+            asilmedia_dom_selectors = (
+                ".fs-episodes", "#episodes-section", "#episodes-raw-data",
+                ".fs-poster__serial-badge", ".badge--series",
+                "[itemtype*='TVSeries']",
+            )
+            for sel in asilmedia_dom_selectors:
+                try:
+                    if analysis_root.select_one(sel):
+                        return ("serial", f"asilmedia main content has serial UI: {sel}")
+                except Exception:
+                    pass
+
+            metadata_parts = []
+            for sel in ("h1", ".fs-title", ".breadcrumbs", ".card__meta", ".fs-meta", "[itemprop='genre']"):
+                try:
+                    metadata_parts.extend(
+                        clean_text(el.get_text(" ", strip=True)).lower()
+                        for el in analysis_root.select(sel)
+                        if el.get_text(" ", strip=True)
+                    )
+                except Exception:
+                    pass
+            metadata_text = " ".join(metadata_parts)
+            if "serial" in metadata_text or "seriali" in metadata_text:
+                return ("serial", "asilmedia main metadata contains serial keyword")
+
+            if text_lower:
+                if "qismlar" in text_lower and ("data-label" in str(analysis_root).lower() or "1-qism" in text_lower):
+                    return ("serial", "asilmedia main content contains episode list")
+                if _re.search(r'\b\d+\s*-\s*fasl\b', text_lower) or _re.search(r'\b\d+\s*-\s*qism\b', text_lower):
+                    return ("serial", "asilmedia main content contains season/episode button")
+
+            if _is_asilmedia_detail_root(analysis_root):
+                return ("movie", "asilmedia main content has no episode or season UI")
 
         if text_lower:
             # Strong single-hit serial keywords. Hitting any of these means
@@ -310,7 +375,6 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
             strong_keywords = (
                 "barcha qismlar", "barcha qismlari",
                 "qismlardan tanlash", "qismlar to'liq", "qismlar to`liq",
-                "qismlar",
                 "fasl", "mavsum",            # uz "season"
                 "сезон", "сериал", "серии",  # ru
                 "seriallar",
@@ -335,7 +399,7 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
                     return ("serial", f"page text matches episode pattern: {pat}")
 
             # Weak keyword — needs at least 2 distinct hits to count.
-            weak_keywords = ("qism", "qismi", "qisim", "qismlar", "epizod")
+            weak_keywords = ("qism", "qismi", "qisim", "epizod")
             weak_hits = [k for k in weak_keywords if k in text_lower]
             if len(weak_hits) >= 2:
                 return ("serial", f"page text weak serial signals: {weak_hits[:3]}")
@@ -353,7 +417,7 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
         )
         for sel in dom_selectors:
             try:
-                if soup.select_one(sel):
+                if analysis_root.select_one(sel):
                     return ("serial", f"page has DOM block matching {sel}")
             except Exception:
                 pass
