@@ -9,7 +9,6 @@ export default function robots(): MetadataRoute.Robots {
     "/user",
     "/profile",
     "/login",
-    "/premium",
     "/watch",
     "/uploads",
     "/notifications",

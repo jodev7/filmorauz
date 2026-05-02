@@ -3,9 +3,10 @@
 import { SyntheticEvent, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronUp, Play, Clock } from "lucide-react";
-import { SeasonWithEpisodes, Episode, buildEpisodeUrl } from "@/lib/series-api";
+import { SeasonWithEpisodes, Episode } from "@/lib/series-api";
 import { formatDuration } from "@/lib/movie-utils";
 import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
+import { buildBestEpisodePath } from "@/lib/content-routes";
 import MediaImage from "@/components/ui/MediaImage";
 
 interface SeasonListProps {
@@ -13,6 +14,7 @@ interface SeasonListProps {
   currentEpisodeId?: string;
   seriesBackdropUrl?: string;
   seriesPosterUrl?: string;
+  seriesSlug?: string;
 }
 
 function isKnownBrokenEpisodeThumbnail(url?: string | null): boolean {
@@ -60,6 +62,7 @@ export default function SeasonList({
   currentEpisodeId,
   seriesBackdropUrl,
   seriesPosterUrl,
+  seriesSlug,
 }: SeasonListProps) {
   // Defensive: ensure seasons is always an array
   const safeSeasons = Array.isArray(seasons) ? seasons : [];
@@ -159,7 +162,12 @@ export default function SeasonList({
                     return (
                       <Link
                         key={episode.id}
-                        href={buildEpisodeUrl(episode.id)}
+                        href={buildBestEpisodePath({
+                          episodeId: episode.id,
+                          seriesSlug,
+                          seasonNumber: season.season_number,
+                          episodeNumber: episode.episode_number,
+                        })}
                         className={`group block rounded-lg overflow-hidden transition-all ${
                           isActive 
                             ? "bg-brand-red/20 border border-brand-red" 

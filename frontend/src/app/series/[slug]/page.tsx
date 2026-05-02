@@ -14,6 +14,8 @@ import SeriesCarousel from "@/components/SeriesCarousel";
 import { getSeriesBySlug, getSeries } from "@/lib/series-api";
 import { localizeSingleGenre } from "@/lib/localization";
 import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
+import { buildSeriesUrl } from "@/lib/content-routes";
+import { buildContentDescription, buildContentKeywords, buildContentTitle, pickSeoImage } from "@/lib/seo";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
@@ -25,19 +27,24 @@ interface Props {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = params;
-  const canonicalUrl = `${SITE_URL}/series/${slug}`;
+  const canonicalUrl = buildSeriesUrl(slug);
 
   try {
     const data = await getSeriesBySlug(slug);
     const s = data.series;
-    const title = `${s.title} serial barcha qismlar o'zbek tilida | FilmoraUz`;
-    const description = `${s.title} serialini barcha qismlari o'zbek tilida HD sifatda FilmoraUz'da tomosha qiling.${s.description ? " " + s.description.slice(0, 100) : ""}`;
-    const imageUrl = normalizeMediaUrl(s.backdrop_url || s.poster_url, `${SITE_URL}/og-image.jpg`);
+    const title = buildContentTitle(s.title);
+    const description = buildContentDescription(s.title, s.year);
+    const imageUrl = pickSeoImage(s.backdrop_url, s.poster_url);
 
     return {
       title,
       description,
-      keywords: [s.title, "serial", "o'zbek tilida", "HD", ...(s.genre || [])],
+      keywords: buildContentKeywords({
+        title: s.title,
+        uzbekTitle: s.title,
+        genres: s.genre,
+        extra: [s.year?.toString() || "", "serial"],
+      }),
       openGraph: {
         title,
         description,
@@ -84,15 +91,16 @@ export default async function SeriesDetailPage({ params }: Props) {
   }
 
   const { series, seasons } = seriesData;
+  const canonicalUrl = buildSeriesUrl(slug);
 
   const seriesJsonLd: Record<string, any> = {
     "@context": "https://schema.org",
     "@type": "TVSeries",
     name: series.title,
-    description: series.description,
-    image: normalizeMediaUrl(series.poster_url || series.backdrop_url, `${SITE_URL}/og-image.jpg`),
+    description: series.description || buildContentDescription(series.title, series.year),
+    image: [pickSeoImage(series.poster_url, series.backdrop_url)],
     genre: series.genre || [],
-    url: `${SITE_URL}/series/${slug}`,
+    url: canonicalUrl,
     datePublished: series.year?.toString(),
     countryOfOrigin: series.country,
     numberOfSeasons: seasons?.length || undefined,
@@ -113,7 +121,7 @@ export default async function SeriesDetailPage({ params }: Props) {
     itemListElement: [
       { "@type": "ListItem", position: 1, name: "Bosh sahifa", item: SITE_URL },
       { "@type": "ListItem", position: 2, name: "Seriallar", item: `${SITE_URL}/series` },
-      { "@type": "ListItem", position: 3, name: series.title, item: `${SITE_URL}/series/${slug}` },
+      { "@type": "ListItem", position: 3, name: series.title, item: canonicalUrl },
     ],
   };
 
@@ -235,6 +243,7 @@ export default async function SeriesDetailPage({ params }: Props) {
                 seasons={seasons}
                 seriesBackdropUrl={series.backdrop_url}
                 seriesPosterUrl={series.poster_url}
+                seriesSlug={series.slug}
               />
             </section>
           )}

@@ -1,14 +1,18 @@
 import { Metadata } from "next";
 import EpisodePageView from "@/components/watch/EpisodePageView";
-import { getEpisodePageDataById } from "@/lib/episode-page-data";
+import { getEpisodePageDataBySeoPath } from "@/lib/episode-page-data";
 
 interface PageProps {
-  params: { id: string };
+  params: { slug: string; seasonNumber: string; episodeNumber: string };
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   try {
-    const data = await getEpisodePageDataById(params.id);
+    const data = await getEpisodePageDataBySeoPath(
+      params.slug,
+      Number(params.seasonNumber),
+      Number(params.episodeNumber)
+    );
     return {
       title: data.title,
       description: data.description,
@@ -29,9 +33,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
         images: [data.imageUrl],
       },
       alternates: { canonical: data.canonicalUrl },
-      robots: data.shouldIndexRawRoute
-        ? { index: true, follow: true }
-        : { index: false, follow: true },
+      robots: { index: true, follow: true },
     };
   } catch {
     return {
@@ -41,7 +43,11 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   }
 }
 
-export default async function EpisodePage({ params }: PageProps) {
-  const data = await getEpisodePageDataById(params.id);
+export default async function SeoEpisodePage({ params }: PageProps) {
+  const data = await getEpisodePageDataBySeoPath(
+    params.slug,
+    Number(params.seasonNumber),
+    Number(params.episodeNumber)
+  );
   return <EpisodePageView data={data} />;
 }

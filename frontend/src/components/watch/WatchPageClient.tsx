@@ -216,8 +216,8 @@ interface WatchPageClientProps {
   movie: Movie | null;
   progressTargetId?: string;
   episodeNavigation?: {
-    previousEpisode?: EpisodeLink | null;
-    nextEpisode?: EpisodeLink | null;
+    previousEpisode?: (EpisodeLink & { href?: string }) | null;
+    nextEpisode?: (EpisodeLink & { href?: string }) | null;
   };
 }
 
@@ -260,6 +260,11 @@ function RecommendationsRow({ movies }: { movies: Movie[] }) {
       </div>
     </div>
   );
+}
+
+function getEpisodeHref(episode?: (EpisodeLink & { href?: string }) | null): string {
+  if (!episode) return "/series";
+  return episode.href || `/episode/${episode.id}`;
 }
 
 export default function WatchPageClient({
@@ -522,7 +527,7 @@ export default function WatchPageClient({
     }, 1000);
 
     autoNextTimeoutRef.current = setTimeout(() => {
-      router.push(`/episode/${episodeNavigation.nextEpisode?.id}`);
+      router.push(getEpisodeHref(episodeNavigation.nextEpisode));
     }, 5000);
 
     return () => {
@@ -801,7 +806,7 @@ export default function WatchPageClient({
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               {episodeNavigation?.previousEpisode ? (
                 <Link
-                  href={`/episode/${episodeNavigation.previousEpisode.id}`}
+                  href={getEpisodeHref(episodeNavigation.previousEpisode)}
                   className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-brand-border bg-brand-dark px-4 py-3 text-sm font-medium text-white transition-colors hover:border-brand-red hover:text-brand-red sm:w-auto sm:min-w-[220px] sm:justify-start"
                 >
                   <ChevronLeft size={18} />
@@ -812,7 +817,7 @@ export default function WatchPageClient({
               )}
               {episodeNavigation?.nextEpisode ? (
                 <Link
-                  href={`/episode/${episodeNavigation.nextEpisode.id}`}
+                  href={getEpisodeHref(episodeNavigation.nextEpisode)}
                   className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-brand-border bg-brand-dark px-4 py-3 text-sm font-medium text-white transition-colors hover:border-brand-red hover:text-brand-red sm:w-auto sm:min-w-[220px] sm:justify-end"
                 >
                   <span>{`Keyingi qism: ${episodeNavigation.nextEpisode.episode_number}-qism`}</span>

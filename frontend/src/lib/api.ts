@@ -31,14 +31,19 @@ export interface Movie {
   record_id?: string;
   code: string;
   title: string;
+  title_uz?: string;
+  original_title?: string;
   description: string;
+  description_uz?: string;
   poster_url: string;
   poster_thumb_url?: string; // Thumbnail for cards
   poster_medium_url?: string; // Medium size for detail pages
   backdrop_url: string;
   year: number;
   genre: string[];
+  genres_uz?: string[];
   country: string;
+  countries_uz?: string[];
   video_url: string;
   embed_url: string;
   source_type: VideoSourceType;

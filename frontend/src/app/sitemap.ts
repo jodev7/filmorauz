@@ -1,20 +1,46 @@
 import { MetadataRoute } from "next";
 import { getMovies } from "@/lib/api";
 import { getSeries } from "@/lib/series-api";
+import { getPublicGenres } from "@/lib/genres";
+import {
+  buildBestEpisodeUrl,
+  buildMovieUrl,
+  buildSeasonUrl,
+  buildSeriesUrl,
+  SITE_URL,
+} from "@/lib/content-routes";
 
 export const dynamic = "force-dynamic";
 
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
-
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
+  const entries: MetadataRoute.Sitemap = [];
+  const seenUrls = new Set<string>();
 
-  const entries: MetadataRoute.Sitemap = [
-    { url: `${SITE_URL}/`, lastModified: now, changeFrequency: "daily", priority: 1.0 },
-    { url: `${SITE_URL}/movies`, lastModified: now, changeFrequency: "daily", priority: 0.9 },
-    { url: `${SITE_URL}/series`, lastModified: now, changeFrequency: "daily", priority: 0.9 },
-    { url: `${SITE_URL}/collections`, lastModified: now, changeFrequency: "weekly", priority: 0.6 },
-  ];
+  const pushEntry = (entry: MetadataRoute.Sitemap[number]) => {
+    if (seenUrls.has(entry.url)) return;
+    seenUrls.add(entry.url);
+    entries.push(entry);
+  };
+
+  pushEntry({ url: `${SITE_URL}/`, lastModified: now, changeFrequency: "daily", priority: 1.0 });
+  pushEntry({ url: `${SITE_URL}/movies`, lastModified: now, changeFrequency: "daily", priority: 0.8 });
+  pushEntry({ url: `${SITE_URL}/series`, lastModified: now, changeFrequency: "daily", priority: 0.8 });
+  pushEntry({ url: `${SITE_URL}/genres`, lastModified: now, changeFrequency: "weekly", priority: 0.7 });
+
+  try {
+    const genres = await getPublicGenres();
+    for (const genre of genres) {
+      pushEntry({
+        url: `${SITE_URL}/genres/${encodeURIComponent(genre)}`,
+        lastModified: now,
+        changeFrequency: "weekly",
+        priority: 0.7,
+      });
+    }
+  } catch {
+    // Ignore genre sitemap failures.
+  }
 
   // Movies
   try {
@@ -26,9 +52,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       if (data.length === 0) break;
       for (const m of data) {
         if (!m.slug || seen.has(m.slug)) continue;
+        if (m.approval_status && m.approval_status !== "approved") continue;
+        if (m.is_published === false && m.approval_status) continue;
         seen.add(m.slug);
-        entries.push({
-          url: `${SITE_URL}/movies/${m.slug}`,
+        pushEntry({
+          url: buildMovieUrl(m.slug),
           lastModified: m.updated_at ? new Date(m.updated_at) : (m.created_at ? new Date(m.created_at) : now),
           changeFrequency: "weekly",
           priority: 0.8,
@@ -41,28 +69,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     console.error("sitemap: failed to fetch movies", e);
   }
 
-  // Genre pages from movie genres
-  try {
-    const res = await getMovies({ page: 1, limit: 100 });
-    const genres = new Set<string>();
-    for (const m of res.data || []) {
-      for (const g of m.genre || []) {
-        if (g) genres.add(g.toLowerCase());
-      }
-    }
-    for (const g of Array.from(genres)) {
-      entries.push({
-        url: `${SITE_URL}/movies?genre=${encodeURIComponent(g)}`,
-        lastModified: now,
-        changeFrequency: "weekly",
-        priority: 0.5,
-      });
-    }
-  } catch {
-    // ignore
-  }
-
-  // Series + episodes
+  // Series + seasons + SEO episode URLs
   try {
     const seenSeries = new Set<string>();
     let page = 1;
@@ -73,8 +80,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       for (const s of data) {
         if (!s.slug || seenSeries.has(s.slug)) continue;
         seenSeries.add(s.slug);
-        entries.push({
-          url: `${SITE_URL}/series/${s.slug}`,
+        pushEntry({
+          url: buildSeriesUrl(s.slug),
           lastModified: s.updated_at ? new Date(s.updated_at) : now,
           changeFrequency: "weekly",
           priority: 0.8,
@@ -84,10 +91,21 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         try {
           const detail = await getSeriesBySlugSafe(s.slug);
           for (const season of detail?.seasons || []) {
+            pushEntry({
+              url: buildSeasonUrl(s.slug, season.season.season_number),
+              lastModified: season.season.updated_at ? new Date(season.season.updated_at) : now,
+              changeFrequency: "weekly",
+              priority: 0.7,
+            });
             for (const ep of season.episodes || []) {
               if (!ep.id) continue;
-              entries.push({
-                url: `${SITE_URL}/episode/${ep.id}`,
+              pushEntry({
+                url: buildBestEpisodeUrl({
+                  episodeId: ep.id,
+                  seriesSlug: s.slug,
+                  seasonNumber: season.season.season_number,
+                  episodeNumber: ep.episode_number,
+                }),
                 lastModified: ep.updated_at ? new Date(ep.updated_at) : now,
                 changeFrequency: "weekly",
                 priority: 0.6,

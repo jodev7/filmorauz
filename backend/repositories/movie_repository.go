@@ -19,6 +19,13 @@ type MovieRepository struct {
 	col *mongo.Collection
 }
 
+type SitemapMovieRecord struct {
+	ID        primitive.ObjectID `bson:"_id"`
+	Slug      string             `bson:"slug"`
+	Genre     []string           `bson:"genre"`
+	UpdatedAt time.Time          `bson:"updated_at"`
+}
+
 func normalizeGenreValues(genres []string) []string {
 	if len(genres) == 0 {
 		return []string{}
@@ -91,6 +98,45 @@ func NewMovieRepository(db *mongo.Database) *MovieRepository {
 	repo := &MovieRepository{col: db.Collection("movies")}
 	repo.EnsureIndexes()
 	return repo
+}
+
+func (r *MovieRepository) ListPublishedForSitemap() ([]SitemapMovieRecord, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	filter := bson.M{
+		"$or": []bson.M{
+			{"is_published": true},
+			{"is_published": bson.M{"$exists": false}},
+		},
+	}
+
+	opts := options.Find().
+		SetProjection(bson.M{
+			"_id":        1,
+			"slug":       1,
+			"genre":      1,
+			"updated_at": 1,
+		}).
+		SetSort(bson.D{{Key: "updated_at", Value: -1}, {Key: "_id", Value: 1}})
+
+	cursor, err := r.col.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var records []SitemapMovieRecord
+	if err := cursor.All(ctx, &records); err != nil {
+		return nil, err
+	}
+	if records == nil {
+		records = []SitemapMovieRecord{}
+	}
+	for i := range records {
+		records[i].Genre = normalizeGenreValues(records[i].Genre)
+	}
+	return records, nil
 }
 
 // EnsureIndexes creates required indexes on the movies collection

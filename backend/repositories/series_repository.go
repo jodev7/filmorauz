@@ -20,6 +20,28 @@ type SeriesRepository struct {
 	episodeCol *mongo.Collection
 }
 
+type SitemapSeriesRecord struct {
+	ID        primitive.ObjectID `bson:"_id"`
+	Slug      string             `bson:"slug"`
+	Genre     []string           `bson:"genre"`
+	UpdatedAt time.Time          `bson:"updated_at"`
+}
+
+type SitemapSeasonRecord struct {
+	ID           primitive.ObjectID `bson:"_id"`
+	SeriesID     primitive.ObjectID `bson:"series_id"`
+	SeasonNumber int                `bson:"season_number"`
+	UpdatedAt    time.Time          `bson:"updated_at"`
+}
+
+type SitemapEpisodeRecord struct {
+	ID            primitive.ObjectID `bson:"_id"`
+	SeriesID      primitive.ObjectID `bson:"series_id"`
+	SeasonID      primitive.ObjectID `bson:"season_id"`
+	EpisodeNumber int                `bson:"episode_number"`
+	UpdatedAt     time.Time          `bson:"updated_at"`
+}
+
 func normalizeSeriesGenres(genres []string) []string {
 	if len(genres) == 0 {
 		return []string{}
@@ -94,6 +116,121 @@ func NewSeriesRepository(db *mongo.Database) *SeriesRepository {
 		seasonCol:  db.Collection("seasons"),
 		episodeCol: db.Collection("episodes"),
 	}
+}
+
+func (r *SeriesRepository) ListPublishedForSitemap() ([]SitemapSeriesRecord, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	filter := bson.M{
+		"$or": []bson.M{
+			{"is_published": true},
+			{"is_published": bson.M{"$exists": false}},
+		},
+	}
+
+	opts := options.Find().
+		SetProjection(bson.M{
+			"_id":        1,
+			"slug":       1,
+			"genre":      1,
+			"updated_at": 1,
+		}).
+		SetSort(bson.D{{Key: "updated_at", Value: -1}, {Key: "_id", Value: 1}})
+
+	cursor, err := r.seriesCol.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var records []SitemapSeriesRecord
+	if err := cursor.All(ctx, &records); err != nil {
+		return nil, err
+	}
+	if records == nil {
+		records = []SitemapSeriesRecord{}
+	}
+	for i := range records {
+		records[i].Genre = normalizeSeriesGenres(records[i].Genre)
+	}
+	return records, nil
+}
+
+func (r *SeriesRepository) GetSeasonsBySeriesIDs(seriesIDs []primitive.ObjectID) ([]SitemapSeasonRecord, error) {
+	if len(seriesIDs) == 0 {
+		return []SitemapSeasonRecord{}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	opts := options.Find().
+		SetProjection(bson.M{
+			"_id":           1,
+			"series_id":     1,
+			"season_number": 1,
+			"updated_at":    1,
+		}).
+		SetSort(bson.D{
+			{Key: "series_id", Value: 1},
+			{Key: "season_number", Value: 1},
+			{Key: "_id", Value: 1},
+		})
+
+	cursor, err := r.seasonCol.Find(ctx, bson.M{"series_id": bson.M{"$in": seriesIDs}}, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var records []SitemapSeasonRecord
+	if err := cursor.All(ctx, &records); err != nil {
+		return nil, err
+	}
+	if records == nil {
+		records = []SitemapSeasonRecord{}
+	}
+	return records, nil
+}
+
+func (r *SeriesRepository) GetEpisodesBySeriesIDs(seriesIDs []primitive.ObjectID) ([]SitemapEpisodeRecord, error) {
+	if len(seriesIDs) == 0 {
+		return []SitemapEpisodeRecord{}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	opts := options.Find().
+		SetProjection(bson.M{
+			"_id":            1,
+			"series_id":      1,
+			"season_id":      1,
+			"episode_number": 1,
+			"updated_at":     1,
+		}).
+		SetSort(bson.D{
+			{Key: "series_id", Value: 1},
+			{Key: "season_id", Value: 1},
+			{Key: "episode_number", Value: 1},
+			{Key: "_id", Value: 1},
+		})
+
+	cursor, err := r.episodeCol.Find(ctx, bson.M{"series_id": bson.M{"$in": seriesIDs}}, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var records []SitemapEpisodeRecord
+	if err := cursor.All(ctx, &records); err != nil {
+		return nil, err
+	}
+	if records == nil {
+		records = []SitemapEpisodeRecord{}
+	}
+	return records, nil
 }
 
 // Series CRUD

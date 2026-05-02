@@ -17,6 +17,8 @@ import { getMovie, getRecommendations } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
 import { formatDuration } from "@/lib/movie-utils";
 import { normalizeMediaUrl } from "@/lib/image-utils";
+import { buildMovieUrl } from "@/lib/content-routes";
+import { buildContentDescription, buildContentKeywords, buildContentTitle, pickSeoImage } from "@/lib/seo";
 import {
 	getLocalizedTitle,
 	getLocalizedDescription,
@@ -38,30 +40,31 @@ interface Props {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = params;
-  const canonicalUrl = `${SITE_URL}/movies/${slug}`;
+  const canonicalUrl = buildMovieUrl(slug);
   
   try {
     const movie = await getMovie(slug);
-    const imageUrl = normalizeMediaUrl(movie.backdrop_url || movie.poster_url, `${SITE_URL}/og-image.jpg`);
+    const imageUrl = pickSeoImage(movie.backdrop_url, movie.poster_url);
     
-    // Get localized metadata based on locale
     const localizedTitle = getLocalizedTitle(movie);
-    const localizedDescription = getLocalizedDescription(movie);
-    const localizedGenres = getLocalizedGenres(movie);
-    
-    const genresStr = localizedGenres.length > 0 ? localizedGenres.join(", ") : "kino";
-    const seoTitle = `${localizedTitle} (${movie.year}) o'zbek tilida HD tomosha qilish | FilmoraUz`;
-    const description = `${localizedTitle} ${movie.year} o'zbek tilida HD sifatda tomosha qiling. Janr: ${genresStr}. FilmoraUz'da online kino.${localizedDescription ? " " + localizedDescription.slice(0, 100) : ""}`;
+    const seoTitle = buildContentTitle(localizedTitle);
+    const description = buildContentDescription(localizedTitle, movie.year);
 
     return {
       title: seoTitle,
-      description: description,
-      keywords: [localizedTitle, movie.year?.toString(), ...localizedGenres, "film", "tomosha", "kino", "o'zbek tilida", "HD"],
+      description,
+      keywords: buildContentKeywords({
+        title: localizedTitle,
+        originalTitle: movie.original_title,
+        uzbekTitle: movie.title_uz || localizedTitle,
+        genres: movie.genre,
+        extra: [movie.year?.toString() || "", "kino"],
+      }),
       authors: [{ name: "FILMORAUZ" }],
       publisher: "FILMORAUZ",
       openGraph: {
         title: seoTitle,
-        description: description,
+        description,
         url: canonicalUrl,
         siteName: "FILMORAUZ",
         type: "video.movie",
@@ -127,6 +130,7 @@ export default async function MovieDetailPage({ params }: Props) {
   const localizedGenres = getLocalizedGenres(movie);
   const localizedCountry = getLocalizedCountry(movie);
   const movieGenres = Array.isArray(movie.genre) ? movie.genre : [];
+  const movieUrl = buildMovieUrl(slug);
 
   // JSON-LD structured data for SEO - Breadcrumbs
   const breadcrumbJsonLd = {
@@ -149,7 +153,7 @@ export default async function MovieDetailPage({ params }: Props) {
         "@type": "ListItem",
         position: 3,
         name: localizedTitle,
-        item: `${SITE_URL}/movies/${slug}`,
+        item: movieUrl,
       },
     ],
   };
@@ -159,12 +163,13 @@ export default async function MovieDetailPage({ params }: Props) {
     "@context": "https://schema.org",
     "@type": "Movie",
     name: localizedTitle,
-    description: localizedDescription,
-    image: normalizeMediaUrl(movie.poster_url || movie.backdrop_url, `${SITE_URL}/og-image.jpg`),
+    alternateName: movie.original_title || undefined,
+    description: localizedDescription || buildContentDescription(localizedTitle, movie.year),
+    image: [pickSeoImage(movie.poster_url, movie.backdrop_url)],
     datePublished: movie.year?.toString(),
     genre: localizedGenres,
     countryOfOrigin: localizedCountry,
-    url: `${SITE_URL}/movies/${slug}`,
+    url: movieUrl,
     duration: movie.duration ? `PT${movie.duration}M` : undefined,
     quality: movie.quality,
     potentialAction: {
