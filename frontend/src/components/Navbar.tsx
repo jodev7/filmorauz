@@ -15,6 +15,12 @@ import { getLocalizedTitle, getLocalizedGenres } from "@/lib/localization";
 import { DEFAULT_AVATAR_PLACEHOLDER, DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
 
+const GENRE_NAV_LINKS = [
+  { href: "/movies?genre=animation", label: "Multifilmlar" },
+  { href: "/movies?genre=anime", label: "Anime" },
+  { href: "/movies?genre=dorama", label: "Dorama" },
+];
+
 export default function Navbar() {
   const { t } = useI18n();
   const [searchOpen, setSearchOpen] = useState(false);
@@ -137,24 +143,15 @@ export default function Navbar() {
           <Link href="/series" className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors">
             Seriallar
           </Link>
-          <Link
-            href="/movies?genre=action"
-            className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors"
-          >
-            {t("common.action")}
-          </Link>
-          <Link
-            href="/movies?genre=drama"
-            className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors"
-          >
-            {t("common.drama")}
-          </Link>
-          <Link
-            href="/movies?genre=comedy"
-            className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors"
-          >
-            {t("common.comedy")}
-          </Link>
+          {GENRE_NAV_LINKS.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors"
+            >
+              {item.label}
+            </Link>
+          ))}
           <Link
             href="/premium"
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-yellow-500 hover:text-yellow-400 hover:bg-yellow-500/10 transition-colors"
@@ -365,9 +362,7 @@ export default function Navbar() {
             { href: "/", label: t("common.home") },
             { href: "/movies", label: t("common.movies") },
             { href: "/series", label: "Seriallar" },
-            { href: "/movies?genre=action", label: t("common.action") },
-            { href: "/movies?genre=drama", label: t("common.drama") },
-            { href: "/movies?genre=comedy", label: t("common.comedy") },
+            ...GENRE_NAV_LINKS,
           ].map((item) => (
             <Link
               key={item.href}

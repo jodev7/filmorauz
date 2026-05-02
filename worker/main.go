@@ -216,6 +216,47 @@ func main() {
 		}
 	}()
 
+	// Local-artifact janitor: every 30 minutes, scan completed jobs that
+	// still carry a local_path/output_path and run the prefix-safe cleanup.
+	// Mops up cases where the post-success sweep was interrupted or the
+	// worker was restarted between Mongo write and unlink.
+	go func() {
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+		runJanitorOnce := func() {
+			jobs, err := jobRepo.ListCompletedWithLocalArtifacts(workerCtx, 200)
+			if err != nil {
+				log.Printf("[CLEANUP] janitor: list error: %v", err)
+				return
+			}
+			if len(jobs) == 0 {
+				return
+			}
+			log.Printf("[CLEANUP] janitor: scanning %d completed jobs with local artifacts", len(jobs))
+			for _, j := range jobs {
+				actions, err := pipe.CleanupCompletedJobArtifacts(j)
+				if err != nil {
+					log.Printf("[CLEANUP] janitor: job=%s err=%v", j.ID.Hex(), err)
+					continue
+				}
+				for _, a := range actions {
+					log.Printf("[CLEANUP] janitor: job=%s %s", j.ID.Hex(), a)
+				}
+			}
+		}
+		// One sweep at startup so a restart immediately catches anything the
+		// previous worker process didn't finish cleaning.
+		runJanitorOnce()
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case <-ticker.C:
+				runJanitorOnce()
+			}
+		}
+	}()
+
 	// Fixed-size processing pool - each goroutine owns one processing slot.
 	log.Printf("[QUEUE] processing worker started concurrency=%d", processConcurrency)
 	for workerIndex := 0; workerIndex < processConcurrency; workerIndex++ {

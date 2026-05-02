@@ -9,9 +9,9 @@ import { logger } from "@/lib/logger";
 
 const QUALITIES = ["480p", "720p", "1080p", "1080p Ultra", "4K"];
 const GENRE_OPTIONS = [
-  "Action", "Adventure", "Animation", "Comedy", "Crime",
-  "Documentary", "Drama", "Fantasy", "Horror", "Mystery",
-  "Romance", "Sci-Fi", "Thriller", "Western",
+  "Action", "Adventure", "Animation", "Anime", "Comedy",
+  "Crime", "Documentary", "Dorama", "Drama", "Fantasy",
+  "Horror", "Mystery", "Romance", "Sci-Fi", "Thriller", "Western",
 ];
 
 const SOURCE_TYPE_OPTIONS: { value: VideoSourceType; label: string; description: string }[] = [

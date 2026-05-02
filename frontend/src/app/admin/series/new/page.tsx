@@ -11,9 +11,9 @@ import MediaImage from "@/components/ui/MediaImage";
 
 // Genre options for series (lowercase, matching DB)
 const GENRE_OPTIONS = [
-  "action", "adventure", "animation", "comedy", "crime",
-  "documentary", "drama", "fantasy", "horror", "mystery",
-  "romance", "sci-fi", "thriller", "western",
+  "action", "adventure", "animation", "anime", "comedy",
+  "crime", "documentary", "dorama", "drama", "fantasy",
+  "horror", "mystery", "romance", "sci-fi", "thriller", "western",
 ];
 
 export default function NewSeriesPage() {

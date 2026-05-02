@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Clock, Calendar, Heart, Eye, Crown } from "lucide-react";
 import VideoPlayer from "@/components/VideoPlayer";
 import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveUnifiedWatchProgress, getWatchProgress, resetWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, getProtectedMediaAccess, Ad, Movie } from "@/lib/api";
@@ -214,6 +214,7 @@ function resolveProgressTargetId(movie: Movie): string {
 
 interface WatchPageClientProps {
   movie: Movie | null;
+  progressTargetId?: string;
   episodeNavigation?: {
     previousEpisode?: EpisodeLink | null;
     nextEpisode?: EpisodeLink | null;
@@ -261,7 +262,11 @@ function RecommendationsRow({ movies }: { movies: Movie[] }) {
   );
 }
 
-export default function WatchPageClient({ movie, episodeNavigation }: WatchPageClientProps) {
+export default function WatchPageClient({
+  movie,
+  progressTargetId: progressTargetIdProp,
+  episodeNavigation,
+}: WatchPageClientProps) {
   if (!movie) {
     return (
       <div className="flex items-center justify-center min-h-[50vh]">
@@ -273,6 +278,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   const { t } = useI18n();
   const { user, token } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
   const [isFavorite, setIsFavorite] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [recommendations, setRecommendations] = useState<Movie[]>([]);
@@ -314,7 +320,7 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
   const isPremiumViewer = isUserPremium(user);
   const targetType = movie.type === "episode" ? "episode" : "movie";
   const isDev = process.env.NODE_ENV !== "production";
-  const progressTargetId = resolveProgressTargetId(movie);
+  const progressTargetId = String(progressTargetIdProp || resolveProgressTargetId(movie)).trim();
   const backHref = movie.type === "episode"
     ? movie.series_slug
       ? `/series/${movie.series_slug}`
@@ -374,12 +380,23 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
 
   // Fetch watch progress for resume
   useEffect(() => {
+    setResumePosition(0);
+    setSelectedStartPosition(0);
+    setResumePromptVisible(false);
+    latestProgressRef.current = { currentTime: 0, duration: 0 };
+    lastSavedAtRef.current = 0;
+
+    if (!progressTargetId) {
+      resumeResolvedRef.current = true;
+      return;
+    }
+
     if (!user || !token || !progressTargetId) return;
     resumeResolvedRef.current = false;
     getWatchProgress(token, progressTargetId, { targetType })
       .then((progress) => {
         if (isDev) {
-          console.log("[watch-progress] fetched", {
+          console.debug("[progress] fetched", {
             target_type: targetType,
             target_id: progressTargetId,
             current_time: progress.current_time,
@@ -401,33 +418,15 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
         if (!canResume) {
           resumeResolvedRef.current = true;
         }
-        if (isDev && !canResume) {
-          console.log("[watch-progress] resume skipped", {
-            reason:
-              progress.completed
-                ? "completed"
-                : progress.current_time <= 10
-                  ? "too_early"
-                  : progress.duration <= 0
-                    ? "no_duration"
-                    : progress.progress_percent >= 90
-                      ? "near_end"
-                      : progress.current_time >= progress.duration - 60
-                        ? "too_close_to_end"
-                        : "unknown",
-            target_type: targetType,
-            target_id: progressTargetId,
-          });
-        }
       })
       .catch(console.error);
   }, [user, token, progressTargetId, targetType, isDev]);
 
   useEffect(() => {
-    if (!user || !token) {
+    if (!user || !token || !progressTargetId) {
       resumeResolvedRef.current = true;
     }
-  }, [user, token]);
+  }, [user, token, progressTargetId]);
 
   // Fetch recommendations
   useEffect(() => {
@@ -439,53 +438,41 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
 
   const persistProgress = useCallback((force: boolean = false) => {
     if (!user || !token || !progressTargetId) return;
-    if (!playIntended) return;
     if (!resumeResolvedRef.current) return;
     const { currentTime, duration } = latestProgressRef.current;
     if (!Number.isFinite(currentTime) || !Number.isFinite(duration)) return;
-    if (duration <= 0 || currentTime < 5) return;
-    if (currentTime >= duration - 5) return;
+    if (duration <= 0 || currentTime <= 5) return;
     const now = Date.now();
     if (!force && now - lastSavedAtRef.current < 10000) return;
     lastSavedAtRef.current = now;
-    if (isDev) {
-      console.log("[watch-progress] saving", {
-        target_type: targetType,
-        target_id: progressTargetId,
-        current_time: Math.floor(currentTime),
-        duration: Math.floor(duration),
-        force,
-      });
-    }
-    saveUnifiedWatchProgress(token, progressTargetId, currentTime, duration, { targetType }).catch(console.error);
+    saveUnifiedWatchProgress(token, progressTargetId, currentTime, duration, {
+      targetType,
+      keepalive: force,
+    }).catch(console.error);
   }, [user, token, progressTargetId, targetType, isDev]);
 
   // Save progress periodically during playback
   const handleTimeUpdate = (currentTime: number, duration: number) => {
     if (!user || !token) return;
     if (!Number.isFinite(currentTime) || !Number.isFinite(duration) || duration <= 0) return;
-    if (currentTime <= 1) return;
+    if (currentTime <= 5) return;
     latestProgressRef.current = { currentTime, duration };
     persistProgress(false);
   };
 
   const handlePauseSave = useCallback((currentTime: number, duration: number) => {
     if (!Number.isFinite(currentTime) || !Number.isFinite(duration) || duration <= 0) return;
-    if (currentTime <= 1) return;
+    if (currentTime <= 5) return;
     latestProgressRef.current = { currentTime, duration };
     persistProgress(true);
   }, [persistProgress]);
 
   const handleInitialSeekResolved = useCallback((applied: boolean) => {
     resumeResolvedRef.current = true;
-    if (isDev) {
-      console.log("[watch-progress] initial seek resolved", {
-        applied,
-        target_type: targetType,
-        target_id: progressTargetId,
-      });
+    if (isDev && applied && selectedStartPosition > 0) {
+      console.debug("[progress] seek applied", selectedStartPosition);
     }
-  }, [isDev, progressTargetId, targetType]);
+  }, [isDev, selectedStartPosition]);
 
   // Handle video end
   const handleVideoEnded = () => {
@@ -576,13 +563,24 @@ export default function WatchPageClient({ movie, episodeNavigation }: WatchPageC
         persistProgress(true);
       }
     };
+    const flushOnPageHide = () => {
+      persistProgress(true);
+    };
     window.addEventListener("beforeunload", flushOnUnload);
+    window.addEventListener("pagehide", flushOnPageHide);
     document.addEventListener("visibilitychange", flushOnHidden);
     return () => {
       window.removeEventListener("beforeunload", flushOnUnload);
+      window.removeEventListener("pagehide", flushOnPageHide);
       document.removeEventListener("visibilitychange", flushOnHidden);
     };
   }, [persistProgress]);
+
+  useEffect(() => {
+    return () => {
+      persistProgress(true);
+    };
+  }, [pathname, persistProgress]);
 
   // Check if movie is favorite
   useEffect(() => {

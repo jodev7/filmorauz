@@ -154,6 +154,13 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 		}
 	}
 
+	// Prefix-safe post-completion sweep — same guarantees as the movie
+	// pipeline. Catches the parser MP4 if `localPath` ever pointed at
+	// something the inline cleanupFile refused (path mismatch, race with a
+	// parallel write, etc.). In dev mode this is a no-op.
+	job.Status = models.IngestionStatusCompleted
+	p.CleanupAfterSuccess(job, localPath, hlsDir)
+
 	log.Printf("[EPISODE] done job=%s series=%s S%02dE%02d streaming=%s",
 		jobID, job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, streamingURL)
 	return nil

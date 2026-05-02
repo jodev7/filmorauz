@@ -4,10 +4,12 @@
 export const UZBEK_GENRE_MAP: Record<string, string> = {
 	"Action": "Jangari",
 	"Adventure": "Sarguzasht",
-	"Animation": "Animatsiya",
+	"Animation": "Multifilmlar",
+	"Anime": "Anime",
 	"Comedy": "Komediya",
 	"Crime": "Jinoyat",
 	"Documentary": "Hujjatli",
+	"Dorama": "Dorama",
 	"Drama": "Drama",
 	"Family": "Oila",
 	"Fantasy": "Fantastika",
@@ -26,7 +28,7 @@ export const UZBEK_GENRE_MAP: Record<string, string> = {
 	"TV Movie": "TV film",
 	"War": "Urush",
 	"Western": "Vestern",
-	"Cartoon": "Multfilm",
+	"Cartoon": "Multifilmlar",
 };
 
 // Case-insensitive lookup — DB stores lowercase, legacy data may be capitalized.

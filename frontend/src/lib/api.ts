@@ -831,6 +831,7 @@ export interface FavoriteItem {
 
 interface TargetOptions {
   targetType?: "movie" | "episode" | "series";
+  keepalive?: boolean;
 }
 
 export interface WatchProgressSummary {
@@ -893,11 +894,12 @@ export async function saveUnifiedWatchProgress(
     duration: normalizedDuration,
   };
   if (process.env.NODE_ENV !== "production") {
-    console.debug("save progress payload", payload);
+    console.debug("[progress] save payload", payload);
   }
   const res = await fetch(`${API_URL}/watch/progress`, {
     method: "POST",
     headers: authHeaders(token),
+    keepalive: Boolean(options?.keepalive),
     body: JSON.stringify(payload),
   });
   if (!res.ok) {

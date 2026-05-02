@@ -96,6 +96,7 @@ export default async function EpisodePage({ params }: PageProps) {
 
   const movieData = episode ? {
     id: episode.id,
+    _id: (episode as Episode & { _id?: string })._id || episode.id,
     title: episode.title,
     description: episode.description || "",
     video_url: episode.video_url || "",
@@ -156,6 +157,7 @@ export default async function EpisodePage({ params }: PageProps) {
         <>
           <WatchPageClient
             movie={movieData as any}
+            progressTargetId={((episode as Episode & { _id?: string })._id || episode.id)}
             episodeNavigation={{
               previousEpisode,
               nextEpisode,

@@ -310,6 +310,7 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
             strong_keywords = (
                 "barcha qismlar", "barcha qismlari",
                 "qismlardan tanlash", "qismlar to'liq", "qismlar to`liq",
+                "qismlar",
                 "fasl", "mavsum",            # uz "season"
                 "сезон", "сериал", "серии",  # ru
                 "seriallar",
@@ -345,6 +346,8 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
             ".seasons", ".season-list", ".season-tabs",
             "[class*='episode']", "[class*='season']", "[class*='qismlar']",
             "[class*='fasl']", "ul.serii", "ol.episodes",
+            ".fs-episodes", ".fs-poster__serial-badge", ".badge--series",
+            "[itemtype*='TVSeries']",
             "a[href*='/episode/']", "a[title*='-qism']", "a[title*='-fasl']",
             ".batcoh-list", ".batcoh-item",
         )

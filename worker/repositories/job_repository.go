@@ -353,6 +353,32 @@ func (r *JobRepository) ResetStaleJobs(ctx context.Context) (int64, error) {
 	return r.RecoverStaleJobs(ctx)
 }
 
+// ListCompletedWithLocalArtifacts returns completed jobs that still carry a
+// local_path or output_path on disk — i.e. the worker's post-success
+// cleanup didn't run or didn't reach the file. Used by the cleanup janitor
+// to mop up after partial failures (process killed mid-cleanup, mode was
+// dev but later flipped to prod, etc.).
+func (r *JobRepository) ListCompletedWithLocalArtifacts(ctx context.Context, limit int64) ([]*models.IngestionJob, error) {
+	filter := bson.M{
+		"status": models.IngestionStatusCompleted,
+		"$or": []bson.M{
+			{"local_path": bson.M{"$exists": true, "$ne": ""}},
+			{"output_path": bson.M{"$exists": true, "$ne": ""}},
+		},
+	}
+	opts := options.Find().SetLimit(limit).SetSort(bson.M{"completed_at": -1})
+	cursor, err := r.collection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var jobs []*models.IngestionJob
+	if err := cursor.All(ctx, &jobs); err != nil {
+		return nil, err
+	}
+	return jobs, nil
+}
+
 func (r *JobRepository) RepairCompletedDownloads(ctx context.Context, downloadDir string) (int64, error) {
 	filter := bson.M{
 		"progress": bson.M{"$gte": 100},

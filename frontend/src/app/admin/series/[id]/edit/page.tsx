@@ -198,9 +198,9 @@ interface SeasonWithEpisodes {
 
 // Stored lowercase English (matches DB). Displayed with `capitalize` CSS.
 const GENRE_OPTIONS = [
-  "action", "adventure", "animation", "comedy", "crime",
-  "documentary", "drama", "fantasy", "horror", "mystery",
-  "romance", "sci-fi", "thriller", "western",
+  "action", "adventure", "animation", "anime", "comedy",
+  "crime", "documentary", "dorama", "drama", "fantasy",
+  "horror", "mystery", "romance", "sci-fi", "thriller", "western",
 ];
 
 export default function EditSeriesPage() {

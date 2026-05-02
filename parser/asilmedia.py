@@ -429,28 +429,75 @@ class AsilmediaParser(BaseParser):
                              "poster": r.poster, "source_id": r.source_id,
                              "description": r.description, "source": r.source} for r in results]
             dict_results = deduplicate_results(dict_results, key="link")
-            from helpers import detect_content_type as _detect_ct
             new_results = []
+            logger.info(f"[ASILMEDIA] source=asilmedia query={query!r} raw result count={len(dict_results)}")
             for r in dict_results:
-                # Synthesize a tiny soup from title+description so the strong
-                # keyword scanner ("serial", "fasl", "barcha qismlar", N-qism)
-                # can fire even though we don't have the full DOM card here.
-                try:
-                    from bs4 import BeautifulSoup as _BS
-                    sniff_html = (r.get("title") or "") + " \n " + (r.get("description") or "")
-                    sniff_soup = _BS(f"<div>{sniff_html}</div>", "lxml")
-                except Exception:
-                    sniff_soup = None
-                ct, reason = _detect_ct(r["link"], "asilmedia", soup=sniff_soup)
-                logger.info(f"[SEARCH] source=asilmedia result={r['link'][:80]} content_type={ct} reason={reason}")
+                ct = self._resolve_search_result_content_type(
+                    detail_url=r["link"],
+                    title=r.get("title", ""),
+                    description=r.get("description", ""),
+                    query=query,
+                )
+                logger.info(f"[SEARCH] source=asilmedia query={query!r} result={r['link'][:80]} content_type={ct}")
                 new_results.append(SearchResult(
                     title=r["title"], year=r["year"], poster=r["poster"],
                     description=r["description"], source_id=r["source_id"],
                     detail_url=r["link"], source=r["source"], content_type=ct
                 ))
             results = new_results
+            logger.info(f"[ASILMEDIA] source=asilmedia query={query!r} parsed count={len(results)}")
 
         return results
+
+    def _resolve_search_result_content_type(self, detail_url: str, title: str, description: str, query: str) -> str:
+        from helpers import detect_content_type as _detect_ct
+
+        try:
+            from bs4 import BeautifulSoup as _BS
+            sniff_html = (title or "") + " \n " + (description or "")
+            sniff_soup = _BS(f"<div>{sniff_html}</div>", "lxml")
+        except Exception:
+            sniff_soup = None
+
+        ct, reason = _detect_ct(detail_url, "asilmedia", soup=sniff_soup)
+        needs_detail_check = (
+            ct == "unknown" or
+            (ct == "movie" and "/films/" in (detail_url or "").lower())
+        )
+
+        if not needs_detail_check:
+            logger.info(
+                f"[ASILMEDIA] source=asilmedia query={query!r} request_url={detail_url} "
+                f"status=skip raw result count=1 parsed count=1 content_type={ct} reason={reason}"
+            )
+            return ct
+
+        try:
+            response = self.session.get(detail_url, timeout=30, headers={"Referer": self.BASE_URL + "/"})
+            status = response.status_code
+            logger.info(
+                f"[ASILMEDIA] source=asilmedia query={query!r} request_url={detail_url} status={status}"
+            )
+            if response.ok:
+                soup = BeautifulSoup(response.text, "lxml")
+                detail_ct, detail_reason = _detect_ct(detail_url, "asilmedia", soup=soup)
+                if detail_ct != "unknown":
+                    logger.info(
+                        f"[ASILMEDIA] source=asilmedia query={query!r} request_url={detail_url} "
+                        f"raw result count=1 parsed count=1 content_type={detail_ct} reason={detail_reason}"
+                    )
+                    return detail_ct
+        except Exception as exc:
+            logger.warning(
+                f"[ASILMEDIA] source=asilmedia query={query!r} request_url={detail_url} "
+                f"status=error content_type={ct} err={exc}"
+            )
+
+        logger.info(
+            f"[ASILMEDIA] source=asilmedia query={query!r} request_url={detail_url} "
+            f"raw result count=1 parsed count=1 content_type={ct} reason={reason}"
+        )
+        return ct
     
     def _extract_dle_card(self, card) -> Optional[SearchResult]:
         """

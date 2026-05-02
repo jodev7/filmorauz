@@ -72,8 +72,8 @@ def deduplicate_by_link(results: List[Dict]) -> List[Dict]:
     return unique
 
 
-def filter_by_query(query: str, results: List[Dict]) -> List[Dict]:
-    """Filter with safe fallback - returns unfiltered if filtering removes all"""
+def filter_by_query(query: str, results: List[Dict], allow_unfiltered_fallback: bool = False) -> List[Dict]:
+    """Filter by partial/fuzzy title matching."""
     if not query or not results:
         return results
     
@@ -103,8 +103,7 @@ def filter_by_query(query: str, results: List[Dict]) -> List[Dict]:
     for r in scored:
         r.pop("_score", None)
     
-    # SAFE FALLBACK: if filtering removed all but cards existed, return unfiltered
-    if not scored and results:
+    if not scored and results and allow_unfiltered_fallback:
         logger.warning(f"[FREEKINO] Filter removed all, returning {len(results)} unfiltered")
         return results
     
@@ -305,6 +304,71 @@ class FreekinoParser:
             "type": item_type,
             "content_type": item_type,
         }
+
+    def _search_json_autocomplete(self, query: str) -> List[Dict[str, Any]]:
+        url = f"{self.BASE_URL}/search/autocomplete?q={quote(query)}"
+        try:
+            response = self.session.get(
+                url,
+                timeout=30,
+                allow_redirects=True,
+                headers={**self.BROWSER_HEADERS, "Accept": "application/json, text/plain, */*"},
+            )
+            logger.info(
+                f"[FREEKINO] source=freekino query={query!r} request_url={url} status={response.status_code}"
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            logger.warning(f"[FREEKINO] autocomplete request failed query={query!r} url={url} err={exc}")
+            return []
+
+        items = payload.get("items") if isinstance(payload, dict) else []
+        raw_count = len(items) if isinstance(items, list) else 0
+        parsed = []
+        for item in items or []:
+            title = clean_text(str(item.get("title", "")))
+            detail_url = normalize_url(self.BASE_URL, str(item.get("url", "")))
+            poster = item.get("poster", "")
+            year = item.get("year", "")
+            result = self._build_result_payload(title=title, detail_url=detail_url, poster_url=poster, year=year)
+            if result:
+                parsed.append(result)
+        logger.info(
+            f"[FREEKINO] source=freekino query={query!r} request_url={url} "
+            f"raw result count={raw_count} parsed count={len(parsed)}"
+        )
+        return parsed
+
+    def _search_catalog_fallback(self, query: str) -> List[Dict[str, Any]]:
+        logger.info(f"[FREEKINO] source=freekino query={query!r} fallback=catalog")
+        collected: List[Dict[str, Any]] = []
+        plans = [
+            {"type_filter": "serial", "category_url": f"{self.BASE_URL}/serial", "max_pages": 8},
+            {"type_filter": "", "category_url": "", "max_pages": 4},
+        ]
+        for plan in plans:
+            for page in range(1, plan["max_pages"] + 1):
+                resp = self.list_catalog(
+                    page=page,
+                    limit=24,
+                    type_filter=plan["type_filter"],
+                    category_url=plan["category_url"],
+                )
+                items = resp.get("items", []) or []
+                logger.info(
+                    f"[FREEKINO] source=freekino query={query!r} request_url="
+                    f"{plan['category_url'] or self.CATALOG_BASE} status=catalog raw result count={len(items)} parsed count={len(items)}"
+                )
+                if not items:
+                    break
+                collected.extend(items)
+                matched = filter_by_query(query, deduplicate_by_link(collected))
+                if matched:
+                    return matched
+                if not resp.get("has_more"):
+                    break
+        return filter_by_query(query, deduplicate_by_link(collected))
     
     def _is_valid_title(self, title: str) -> bool:
         """
@@ -470,13 +534,20 @@ class FreekinoParser:
             logger.info(f"[FREEKINO] STAGE 7: Titles after filter: {titles_after}")
             logger.info(f"[FREEKINO] STAGE 7: After filter = {len(results)}")
             
-            # === FINAL SAFETY: if extracted cards existed but filter returned [], use extracted ===
-            if not results and extracted_cards:
-                logger.warning(f"[FREEKINO] FINAL: Filter returned [], using {len(extracted_cards)} extracted cards")
-                results = extracted_cards
-            
+            if not results:
+                json_results = self._search_json_autocomplete(query)
+                results = filter_by_query(query, deduplicate_by_link(json_results))
+
+            if not results:
+                results = self._search_catalog_fallback(query)
+
             logger.info(f"[FREEKINO] FINAL: Returning {len(results)} results")
             logger.info(f"[FREEKINO] search query={query!r} status={status} items_count={len(results)}")
+            for item in results:
+                logger.info(
+                    f"[FREEKINO] source=freekino query={query!r} item={item.get('detail_url') or item.get('link')} "
+                    f"content_type={item.get('content_type') or item.get('type')}"
+                )
             
         except requests.RequestException as e:
             logger.error(f"[FREEKINO] HTTP error: {e}")
@@ -508,7 +579,7 @@ class FreekinoParser:
             film_links = card.find_all("a", href=True)
             for a in film_links:
                 href = a.get("href", "")
-                if "/film/" in href or "/movie/" in href:
+                if "/film/" in href or "/movie/" in href or "/serial/" in href:
                     link = href
                     # Try title attribute first (e.g., "Watch Interstellar (2014)")
                     raw_title = a.get("title", "")

@@ -552,6 +552,15 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		} else {
 			log.Printf("[PIPELINE] Status updated to COMPLETED (100%%)")
 		}
+
+		// Prefix-safe post-completion sweep. The status was just set to
+		// completed above; mirror it on the in-memory copy so
+		// CleanupAfterSuccess's "must be completed" guard passes. Inline
+		// cleanup blocks earlier in this function still run for the common
+		// case — this is the safety net that catches anything they missed
+		// (e.g. a later-bound LocalPath set after the first delete attempt).
+		job.Status = models.IngestionStatusCompleted
+		p.CleanupAfterSuccess(job, job.LocalPath, hlsPath)
 	}
 
 	// ===== FINAL JOB RESULT =====

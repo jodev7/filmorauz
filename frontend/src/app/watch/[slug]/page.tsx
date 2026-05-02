@@ -47,7 +47,7 @@ export default async function WatchPage({ params }: PageProps) {
   return (
     <>
       <Navbar />
-      <WatchPageClient movie={movie} />
+      <WatchPageClient movie={movie} progressTargetId={movie._id || movie.id} />
       <Footer />
     </>
   );
