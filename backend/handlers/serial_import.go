@@ -22,12 +22,27 @@ import (
 // parserSerialEpisode mirrors the shape returned by the Python parser's
 // /serial-details endpoint.
 type parserSerialEpisode struct {
-	Season     int    `json:"season"`
-	Episode    int    `json:"episode"`
-	Title      string `json:"title"`
-	EpisodeURL string `json:"episode_url"`
-	VideoURL   string `json:"video_url"`
-	Poster     string `json:"poster"`
+	Season      int               `json:"season"`
+	Episode     int               `json:"episode"`
+	Title       string            `json:"title"`
+	EpisodeURL  string            `json:"episode_url"`
+	VideoURL    string            `json:"video_url"`
+	Poster      string            `json:"poster"`
+	QualityURLs map[string]string `json:"quality_urls"`
+	Error       string            `json:"error"`
+}
+
+type parserSerialSeasonEpisode struct {
+	EpisodeNumber int               `json:"episode_number"`
+	Title         string            `json:"title"`
+	VideoURL      string            `json:"video_url"`
+	QualityURLs   map[string]string `json:"quality_urls"`
+	Error         string            `json:"error"`
+}
+
+type parserSerialSeason struct {
+	SeasonNumber int                         `json:"season_number"`
+	Episodes     []parserSerialSeasonEpisode `json:"episodes"`
 }
 
 type parserSerialResponse struct {
@@ -40,6 +55,7 @@ type parserSerialResponse struct {
 	Backdrop    string                `json:"backdrop"`
 	Description string                `json:"description"`
 	Episodes    []parserSerialEpisode `json:"episodes"`
+	Seasons     []parserSerialSeason  `json:"seasons"`
 	Error       string                `json:"error"`
 }
 
@@ -127,7 +143,11 @@ func (h *IngestionHandler) importSerial(c *gin.Context, source, sourceID, detail
 
 	for _, ep := range payload.Episodes {
 		if ep.VideoURL == "" {
-			skipped = append(skipped, fmt.Sprintf("S%02dE%02d (no video_url)", ep.Season, ep.Episode))
+			reason := "no video_url"
+			if strings.TrimSpace(ep.Error) != "" {
+				reason = ep.Error
+			}
+			skipped = append(skipped, fmt.Sprintf("S%02dE%02d (%s)", ep.Season, ep.Episode, reason))
 			continue
 		}
 
