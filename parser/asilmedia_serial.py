@@ -122,6 +122,7 @@ class AsilmediaSerialParser:
             year = int(m_year.group(0))
 
         grouped: Dict[tuple[int, int], Dict] = {}
+        duplicates_removed = 0
 
         # Primary path: modern Asilmedia serial data lives in the hidden anchor
         # bundle the frontend JS uses to build the episode picker.
@@ -148,13 +149,19 @@ class AsilmediaSerialParser:
                 key = (season, episode_no)
                 quality_match = _QUALITY_RE.search(label) or _QUALITY_RE.search(href)
                 quality_key = f"{quality_match.group(1)}p" if quality_match else "unknown"
+                if key in grouped:
+                    duplicates_removed += 1
                 item = grouped.setdefault(
                     key,
                     {
                         "season": season,
                         "episode": episode_no,
+                        "season_number": season,
+                        "episode_number": episode_no,
                         "title": _parse_episode_title(label, episode_no),
                         "episode_url": url,
+                        "detail_url": url,
+                        "source_episode_url": url,
                         "video_url": "",
                         "poster": poster,
                         "quality_urls": {},
@@ -184,13 +191,19 @@ class AsilmediaSerialParser:
                     continue
                 season, episode_no = parsed
                 key = (season, episode_no)
+                if key in grouped:
+                    duplicates_removed += 1
                 item = grouped.setdefault(
                     key,
                     {
                         "season": season,
                         "episode": episode_no,
+                        "season_number": season,
+                        "episode_number": episode_no,
                         "title": f"{episode_no}-qism",
                         "episode_url": url,
+                        "detail_url": url,
+                        "source_episode_url": url,
                         "video_url": "",
                         "poster": poster,
                         "quality_urls": {},
@@ -228,6 +241,8 @@ class AsilmediaSerialParser:
                 {
                     "episode_number": item["episode"],
                     "title": item["title"],
+                    "detail_url": item["detail_url"],
+                    "source_episode_url": item["source_episode_url"],
                     "video_url": item.get("video_url", ""),
                     "quality_urls": item.get("quality_urls") or {},
                     **({"error": item["error"]} if item.get("error") else {}),
@@ -242,6 +257,11 @@ class AsilmediaSerialParser:
             for season_no in sorted(seasons_index.keys())
         ]
 
+        missing_numbers = self._compute_missing_numbers(flat_episodes)
+        logger.info(
+            f"[serial-details] source=asilmedia title={title!r} seasons={len(seasons)} "
+            f"episodes_found={len(flat_episodes)} missing_numbers={missing_numbers} duplicates_removed={duplicates_removed}"
+        )
         logger.info(
             f"[ASILMEDIA SERIAL] done title={title!r} episodes={len(flat_episodes)} resolved={resolved}"
         )
@@ -258,3 +278,17 @@ class AsilmediaSerialParser:
             "episodes": flat_episodes,
             "seasons": seasons,
         }
+
+    def _compute_missing_numbers(self, episodes: List[Dict]) -> List[int]:
+        by_season: Dict[int, set[int]] = {}
+        for item in episodes:
+            by_season.setdefault(item["season"], set()).add(item["episode"])
+        missing: List[int] = []
+        for season_no in sorted(by_season.keys()):
+            nums = sorted(by_season[season_no])
+            if not nums:
+                continue
+            for expected in range(nums[0], nums[-1] + 1):
+                if expected not in by_season[season_no]:
+                    missing.append(expected)
+        return missing
