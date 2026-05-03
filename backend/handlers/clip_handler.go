@@ -20,12 +20,13 @@ import (
 )
 
 type ClipHandler struct {
-	clipRepo  *repositories.ClipRepository
-	parserURL string
+	clipRepo   *repositories.ClipRepository
+	seriesRepo *repositories.SeriesRepository
+	parserURL  string
 }
 
-func NewClipHandler(clipRepo *repositories.ClipRepository, parserURL string) *ClipHandler {
-	return &ClipHandler{clipRepo: clipRepo, parserURL: parserURL}
+func NewClipHandler(clipRepo *repositories.ClipRepository, seriesRepo *repositories.SeriesRepository, parserURL string) *ClipHandler {
+	return &ClipHandler{clipRepo: clipRepo, seriesRepo: seriesRepo, parserURL: parserURL}
 }
 
 func (h *ClipHandler) ListClips(c *gin.Context) {
@@ -250,16 +251,6 @@ func resolveClipDownloadURL(clip *models.Clip) string {
 	return raw
 }
 
-func clipCaptionTitle(clip *models.Clip) string {
-	if clip == nil {
-		return ""
-	}
-	if title := strings.TrimSpace(clip.DisplayTitle()); title != "" {
-		return title
-	}
-	return "Klip"
-}
-
 // DownloadClip GET /api/admin/clips/:id/download
 // Streams the clip through backend with attachment headers so the browser downloads it.
 func (h *ClipHandler) DownloadClip(c *gin.Context) {
@@ -443,7 +434,9 @@ func (h *ClipHandler) UploadToInstagram(c *gin.Context) {
 		return
 	}
 
-	caption := fmt.Sprintf("%s\n\nKinoni profildagi bot orqali toping!\nKino Kodi: %s", clipCaptionTitle(clip), clip.MovieCode)
+	caption := services.BuildInstagramClipCaption(
+		services.ResolveInstagramClipCode(ctx, clip, h.seriesRepo),
+	)
 
 	type accountResult struct {
 		Account        string `json:"account"`

@@ -15,17 +15,19 @@ import (
 )
 
 type PublishJobHandler struct {
-	jobRepo   *repositories.PublishJobRepository
-	clipRepo  *repositories.ClipRepository
-	parserURL string
+	jobRepo    *repositories.PublishJobRepository
+	clipRepo   *repositories.ClipRepository
+	seriesRepo *repositories.SeriesRepository
+	parserURL  string
 }
 
 func NewPublishJobHandler(
 	jobRepo *repositories.PublishJobRepository,
 	clipRepo *repositories.ClipRepository,
+	seriesRepo *repositories.SeriesRepository,
 	parserURL string,
 ) *PublishJobHandler {
-	return &PublishJobHandler{jobRepo: jobRepo, clipRepo: clipRepo, parserURL: parserURL}
+	return &PublishJobHandler{jobRepo: jobRepo, clipRepo: clipRepo, seriesRepo: seriesRepo, parserURL: parserURL}
 }
 
 // ListAccounts GET /api/admin/publish/accounts
@@ -106,7 +108,7 @@ func (h *PublishJobHandler) UploadNow(c *gin.Context) {
 			ClipURL:     clip.URL,
 			MovieTitle:  clip.DisplayTitle(),
 			MovieSlug:   clip.DisplaySlug(),
-			MovieCode:   clip.MovieCode,
+			MovieCode:   services.ResolveInstagramClipCode(ctx, clip, h.seriesRepo),
 			Platform:    j.Platform,
 			AccountName: j.AccountName,
 			CreatedBy:   createdBy,
@@ -212,7 +214,7 @@ func (h *PublishJobHandler) Schedule(c *gin.Context) {
 			ClipURL:      clip.URL,
 			MovieTitle:   clip.DisplayTitle(),
 			MovieSlug:    clip.DisplaySlug(),
-			MovieCode:    clip.MovieCode,
+			MovieCode:    services.ResolveInstagramClipCode(ctx, clip, h.seriesRepo),
 			Platform:     j.Platform,
 			AccountName:  j.AccountName,
 			ScheduledFor: scheduledFor.UTC(),

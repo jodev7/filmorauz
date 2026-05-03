@@ -1,15 +1,12 @@
 package services
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/filmorauz/backend/models"
+	"github.com/filmorauz/backend/repositories"
 )
-
-// BuildPublishCaption returns the standard caption used for Instagram and TikTok.
-func BuildPublishCaption(movieTitle, movieCode string) string {
-	return fmt.Sprintf("%s\n\nKinoni profildagi bot orqali toping!\nKino Kodi: %s", movieTitle, movieCode)
-}
 
 // BuildYouTubeDescription returns the YouTube Shorts description.
 // Title is already set as the video title, so it is omitted here.
@@ -22,9 +19,9 @@ func BuildYouTubeDescription(movieCode string) string {
 // available (including via sidecar recovery). For other platforms they stay
 // empty.
 func ExecutePlatformUpload(parserURL string, job *models.PublishJob) (mediaID, postURL string, err error) {
-	caption := BuildPublishCaption(job.MovieTitle, job.MovieCode)
 	switch job.Platform {
 	case models.PublishPlatformInstagram:
+		caption := BuildInstagramClipCaption(job.MovieCode)
 		account := GetInstagramAccount(job.AccountName)
 		if account == nil {
 			return "", "", fmt.Errorf("instagram account not configured: %s", job.AccountName)
@@ -43,6 +40,7 @@ func ExecutePlatformUpload(parserURL string, job *models.PublishJob) (mediaID, p
 		ytDesc := BuildYouTubeDescription(job.MovieCode)
 		return "", "", UploadShortToYouTube(parserURL, job.ClipURL, job.MovieTitle, ytDesc, account)
 	case models.PublishPlatformTikTok:
+		caption := BuildInstagramClipCaption(job.MovieCode)
 		account := GetTikTokAccount(job.AccountName)
 		if account == nil {
 			return "", "", fmt.Errorf("tiktok account not configured: %s", job.AccountName)
@@ -51,4 +49,16 @@ func ExecutePlatformUpload(parserURL string, job *models.PublishJob) (mediaID, p
 	default:
 		return "", "", fmt.Errorf("unknown platform: %s", job.Platform)
 	}
+}
+
+func PopulateInstagramJobCode(
+	ctx context.Context,
+	job *models.PublishJob,
+	clipRepo *repositories.ClipRepository,
+	seriesRepo *repositories.SeriesRepository,
+) {
+	if job == nil {
+		return
+	}
+	job.MovieCode = ResolveInstagramCodeByClipID(ctx, clipRepo, seriesRepo, job.ClipID, job.MovieCode)
 }

@@ -420,6 +420,11 @@ function getClipDisplayTitle(clip: Clip): string {
   return "Untitled clip";
 }
 
+function buildInstagramCaption(clip: Clip): string {
+  const code = clip.movie_code?.trim() || "";
+  return `🎬 Kinoni profildagi bot orqali toping!\n🔢 Kino Kodi: ${code}`;
+}
+
 function getClipSequence(clip: Clip): number {
   return clip.clip_index || clip.sequence || 0;
 }
@@ -1625,6 +1630,14 @@ export default function AdminClipsPage() {
                 <p className="text-gray-500 text-xs">
                   {modal.selectedJobs.map((j) => `${PLATFORM_META[j.platform].label}/${j.account_name}`).join(", ")}
                 </p>
+                {modal.selectedJobs.some((j) => j.platform === "instagram") && (
+                  <div className="rounded-lg border border-brand-border bg-brand-dark/40 px-3 py-2 text-left">
+                    <p className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Instagram caption</p>
+                    <pre className="whitespace-pre-wrap text-xs text-gray-200 font-sans">
+                      {buildInstagramCaption(modal.clip)}
+                    </pre>
+                  </div>
+                )}
                 <button
                   onClick={() => setModal(null)}
                   className="w-full mt-2 py-2 rounded-lg bg-brand-border text-gray-300 text-sm hover:bg-white/10 transition-colors"
@@ -1772,6 +1785,15 @@ export default function AdminClipsPage() {
                           .map((j) => `${PLATFORM_META[j.platform].label}/${j.account_name}`)
                           .join(", ")}
                       </p>
+                    )}
+
+                    {modal.selectedJobs.some((j) => j.platform === "instagram") && (
+                      <div className="rounded-lg border border-brand-border bg-brand-dark/40 px-3 py-2">
+                        <p className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Instagram caption</p>
+                        <pre className="whitespace-pre-wrap text-xs text-gray-200 font-sans">
+                          {buildInstagramCaption(modal.clip)}
+                        </pre>
+                      </div>
                     )}
 
                     <div className="flex rounded-lg border border-brand-border overflow-hidden">

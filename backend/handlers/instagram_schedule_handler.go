@@ -8,6 +8,7 @@ import (
 
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
+	"github.com/filmorauz/backend/services"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -15,13 +16,15 @@ import (
 type InstagramScheduleHandler struct {
 	scheduleRepo *repositories.InstagramScheduleRepository
 	clipRepo     *repositories.ClipRepository
+	seriesRepo   *repositories.SeriesRepository
 }
 
 func NewInstagramScheduleHandler(
 	scheduleRepo *repositories.InstagramScheduleRepository,
 	clipRepo *repositories.ClipRepository,
+	seriesRepo *repositories.SeriesRepository,
 ) *InstagramScheduleHandler {
-	return &InstagramScheduleHandler{scheduleRepo: scheduleRepo, clipRepo: clipRepo}
+	return &InstagramScheduleHandler{scheduleRepo: scheduleRepo, clipRepo: clipRepo, seriesRepo: seriesRepo}
 }
 
 // POST /api/admin/clips/:id/instagram/schedule
@@ -71,7 +74,7 @@ func (h *InstagramScheduleHandler) Create(c *gin.Context) {
 		ClipURL:      clip.URL,
 		MovieTitle:   clip.MovieTitle,
 		MovieSlug:    clip.MovieSlug,
-		MovieCode:    clip.MovieCode,
+		MovieCode:    services.ResolveInstagramClipCode(ctx, clip, h.seriesRepo),
 		AccountNames: req.AccountNames,
 		ScheduledFor: scheduledFor.UTC(),
 		CreatedBy:    createdBy,
