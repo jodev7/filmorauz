@@ -85,10 +85,12 @@ export default function Navbar() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  // Close mobile menu on resize to desktop
+  // Close mobile menu on resize to desktop. Tied to the same breakpoint as the
+  // desktop nav (lg = 1024px) so iPad widths (768–1023) stay on the tablet
+  // header where the nav links live in the menu, not the bar.
   useEffect(() => {
     function handleResize() {
-      if (window.innerWidth >= 768) {
+      if (window.innerWidth >= 1024) {
         setMenuOpen(false);
       }
     }
@@ -117,7 +119,7 @@ export default function Navbar() {
   return (
     <header className="fixed top-0 left-0 right-0 z-[70] bg-[#0a0a0f]/95 backdrop-blur-md border-b border-[#1e1e2e]">
       <div className="h-[env(safe-area-inset-top)]" />
-      <nav className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
+      <nav className="w-full max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-2 sm:gap-3 lg:gap-4">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2 shrink-0">
           <Film className="text-orange-500" size={22} />
@@ -132,8 +134,11 @@ export default function Navbar() {
           )}
         </Link>
 
-        {/* Desktop nav links */}
-        <div className="hidden md:flex items-center gap-1 text-sm font-medium text-zinc-400">
+        {/* Desktop nav links — only on ≥1024 (lg). At iPad widths (768–1023)
+            the seven links + premium badge would crowd out the right-side
+            icons, so on tablet we keep just the action icons in the bar and
+            move the links into the menu drawer. */}
+        <div className="hidden lg:flex items-center gap-1 text-sm font-medium text-zinc-400">
           <Link href="/" className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors">
             {t("common.home")}
           </Link>
@@ -290,10 +295,11 @@ export default function Navbar() {
             )
           )}
 
-          {/* Mobile menu toggle */}
+          {/* Mobile/tablet menu toggle — visible up to lg (1024) so iPad widths
+              get the drawer with all nav links. */}
           <button
             onClick={() => setMenuOpen(!menuOpen)}
-            className="md:hidden text-zinc-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5"
+            className="lg:hidden text-zinc-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5"
             aria-label="Toggle menu"
           >
             {menuOpen ? <X size={22} /> : <Menu size={22} />}
@@ -303,7 +309,7 @@ export default function Navbar() {
 
       {/* Mobile menu */}
       {menuOpen && (
-        <div className="md:hidden border-t border-[#1e1e2e] bg-[#0a0a0f]/95 backdrop-blur-md px-4 py-4 flex flex-col gap-1">
+        <div className="lg:hidden border-t border-[#1e1e2e] bg-[#0a0a0f]/95 backdrop-blur-md px-4 py-4 flex flex-col gap-1">
           {/* Mobile search */}
           <form
             onSubmit={handleSearchSubmit}

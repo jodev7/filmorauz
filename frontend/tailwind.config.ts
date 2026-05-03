@@ -21,6 +21,12 @@ const config: Config = {
         display: ["var(--font-display)"],
         body: ["var(--font-body)"],
       },
+      // Bump max-w-7xl from Tailwind's 80rem (1280px) to 1440px so the global
+      // page container is comfortable on 1440p displays without scaling.
+      // Ultra-wide viewports (1920+/2560+/4K/8K) still cap here and center.
+      maxWidth: {
+        "7xl": "1440px",
+      },
     },
   },
   plugins: [],

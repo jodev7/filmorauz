@@ -482,34 +482,53 @@ function HLSPlayer({
     setSeekStep(loadSeekStep());
   }, []);
 
-  useEffect(() => {
+  // Try to apply the saved-progress seek. Safe to call repeatedly: it bails if
+  // already applied, if the player isn't ready, or if the saved time is outside
+  // the resume window. Each branch logs once via a ref.
+  const tryApplyInitialSeek = useCallback((trigger: string) => {
     const video = videoRef.current;
     if (!video || hasAppliedInitialSeek.current) return;
-    if (!initialSeekTime || initialSeekTime <= 0) {
-      onInitialSeekResolved?.(false);
-      if (isDev) {
-        console.log("[watch-progress] seek skipped", {
-          player: "hls",
-          reason: "no_initial_seek_time",
-        });
+    if (!initialSeekTime || initialSeekTime <= 10) {
+      // Not a definitive "no resume" yet — saved progress may still be loading.
+      // Only resolve when we know there's nothing to seek to AND metadata exists.
+      if (isFinite(video.duration) && video.duration > 0 && (initialSeekTime ?? 0) <= 0) {
+        hasAppliedInitialSeek.current = true;
+        onInitialSeekResolved?.(false);
+        if (isDev) {
+          console.log("[player] resume skipped reason=no_saved_time trigger=" + trigger);
+        }
       }
       return;
     }
     if (!isFinite(video.duration) || video.duration <= 0 || video.readyState < 1) {
+      return; // wait for metadata
+    }
+    if (initialSeekTime > video.duration - 30) {
+      hasAppliedInitialSeek.current = true;
+      onInitialSeekResolved?.(false);
+      if (isDev) {
+        console.log(`[player] resume skipped reason=too_close_to_end time=${initialSeekTime} duration=${video.duration}`);
+      }
       return;
     }
     video.currentTime = initialSeekTime;
     hasAppliedInitialSeek.current = true;
     onInitialSeekResolved?.(true);
     if (isDev) {
-      console.log("[watch-progress] seek applied", {
-        player: "hls",
-        current_time: initialSeekTime,
-        duration: video.duration,
-        trigger: "effect",
-      });
+      console.log(`[player] resume seek applied time=${initialSeekTime} trigger=${trigger}`);
     }
   }, [initialSeekTime, isDev, onInitialSeekResolved]);
+
+  // Keep the latest tryApplyInitialSeek reachable from listeners that were
+  // registered once (HLS MANIFEST_PARSED, native loadedmetadata) — those
+  // closures capture the function at registration time, but we need them to
+  // see the updated `initialSeekTime` once the GET /watch/progress fetch
+  // resolves after the source effect already ran.
+  const trySeekRef = useRef(tryApplyInitialSeek);
+  useEffect(() => {
+    trySeekRef.current = tryApplyInitialSeek;
+    tryApplyInitialSeek("effect");
+  }, [tryApplyInitialSeek]);
 
   const seekBy = useCallback((delta: number) => {
     const video = videoRef.current;
@@ -608,6 +627,9 @@ function HLSPlayer({
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
+        // Try the saved-progress seek as soon as the manifest is ready —
+        // duration is usually available here, before durationchange fires.
+        trySeekRef.current("manifest_parsed");
         // Build deduplicated quality list sorted by height desc.
         const seen = new Set<number>();
         const levels: QualityLevel[] = [{ index: -1, label: "Auto", height: -1 }];
@@ -690,6 +712,8 @@ function HLSPlayer({
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
       // Native HLS (Safari)
       video.src = src;
+      const onNativeLoadedMeta = () => trySeekRef.current("loadedmetadata_native");
+      video.addEventListener("loadedmetadata", onNativeLoadedMeta);
       const onVideoError = () => {
         const code = video.error?.code;
         logger.error("[HLSPlayer] native video error", code);
@@ -702,6 +726,7 @@ function HLSPlayer({
       video.addEventListener("error", onVideoError);
       return () => {
         video.removeEventListener("error", onVideoError);
+        video.removeEventListener("loadedmetadata", onNativeLoadedMeta);
         video.removeAttribute("src");
         video.load();
       };
@@ -807,28 +832,7 @@ function HLSPlayer({
     };
     const onDurationChange = () => {
       setDuration(video.duration);
-      if (!hasAppliedInitialSeek.current && initialSeekTime && initialSeekTime > 0) {
-        video.currentTime = initialSeekTime;
-        hasAppliedInitialSeek.current = true;
-        onInitialSeekResolved?.(true);
-        if (isDev) {
-          console.log("[watch-progress] seek applied", {
-            player: "hls",
-            current_time: initialSeekTime,
-            duration: video.duration,
-            trigger: "durationchange",
-          });
-        }
-      } else if (!hasAppliedInitialSeek.current) {
-        onInitialSeekResolved?.(false);
-        if (isDev) {
-          console.log("[watch-progress] seek skipped", {
-            player: "hls",
-            reason: "no_initial_seek_time",
-            trigger: "durationchange",
-          });
-        }
-      }
+      trySeekRef.current("durationchange");
       if (!adInitializedRef.current && isFinite(video.duration) && video.duration > 0) {
         adInitializedRef.current = true;
         nextAdAtRef.current =
@@ -843,10 +847,12 @@ function HLSPlayer({
       setPlaying(false);
       onEnded?.();
     };
+    const onLoadedMeta = () => trySeekRef.current("loadedmetadata");
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", handlePause);
     video.addEventListener("timeupdate", onVideoTimeUpdate);
     video.addEventListener("durationchange", onDurationChange);
+    video.addEventListener("loadedmetadata", onLoadedMeta);
     video.addEventListener("volumechange", onVolumeChange);
     video.addEventListener("ended", onVideoEnded);
     return () => {
@@ -854,10 +860,11 @@ function HLSPlayer({
       video.removeEventListener("pause", handlePause);
       video.removeEventListener("timeupdate", onVideoTimeUpdate);
       video.removeEventListener("durationchange", onDurationChange);
+      video.removeEventListener("loadedmetadata", onLoadedMeta);
       video.removeEventListener("volumechange", onVolumeChange);
       video.removeEventListener("ended", onVideoEnded);
     };
-  }, [onEnded, onTimeUpdate, onPause, onInitialSeekResolved, isPremiumUser, adActive, triggerAdBreak, initialSeekTime]);
+  }, [onEnded, onTimeUpdate, onPause, isPremiumUser, adActive, triggerAdBreak]);
 
   const togglePlay = () => {
     if (adActive) return;

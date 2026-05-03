@@ -329,6 +329,7 @@ func (r *WatchHistoryRepository) GetProgress(
 		Duration:        item.DurationSec,
 		ProgressPercent: item.ProgressPercent,
 		Completed:       item.Completed,
+		UpdatedAt:       item.UpdatedAt,
 	}, nil
 }
 

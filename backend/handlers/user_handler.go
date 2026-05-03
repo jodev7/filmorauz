@@ -425,6 +425,7 @@ func (h *UserHandler) GetWatchProgress(c *gin.Context) {
 		return
 	}
 	if progress == nil {
+		log.Printf("[progress] loaded target_type=%s target_id=%s current_time=0 (no record)", target.TargetType, target.TargetID.Hex())
 		c.JSON(http.StatusOK, gin.H{
 			"current_time":     0,
 			"duration":         0,
@@ -434,6 +435,7 @@ func (h *UserHandler) GetWatchProgress(c *gin.Context) {
 		return
 	}
 
+	log.Printf("[progress] loaded target_type=%s target_id=%s current_time=%d", target.TargetType, target.TargetID.Hex(), progress.CurrentTime)
 	c.JSON(http.StatusOK, progress)
 }
 

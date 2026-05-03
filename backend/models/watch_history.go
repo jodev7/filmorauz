@@ -38,10 +38,11 @@ type WatchProgressRequest struct {
 }
 
 type WatchProgressResponse struct {
-	CurrentTime     int64   `json:"current_time"`
-	Duration        int64   `json:"duration"`
-	ProgressPercent float64 `json:"progress_percent"`
-	Completed       bool    `json:"completed"`
+	CurrentTime     int64     `json:"current_time"`
+	Duration        int64     `json:"duration"`
+	ProgressPercent float64   `json:"progress_percent"`
+	Completed       bool      `json:"completed"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // ContinueWatchingItem represents a continue watching item for frontend

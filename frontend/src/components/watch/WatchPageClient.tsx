@@ -400,28 +400,20 @@ export default function WatchPageClient({
     resumeResolvedRef.current = false;
     getWatchProgress(token, progressTargetId, { targetType })
       .then((progress) => {
-        if (isDev) {
-          console.debug("[progress] fetched", {
-            target_type: targetType,
-            target_id: progressTargetId,
-            current_time: progress.current_time,
-            duration: progress.duration,
-            progress_percent: progress.progress_percent,
-            completed: progress.completed,
-          });
-        }
-        const canResume =
-          !progress.completed &&
-          progress.current_time > 10 &&
-          progress.duration > 0 &&
-          progress.progress_percent < 90 &&
-          progress.current_time < progress.duration - 60;
+        console.log(`[progress] loaded target_type=${targetType} target_id=${progressTargetId} current_time=${progress.current_time}`);
+        const tooEarly = progress.current_time < 10;
+        const tooLate = progress.duration > 0 && progress.current_time > progress.duration - 30;
+        const canResume = !progress.completed && progress.current_time >= 10 && !tooLate;
         const nextResume = canResume ? progress.current_time : 0;
         setResumePosition(nextResume);
         setSelectedStartPosition(nextResume);
-        setResumePromptVisible(canResume);
+        setResumePromptVisible(false);
         if (!canResume) {
           resumeResolvedRef.current = true;
+          if (isDev) {
+            const reason = progress.completed ? "completed" : tooEarly ? "current_time<10" : tooLate ? "current_time>duration-30" : "no_progress";
+            console.log(`[player] resume skipped reason=${reason}`);
+          }
         }
       })
       .catch(console.error);
