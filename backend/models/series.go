@@ -65,8 +65,10 @@ type Episode struct {
 	UpdatedAt     time.Time          `bson:"updated_at" json:"updated_at"`
 
 	// Hover-preview thumbnails — see Movie.ThumbnailsBaseURL.
-	ThumbnailsBaseURL string `bson:"thumbnails_base_url,omitempty" json:"thumbnails_base_url,omitempty"`
-	ThumbnailInterval int    `bson:"thumbnail_interval,omitempty" json:"thumbnail_interval,omitempty"`
+	ThumbnailsBaseURL   string `bson:"thumbnails_base_url,omitempty" json:"thumbnails_base_url,omitempty"`
+	ThumbnailInterval   int    `bson:"thumbnail_interval,omitempty" json:"thumbnail_interval,omitempty"`
+	PreviewSpriteURL    string `bson:"preview_sprite_url,omitempty" json:"preview_sprite_url,omitempty"`
+	PreviewVTTURL       string `bson:"preview_vtt_url,omitempty" json:"preview_vtt_url,omitempty"`
 }
 
 // SeasonWithEpisodes combines a season with its episodes

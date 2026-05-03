@@ -76,6 +76,8 @@ export interface Movie {
   master_playlist_url?: string;
   thumbnails_base_url?: string;
   thumbnail_interval?: number;
+  preview_sprite_url?: string;
+  preview_vtt_url?: string;
 }
 
 export interface MovieInput {

@@ -740,6 +740,10 @@ export default function WatchPageClient({
                   onPause={handlePauseSave}
                   onInitialSeekResolved={handleInitialSeekResolved}
                   onEnded={handleVideoEnded}
+                  thumbnailsVttUrl={movie.preview_vtt_url}
+                  thumbnailsSpriteUrl={movie.preview_sprite_url}
+                  thumbnailsBaseUrl={movie.thumbnails_base_url}
+                  thumbnailInterval={movie.thumbnail_interval}
                   headerTitle={
                     movie.type === "episode" && movie.series_title
                       ? movie.series_title

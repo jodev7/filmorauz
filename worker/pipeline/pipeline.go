@@ -435,6 +435,8 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 				"$set": bson.M{
 					"thumbnails_base_url": thumbBase,
 					"thumbnail_interval":  ThumbnailIntervalSeconds,
+					"preview_sprite_url":  thumbBase + SpriteFileName,
+					"preview_vtt_url":     thumbBase + VTTFileName,
 				},
 			})
 			if err != nil {

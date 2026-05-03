@@ -946,6 +946,8 @@ func detectContentType(name string) string {
 		return "image/png"
 	case strings.HasSuffix(name, ".webp"):
 		return "image/webp"
+	case strings.HasSuffix(name, ".vtt"):
+		return "text/vtt"
 	default:
 		return "application/octet-stream"
 	}

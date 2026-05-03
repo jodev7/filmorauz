@@ -59,6 +59,10 @@ interface Props {
   headerSubtitle?: string;
   seriesButtonUrl?: string;
   seriesButtonLabel?: string;
+  thumbnailsVttUrl?: string;
+  thumbnailsSpriteUrl?: string;
+  thumbnailsBaseUrl?: string;
+  thumbnailInterval?: number;
 }
 
 // Detect if URL is an embed (YouTube, Vimeo, etc.)
@@ -320,6 +324,39 @@ function formatTime(s: number): string {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
+// Parse a WebVTT file emitted by the worker's thumbnail pipeline. Each cue
+// looks like:
+//   00:00:00.000 --> 00:00:10.000
+//   sprite.webp#xywh=0,0,160,90
+// Returns sorted cues with absolute sprite URLs and parsed xywh.
+function parseThumbnailVtt(
+  text: string,
+  vttUrl: string
+): { start: number; end: number; src: string; x: number; y: number; w: number; h: number }[] {
+  const cues: { start: number; end: number; src: string; x: number; y: number; w: number; h: number }[] = [];
+  const lines = text.split(/\r?\n/);
+  const ts = (s: string) => {
+    const m = s.match(/(\d+):(\d+):(\d+)(?:\.(\d+))?/);
+    if (!m) return NaN;
+    return +m[1] * 3600 + +m[2] * 60 + +m[3] + (m[4] ? +`0.${m[4]}` : 0);
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const arrow = lines[i].indexOf("-->");
+    if (arrow < 0) continue;
+    const start = ts(lines[i].slice(0, arrow));
+    const end = ts(lines[i].slice(arrow + 3));
+    const target = (lines[i + 1] || "").trim();
+    if (!target || isNaN(start) || isNaN(end)) continue;
+    const [path, frag = ""] = target.split("#");
+    const m = frag.match(/xywh=(\d+),(\d+),(\d+),(\d+)/);
+    if (!m) continue;
+    const src = new URL(path, vttUrl).toString();
+    cues.push({ start, end, src, x: +m[1], y: +m[2], w: +m[3], h: +m[4] });
+    i++;
+  }
+  return cues.sort((a, b) => a.start - b.start);
+}
+
 function HLSPlayer({
   src,
   poster,
@@ -334,6 +371,10 @@ function HLSPlayer({
   headerSubtitle,
   seriesButtonUrl,
   seriesButtonLabel,
+  thumbnailsVttUrl,
+  thumbnailsSpriteUrl,
+  thumbnailsBaseUrl,
+  thumbnailInterval,
 }: {
   src: string;
   poster?: string;
@@ -348,6 +389,10 @@ function HLSPlayer({
   headerSubtitle?: string;
   seriesButtonUrl?: string;
   seriesButtonLabel?: string;
+  thumbnailsVttUrl?: string;
+  thumbnailsSpriteUrl?: string;
+  thumbnailsBaseUrl?: string;
+  thumbnailInterval?: number;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -377,6 +422,48 @@ function HLSPlayer({
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverX, setHoverX] = useState(0);
   const [progressWidth, setProgressWidth] = useState(0);
+  const hoverRaf = useRef<number | null>(null);
+
+  // Lazy-loaded scrub-preview cues parsed from the VTT file. Only fetched the
+  // first time the user hovers the progress bar — avoids a network hit for
+  // visitors who never scrub.
+  type ThumbCue = { start: number; end: number; src: string; x: number; y: number; w: number; h: number };
+  const [thumbCues, setThumbCues] = useState<ThumbCue[] | null>(null);
+  const thumbFetchStarted = useRef(false);
+  const ensureThumbCues = useCallback(() => {
+    if (thumbFetchStarted.current) return;
+    thumbFetchStarted.current = true;
+    // Preload the sprite in parallel with VTT — first hover usually means the
+    // user will keep moving, so warming the image cache cuts the visible
+    // flash on the first cue render. img.decode() resolves once decoded.
+    if (thumbnailsSpriteUrl) {
+      const img = new Image();
+      img.src = thumbnailsSpriteUrl;
+    }
+    if (!thumbnailsVttUrl) return;
+    fetch(thumbnailsVttUrl)
+      .then((r) => (r.ok ? r.text() : Promise.reject(r.status)))
+      .then((text) => setThumbCues(parseThumbnailVtt(text, thumbnailsVttUrl)))
+      .catch(() => { /* fall back to time-only tooltip */ });
+  }, [thumbnailsVttUrl, thumbnailsSpriteUrl]);
+  const activeCue = (() => {
+    if (hoverTime === null) return null;
+    if (thumbCues && thumbCues.length) {
+      // Binary-search-friendly scan: cues are sorted by start time.
+      for (let i = 0; i < thumbCues.length; i++) {
+        const c = thumbCues[i];
+        if (hoverTime >= c.start && hoverTime < c.end) return c;
+      }
+      return thumbCues[thumbCues.length - 1];
+    }
+    if (thumbnailsBaseUrl) {
+      const interval = thumbnailInterval && thumbnailInterval > 0 ? thumbnailInterval : 5;
+      const idx = Math.floor(hoverTime / interval) + 1;
+      const padded = String(idx).padStart(4, "0");
+      return { start: 0, end: 0, src: `${thumbnailsBaseUrl}frame_${padded}.webp`, x: 0, y: 0, w: 0, h: 0 };
+    }
+    return null;
+  })();
 
   // In-player ad state
   const adVideoRef = useRef<HTMLVideoElement>(null);
@@ -1070,26 +1157,68 @@ function HLSPlayer({
           <div
             ref={progressContainerRef}
             className="relative h-1.5 group/progress hover:h-2 transition-all"
+            onMouseEnter={ensureThumbCues}
             onMouseMove={(e) => {
               if (adActive) return;
+              // Throttle via rAF — coalesces multiple mousemove events into a
+              // single paint, keeps state churn ≤16ms regardless of input rate.
               const rect = e.currentTarget.getBoundingClientRect();
-              const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-              setHoverX(x);
-              setProgressWidth(rect.width);
-              if (duration > 0) setHoverTime((x / rect.width) * duration);
+              const clientX = e.clientX;
+              if (hoverRaf.current !== null) return;
+              hoverRaf.current = requestAnimationFrame(() => {
+                hoverRaf.current = null;
+                const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
+                setHoverX(x);
+                setProgressWidth(rect.width);
+                if (duration > 0) setHoverTime((x / rect.width) * duration);
+              });
             }}
-            onMouseLeave={() => setHoverTime(null)}
+            onMouseLeave={() => {
+              if (hoverRaf.current !== null) {
+                cancelAnimationFrame(hoverRaf.current);
+                hoverRaf.current = null;
+              }
+              setHoverTime(null);
+            }}
           >
-            {/* Hover tooltip — time only. Positioned above the bar, follows mouse. */}
+            {/* Hover tooltip — thumbnail + time (sprite-backed when VTT cues
+                are available, single-image fallback when only the base URL is
+                known, time-only otherwise). Lazy: cues fetch on first hover. */}
             {hoverTime !== null && duration > 0 && !adActive && (() => {
-              const TOOLTIP_W = 56;
-              const half = TOOLTIP_W / 2;
+              const hasThumb = !!activeCue;
+              const PREVIEW_W = hasThumb ? 160 : 56;
+              const half = PREVIEW_W / 2;
               const left = Math.max(half, Math.min(hoverX, progressWidth - half));
+              const isSprite = !!activeCue && activeCue.w > 0;
               return (
                 <div
-                  className="pointer-events-none absolute -translate-x-1/2 bottom-full mb-3"
+                  className="pointer-events-none absolute -translate-x-1/2 bottom-full mb-3 flex flex-col items-center gap-1"
                   style={{ left }}
                 >
+                  {hasThumb && (
+                    isSprite ? (
+                      <div
+                        className="rounded overflow-hidden ring-1 ring-white/20 shadow-lg bg-black"
+                        style={{
+                          width: activeCue!.w,
+                          height: activeCue!.h,
+                          backgroundImage: `url(${activeCue!.src})`,
+                          backgroundPosition: `-${activeCue!.x}px -${activeCue!.y}px`,
+                          backgroundRepeat: "no-repeat",
+                        }}
+                      />
+                    ) : (
+                      <img
+                        src={activeCue!.src}
+                        alt=""
+                        loading="lazy"
+                        decoding="async"
+                        className="rounded ring-1 ring-white/20 shadow-lg bg-black"
+                        style={{ width: 160, height: 90 }}
+                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }}
+                      />
+                    )
+                  )}
                   <span className="block min-w-14 rounded bg-black/85 px-2 py-1 text-center text-[11px] font-medium text-white tabular-nums shadow-lg">
                     {formatTime(hoverTime)}
                   </span>
@@ -1299,6 +1428,10 @@ export default function VideoPlayer({
   headerSubtitle,
   seriesButtonUrl,
   seriesButtonLabel,
+  thumbnailsVttUrl,
+  thumbnailsSpriteUrl,
+  thumbnailsBaseUrl,
+  thumbnailInterval,
 }: Props) {
   const { user } = useAuth();
   const [started, setStarted] = useState(false);
@@ -1452,6 +1585,10 @@ export default function VideoPlayer({
           headerSubtitle={headerSubtitle}
           seriesButtonUrl={seriesButtonUrl}
           seriesButtonLabel={seriesButtonLabel}
+          thumbnailsVttUrl={thumbnailsVttUrl}
+          thumbnailsSpriteUrl={thumbnailsSpriteUrl}
+          thumbnailsBaseUrl={thumbnailsBaseUrl}
+          thumbnailInterval={thumbnailInterval}
         />
       );
 
