@@ -75,8 +75,15 @@ class UzmoviSerialParser:
 
     def parse(self, url: str) -> Dict:
         logger.info(f"[UZMOVI SERIAL] parse start url={url}")
-        resp = self.session.get(url, timeout=30)
-        resp.raise_for_status()
+        m_sid = re.search(r"/(\d+)-[^/]+\.html", url) or re.search(r"id=(\d+)", url)
+        source_id = m_sid.group(1) if m_sid else ""
+        resp = self._get_with_retry(url, label="serial page")
+        if resp is None:
+            return {
+                "success": False,
+                "error": "serial page unreachable after retries",
+                "provider": "uzmovi",
+            }
         soup = BeautifulSoup(resp.text, "lxml")
         self._serial_url = url
 
@@ -102,7 +109,10 @@ class UzmoviSerialParser:
 
         year = _extract_year(title) or _extract_year(resp.text[:4000])
 
+        logger.info(f"[uzmovi serial] source_id={source_id} title={title!r}")
+
         episode_candidates, source_counts = self._collect_episode_candidates(soup, resp.text)
+        logger.info(f"[uzmovi serial] found episode buttons: {source_counts.get('visible', 0)}")
         if not episode_candidates:
             return {
                 "success": False,
@@ -244,7 +254,13 @@ class UzmoviSerialParser:
             for season_no in sorted(seasons_index.keys())
         ]
 
+        if resolved_rows:
+            ep_nums = sorted({r["episode"] for r in resolved_rows})
+            logger.info(f"[uzmovi serial] discovered numeric range: {ep_nums[0]}..{ep_nums[-1]}")
+        logger.info(f"[uzmovi serial] created episodes: {sum(1 for r in resolved_rows if r.get('video_url'))}")
+
         missing_numbers = self._compute_missing_numbers(resolved_rows)
+        logger.info(f"[uzmovi serial] missing episodes: {missing_numbers}")
         logger.info(
             f"[serial-details] source=uzmovi title={title!r} seasons={len(seasons)} "
             f"episodes_found={len(resolved_rows)} missing_numbers={missing_numbers} duplicates_removed={duplicates_removed}"
@@ -381,10 +397,33 @@ class UzmoviSerialParser:
                     missing.append(expected)
         return missing
 
+    def _get_with_retry(self, url: str, label: str = "fetch", attempts: int = 3, timeout: int = 45,
+                        headers: Optional[Dict[str, str]] = None):
+        """GET with exponential backoff. Returns response on 2xx, else None.
+
+        Used for the main serial page and for per-episode/iframe fetches so a
+        single slow page doesn't kill the entire serial extraction.
+        """
+        import time
+        backoff = 2
+        for attempt in range(1, attempts + 1):
+            try:
+                resp = self.session.get(url, timeout=timeout, headers=headers or {})
+                if 200 <= resp.status_code < 300:
+                    return resp
+                logger.warning(f"[UZMOVI SERIAL] {label} attempt={attempt} status={resp.status_code} url={url[:120]}")
+            except Exception as e:
+                logger.warning(f"[UZMOVI SERIAL] {label} attempt={attempt} err={e} url={url[:120]}")
+            if attempt < attempts:
+                time.sleep(backoff)
+                backoff *= 2
+        return None
+
     def _extract_episode_video(self, episode_url: str) -> str:
         try:
-            resp = self.session.get(episode_url, timeout=30)
-            resp.raise_for_status()
+            resp = self._get_with_retry(episode_url, label="episode")
+            if resp is None:
+                return ""
             soup = BeautifulSoup(resp.text, "lxml")
 
             # Visible iframe.

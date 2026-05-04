@@ -252,6 +252,27 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	var videoPath string
 	videoPath = localPath
 	log.Printf("[STAGE] download complete — using parser-downloaded file: %s", videoPath)
+
+	// Probe the downloaded source so we can record what we actually got and
+	// surface a warning if the parser claimed a higher quality than the file
+	// proves out. Non-fatal — we still process whatever was delivered.
+	if videoPath != "" {
+		if fi, statErr := os.Stat(videoPath); statErr == nil {
+			log.Printf("[WORKER] downloaded file size=%d bytes (%.2f MB) path=%s", fi.Size(), float64(fi.Size())/(1024*1024), videoPath)
+			p.log(jobID, fmt.Sprintf("Downloaded file size: %.2f MB", float64(fi.Size())/(1024*1024)), "info")
+		}
+		if w, h, probeErr := p.getInputResolution(videoPath); probeErr == nil {
+			log.Printf("[WORKER] ffprobe source resolution: %dx%d (selected_quality=%q)", w, h, job.SourceQuality)
+			p.log(jobID, fmt.Sprintf("Source resolution: %dx%d (selected_quality=%s)", w, h, job.SourceQuality), "info")
+			if strings.EqualFold(strings.TrimSpace(job.SourceQuality), "1080p") && h > 0 && h < 900 {
+				warn := fmt.Sprintf("WARNING: selected_quality=1080p but downloaded source height=%d (<900) — parser may have picked the wrong quality", h)
+				log.Printf("[WORKER] %s", warn)
+				p.log(jobID, warn, "warn")
+			}
+		} else {
+			log.Printf("[WORKER] ffprobe source resolution failed: %v", probeErr)
+		}
+	}
 	// NOTE: do NOT defer cleanupFile here — file must survive retries until processing succeeds
 
 	// Update status to processing

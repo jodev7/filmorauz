@@ -174,17 +174,32 @@ func (h *IngestionHandler) runSerialExtractionAsync(
 	parserEndpoint := fmt.Sprintf("%s/serial-details?%s", parserBaseURL, params.Encode())
 	log.Printf("[series extractor] calling parser parent_job=%s endpoint=%s", parentID, parserEndpoint)
 
-	resp, err := h.httpClient.Get(parserEndpoint)
-	if err != nil {
-		h.failParent(ctx, parentID, fmt.Sprintf("parser unreachable: %v", err))
+	body, status, contentType, fetchErr := fetchSerialDetailsWithRetry(parserEndpoint, parentID)
+	if fetchErr != nil {
+		h.failParent(ctx, parentID, fetchErr.Error())
 		return
 	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+
+	// Reject non-JSON responses up front so the UI doesn't see a raw Go
+	// `invalid character '<' looking for beginning of value` error when the
+	// parser (or an intermediate proxy) returns an HTML error page.
+	if !looksLikeJSON(contentType, body) {
+		reason := fmt.Sprintf("parser returned non-JSON response (HTTP %d, content-type=%q) — likely timeout or upstream error", status, contentType)
+		if status == http.StatusGatewayTimeout || status == http.StatusBadGateway || status == http.StatusServiceUnavailable {
+			reason = fmt.Sprintf("parser timeout (HTTP %d) — please re-import; the source page may be slow", status)
+		}
+		log.Printf("[series extractor] non-json parser response parent_job=%s status=%d ct=%q body=%s",
+			parentID, status, contentType, safeBody(body))
+		h.failParent(ctx, parentID, reason)
+		return
+	}
 
 	var payload parserSerialResponse
 	if err := json.Unmarshal(body, &payload); err != nil {
-		h.failParent(ctx, parentID, fmt.Sprintf("invalid parser response (http=%d): %v", resp.StatusCode, err))
+		reason := fmt.Sprintf("parser response could not be parsed (HTTP %d) — please re-import", status)
+		log.Printf("[series extractor] json decode failed parent_job=%s status=%d err=%v body=%s",
+			parentID, status, err, safeBody(body))
+		h.failParent(ctx, parentID, reason)
 		return
 	}
 	if !payload.Success {
@@ -269,7 +284,7 @@ func (h *IngestionHandler) runSerialExtractionAsync(
 	if len(payload.Warnings) > 0 {
 		log.Printf("[series extractor] warnings parent_job=%s warnings=%v", parentID, payload.Warnings)
 	}
-	if err := h.completeParent(ctx, parentID, len(seasonsSet), len(payload.Episodes), createdCount, series.ID, series.Slug); err != nil {
+	if err := h.completeParent(ctx, parentID, len(seasonsSet), len(payload.Episodes), createdCount, series.ID, series.Slug, payload.MissingNumbers); err != nil {
 		log.Printf("[series extractor] complete parent failed parent_job=%s err=%v", parentID, err)
 	}
 }
@@ -309,14 +324,14 @@ func (h *IngestionHandler) failParent(ctx context.Context, id, reason string) {
 
 func (h *IngestionHandler) completeParent(
 	ctx context.Context, id string, seasons, episodes, childJobs int,
-	seriesID primitive.ObjectID, seriesSlug string,
+	seriesID primitive.ObjectID, seriesSlug string, missing []int,
 ) error {
 	objID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
 		return err
 	}
 	now := time.Now()
-	_, err = h.jobRepo.GetCollection().UpdateByID(ctx, objID, bson.M{"$set": bson.M{
+	update := bson.M{
 		"status":             models.IngestionStatusCompleted,
 		"stage":              string(models.IngestionStatusCompleted),
 		"progress":           100,
@@ -328,7 +343,11 @@ func (h *IngestionHandler) completeParent(
 		"completed_at":       now,
 		"updated_at":         now,
 		"message":            fmt.Sprintf("Extracted %d episodes (%d new jobs)", episodes, childJobs),
-	}})
+	}
+	if len(missing) > 0 {
+		update["missing_episodes"] = missing
+	}
+	_, err = h.jobRepo.GetCollection().UpdateByID(ctx, objID, bson.M{"$set": update})
 	return err
 }
 
@@ -546,6 +565,72 @@ func (h *IngestionHandler) CompleteEpisode(c *gin.Context) {
 
 	log.Printf("[INGESTION] EPISODE COMPLETE: id=%s video_url=%s", epID.Hex(), body.VideoURL)
 	c.JSON(http.StatusOK, gin.H{"message": "episode updated", "episode": episode})
+}
+
+// serialDetailsClient is a long-timeout HTTP client used only for the parser
+// /serial-details endpoint. Series with 90+ episodes can legitimately take
+// many minutes to scrape end-to-end; the shared 180s client would 504 here.
+var serialDetailsClient = &http.Client{
+	Timeout: 25 * time.Minute,
+}
+
+// fetchSerialDetailsWithRetry GETs the parser /serial-details endpoint, with
+// up to 3 attempts and exponential backoff on transient gateway errors
+// (502/503/504). Returns body, status, content-type, error.
+func fetchSerialDetailsWithRetry(endpoint, parentID string) ([]byte, int, string, error) {
+	var lastErr error
+	var lastStatus int
+	var lastCT string
+	var lastBody []byte
+	backoff := 5 * time.Second
+	for attempt := 1; attempt <= 3; attempt++ {
+		resp, err := serialDetailsClient.Get(endpoint)
+		if err != nil {
+			lastErr = fmt.Errorf("parser unreachable: %v", err)
+			log.Printf("[series extractor] attempt=%d parent_job=%s err=%v", attempt, parentID, err)
+			time.Sleep(backoff)
+			backoff *= 2
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		lastStatus = resp.StatusCode
+		lastCT = resp.Header.Get("Content-Type")
+		lastBody = body
+		if resp.StatusCode == http.StatusBadGateway ||
+			resp.StatusCode == http.StatusServiceUnavailable ||
+			resp.StatusCode == http.StatusGatewayTimeout {
+			log.Printf("[series extractor] gateway error attempt=%d parent_job=%s status=%d", attempt, parentID, resp.StatusCode)
+			time.Sleep(backoff)
+			backoff *= 2
+			continue
+		}
+		return body, resp.StatusCode, lastCT, nil
+	}
+	if lastErr != nil {
+		return lastBody, lastStatus, lastCT, lastErr
+	}
+	return lastBody, lastStatus, lastCT, nil
+}
+
+// looksLikeJSON returns true when the response is plausibly a JSON payload —
+// either the Content-Type advertises it, or the body's first non-whitespace
+// byte is `{` or `[`. HTML error pages from proxies (`<html>`) are rejected.
+func looksLikeJSON(contentType string, body []byte) bool {
+	if strings.Contains(strings.ToLower(contentType), "application/json") {
+		return true
+	}
+	for _, b := range body {
+		switch b {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case '{', '[':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func safeBody(b []byte) string {

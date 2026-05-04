@@ -1823,6 +1823,13 @@ export interface IngestionJob {
   seasons_count?: number;
   episode_count?: number;
   child_jobs_created?: number;
+  missing_episodes?: number[];
+  // Source quality (selected by parser, validated by worker after download)
+  source_quality?: string;
+  source_resolution?: string;
+  available_qualities?: string[];
+  generated_qualities?: string[];
+  file_size?: number;
 }
 
 export interface SearchResult {
@@ -1932,10 +1939,11 @@ export async function createDirectUploadJob(
 // Get all ingestion jobs
 export async function getIngestionJobs(
   token: string,
-  params?: { status?: string; page?: number; limit?: number; skip?: number }
-): Promise<{ data: IngestionJob[]; page: number; total: number; totalPages: number; limit: number; skip: number }> {
+  params?: { status?: string; source?: string; page?: number; limit?: number; skip?: number }
+): Promise<{ data: IngestionJob[]; page: number; total: number; totalPages: number; limit: number; skip: number; status_counts?: Record<string, number> }> {
   const qs = new URLSearchParams();
   if (params?.status) qs.set("status", params.status);
+  if (params?.source) qs.set("source", params.source);
   if (params?.page) qs.set("page", String(params.page));
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.skip) qs.set("skip", String(params.skip));

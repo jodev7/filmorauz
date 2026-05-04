@@ -54,6 +54,41 @@ def _parse_quality_label(label: str) -> str:
     return label
 
 
+# Synonyms that indicate a quality bucket without a numeric pixel height.
+_QUALITY_SYNONYMS = (
+    (r'4k|2160p?', 2160),
+    (r'full\s*hd|fhd|1080p?', 1080),
+    (r'\bhd\b|720p?', 720),
+    (r'\bsd\b|480p?', 480),
+    (r'360p?', 360),
+    (r'240p?', 240),
+)
+
+
+def _detect_quality_height(*texts: str) -> int:
+    """Best-effort detect a pixel height from any of the supplied strings.
+
+    Looks for explicit `\\d{3,4}p?`, common synonyms (FHD, HD, SD, 4K), and
+    URL-embedded markers like `_1080.mp4` or `/720/`.
+    """
+    for text in texts:
+        if not text:
+            continue
+        t = str(text).lower()
+        # Explicit numeric height like 1080p / 720
+        m = re.search(r'\b(2160|1440|1080|720|480|360|240)p?\b', t)
+        if m:
+            return int(m.group(1))
+        # URL fragments like _1080., -720p., /480/.
+        m = re.search(r'[_/\-](2160|1440|1080|720|480|360|240)p?[_./\-]', t)
+        if m:
+            return int(m.group(1))
+        for pattern, height in _QUALITY_SYNONYMS:
+            if re.search(pattern, t):
+                return height
+    return 0
+
+
 def _get_asilmedia_main_content(soup: BeautifulSoup):
     if soup is None:
         return None
@@ -1133,6 +1168,19 @@ class AsilmediaParser(BaseParser):
                 f"[ASILMEDIA] all {len(unique)} extracted video URLs failed validation — page={page_url}"
             )
 
+        # Re-sort validated entries by detected height so the caller's "first
+        # entry == highest quality" expectation always holds.
+        validated.sort(
+            key=lambda v: int(v.get("height") or _label_to_int(v.get("quality", ""))),
+            reverse=True,
+        )
+
+        if validated:
+            top = validated[0]
+            top_height = int(top.get("height") or _label_to_int(top.get("quality", "")))
+            top_label = f"{top_height}p" if top_height else (top.get("quality") or "auto")
+            logger.info(f"[asilmedia] selected quality: {top_label} url={top.get('url', '')[:200]}")
+
         return validated
     
     def _extract_quality_links(self, soup, page_url: str) -> tuple[List[Dict[str, str]], dict]:
@@ -1163,70 +1211,68 @@ class AsilmediaParser(BaseParser):
         
         # Find all links that might be quality selectors
         all_links = soup.find_all("a", href=True)
-        
+
+        media_url_re = re.compile(r'\.(?:mp4|m3u8|m3u|mpd)(?:[?#]|$)', re.IGNORECASE)
+
         for link in all_links:
             href = link.get("href", "")
-            text = link.get_text(strip=True).lower()
-            
+            text = link.get_text(" ", strip=True)
+            text_lc = text.lower()
+
             if not href:
                 continue
-            
+
             # Skip non-video links
             if any(skip in href for skip in ['/film/', '/page/', '/category/', '/search', 'asilmedia.org']):
                 continue
-            
-            # Check if this link has quality indicators
-            is_quality_link = False
-            detected_quality = ""
-            
-            for pattern in quality_patterns:
-                if re.search(pattern, text) or re.search(pattern, href.lower()):
-                    is_quality_link = True
-                    if '1080' in pattern or 'full' in pattern:
-                        detected_quality = "1080p"
-                    elif '720' in pattern:
-                        detected_quality = "720p"
-                    elif '480' in pattern:
-                        detected_quality = "480p"
-                    elif '360' in pattern:
-                        detected_quality = "360p"
-                    break
-            
-            if not is_quality_link:
+
+            # Only accept hrefs that look like media files (allow query strings).
+            if not media_url_re.search(href):
                 continue
-            
-            # Validate URL
-            if not (href.endswith('.mp4') or href.endswith('.m3u8') or href.endswith('.m3u')):
+
+            # Detect quality from link text, title attr, and href itself.
+            height = _detect_quality_height(
+                text_lc,
+                link.get("title", ""),
+                link.get("data-quality", ""),
+                href,
+            )
+            if height <= 0:
+                # No usable quality marker; skip — the caller has fallback paths
+                # (playerjs / scripts) that do tag quality.
                 continue
-            
+
             error = validate_media_url_strict(href)
             if error:
                 if DEBUG:
                     logger.info(f"[ASILMEDIA DLE] Skip quality link (invalid): {href[:60]} - {error}")
                 continue
-            
+
             url = normalize_url(href, self.BASE_URL)
-            res = _label_to_int(detected_quality)
-            
-            if res not in quality_map:
-                quality_map[res] = url
+            label = f"{height}p"
+
+            if height not in quality_map:
+                quality_map[height] = url
                 entries.append({
-                    "quality": _parse_quality_label(detected_quality),
+                    "quality": label,
                     "url": url,
-                    "type": classify_media_url(url)
+                    "type": classify_media_url(url),
+                    "height": height,
                 })
-                if DEBUG:
-                    logger.info(f"[ASILMEDIA DLE] Found quality link: {detected_quality} -> {url[:60]}...")
+                logger.info(f"[asilmedia] quality candidate text={text_lc[:40]!r} {label} url={url[:120]}")
         
         # Pattern 2: Look for PlayerJS-style quality entries in scripts
         playerjs_entries = self._extract_playerjs_quality(soup, page_url)
         for entry in playerjs_entries:
-            res = _label_to_int(entry.get("quality", ""))
-            if res not in quality_map:
-                quality_map[res] = entry["url"]
+            height = _detect_quality_height(entry.get("quality", ""), entry.get("url", ""))
+            if height <= 0:
+                continue
+            if height not in quality_map:
+                quality_map[height] = entry["url"]
+                entry["quality"] = f"{height}p"
+                entry["height"] = height
                 entries.append(entry)
-                if DEBUG:
-                    logger.info(f"[ASILMEDIA DLE] Found PlayerJS quality: {entry.get('quality')} -> {entry['url'][:60]}...")
+                logger.info(f"[asilmedia] quality candidate (playerjs) {height}p url={entry['url'][:120]}")
         
         # Pattern 3: Look for quality buttons in specific containers
         # Common patterns: .quality-list, .download-buttons, .player-qualities
@@ -1235,52 +1281,42 @@ class AsilmediaParser(BaseParser):
             links = container.find_all("a", href=True)
             for link in links:
                 href = link.get("href", "")
-                text = link.get_text(strip=True)
-                
-                if not href or not (href.endswith('.mp4') or href.endswith('.m3u8')):
+                text = link.get_text(" ", strip=True)
+
+                if not href or not media_url_re.search(href):
                     continue
-                
-                # Extract quality from text
-                detected_quality = ""
-                for pattern, label in [(r'1080', '1080p'), (r'720', '720p'), (r'480', '480p'), (r'360', '360p')]:
-                    if re.search(pattern, text, re.IGNORECASE):
-                        detected_quality = label
-                        break
-                
-                if not detected_quality:
+
+                height = _detect_quality_height(text, link.get("title", ""), href)
+                if height <= 0:
                     continue
-                
+
                 error = validate_media_url_strict(href)
                 if error:
                     continue
-                
+
                 url = normalize_url(href, self.BASE_URL)
-                res = _label_to_int(detected_quality)
-                
-                if res not in quality_map:
-                    quality_map[res] = url
+
+                if height not in quality_map:
+                    quality_map[height] = url
                     entries.append({
-                        "quality": detected_quality,
+                        "quality": f"{height}p",
                         "url": url,
-                        "type": classify_media_url(url)
+                        "type": classify_media_url(url),
+                        "height": height,
                     })
-                    if DEBUG:
-                        logger.info(f"[ASILMEDIA DLE] Found container quality: {detected_quality} -> {url[:60]}...")
-        
-        # Sort entries by quality (highest first)
-        if entries:
-            sorted_resolutions = sorted(quality_map.keys(), reverse=True)
-            sorted_entries = []
-            for res in sorted_resolutions:
-                for e in entries:
-                    if _label_to_int(e.get("quality", "")) == res:
-                        sorted_entries.append(e)
-                        break
-            entries = sorted_entries
-        
-        if DEBUG:
-            logger.info(f"[ASILMEDIA DLE] Quality extraction complete: {len(entries)} entries, qualities: {list(quality_map.keys())}")
-        
+                    logger.info(f"[asilmedia] quality candidate (container) {height}p url={url[:120]}")
+
+        # Sort entries by height descending so callers can pick entries[0] as
+        # the highest available quality without re-sorting.
+        entries.sort(key=lambda e: int(e.get("height") or _label_to_int(e.get("quality", ""))), reverse=True)
+
+        # Build a compact "found qualities" log line per the asilmedia spec.
+        if quality_map:
+            summary = ",".join(
+                f"{h}p={(quality_map[h] or '')[:80]}" for h in sorted(quality_map.keys(), reverse=True)
+            )
+            logger.info(f"[asilmedia] found qualities: {summary}")
+
         return entries, quality_map
     
     def _extract_playerjs_quality(self, soup, page_url: str) -> List[Dict[str, str]]:

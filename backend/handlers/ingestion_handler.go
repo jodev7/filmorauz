@@ -862,51 +862,9 @@ func (h *IngestionHandler) GetIngestionJob(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": job})
 }
 
-// ListIngestionJobs lists all jobs with filters
-// GET /api/ingestion/jobs?status=pending&page=1&limit=30&skip=0&light=true
-func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
-	startTime := time.Now()
-	defer func() {
-		duration := time.Since(startTime)
-		if duration > 1*time.Second {
-			log.Printf("[API] ListIngestionJobs slow response: duration=%v", duration)
-		}
-	}()
-
-	status := c.Query("status")
-	limit := 30
-	page := 1
-	skip := 0
-	light := c.Query("light") == "true"
-
-	if l := c.Query("limit"); l != "" {
-		fmt.Sscanf(l, "%d", &limit)
-	}
-	if p := c.Query("page"); p != "" {
-		fmt.Sscanf(p, "%d", &page)
-	}
-	if s := c.Query("skip"); s != "" {
-		fmt.Sscanf(s, "%d", &skip)
-	}
-	if limit <= 0 {
-		limit = 30
-	}
-	if limit > 100 {
-		limit = 100
-	}
-	if page <= 0 {
-		page = 1
-	}
-	if c.Query("page") != "" {
-		skip = (page - 1) * limit
-	}
-	if skip < 0 {
-		skip = 0
-	}
-	if c.Query("page") == "" {
-		page = (skip / limit) + 1
-	}
-
+// buildJobStatusFilter maps a status keyword to a Mongo filter for jobs.
+// Empty/"all" returns an empty filter.
+func buildJobStatusFilter(status string) bson.M {
 	filter := bson.M{}
 	switch status {
 	case "", "all":
@@ -955,6 +913,59 @@ func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
 	default:
 		filter["status"] = status
 	}
+	return filter
+}
+
+// ListIngestionJobs lists all jobs with filters
+// GET /api/ingestion/jobs?status=pending&page=1&limit=30&skip=0&light=true
+func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime)
+		if duration > 1*time.Second {
+			log.Printf("[API] ListIngestionJobs slow response: duration=%v", duration)
+		}
+	}()
+
+	status := c.Query("status")
+	source := c.Query("source")
+	limit := 30
+	page := 1
+	skip := 0
+	light := c.Query("light") == "true"
+
+	if l := c.Query("limit"); l != "" {
+		fmt.Sscanf(l, "%d", &limit)
+	}
+	if p := c.Query("page"); p != "" {
+		fmt.Sscanf(p, "%d", &page)
+	}
+	if s := c.Query("skip"); s != "" {
+		fmt.Sscanf(s, "%d", &skip)
+	}
+	if limit <= 0 {
+		limit = 30
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if c.Query("page") != "" {
+		skip = (page - 1) * limit
+	}
+	if skip < 0 {
+		skip = 0
+	}
+	if c.Query("page") == "" {
+		page = (skip / limit) + 1
+	}
+
+	filter := buildJobStatusFilter(status)
+	if source != "" {
+		filter["source"] = source
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -985,13 +996,30 @@ func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
 		totalPages = int(math.Ceil(float64(total) / float64(limit)))
 	}
 
+	statusCounts := map[string]int64{}
+	countKeys := []string{"all", "active", "pending", "processing", "failed", "stuck", "completed"}
+	for _, key := range countKeys {
+		f := buildJobStatusFilter(key)
+		if source != "" {
+			f["source"] = source
+		}
+		count, cerr := h.jobRepo.CountTopLevelGroups(ctx, f)
+		if cerr != nil {
+			log.Printf("[API] ListIngestionJobs status_counts %s error: %v", key, cerr)
+			continue
+		}
+		statusCounts[key] = count
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"data":       jobs,
-		"page":       page,
-		"total":      total,
-		"totalPages": totalPages,
-		"limit":      limit,
-		"skip":       skip,
+		"data":          jobs,
+		"page":          page,
+		"total":         total,
+		"totalPages":    totalPages,
+		"total_pages":   totalPages,
+		"limit":         limit,
+		"skip":          skip,
+		"status_counts": statusCounts,
 	})
 }
 

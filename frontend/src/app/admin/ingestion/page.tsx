@@ -1397,7 +1397,8 @@ function JobsTab({
   currentPage,
   totalPages,
   totalJobs,
-  handlePageChange
+  handlePageChange,
+  statusCounts,
 }: {
   jobs: IngestionJob[];
   loadingJobs: boolean;
@@ -1409,13 +1410,24 @@ function JobsTab({
   totalPages: number;
   totalJobs: number;
   handlePageChange: (page: number) => void;
+  statusCounts: Record<string, number> | null;
 }) {
   const [now, setNow] = useState(() => Date.now());
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
   const [expandedSerials, setExpandedSerials] = useState<Set<string>>(new Set());
   const [expandedSeasons, setExpandedSeasons] = useState<Set<string>>(new Set());
   const hasRunningJobs = jobs.some((job) => !isTerminalJobStatus(job.status));
-  const summary = getJobSummary(jobs, now);
+  const localSummary = getJobSummary(jobs, now);
+  const summary = statusCounts
+    ? {
+        active: statusCounts.active ?? 0,
+        pending: statusCounts.pending ?? 0,
+        processing: statusCounts.processing ?? 0,
+        uploading: localSummary.uploading,
+        failed: statusCounts.failed ?? 0,
+        stuck: statusCounts.stuck ?? 0,
+      }
+    : localSummary;
 
   useEffect(() => {
     if (!hasRunningJobs) return;
@@ -1608,12 +1620,33 @@ function JobsTab({
             <p className="text-xs text-gray-500">
               {elapsedLabel}: {elapsedTime} • Last update: {lastUpdateText} ago • Retry: {safeJob.retry_count}
             </p>
-            {job.content_type === "serial_parent" && (
-              <p className="mt-1 text-xs text-blue-300">
-                Serial import • seasons: {job.seasons_count ?? 0} •
-                {" "}episodes: {job.episode_count ?? 0} •
-                {" "}new jobs: {job.child_jobs_created ?? 0}
+            {(job.source_quality || job.source_resolution || job.total_bytes) && (
+              <p className="text-xs text-gray-400 mt-1">
+                {job.source_quality && <span className="mr-3">Source quality: <span className="text-white">{job.source_quality}</span></span>}
+                {job.source_resolution && <span className="mr-3">Resolution: <span className="text-white">{job.source_resolution}</span></span>}
+                {!!job.total_bytes && <span>Size: <span className="text-white">{(job.total_bytes / (1024 * 1024)).toFixed(1)} MB</span></span>}
               </p>
+            )}
+            {job.content_type === "serial_parent" && (
+              <div className="mt-1 text-xs text-blue-300 space-y-0.5">
+                {!isTerminalJobStatus(job.status) && (
+                  <p className="flex items-center gap-1.5">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Extracting episodes...
+                  </p>
+                )}
+                <p>
+                  Serial import • seasons: {job.seasons_count ?? 0} •
+                  {" "}episodes: {job.episode_count ?? 0} •
+                  {" "}new jobs: {job.child_jobs_created ?? 0}
+                </p>
+                {Array.isArray(job.missing_episodes) && job.missing_episodes.length > 0 && (
+                  <p className="text-yellow-300">
+                    Missing episodes: {job.missing_episodes.slice(0, 30).join(", ")}
+                    {job.missing_episodes.length > 30 ? `, … (+${job.missing_episodes.length - 30} more)` : ""}
+                  </p>
+                )}
+              </div>
             )}
             {job.content_type === "serial_parent" && job.status === "failed" && job.error && (
               <p className="mt-1 flex items-start gap-1 text-xs text-red-400">
@@ -1764,6 +1797,49 @@ function JobsTab({
     );
   }, [expandedLogs, handleRetry, now, retryingStage, toggleLogs]);
 
+  const paginationControls = totalPages > 1 ? (
+    <div className="flex items-center justify-between gap-2 rounded-lg border border-brand-border bg-brand-card/50 px-3 py-2">
+      <div className="text-sm text-gray-400">
+        Page {currentPage} of {Math.max(totalPages, 1)}
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => handlePageChange(currentPage - 1)}
+          disabled={currentPage <= 1}
+          className="px-3 py-1.5 rounded-lg text-sm border border-brand-border bg-brand-card text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          Prev
+        </button>
+        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+          const pageNum = Math.max(1, Math.min(totalPages - 4, currentPage - 2)) + i;
+          if (pageNum > totalPages || pageNum < 1) return null;
+          return (
+            <button
+              key={pageNum}
+              onClick={() => handlePageChange(pageNum)}
+              className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                pageNum === currentPage
+                  ? "bg-brand-red text-white border-brand-red"
+                  : "border-brand-border bg-brand-card text-gray-400 hover:text-white"
+              }`}
+            >
+              {pageNum}
+            </button>
+          );
+        })}
+        <button
+          onClick={() => handlePageChange(currentPage + 1)}
+          disabled={currentPage >= totalPages}
+          className="px-3 py-1.5 rounded-lg text-sm border border-brand-border bg-brand-card text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+        >
+          Next
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1794,6 +1870,8 @@ function JobsTab({
           </button>
         ))}
       </div>
+
+      {paginationControls}
 
       {loadingJobs && jobs.length === 0 ? (
         <div className="flex items-center justify-center py-12">
@@ -1913,50 +1991,7 @@ function JobsTab({
         </div>
       )}
 
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between mt-6">
-          <div className="text-sm text-gray-400">
-            Showing {jobGroups.length} item{jobGroups.length === 1 ? "" : "s"} on this page
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => handlePageChange(currentPage - 1)}
-              disabled={currentPage <= 1}
-              className="px-3 py-1.5 rounded-lg text-sm border border-brand-border bg-brand-card text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
-            >
-              <ChevronLeft className="w-4 h-4" />
-              Previous
-            </button>
-
-            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-              const pageNum = Math.max(1, Math.min(totalPages - 4, currentPage - 2)) + i;
-              if (pageNum > totalPages) return null;
-              return (
-                <button
-                  key={pageNum}
-                  onClick={() => handlePageChange(pageNum)}
-                  className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
-                    pageNum === currentPage
-                      ? "bg-brand-red text-white border-brand-red"
-                      : "border-brand-border bg-brand-card text-gray-400 hover:text-white"
-                  }`}
-                >
-                  {pageNum}
-                </button>
-              );
-            })}
-
-            <button
-              onClick={() => handlePageChange(currentPage + 1)}
-              disabled={currentPage >= totalPages}
-              className="px-3 py-1.5 rounded-lg text-sm border border-brand-border bg-brand-card text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
-            >
-              Next
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
+      {paginationControls}
     </div>
   );
 }
@@ -1971,6 +2006,7 @@ export default function IngestionPage() {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [totalPages, setTotalPages] = useState<number>(0);
   const [totalJobs, setTotalJobs] = useState<number>(0);
+  const [statusCounts, setStatusCounts] = useState<Record<string, number> | null>(null);
   const [pageSize] = useState<number>(30); // Default page size
   const [currentFilter, setCurrentFilter] = useState<JobFilter>("all");
   const [retryingStage, setRetryingStage] = useState<{jobId: string; stage: string} | null>(null);
@@ -2012,6 +2048,7 @@ export default function IngestionPage() {
       setTotalPages(result.totalPages || 0);
       setCurrentPage(result.page || page);
       setJobs(jobsData);
+      if (result.status_counts) setStatusCounts(result.status_counts);
     } catch (err) {
       console.error("Failed to fetch jobs:", err);
       setJobs((prev) => (Array.isArray(prev) ? prev : []));
@@ -2206,6 +2243,7 @@ export default function IngestionPage() {
             totalPages={totalPages}
             totalJobs={totalJobs}
             handlePageChange={handlePageChange}
+            statusCounts={statusCounts}
           />
         )}
       </div>

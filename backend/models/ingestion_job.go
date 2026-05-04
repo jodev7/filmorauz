@@ -123,7 +123,8 @@ type IngestionJob struct {
 	// jobs. UI shows these as a progress indicator while extraction runs.
 	SeasonsCount     int `bson:"seasons_count,omitempty"      json:"seasons_count,omitempty"`
 	EpisodeCount     int `bson:"episode_count,omitempty"      json:"episode_count,omitempty"`
-	ChildJobsCreated int `bson:"child_jobs_created,omitempty" json:"child_jobs_created,omitempty"`
+	ChildJobsCreated int   `bson:"child_jobs_created,omitempty" json:"child_jobs_created,omitempty"`
+	MissingEpisodes  []int `bson:"missing_episodes,omitempty"   json:"missing_episodes,omitempty"`
 }
 
 // JobSteps tracks the completion status of each pipeline step
