@@ -67,14 +67,18 @@ type RenditionConfig struct {
 	CRF          int    // Constant Rate Factor (18-23, lower = higher quality)
 }
 
+var standardRenditionLadder = []RenditionConfig{
+	{Name: "360p", Width: 640, Height: 360, VideoBitrate: "800k", MaxBitrate: "960k", BufSize: "1600k", AudioBitrate: "96k", Bandwidth: 896000, CRF: 23},
+	{Name: "480p", Width: 854, Height: 480, VideoBitrate: "1200k", MaxBitrate: "1440k", BufSize: "2400k", AudioBitrate: "128k", Bandwidth: 1320000, CRF: 22},
+	{Name: "720p", Width: 1280, Height: 720, VideoBitrate: "2800k", MaxBitrate: "3360k", BufSize: "5600k", AudioBitrate: "128k", Bandwidth: 3020000, CRF: 21},
+	{Name: "1080p", Width: 1920, Height: 1080, VideoBitrate: "5000k", MaxBitrate: "6000k", BufSize: "10000k", AudioBitrate: "128k", Bandwidth: 5300000, CRF: 20},
+}
+
 // DefaultRenditions returns the default adaptive HLS renditions (legacy - use getApplicableRenditions for production)
 func DefaultRenditions() []RenditionConfig {
-	return []RenditionConfig{
-		{Name: "360p", Width: 640, Height: 360, VideoBitrate: "800k", AudioBitrate: "96k", Bandwidth: 896000, CRF: 23},
-		{Name: "480p", Width: 854, Height: 480, VideoBitrate: "1200k", AudioBitrate: "128k", Bandwidth: 1328000, CRF: 22},
-		{Name: "720p", Width: 1280, Height: 720, VideoBitrate: "2800k", AudioBitrate: "128k", Bandwidth: 2928000, CRF: 21},
-		{Name: "1080p", Width: 1920, Height: 1080, VideoBitrate: "5000k", AudioBitrate: "128k", Bandwidth: 5128000, CRF: 20},
-	}
+	out := make([]RenditionConfig, len(standardRenditionLadder))
+	copy(out, standardRenditionLadder)
+	return out
 }
 
 // processAdaptiveHLS generates multi-bitrate adaptive HLS with a master playlist
@@ -130,6 +134,9 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir, hlsFolderName
 
 	// Determine which renditions to generate based on input resolution
 	renditions := p.getApplicableRenditions(inputWidth, inputHeight)
+	if len(renditions) == 0 {
+		return "", "", nil, fmt.Errorf("no HLS renditions are eligible for source resolution %dx%d", inputWidth, inputHeight)
+	}
 	log.Printf("[HLS] Source resolution %dx%d - generating %d renditions: %v", inputWidth, inputHeight, len(renditions), getRenditionNames(renditions))
 
 	// Step 1: Cut + logo overlay → processed_master.mp4
@@ -241,11 +248,16 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir, hlsFolderName
 		jobStatusCallback(models.IngestionStatusProcessing, 88)
 	}
 
+	actualRenditions, actualQualities, verifyErr := p.verifyExpectedRenditions(outputDir, renditions)
+	if verifyErr != nil {
+		return "", "", nil, verifyErr
+	}
+
 	// Step 3: Create master playlist
 	log.Printf("[STAGE] master_playlist start")
 	masterPlaylistPath = filepath.Join(outputDir, MasterPlaylistName)
 	log.Printf("[HLS_PATH] master_playlist_local=%s", masterPlaylistPath)
-	if err = p.createMasterPlaylist(masterPlaylistPath, renditions); err != nil {
+	if err = p.createMasterPlaylist(masterPlaylistPath, actualRenditions); err != nil {
 		return "", "", nil, fmt.Errorf("failed to create master playlist: %w", err)
 	}
 	log.Printf("[STAGE] master_playlist end")
@@ -255,15 +267,15 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir, hlsFolderName
 	// Retries the master playlist regeneration once if it's missing/empty —
 	// the ffmpeg renditions already succeeded, so this is a cheap safety net
 	// against a partial write or a races we haven't seen but want to survive.
-	if vErr := p.validateHLSOutput(outputDir, renditions); vErr != nil {
+	if vErr := p.validateHLSOutput(outputDir, actualRenditions); vErr != nil {
 		log.Printf("[hls] ERROR: master playlist missing or invalid: %v — retrying createMasterPlaylist once", vErr)
 		if rmErr := os.Remove(masterPlaylistPath); rmErr != nil && !os.IsNotExist(rmErr) {
 			log.Printf("[hls] WARNING: pre-retry cleanup of stale master failed: %v", rmErr)
 		}
-		if err = p.createMasterPlaylist(masterPlaylistPath, renditions); err != nil {
+		if err = p.createMasterPlaylist(masterPlaylistPath, actualRenditions); err != nil {
 			return "", "", nil, fmt.Errorf("master playlist retry failed: %w", err)
 		}
-		if vErr2 := p.validateHLSOutput(outputDir, renditions); vErr2 != nil {
+		if vErr2 := p.validateHLSOutput(outputDir, actualRenditions); vErr2 != nil {
 			return "", "", nil, fmt.Errorf("HLS validation failed after retry: %w", vErr2)
 		}
 		log.Printf("[hls] retry succeeded — master playlist now present")
@@ -289,10 +301,7 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir, hlsFolderName
 	log.Printf("[STAGE] hls_processing end — master: %s, processed_master: %s", masterPlaylistPath, processedMasterPath)
 
 	// Build list of generated qualities
-	generatedQualities = make([]string, len(renditions))
-	for i, r := range renditions {
-		generatedQualities[i] = r.Name
-	}
+	generatedQualities = actualQualities
 	log.Printf("[HLS] Generated qualities: %v", generatedQualities)
 
 	return masterPlaylistPath, processedMasterPath, generatedQualities, nil
@@ -302,99 +311,47 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir, hlsFolderName
 // Uses height-based smart selection - never upscale
 // Height >= 1080: generate [1080p, 720p, 480p, 360p]
 // Height >= 720:  generate [720p, 480p, 360p]
-// Height >= 480: generate [480p, 360p]
-// Height < 480:  generate [480p only]
+// Height >= 480:  generate [480p, 360p]
+// Height < 360:   no standard rendition is eligible
 // Each rendition includes optimized bitrate settings for streaming
 func (p *Pipeline) getApplicableRenditions(inputWidth, inputHeight int) []RenditionConfig {
-	applicable := make([]RenditionConfig, 0)
-
-	// Smart height-based selection - never upscale
-	// Bitrate strategy: target → maxrate=1.2x, bufsize=2x
-	if inputHeight >= 1080 {
-		// Source is 1080p or higher - generate all four renditions
-		// 1080p: target 5000k, max 6000k, buf 10000k, CRF 20 (keep original quality)
-		applicable = append(applicable, RenditionConfig{
-			Name: "1080p", Width: 1920, Height: 1080,
-			VideoBitrate: "5000k", MaxBitrate: "6000k", BufSize: "10000k",
-			AudioBitrate: "128k", Bandwidth: 5300000, CRF: 20,
-		})
-		// 720p: target 2800k, max 3360k, buf 5600k, CRF 21
-		applicable = append(applicable, RenditionConfig{
-			Name: "720p", Width: 1280, Height: 720,
-			VideoBitrate: "2800k", MaxBitrate: "3360k", BufSize: "5600k",
-			AudioBitrate: "128k", Bandwidth: 3020000, CRF: 21,
-		})
-		// 480p: target 1200k, max 1440k, buf 2400k, CRF 22
-		applicable = append(applicable, RenditionConfig{
-			Name: "480p", Width: 854, Height: 480,
-			VideoBitrate: "1200k", MaxBitrate: "1440k", BufSize: "2400k",
-			AudioBitrate: "128k", Bandwidth: 1320000, CRF: 22,
-		})
-		// 360p: target 800k, max 960k, buf 1600k, CRF 23
-		applicable = append(applicable, RenditionConfig{
-			Name: "360p", Width: 640, Height: 360,
-			VideoBitrate: "800k", MaxBitrate: "960k", BufSize: "1600k",
-			AudioBitrate: "96k", Bandwidth: 896000, CRF: 23,
-		})
-		log.Printf("[HLS] Source height >= 1080px: generating [1080p(5000k), 720p(2800k), 480p(1200k), 360p(800k)]")
-	} else if inputHeight >= 720 {
-		// Source is 720p - generate 720p, 480p, 360p
-		// 720p: target 3000k, max 3600k, buf 6000k, CRF 20
-		applicable = append(applicable, RenditionConfig{
-			Name: "720p", Width: 1280, Height: 720,
-			VideoBitrate: "3000k", MaxBitrate: "3600k", BufSize: "6000k",
-			AudioBitrate: "128k", Bandwidth: 3200000, CRF: 20,
-		})
-		// 480p: target 1200k, max 1440k, buf 2400k, CRF 22
-		applicable = append(applicable, RenditionConfig{
-			Name: "480p", Width: 854, Height: 480,
-			VideoBitrate: "1200k", MaxBitrate: "1440k", BufSize: "2400k",
-			AudioBitrate: "128k", Bandwidth: 1320000, CRF: 22,
-		})
-		// 360p: target 800k, max 960k, buf 1600k, CRF 23
-		applicable = append(applicable, RenditionConfig{
-			Name: "360p", Width: 640, Height: 360,
-			VideoBitrate: "800k", MaxBitrate: "960k", BufSize: "1600k",
-			AudioBitrate: "96k", Bandwidth: 896000, CRF: 23,
-		})
-		log.Printf("[HLS] Source height >= 720px and < 1080px: generating [720p(3000k), 480p(1200k), 360p(800k)]")
-	} else if inputHeight >= 480 {
-		// Source is 480p - generate 480p and 360p
-		// 480p: target 1500k, max 1800k, buf 3000k, CRF 20 (higher quality for low-res source)
-		applicable = append(applicable, RenditionConfig{
-			Name: "480p", Width: 854, Height: 480,
-			VideoBitrate: "1500k", MaxBitrate: "1800k", BufSize: "3000k",
-			AudioBitrate: "128k", Bandwidth: 1620000, CRF: 20,
-		})
-		// 360p: target 800k, max 960k, buf 1600k, CRF 23
-		applicable = append(applicable, RenditionConfig{
-			Name: "360p", Width: 640, Height: 360,
-			VideoBitrate: "800k", MaxBitrate: "960k", BufSize: "1600k",
-			AudioBitrate: "96k", Bandwidth: 896000, CRF: 23,
-		})
-		log.Printf("[HLS] Source height >= 480px and < 720px: generating [480p(1500k), 360p(800k)]")
-	} else {
-		// Source is below 480p - only generate 480p (no upscaling)
-		// 480p: target 1500k, max 1800k, buf 3000k, CRF 20 (higher quality for low-res source)
-		applicable = append(applicable, RenditionConfig{
-			Name: "480p", Width: 854, Height: 480,
-			VideoBitrate: "1500k", MaxBitrate: "1800k", BufSize: "3000k",
-			AudioBitrate: "128k", Bandwidth: 1620000, CRF: 20,
-		})
-		log.Printf("[HLS] Source height < 480px: generating [480p(1500k) only] - no upscaling")
+	descending := []int{1080, 720, 480, 360}
+	templates := map[int]RenditionConfig{}
+	for _, r := range standardRenditionLadder {
+		templates[r.Height] = r
 	}
 
-	// Defensive: if somehow nothing was added, add 480p as fallback
+	applicable := make([]RenditionConfig, 0, len(descending))
+	for _, targetHeight := range descending {
+		if inputHeight < targetHeight {
+			continue
+		}
+		base := templates[targetHeight]
+		base.Width = scaledWidthForHeight(inputWidth, inputHeight, targetHeight)
+		applicable = append(applicable, base)
+	}
+
 	if len(applicable) == 0 {
-		applicable = append(applicable, RenditionConfig{
-			Name: "480p", Width: 854, Height: 480,
-			VideoBitrate: "1200k", MaxBitrate: "1440k", BufSize: "2400k",
-			AudioBitrate: "128k", Bandwidth: 1320000, CRF: 22,
-		})
-		log.Printf("[HLS] Fallback: generating [480p(1200k)]")
+		log.Printf("[HLS] WARNING: source height %d is below lowest standard rendition; no standard qualities are eligible", inputHeight)
+		return nil
 	}
 
+	log.Printf("[HLS] Source height=%d => applicable renditions=%v", inputHeight, getRenditionNames(applicable))
 	return applicable
+}
+
+func scaledWidthForHeight(inputWidth, inputHeight, targetHeight int) int {
+	if inputWidth <= 0 || inputHeight <= 0 || targetHeight <= 0 {
+		return 0
+	}
+	width := (inputWidth * targetHeight) / inputHeight
+	if width%2 != 0 {
+		width++
+	}
+	if width < 2 {
+		width = 2
+	}
+	return width
 }
 
 // getRenditionNames returns a slice of rendition names for logging
@@ -652,8 +609,7 @@ func (p *Pipeline) generateHLSRendition(jobID, baseVideoPath, outputDir string, 
 		"-threads", ffThreads,
 		"-filter_threads", ffThreads,
 		"-i", baseVideoPath, // Input: base video with filters applied
-		"-vf", fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2",
-			rendition.Width, rendition.Height, rendition.Width, rendition.Height), // Scale and pad to exact resolution
+		"-vf", fmt.Sprintf("scale=-2:%d", rendition.Height),
 		"-c:v", "libx264", // H.264 video codec
 		"-preset", "veryfast", // Fast encoding preset
 		"-crf", fmt.Sprintf("%d", crf), // CRF for quality (lower = better quality)
@@ -673,9 +629,9 @@ func (p *Pipeline) generateHLSRendition(jobID, baseVideoPath, outputDir string, 
 		"-hls_time", fmt.Sprintf("%d", segmentDuration), // Segment duration
 		"-hls_list_size", "0", // Include all segments in playlist
 		"-hls_playlist_type", "vod", // VOD playlist type
-		"-hls_segment_filename", segmentPattern, // Segment filename pattern
-		hlsPlaylist,           // Output playlist
 		"-progress", "pipe:1", // Output progress to stdout
+		"-hls_segment_filename", segmentPattern, // Segment filename pattern
+		hlsPlaylist, // Output playlist
 	}
 
 	log.Printf("[BITRATE] %s: target=%s, max=%s, buf=%s, crf=%d, audio=%s",
@@ -801,9 +757,17 @@ func (p *Pipeline) validateHLSOutput(outputDir string, renditions []RenditionCon
 
 	segmentCount := 0
 	for _, r := range renditions {
-		entries, rerr := os.ReadDir(filepath.Join(outputDir, r.Name))
+		renditionDir := filepath.Join(outputDir, r.Name)
+		entries, rerr := os.ReadDir(renditionDir)
 		if rerr != nil {
-			continue
+			return fmt.Errorf("rendition directory missing for %s: %w", r.Name, rerr)
+		}
+		playlistInfo, statErr := os.Stat(filepath.Join(renditionDir, "index.m3u8"))
+		if statErr != nil {
+			return fmt.Errorf("rendition playlist missing for %s: %w", r.Name, statErr)
+		}
+		if playlistInfo.Size() == 0 {
+			return fmt.Errorf("rendition playlist empty for %s", r.Name)
 		}
 		for _, e := range entries {
 			if !e.IsDir() && strings.HasSuffix(e.Name(), ".ts") {
@@ -815,6 +779,95 @@ func (p *Pipeline) validateHLSOutput(outputDir string, renditions []RenditionCon
 	if segmentCount == 0 {
 		return fmt.Errorf("no .ts segments produced under %s", outputDir)
 	}
+	return nil
+}
+
+func (p *Pipeline) verifyExpectedRenditions(outputDir string, expected []RenditionConfig) ([]RenditionConfig, []string, error) {
+	actual := make([]RenditionConfig, 0, len(expected))
+	actualNames := make([]string, 0, len(expected))
+	missing := make([]string, 0)
+
+	for _, rendition := range expected {
+		renditionDir := filepath.Join(outputDir, rendition.Name)
+		playlistPath := filepath.Join(renditionDir, "index.m3u8")
+		entries, err := os.ReadDir(renditionDir)
+		if err != nil {
+			missing = append(missing, rendition.Name)
+			continue
+		}
+		fi, err := os.Stat(playlistPath)
+		if err != nil || fi.Size() == 0 {
+			missing = append(missing, rendition.Name)
+			continue
+		}
+		hasSegments := false
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".ts") {
+				hasSegments = true
+				break
+			}
+		}
+		if !hasSegments {
+			missing = append(missing, rendition.Name)
+			continue
+		}
+		actual = append(actual, rendition)
+		actualNames = append(actualNames, rendition.Name)
+	}
+
+	if len(missing) > 0 {
+		return nil, nil, fmt.Errorf("expected HLS renditions missing after ffmpeg: expected=%v actual=%v missing=%v", getRenditionNames(expected), actualNames, missing)
+	}
+	return actual, actualNames, nil
+}
+
+func parseMasterPlaylistVariantPaths(content string) []string {
+	lines := strings.Split(content, "\n")
+	paths := make([]string, 0)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasSuffix(line, ".m3u8") {
+			paths = append(paths, line)
+		}
+	}
+	return paths
+}
+
+func (p *Pipeline) verifyUploadedVariants(masterPath, b2Root, folderName string) error {
+	masterBytes, err := os.ReadFile(masterPath)
+	if err != nil {
+		return fmt.Errorf("read local master playlist for upload verification: %w", err)
+	}
+
+	masterRemote := filepath.ToSlash(filepath.Join(b2Root, folderName, MasterPlaylistName))
+	if size, err := p.storage.GetFileSize(masterRemote); err != nil || size <= 0 {
+		if err != nil {
+			return fmt.Errorf("uploaded master playlist missing in storage at %s: %w", masterRemote, err)
+		}
+		return fmt.Errorf("uploaded master playlist empty in storage at %s", masterRemote)
+	}
+
+	variantPaths := parseMasterPlaylistVariantPaths(string(masterBytes))
+	if len(variantPaths) == 0 {
+		return fmt.Errorf("master playlist %s does not reference any variants", masterPath)
+	}
+
+	missing := make([]string, 0)
+	for _, variantPath := range variantPaths {
+		remotePath := filepath.ToSlash(filepath.Join(b2Root, folderName, filepath.FromSlash(variantPath)))
+		size, err := p.storage.GetFileSize(remotePath)
+		if err != nil || size <= 0 {
+			missing = append(missing, variantPath)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("uploaded HLS variants missing in storage for master %s: %v", masterRemote, missing)
+	}
+
+	log.Printf("[HLS] Upload verification passed for master=%s variants=%v", masterRemote, variantPaths)
 	return nil
 }
 
@@ -984,6 +1037,10 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 
 		if streamingURL == "" {
 			return "", fmt.Errorf("master playlist not found")
+		}
+
+		if err := p.verifyUploadedVariants(filepath.Join(hlsDir, MasterPlaylistName), b2Root, folderName); err != nil {
+			return "", fmt.Errorf("uploaded HLS verification failed: %w", err)
 		}
 
 		log.Printf("[HLS] Final CDN master playlist URL: %s", streamingURL)

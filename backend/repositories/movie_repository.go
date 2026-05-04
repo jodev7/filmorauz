@@ -492,6 +492,29 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 		movie.IsPremium = isPremium
 	}
 
+	// Handle HLS streaming fields
+	if masterPlaylistURL, ok := doc["master_playlist_url"].(string); ok {
+		movie.MasterPlaylistURL = masterPlaylistURL
+	}
+	if aq, ok := doc["available_qualities"]; ok && aq != nil {
+		movie.AvailableQualities = decodeBSONStringArray(aq)
+	}
+	if gq, ok := doc["generated_qualities"]; ok && gq != nil {
+		movie.GeneratedQualities = decodeBSONStringArray(gq)
+	}
+	if len(movie.AvailableQualities) == 0 && len(movie.GeneratedQualities) > 0 {
+		movie.AvailableQualities = append([]string(nil), movie.GeneratedQualities...)
+	}
+	if len(movie.GeneratedQualities) == 0 && len(movie.AvailableQualities) > 0 {
+		movie.GeneratedQualities = append([]string(nil), movie.AvailableQualities...)
+	}
+	if defaultQuality, ok := doc["default_quality"].(string); ok {
+		movie.DefaultQuality = defaultQuality
+	}
+	if sourceResolution, ok := doc["source_resolution"].(string); ok {
+		movie.SourceResolution = sourceResolution
+	}
+
 	// Handle title_uz
 	if titleUz, ok := doc["title_uz"].(string); ok {
 		movie.TitleUz = titleUz
@@ -1106,6 +1129,7 @@ func (r *MovieRepository) Update(id primitive.ObjectID, movie *models.Movie) err
 				"created_at":                  movie.CreatedAt,
 				"updated_at":                  movie.UpdatedAt,
 				"master_playlist_url":         movie.MasterPlaylistURL,
+				"available_qualities":         movie.AvailableQualities,
 				"generated_qualities":         movie.GeneratedQualities,
 				"default_quality":             movie.DefaultQuality,
 				"source_resolution":           movie.SourceResolution,

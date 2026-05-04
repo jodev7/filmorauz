@@ -308,6 +308,7 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	if err != nil {
 		return fmt.Errorf("upload/save failed: %w", err)
 	}
+	job.MasterPlaylistURL = streamingURL
 	log.Printf("[STAGE] upload_save end — streamingURL: %s", streamingURL)
 	log.Printf("[PIPELINE] Final uploads path for clip generation: %s", finalUploadsPath)
 
@@ -1591,6 +1592,7 @@ func (p *Pipeline) processDirectUploadJob(ctx context.Context, job *models.Inges
 	if streamingURL == "" {
 		return fmt.Errorf("no master playlist found")
 	}
+	job.MasterPlaylistURL = streamingURL
 	log.Printf("[DIRECT_UPLOAD] Uploaded HLS to: %s", streamingURL)
 
 	// Update job with output paths
@@ -1868,6 +1870,9 @@ func (p *Pipeline) processVideo(job *models.IngestionJob, inputPath string, cano
 	if inputWidth, inputHeight, err := p.getInputResolution(inputPath); err == nil {
 		sourceResolution = fmt.Sprintf("%dx%d", inputWidth, inputHeight)
 	}
+	job.SourceResolution = sourceResolution
+	job.GeneratedQualities = append([]string(nil), generatedQualities...)
+	job.AvailableQualities = append([]string(nil), generatedQualities...)
 	if err := p.jobRepo.UpdateQualityInfo(context.Background(), jobID, job.SourceQuality, sourceResolution, generatedQualities, masterPlaylistPath); err != nil {
 		log.Printf("[PIPELINE] WARNING: failed to update quality info: %v", err)
 	}
@@ -2063,28 +2068,42 @@ func (p *Pipeline) createMovieInDatabase(job *models.IngestionJob, metadata *mod
 	if displayDescription == "" {
 		displayDescription = "No description available"
 	}
+	availableQualities := append([]string(nil), job.GeneratedQualities...)
+	if len(availableQualities) == 0 {
+		availableQualities = append([]string(nil), job.AvailableQualities...)
+	}
+	maxQuality := highestAvailableQuality(availableQualities)
+	defaultQuality := maxQuality
+	if maxQuality == "" {
+		maxQuality = job.Quality
+	}
 
 	movieDoc := bson.M{
-		"code":             code,
-		"slug":             displaySlug,
-		"title":            displayTitle,
-		"normalized_title": normalizedDisplayTitle,
-		"original_title":   metadata.Title,
-		"description":      displayDescription,
-		"year":             metadata.Year,
-		"genre":            metadata.Genres,
-		"country":          metadata.Country,
-		"duration":         metadata.Duration,
-		"poster_url":       metadata.Poster,
-		"backdrop_url":     metadata.Backdrop,
-		"video_url":        streamingURL,
-		"source_type":      "direct_hls",
+		"code":                code,
+		"slug":                displaySlug,
+		"title":               displayTitle,
+		"normalized_title":    normalizedDisplayTitle,
+		"original_title":      metadata.Title,
+		"description":         displayDescription,
+		"year":                metadata.Year,
+		"genre":               metadata.Genres,
+		"country":             metadata.Country,
+		"duration":            metadata.Duration,
+		"poster_url":          metadata.Poster,
+		"backdrop_url":        metadata.Backdrop,
+		"video_url":           streamingURL,
+		"master_playlist_url": streamingURL,
+		"available_qualities": availableQualities,
+		"generated_qualities": availableQualities,
+		"default_quality":     defaultQuality,
+		"source_resolution":   job.SourceResolution,
+		"source_type":         "direct_hls",
 		"source": bson.M{
 			"provider":   job.Source,
 			"source_url": job.DetailURL,
 			"source_id":  job.SourceID,
 		},
-		"quality":    job.Quality,
+		"quality":    maxQuality,
 		"is_premium": job.IsPremium,
 		"status":     "published",
 		"created_at": time.Now(),
@@ -2190,6 +2209,15 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 		displayDescription = enrichedMetadata.DescriptionUz
 		log.Printf("[PIPELINE] Using Uzbek description (length: %d)", len(displayDescription))
 	}
+	availableQualities := append([]string(nil), job.GeneratedQualities...)
+	if len(availableQualities) == 0 {
+		availableQualities = append([]string(nil), job.AvailableQualities...)
+	}
+	maxQuality := highestAvailableQuality(availableQualities)
+	defaultQuality := maxQuality
+	if maxQuality == "" {
+		maxQuality = enrichedMetadata.Quality
+	}
 
 	movieDoc := bson.M{
 		"code":                  code,
@@ -2205,13 +2233,18 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 		"country":               strings.Join(enrichedMetadata.Countries, ", "), // English countries for storage (joined string)
 		"countries_uz":          enrichedMetadata.CountriesUz,                   // Uzbek countries as array for frontend display
 		"duration":              enrichedMetadata.Duration,
-		"quality":               enrichedMetadata.Quality,
+		"quality":               maxQuality,
 		"translation":           enrichedMetadata.Translation,
 		"poster_url":            posterURL,           // Generated/localized poster
 		"original_poster_url":   originalPosterURL,   // Original TMDB poster
 		"backdrop_url":          backdropURL,         // Generated/localized backdrop
 		"original_backdrop_url": originalBackdropURL, // Original TMDB backdrop
 		"video_url":             streamingURL,
+		"master_playlist_url":   streamingURL,
+		"available_qualities":   availableQualities,
+		"generated_qualities":   availableQualities,
+		"default_quality":       defaultQuality,
+		"source_resolution":     job.SourceResolution,
 		"source_type":           "direct_hls",
 		"source": bson.M{
 			"provider":   job.Source,
@@ -2642,6 +2675,23 @@ func parseNumericCode(code string) int64 {
 		}
 	}
 	return result
+}
+
+func highestAvailableQuality(qualities []string) string {
+	best := ""
+	bestHeight := -1
+	for _, quality := range qualities {
+		q := strings.TrimSpace(strings.TrimSuffix(quality, "p"))
+		height, err := strconv.Atoi(q)
+		if err != nil {
+			continue
+		}
+		if height > bestHeight {
+			bestHeight = height
+			best = fmt.Sprintf("%dp", height)
+		}
+	}
+	return best
 }
 
 // sendTelegramNotification sends a Telegram notification after successful movie creation

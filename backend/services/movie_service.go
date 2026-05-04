@@ -106,11 +106,11 @@ type MovieService struct {
 	counterRepo     *repositories.CounterRepository
 	notificationSvc *NotificationService
 	viewEventRepo   *repositories.MovieViewEventRepository
-	clipRepo        *repositories.ClipRepository                  // optional — enables clip cleanup on delete
-	igScheduleRepo  *repositories.InstagramScheduleRepository     // optional — clip-linked instagram schedule cleanup
-	publishJobRepo  *repositories.PublishJobRepository            // optional — clip-linked multi-platform publish job cleanup
-	jobRepo         *repositories.JobRepository                   // optional — ingestion job cascade cleanup
-	b2Cleanup       *B2CleanupService                             // optional — nil means skip B2 cleanup
+	clipRepo        *repositories.ClipRepository              // optional — enables clip cleanup on delete
+	igScheduleRepo  *repositories.InstagramScheduleRepository // optional — clip-linked instagram schedule cleanup
+	publishJobRepo  *repositories.PublishJobRepository        // optional — clip-linked multi-platform publish job cleanup
+	jobRepo         *repositories.JobRepository               // optional — ingestion job cascade cleanup
+	b2Cleanup       *B2CleanupService                         // optional — nil means skip B2 cleanup
 }
 
 func NewMovieService(repo *repositories.MovieRepository, seriesRepo *repositories.SeriesRepository, counterRepo *repositories.CounterRepository, notificationSvc *NotificationService, viewEventRepo *repositories.MovieViewEventRepository) *MovieService {
@@ -497,37 +497,42 @@ func (s *MovieService) CreateMovie(input *models.MovieInput) (*models.Movie, err
 
 	now := time.Now()
 	movie := &models.Movie{
-		ID:              primitive.NewObjectID(),
-		Code:            code,
-		Slug:            slug,
-		WebsiteURL:      calculateWebsiteURL(slug, websiteBaseURL),
-		Source:          sanitizeMovieSource(input.Source),
-		Title:           input.Title,
-		NormalizedTitle: normalizedTitle,
-		Description:     input.Description,
-		PosterURL:       input.PosterURL,
-		BackdropURL:     input.BackdropURL,
-		Year:            input.Year,
-		Genre:           normalizeMovieGenres(input.Genre),
-		Country:         input.Country,
-		VideoURL:        input.VideoURL,
-		EmbedURL:        input.EmbedURL,
-		SourceType:      input.SourceType,
-		Duration:        input.Duration,
-		Quality:         input.Quality,
-		RatingAvg:       0,
-		RatingCount:     0,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-		TitleUz:         input.TitleUz,
-		DescriptionUz:   input.DescriptionUz,
-		GenresUz:        input.GenresUz,
-		CountriesUz:     input.CountriesUz,
-		OriginalTitle:   input.OriginalTitle,
-		TMDBID:          input.TMDBID,
-		MetadataSource:  input.MetadataSource,
-		ApprovalStatus:  "pending",
-		IsPublished:     false,
+		ID:                 primitive.NewObjectID(),
+		Code:               code,
+		Slug:               slug,
+		WebsiteURL:         calculateWebsiteURL(slug, websiteBaseURL),
+		Source:             sanitizeMovieSource(input.Source),
+		Title:              input.Title,
+		NormalizedTitle:    normalizedTitle,
+		Description:        input.Description,
+		PosterURL:          input.PosterURL,
+		BackdropURL:        input.BackdropURL,
+		Year:               input.Year,
+		Genre:              normalizeMovieGenres(input.Genre),
+		Country:            input.Country,
+		VideoURL:           input.VideoURL,
+		EmbedURL:           input.EmbedURL,
+		SourceType:         input.SourceType,
+		Duration:           input.Duration,
+		Quality:            input.Quality,
+		MasterPlaylistURL:  input.MasterPlaylistURL,
+		AvailableQualities: append([]string(nil), input.AvailableQualities...),
+		GeneratedQualities: append([]string(nil), input.GeneratedQualities...),
+		DefaultQuality:     input.DefaultQuality,
+		SourceResolution:   input.SourceResolution,
+		RatingAvg:          0,
+		RatingCount:        0,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+		TitleUz:            input.TitleUz,
+		DescriptionUz:      input.DescriptionUz,
+		GenresUz:           input.GenresUz,
+		CountriesUz:        input.CountriesUz,
+		OriginalTitle:      input.OriginalTitle,
+		TMDBID:             input.TMDBID,
+		MetadataSource:     input.MetadataSource,
+		ApprovalStatus:     "pending",
+		IsPublished:        false,
 	}
 
 	if err := s.repo.Create(movie); err != nil {

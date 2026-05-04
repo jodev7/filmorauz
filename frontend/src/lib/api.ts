@@ -74,6 +74,10 @@ export interface Movie {
   episode_title?: string;
   premium_stream_url?: string;
   master_playlist_url?: string;
+  available_qualities?: string[];
+  generated_qualities?: string[];
+  default_quality?: string;
+  source_resolution?: string;
   thumbnails_base_url?: string;
   thumbnail_interval?: number;
   preview_sprite_url?: string;

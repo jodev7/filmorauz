@@ -1182,6 +1182,7 @@ func (r *JobRepository) UpdateQualityInfo(ctx context.Context, id, sourceQuality
 		"$set": bson.M{
 			"source_quality":      sourceQuality,
 			"source_resolution":   sourceResolution,
+			"available_qualities": generatedQualities,
 			"generated_qualities": generatedQualities,
 			"master_playlist_url": masterPlaylistURL,
 			"updated_at":          time.Now(),

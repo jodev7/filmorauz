@@ -517,16 +517,18 @@ func (h *MovieHandler) GetMovieWatchSource(c *gin.Context) {
 
 	// Add HLS streaming data if available
 	if movie.SourceType == "direct_hls" && movie.MasterPlaylistURL != "" {
+		qualities := getPlaybackQualities(movie)
 		response["hls"] = gin.H{
 			"master_playlist_url": movie.MasterPlaylistURL,
-			"generated_qualities": movie.GeneratedQualities,
-			"default_quality":     getDefaultQuality(movie.DefaultQuality, movie.GeneratedQualities),
+			"available_qualities": qualities,
+			"generated_qualities": qualities,
+			"default_quality":     getDefaultQuality(movie.DefaultQuality, qualities),
 			"source_resolution":   movie.SourceResolution,
 		}
 
 		// Preload URLs for fast playback (first 2 segments of default quality)
 		// These can be prefetched by the frontend
-		defaultQ := getDefaultQuality(movie.DefaultQuality, movie.GeneratedQualities)
+		defaultQ := getDefaultQuality(movie.DefaultQuality, qualities)
 		if defaultQ != "" && movie.MasterPlaylistURL != "" {
 			preloadURLs := generatePreloadURLs(movie.MasterPlaylistURL, defaultQ, 2)
 			response["preload"] = gin.H{
@@ -549,6 +551,16 @@ func protectMovieMedia(movie *models.Movie) {
 	movie.BackdropURL = protectMediaURL(movie.BackdropURL)
 	movie.VideoURL = protectMediaURL(movie.VideoURL)
 	movie.MasterPlaylistURL = protectMediaURL(movie.MasterPlaylistURL)
+}
+
+func getPlaybackQualities(movie *models.Movie) []string {
+	if movie == nil {
+		return nil
+	}
+	if len(movie.AvailableQualities) > 0 {
+		return movie.AvailableQualities
+	}
+	return movie.GeneratedQualities
 }
 
 // getDefaultQuality returns the default quality for playback
