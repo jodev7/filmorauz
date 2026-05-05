@@ -132,6 +132,8 @@ downloader_service = DownloaderService(DOWNLOAD_DIR)
 # Key: job_id, Value: DownloadState object
 _active_downloads = {}
 _downloads_lock = threading.Lock()
+_serial_extract_jobs = {}
+_serial_jobs_lock = threading.Lock()
 IG_SESSION_DIR = Path(__file__).parent / "ig_sessions"
 IG_SESSION_DIR.mkdir(exist_ok=True)
 # Sidecar directory: holds per-publish_key result files so backend can recover
@@ -258,6 +260,94 @@ def _ig_action_required(error_type: str, account: str) -> str:
 
 def _ig_raise(error_type: str, account: str, message: str):
     raise InstagramUploadError(error_type, account, message, _ig_action_required(error_type, account))
+
+
+def _serial_job_snapshot(job_id: str):
+    with _serial_jobs_lock:
+        job = _serial_extract_jobs.get(job_id)
+        if not job:
+            return None
+        snapshot = dict(job)
+        snapshot["episodes"] = list(job.get("episodes", []))
+        if job.get("result") is not None:
+            snapshot["result"] = dict(job["result"])
+        return snapshot
+
+
+def _update_serial_job(job_id: str, **fields):
+    with _serial_jobs_lock:
+        job = _serial_extract_jobs.get(job_id)
+        if not job:
+            return
+        job.update(fields)
+        job["updated_at"] = int(time.time())
+
+
+def _run_serial_extract_job(job_id: str, provider: str, serial_url: str):
+    parser = SERIAL_PARSERS[provider]
+
+    def emit_progress(payload: dict):
+        episodes = payload.get("episodes")
+        updates = {
+            "status": "processing" if payload.get("stage") != "completed" else "completed",
+            "stage": payload.get("stage", "processing"),
+            "message": payload.get("message", "Extracting episodes"),
+            "expected_total": int(payload.get("expected_total") or 0),
+            "discovered_count": int(payload.get("discovered_count") or 0),
+            "resolved_count": int(payload.get("resolved_count") or 0),
+            "missing_numbers": list(payload.get("missing_numbers") or []),
+            "warnings": list(payload.get("warnings") or []),
+            "title": payload.get("title", ""),
+            "year": int(payload.get("year") or 0),
+            "poster": payload.get("poster", ""),
+            "backdrop": payload.get("backdrop", ""),
+            "description": payload.get("description", ""),
+        }
+        if episodes is not None:
+            updates["episodes"] = list(episodes)
+        if payload.get("result") is not None:
+            updates["result"] = dict(payload["result"])
+        _update_serial_job(job_id, **updates)
+
+    try:
+        _update_serial_job(
+            job_id,
+            status="processing",
+            stage="starting",
+            message="Starting serial extraction...",
+        )
+        if provider == "uzmovi":
+            result = parser.parse(serial_url, progress_callback=emit_progress)
+        else:
+            result = parser.parse(serial_url)
+
+        status = "completed" if result.get("success") else "failed"
+        _update_serial_job(
+            job_id,
+            status=status,
+            stage="completed" if status == "completed" else "failed",
+            message=f"Extracted {len(result.get('episodes', []))} episodes" if status == "completed" else result.get("error", "serial parse failed"),
+            expected_total=max(
+                int(_serial_job_snapshot(job_id).get("expected_total", 0) or 0) if _serial_job_snapshot(job_id) else 0,
+                len(result.get("episodes", [])),
+            ),
+            discovered_count=len(result.get("episodes", [])),
+            resolved_count=len(result.get("episodes", [])),
+            episodes=list(result.get("episodes", [])),
+            warnings=list(result.get("warnings", [])),
+            missing_numbers=list(result.get("missing_numbers", [])),
+            result=result,
+            error=result.get("error", ""),
+        )
+    except Exception as exc:
+        logger.exception(f"[SERIAL] async parse failed provider={provider} job_id={job_id}")
+        _update_serial_job(
+            job_id,
+            status="failed",
+            stage="failed",
+            message=f"{provider} serial parse failed",
+            error=str(exc),
+        )
 
 
 def _ig_normalize_account_name(name: str) -> str:
@@ -1211,6 +1301,20 @@ class ParserHandler(BaseHTTPRequestHandler):
                     },
                     status=500,
                 )
+            return
+
+        # Async serial extraction status:
+        # GET /serial/extract/status/<job_id>
+        elif path.startswith("/serial/extract/status/"):
+            job_id = path.rsplit("/", 1)[-1].strip()
+            if not job_id:
+                self._send_error("Missing job_id parameter", 400)
+                return
+            snapshot = _serial_job_snapshot(job_id)
+            if snapshot is None:
+                self._send_error("serial extraction job not found", 404)
+                return
+            self._send_json(snapshot)
             return
 
         # Search: /search?source=uzmovi&q=interstellar
@@ -2266,6 +2370,68 @@ class ParserHandler(BaseHTTPRequestHandler):
         path = parsed.path
 
         logger.info(f"[SERVER] {self.command} {self.path}")
+
+        if path == "/serial/extract/start":
+            body = self._read_json_body()
+            serial_url = (body.get("url", "") or "").strip()
+            source_hint = (body.get("source", "") or "").strip().lower()
+
+            if not serial_url:
+                self._send_error("Missing 'url' field", 400)
+                return
+
+            provider = source_hint or _detect_serial_provider(serial_url)
+            if provider not in SERIAL_PARSERS:
+                self._send_error(
+                    f"Unsupported serial provider. Supported: {sorted(SERIAL_PARSERS.keys())}",
+                    400,
+                )
+                return
+
+            job_id = hashlib.sha1(f"{provider}:{serial_url}:{time.time()}:{random.random()}".encode("utf-8")).hexdigest()[:16]
+            now = int(time.time())
+            with _serial_jobs_lock:
+                _serial_extract_jobs[job_id] = {
+                    "job_id": job_id,
+                    "status": "queued",
+                    "stage": "queued",
+                    "provider": provider,
+                    "url": serial_url,
+                    "message": "Queued for extraction",
+                    "episodes": [],
+                    "expected_total": 0,
+                    "discovered_count": 0,
+                    "resolved_count": 0,
+                    "missing_numbers": [],
+                    "warnings": [],
+                    "title": "",
+                    "year": 0,
+                    "poster": "",
+                    "backdrop": "",
+                    "description": "",
+                    "error": "",
+                    "created_at": now,
+                    "updated_at": now,
+                    "result": None,
+                }
+
+            thread = threading.Thread(
+                target=_run_serial_extract_job,
+                args=(job_id, provider, serial_url),
+                daemon=True,
+            )
+            thread.start()
+            self._send_json(
+                {
+                    "ok": True,
+                    "job_id": job_id,
+                    "status": "queued",
+                    "provider": provider,
+                    "message": "Serial extraction queued",
+                },
+                status=202,
+            )
+            return
         
         # /download - Download a video
         if path == "/download":

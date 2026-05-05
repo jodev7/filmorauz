@@ -87,12 +87,15 @@ type IngestionJob struct {
 	ProcessingFinishedAt  *time.Time `bson:"processing_finished_at,omitempty" json:"processing_finished_at,omitempty"`
 
 	// Real-time download progress fields
-	Stage           string  `bson:"stage,omitempty" json:"stage,omitempty"`
-	Message         string  `bson:"message,omitempty" json:"message,omitempty"` // Human-readable message
-	DownloadedBytes int64   `bson:"downloaded_bytes,omitempty" json:"downloaded_bytes,omitempty"`
-	TotalBytes      int64   `bson:"total_bytes,omitempty" json:"total_bytes,omitempty"`
-	SpeedMBps       float64 `bson:"speed_mbps,omitempty" json:"speed_mbps,omitempty"`
-	EtaSeconds      int     `bson:"eta_seconds,omitempty" json:"eta_seconds,omitempty"`
+	Stage           string     `bson:"stage,omitempty" json:"stage,omitempty"`
+	Message         string     `bson:"message,omitempty" json:"message,omitempty"` // Human-readable message
+	DownloadedBytes int64      `bson:"downloaded_bytes,omitempty" json:"downloaded_bytes,omitempty"`
+	TotalBytes      int64      `bson:"total_bytes,omitempty" json:"total_bytes,omitempty"`
+	SpeedMBps       float64    `bson:"speed_mbps,omitempty" json:"speed_mbps,omitempty"`
+	EtaSeconds      int        `bson:"eta_seconds,omitempty" json:"eta_seconds,omitempty"`
+	LastProgressAt  *time.Time `bson:"last_progress_at,omitempty" json:"last_progress_at,omitempty"`
+	WorkerID        string     `bson:"worker_id,omitempty" json:"worker_id,omitempty"`
+	LockedUntil     *time.Time `bson:"locked_until,omitempty" json:"locked_until,omitempty"`
 
 	// Direct upload specific fields
 	TempFileURL string `bson:"temp_file_url,omitempty" json:"temp_file_url,omitempty"` // Temp file URL (B2 path) for direct upload
@@ -121,8 +124,8 @@ type IngestionJob struct {
 	// are created immediately by the import endpoint, then populated by the
 	// background extractor as it discovers seasons/episodes and fans out child
 	// jobs. UI shows these as a progress indicator while extraction runs.
-	SeasonsCount     int `bson:"seasons_count,omitempty"      json:"seasons_count,omitempty"`
-	EpisodeCount     int `bson:"episode_count,omitempty"      json:"episode_count,omitempty"`
+	SeasonsCount     int   `bson:"seasons_count,omitempty"      json:"seasons_count,omitempty"`
+	EpisodeCount     int   `bson:"episode_count,omitempty"      json:"episode_count,omitempty"`
 	ChildJobsCreated int   `bson:"child_jobs_created,omitempty" json:"child_jobs_created,omitempty"`
 	MissingEpisodes  []int `bson:"missing_episodes,omitempty"   json:"missing_episodes,omitempty"`
 }

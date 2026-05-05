@@ -112,10 +112,11 @@ func resolveExistingDownloadedArtifact(jobID, rawPath, downloadDir string) strin
 // JobRepository handles ingestion job persistence
 type JobRepository struct {
 	collection *mongo.Collection
+	workerID   string
 }
 
 // NewJobRepository creates a new job repository
-func NewJobRepository(db *mongo.Database) *JobRepository {
+func NewJobRepository(db *mongo.Database, workerID string) *JobRepository {
 	collection := db.Collection("ingestion_jobs")
 
 	// Create indexes
@@ -156,6 +157,7 @@ func NewJobRepository(db *mongo.Database) *JobRepository {
 
 	return &JobRepository{
 		collection: collection,
+		workerID:   workerID,
 	}
 }
 
@@ -178,6 +180,13 @@ func (r *JobRepository) UpdateVideoURL(ctx context.Context, id, videoURL string)
 
 // ClaimNextJob atomically claims the next queued download job.
 func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob, error) {
+	if normalized, err := r.NormalizeQueuedJobs(ctx); err != nil {
+		log.Printf("[worker] normalize queued error=%v", err)
+	} else if normalized > 0 {
+		log.Printf("[worker] normalized queued jobs count=%d", normalized)
+	}
+
+	lockCutoff := time.Now()
 	filter := bson.M{
 		"status":      models.IngestionStatusQueued,
 		"retry_count": bson.M{"$lt": 3},
@@ -185,18 +194,37 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 			{"steps.download": bson.M{"$exists": false}},
 			{"steps.download": false},
 		},
+		"$and": []bson.M{
+			{
+				"$or": []bson.M{
+					{"locked_until": bson.M{"$exists": false}},
+					{"locked_until": nil},
+					{"locked_until": bson.M{"$lte": lockCutoff}},
+				},
+			},
+		},
 	}
 
 	now := time.Now()
+	lockedUntil := now.Add(2 * time.Minute)
 	// started_at: stamp when work actually begins so the UI elapsed timer
 	// does not run while the job is sitting in the pending queue.
 	update := bson.M{
 		"$set": bson.M{
 			"status":              models.IngestionStatusDownloading,
 			"stage":               "download",
+			"progress":            1,
+			"steps.download":      true,
 			"updated_at":          now,
 			"started_at":          now,
 			"download_started_at": now,
+			"last_progress_at":    now,
+			"worker_id":           r.workerID,
+			"locked_until":        lockedUntil,
+			"message":             "Worker claimed job; starting download",
+		},
+		"$unset": bson.M{
+			"completed_at": "",
 		},
 	}
 
@@ -204,7 +232,7 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 		SetSort(bson.D{{Key: "created_at", Value: 1}})
 
 	log.Printf("[REPO] ClaimNextJob: querying for pending download jobs...")
-	log.Printf("[REPO] ClaimNextJob filter: status=queued, retry_count<3, steps.download=$exists:false OR steps.download=false")
+	log.Printf("[REPO] ClaimNextJob filter: status=queued, retry_count<3, steps.download=$exists:false OR steps.download=false, lock expired or absent")
 	log.Printf("[REPO] ClaimNextJob FINAL QUERY: %+v", filter)
 
 	var job models.IngestionJob
@@ -221,6 +249,40 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 	log.Printf("[REPO] ClaimNextJob: CLAIMED job %s (status: queued -> downloading, title: %s, source: %s)",
 		job.ID.Hex(), job.Title, job.Source)
 	return &job, nil
+}
+
+func (r *JobRepository) NormalizeQueuedJobs(ctx context.Context) (int64, error) {
+	now := time.Now()
+	res, err := r.collection.UpdateMany(ctx, bson.M{
+		"status": models.IngestionStatusQueued,
+		"$or": []bson.M{
+			{"stage": bson.M{"$ne": "download"}},
+			{"progress": bson.M{"$ne": 0}},
+			{"steps.download": bson.M{"$ne": false}},
+			{"worker_id": bson.M{"$exists": true, "$ne": ""}},
+			{"locked_until": bson.M{"$exists": true}},
+			{"download_started_at": bson.M{"$exists": true}},
+			{"last_progress_at": bson.M{"$exists": true}},
+		},
+	}, bson.M{
+		"$set": bson.M{
+			"stage":          "download",
+			"progress":       0,
+			"updated_at":     now,
+			"message":        "Waiting for worker",
+			"steps.download": false,
+		},
+		"$unset": bson.M{
+			"worker_id":           "",
+			"locked_until":        "",
+			"download_started_at": "",
+			"last_progress_at":    "",
+		},
+	})
+	if err != nil {
+		return 0, err
+	}
+	return res.ModifiedCount, nil
 }
 
 // ClaimNextProcessingJob atomically claims a job ready for ffmpeg processing.
@@ -671,9 +733,16 @@ func (r *JobRepository) SetError(ctx context.Context, id string, errMsg string) 
 	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
 		"$set": bson.M{
 			"error":      errMsg,
+			"message":    errMsg,
 			"status":     models.IngestionStatusFailed,
 			"stage":      "failed",
 			"updated_at": time.Now(),
+		},
+		"$unset": bson.M{
+			"worker_id":           "",
+			"locked_until":        "",
+			"download_started_at": "",
+			"last_progress_at":    "",
 		},
 	})
 
@@ -725,17 +794,27 @@ func (r *JobRepository) IncrementRetry(ctx context.Context, id string) error {
 	if newRetry >= maxRetries {
 		setFields["status"] = models.IngestionStatusFailed
 		setFields["stage"] = "failed"
+		setFields["message"] = fmt.Sprintf("Retry limit exceeded (%d/%d)", newRetry, maxRetries)
 		setFields["completed_at"] = time.Now()
 		log.Printf("[REPO] IncrementRetry: job %s reached max retries (%d) — marking as failed (terminal)", id, newRetry)
 	} else {
 		setFields["status"] = models.IngestionStatusQueued
-		setFields["stage"] = "queued"
+		setFields["stage"] = "download"
+		setFields["progress"] = 0
+		setFields["message"] = "Waiting for worker"
+		setFields["steps.download"] = false
 		log.Printf("[REPO] IncrementRetry: job %s retry %d/%d — resetting to queued", id, newRetry, maxRetries)
 	}
 
 	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
 		"$inc": bson.M{"retry_count": 1},
 		"$set": setFields,
+		"$unset": bson.M{
+			"worker_id":           "",
+			"locked_until":        "",
+			"download_started_at": "",
+			"last_progress_at":    "",
+		},
 	})
 
 	return err
@@ -765,7 +844,7 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 	// Match downloading jobs that either never reported progress (no
 	// last_progress_at field) and were last updated > download stale window
 	// ago, OR have a last_progress_at older than the window.
-	downloadResult, err := r.collection.UpdateMany(ctx, bson.M{
+	cursor, err := r.collection.Find(ctx, bson.M{
 		"status": models.IngestionStatusDownloading,
 		"$or": []bson.M{
 			{"last_progress_at": bson.M{"$lt": downloadStaleCutoff}},
@@ -774,23 +853,75 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 				"updated_at":       bson.M{"$lt": downloadStaleCutoff},
 			},
 		},
-	}, bson.M{
-		"$set": bson.M{
-			"status":     models.IngestionStatusQueued,
-			"stage":      "queued",
-			"progress":   0,
-			"updated_at": now,
-			"error":      "Recovered stale download job after no progress for 5 minutes; returned to queue automatically",
-		},
-		"$unset": bson.M{
-			"completed_at": "",
-		},
 	})
 	if err != nil {
 		log.Printf("[REPO] RecoverStaleJobs(download): ERROR - %v", err)
 		return 0, err
 	}
-	totalRecovered += downloadResult.ModifiedCount
+	defer cursor.Close(ctx)
+
+	var staleDownloadJobs []models.IngestionJob
+	if err := cursor.All(ctx, &staleDownloadJobs); err != nil {
+		log.Printf("[REPO] RecoverStaleJobs(download): decode error - %v", err)
+		return 0, err
+	}
+
+	const maxRetries = 3
+	for _, job := range staleDownloadJobs {
+		reason := "Recovered stale download job after no progress for 5 minutes; returned to queue automatically"
+		newRetry := job.RetryCount + 1
+		updateSet := bson.M{
+			"updated_at": now,
+		}
+		updateUnset := bson.M{
+			"completed_at":          "",
+			"worker_id":             "",
+			"locked_until":          "",
+			"download_started_at":   "",
+			"last_progress_at":      "",
+			"processing_started_at": "",
+		}
+		logLevel := "warning"
+		logMessage := reason
+
+		if newRetry >= maxRetries {
+			finalReason := fmt.Sprintf("%s Retry limit exceeded (%d/%d).", reason, newRetry, maxRetries)
+			updateSet["status"] = models.IngestionStatusFailed
+			updateSet["stage"] = "failed"
+			updateSet["error"] = finalReason
+			updateSet["message"] = finalReason
+			updateSet["completed_at"] = now
+			logMessage = finalReason
+			logLevel = "error"
+		} else {
+			updateSet["status"] = models.IngestionStatusQueued
+			updateSet["stage"] = "download"
+			updateSet["progress"] = 0
+			updateSet["error"] = reason
+			updateSet["message"] = "Waiting for worker"
+			updateSet["steps.download"] = false
+			updateSet["downloaded_bytes"] = int64(0)
+			updateSet["total_bytes"] = int64(0)
+			updateSet["speed_mbps"] = 0.0
+			updateSet["eta_seconds"] = 0
+		}
+
+		_, updateErr := r.collection.UpdateByID(ctx, job.ID, bson.M{
+			"$inc":   bson.M{"retry_count": 1},
+			"$set":   updateSet,
+			"$unset": updateUnset,
+			"$push": bson.M{"logs": models.IngestionLog{
+				Timestamp: now,
+				Message:   logMessage,
+				Level:     logLevel,
+			}},
+		})
+		if updateErr != nil {
+			log.Printf("[REPO] RecoverStaleJobs(download): update failed job=%s err=%v", job.ID.Hex(), updateErr)
+			continue
+		}
+		totalRecovered++
+	}
 
 	processResult, err := r.collection.UpdateMany(ctx, bson.M{
 		"status":     bson.M{"$in": []models.IngestionStatus{models.IngestionStatusProcessing, models.IngestionStatusUploading}},
@@ -805,6 +936,8 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 		},
 		"$unset": bson.M{
 			"completed_at": "",
+			"worker_id":    "",
+			"locked_until": "",
 		},
 	})
 	if err != nil {
@@ -983,13 +1116,15 @@ func (r *JobRepository) UpdateDownloadProgress(ctx context.Context, id string, p
 		"eta_seconds":      etaSeconds,
 		"message":          message,
 		"status":           models.IngestionStatusDownloading,
+		"stage":            "download",
+		"steps.download":   true,
 		"updated_at":       now,
 	}
 	// Only stamp last_progress_at when bytes actually moved forward — this is
 	// what the watchdog uses to detect a hung downloader. If the parser keeps
 	// responding with the same byte count, updated_at still ticks (heartbeat),
 	// but last_progress_at stays frozen and the watchdog will fire.
-	if downloadedBytes > currentJob.DownloadedBytes {
+	if downloadedBytes > currentJob.DownloadedBytes || (totalBytes <= 0 && progress > 0) {
 		setFields["last_progress_at"] = now
 	}
 
@@ -1048,12 +1183,21 @@ func (r *JobRepository) TransitionToProcessing(ctx context.Context, id, localPat
 				"local_path":               localPath,
 				"steps.download":           true,
 				"error":                    "",
+				"message":                  "Download complete but waiting for processing",
+				"worker_id":                "",
 				"updated_at":               now,
 				"download_finished_at":     bson.M{"$ifNull": bson.A{"$download_finished_at", now}},
 				"queued_for_processing_at": bson.M{"$ifNull": bson.A{"$queued_for_processing_at", now}},
 			},
 		},
 	}
+
+	update = append(update, bson.M{
+		"$unset": bson.M{
+			"locked_until":     "",
+			"last_progress_at": "",
+		},
+	})
 
 	_, err = r.collection.UpdateByID(ctx, objID, update)
 	if err != nil {

@@ -601,6 +601,10 @@ function getJobStatusSummary(job: IngestionJob): string {
     return "Download complete but waiting for processing";
   }
 
+  if (displayStatus === "queued" && !job.worker_id) {
+    return "Waiting for worker";
+  }
+
   const message = (job.message || "").trim();
   if (message && !(isProgressStage(displayStatus) && /\b\d{1,3}%\b/.test(message))) {
     return message;
@@ -1620,6 +1624,12 @@ function JobsTab({
             <p className="text-xs text-gray-500">
               {elapsedLabel}: {elapsedTime} • Last update: {lastUpdateText} ago • Retry: {safeJob.retry_count}
             </p>
+            {(job.worker_id || job.locked_until || (displayStatus === "queued" && !job.worker_id)) && (
+              <p className="text-xs text-gray-400 mt-1">
+                {job.worker_id ? <>Worker: <span className="text-white">{job.worker_id}</span></> : <>Waiting for worker</>}
+                {job.locked_until && <> • Locked until <span className="text-white">{new Date(job.locked_until).toLocaleString()}</span></>}
+              </p>
+            )}
             {(job.source_quality || job.source_resolution || job.total_bytes) && (
               <p className="text-xs text-gray-400 mt-1">
                 {job.source_quality && <span className="mr-3">Source quality: <span className="text-white">{job.source_quality}</span></span>}

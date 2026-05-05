@@ -164,6 +164,62 @@ func (p *Pipeline) ProcessJob(ctx context.Context, job *models.IngestionJob) err
 	return nil
 }
 
+func (p *Pipeline) ProcessDownloadJob(ctx context.Context, job *models.IngestionJob) error {
+	if job == nil {
+		return fmt.Errorf("job is nil - cannot process download")
+	}
+
+	jobID := job.ID.Hex()
+	log.Printf("[WORKER] download worker processing job_id=%s source=%s source_id=%s", jobID, job.Source, job.SourceID)
+
+	metadata, localPath, err := p.parseMovieDetails(job)
+	if err != nil {
+		return p.failDownloadJob(jobID, fmt.Errorf("parse details failed: %w", err))
+	}
+	if metadata == nil {
+		return p.failDownloadJob(jobID, fmt.Errorf("parser returned nil metadata"))
+	}
+
+	if err := p.jobRepo.UpdateMetadata(ctx, jobID, metadata); err != nil {
+		log.Printf("[WORKER] download metadata update failed job_id=%s err=%v", jobID, err)
+	}
+
+	videoURL := strings.TrimSpace(metadata.VideoURL)
+	selectedQuality := strings.TrimSpace(metadata.Quality)
+	log.Printf("[WORKER] selected download source job_id=%s selected_quality=%q video_url=%s", jobID, selectedQuality, safeTruncate(videoURL, 160))
+	if err := p.jobRepo.UpdateVideoURL(ctx, jobID, videoURL); err != nil {
+		log.Printf("[WORKER] failed to persist video_url job_id=%s err=%v", jobID, err)
+	}
+
+	if err := validateDownloadURL(videoURL); err != nil {
+		return p.failDownloadJob(jobID, fmt.Errorf("invalid video_url %q: %w", videoURL, err))
+	}
+
+	if localPath != "" {
+		log.Printf("[WORKER] parser already has local file job_id=%s local_path=%s", jobID, localPath)
+		if err := p.jobRepo.TransitionToProcessing(ctx, jobID, localPath); err != nil {
+			return p.failDownloadJob(jobID, fmt.Errorf("transition to ready_to_process failed: %w", err))
+		}
+		return nil
+	}
+
+	job.Metadata = metadata
+	job.VideoURL = videoURL
+	log.Printf("[WORKER] downloader command job_id=%s endpoint=%s/download video_url=%s", jobID, p.config.ParserURL, safeTruncate(videoURL, 160))
+
+	localPath, err = p.startDownloadAndPoll(ctx, job)
+	if err != nil {
+		return p.failDownloadJob(jobID, fmt.Errorf("download failed for url %q: %w", videoURL, err))
+	}
+
+	if err := p.jobRepo.TransitionToProcessing(ctx, jobID, localPath); err != nil {
+		return p.failDownloadJob(jobID, fmt.Errorf("transition to ready_to_process failed: %w", err))
+	}
+
+	log.Printf("[WORKER] download worker completed job_id=%s local_path=%s", jobID, localPath)
+	return nil
+}
+
 // processJobWithRecovery is the actual processing logic wrapped with panic recovery
 func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.IngestionJob) error {
 	jobID := job.ID.Hex()
@@ -2550,6 +2606,39 @@ func (p *Pipeline) updateMessage(jobID string, message string) error {
 func (p *Pipeline) log(jobID, message, level string) {
 	p.jobRepo.AddLog(context.Background(), jobID, message, level)
 	log.Printf("[%s] %s", level, message)
+}
+
+func validateDownloadURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fmt.Errorf("empty")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("unsupported scheme %q", u.Scheme)
+	}
+	if strings.TrimSpace(u.Host) == "" {
+		return fmt.Errorf("missing host")
+	}
+	return nil
+}
+
+func (p *Pipeline) failDownloadJob(jobID string, err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	p.log(jobID, msg, "error")
+	if failErr := p.jobRepo.SetError(context.Background(), jobID, msg); failErr != nil {
+		log.Printf("[WORKER] failDownloadJob set error failed job_id=%s err=%v", jobID, failErr)
+	}
+	if failErr := p.jobRepo.UpdateStatus(context.Background(), jobID, models.IngestionStatusDownloadFailed, 0); failErr != nil {
+		log.Printf("[WORKER] failDownloadJob secondary failure job_id=%s err=%v", jobID, failErr)
+	}
+	return err
 }
 
 // failJob marks a job as failed

@@ -73,10 +73,12 @@ type IngestionJob struct {
 	ProcessingFinishedAt  *time.Time `bson:"processing_finished_at,omitempty" json:"processing_finished_at,omitempty"`
 
 	// Download progress fields (populated during download)
-	DownloadedBytes int64   `bson:"downloaded_bytes,omitempty" json:"downloaded_bytes,omitempty"`
-	TotalBytes      int64   `bson:"total_bytes,omitempty" json:"total_bytes,omitempty"`
-	SpeedMbps       float64 `bson:"speed_mbps,omitempty" json:"speed_mbps,omitempty"`
-	EtaSeconds      int     `bson:"eta_seconds,omitempty" json:"eta_seconds,omitempty"`
+	DownloadedBytes int64      `bson:"downloaded_bytes,omitempty" json:"downloaded_bytes,omitempty"`
+	TotalBytes      int64      `bson:"total_bytes,omitempty" json:"total_bytes,omitempty"`
+	SpeedMbps       float64    `bson:"speed_mbps,omitempty" json:"speed_mbps,omitempty"`
+	EtaSeconds      int        `bson:"eta_seconds,omitempty" json:"eta_seconds,omitempty"`
+	WorkerID        string     `bson:"worker_id,omitempty" json:"worker_id,omitempty"`
+	LockedUntil     *time.Time `bson:"locked_until,omitempty" json:"locked_until,omitempty"`
 	// LastProgressAt is the last time downloaded_bytes increased. The polling
 	// watchdog fails the job if this stops advancing for too long, even when
 	// the parser keeps responding (e.g. download process hung but not exited).

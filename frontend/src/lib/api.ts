@@ -1805,6 +1805,9 @@ export interface IngestionJob {
   total_bytes?: number;
   speed_mbps?: number;
   eta_seconds?: number;
+  last_progress_at?: string;
+  worker_id?: string;
+  locked_until?: string;
   message?: string;
   // Direct upload fields
   temp_file_url?: string;

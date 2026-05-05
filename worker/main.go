@@ -57,9 +57,14 @@ func main() {
 	log.Println("Connected to MongoDB")
 
 	db := client.Database(mongoDB)
+	hostname, _ := os.Hostname()
+	workerID := strings.TrimSpace(getEnv("WORKER_ID", ""))
+	if workerID == "" {
+		workerID = hostname + ":" + strconv.Itoa(os.Getpid())
+	}
 
 	// Initialize repositories
-	jobRepo := repositories.NewJobRepository(db)
+	jobRepo := repositories.NewJobRepository(db, workerID)
 
 	// Pipeline configuration
 	pipeConfig := pipeline.Config{
@@ -258,6 +263,44 @@ func main() {
 	}()
 
 	// Fixed-size processing pool - each goroutine owns one processing slot.
+	log.Printf("[QUEUE] download worker started worker_id=%s concurrency=1", workerID)
+	go func() {
+		pollInterval := 5 * time.Second
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			default:
+			}
+
+			count, err := jobRepo.CountPendingJobs(workerCtx)
+			if err != nil {
+				log.Printf("[worker] poll queued count_error=%v", err)
+				time.Sleep(pollInterval)
+				continue
+			}
+			log.Printf("[worker] poll queued count=%d", count)
+
+			job, err := jobRepo.ClaimNextJob(workerCtx)
+			if err != nil {
+				log.Printf("[worker] claimed=false reason=claim_error err=%v", err)
+				time.Sleep(pollInterval)
+				continue
+			}
+			if job == nil {
+				log.Printf("[worker] claimed=false reason=no_claimable_queued_jobs")
+				time.Sleep(pollInterval)
+				continue
+			}
+
+			log.Printf("[worker] claiming job_id=%s", job.ID.Hex())
+			log.Printf("[worker] claimed=true reason=ok job_id=%s source=%s source_id=%s", job.ID.Hex(), job.Source, job.SourceID)
+			if err := pipe.ProcessDownloadJob(workerCtx, job); err != nil {
+				log.Printf("[worker] download job failed job_id=%s err=%v", job.ID.Hex(), err)
+			}
+		}
+	}()
+
 	log.Printf("[QUEUE] processing worker started concurrency=%d", processConcurrency)
 	for workerIndex := 0; workerIndex < processConcurrency; workerIndex++ {
 		go func(slot int) {

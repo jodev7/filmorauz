@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from bs4 import BeautifulSoup
 
@@ -73,7 +73,7 @@ class UzmoviSerialParser:
         self.session = self._movie.session
         self.base_url = getattr(self._movie, "BASE_URL", None) or "https://uzmovi.tv"
 
-    def parse(self, url: str) -> Dict:
+    def parse(self, url: str, progress_callback: Optional[Callable[[Dict], None]] = None) -> Dict:
         logger.info(f"[UZMOVI SERIAL] parse start url={url}")
         m_sid = re.search(r"/(\d+)-[^/]+\.html", url) or re.search(r"id=(\d+)", url)
         source_id = m_sid.group(1) if m_sid else ""
@@ -154,6 +154,7 @@ class UzmoviSerialParser:
         # any missing episode numbers between min and max (and probe slightly
         # past the observed max to detect episodes hidden from the rendered DOM).
         pattern_added = 0
+        expected_total = 0
         if group_priority:
             top_group_id = max(group_priority, key=lambda g: group_priority[g])
             in_top: Dict[tuple[int, int], Dict] = {
@@ -162,17 +163,21 @@ class UzmoviSerialParser:
             if in_top:
                 eps_in_top = [ep for (_, ep) in in_top.keys()]
                 min_ep, max_ep = min(eps_in_top), max(eps_in_top)
+                detected_expected_max = self._detect_expected_episode_max(resp.text, episode_candidates, max_ep)
                 # Probe upward past the observed max (cap probe range for safety).
-                probe_max = self._probe_upper_bound(top_group_id, max_ep, hard_cap=max(max_ep + 30, 500))
-                if probe_max > max_ep:
+                probe_target = max(max_ep + 30, detected_expected_max, 500)
+                probe_max = self._probe_upper_bound(top_group_id, max_ep, hard_cap=probe_target)
+                final_max = max(max_ep, detected_expected_max, probe_max)
+                if final_max > max_ep:
                     logger.info(
-                        f"[UZMOVI SERIAL] probe extended max {max_ep} -> {probe_max} for group={top_group_id}"
+                        f"[UZMOVI SERIAL] probe extended max {max_ep} -> {final_max} for group={top_group_id}"
                     )
-                    max_ep = probe_max
+                    max_ep = final_max
                 # Assume single-season layout for the top translation group;
                 # if existing inventory carries multiple seasons we leave them
                 # alone and only fill gaps within season 1 of this group.
                 fill_season = next(iter(in_top.keys()))[0] if len(set(s for s, _ in in_top.keys())) == 1 else 1
+                expected_total = max_ep - min_ep + 1
                 for n in range(min_ep, max_ep + 1):
                     key = (fill_season, n)
                     if key in {(it["season"], it["episode"]) for it in inventory}:
@@ -196,9 +201,27 @@ class UzmoviSerialParser:
             f"found_script={source_counts.get('script', 0)} found_pattern={pattern_added} "
             f"final={len(inventory)}"
         )
+        if expected_total <= 0:
+            expected_total = len(inventory)
+
+        if progress_callback:
+            progress_callback({
+                "stage": "inventory_ready",
+                "message": f"Extracting episodes 0/{expected_total}...",
+                "title": title,
+                "year": year,
+                "poster": poster,
+                "backdrop": backdrop,
+                "description": description,
+                "expected_total": expected_total,
+                "discovered_count": len(inventory),
+                "resolved_count": 0,
+                "episodes": [],
+            })
 
         resolved_rows: List[Dict] = []
         seen_final: set[tuple[int, int, str]] = set()
+        progress_emitted = 0
 
         for entry in inventory:
             video_url = self._extract_episode_video(entry["episode_url"])
@@ -232,6 +255,22 @@ class UzmoviSerialParser:
                     **({"error": "video_url not extracted for episode"} if not video_url else {}),
                 }
             )
+
+            if progress_callback and len(resolved_rows) >= progress_emitted + 5:
+                progress_emitted = len(resolved_rows)
+                progress_callback({
+                    "stage": "resolving_episodes",
+                    "message": f"Extracting episodes {len(resolved_rows)}/{expected_total}...",
+                    "title": title,
+                    "year": year,
+                    "poster": poster,
+                    "backdrop": backdrop,
+                    "description": description,
+                    "expected_total": expected_total,
+                    "discovered_count": len(inventory),
+                    "resolved_count": len(resolved_rows),
+                    "episodes": list(resolved_rows),
+                })
 
         resolved_rows.sort(key=lambda item: (item["season"], item["episode"], item["video_url"] or item["episode_url"]))
 
@@ -275,8 +314,7 @@ class UzmoviSerialParser:
         logger.info(
             f"[UZMOVI SERIAL] done title={title!r} resolved={resolved}/{len(resolved_rows)}"
         )
-
-        return {
+        result = {
             "success": len(resolved_rows) > 0,
             "type": "serial",
             "provider": "uzmovi",
@@ -290,6 +328,24 @@ class UzmoviSerialParser:
             "warnings": warnings,
             "missing_numbers": missing_numbers,
         }
+        if progress_callback:
+            progress_callback({
+                "stage": "completed",
+                "message": f"Extracting episodes {len(resolved_rows)}/{expected_total}...",
+                "title": title,
+                "year": year,
+                "poster": poster,
+                "backdrop": backdrop,
+                "description": description,
+                "expected_total": expected_total,
+                "discovered_count": len(inventory),
+                "resolved_count": len(resolved_rows),
+                "episodes": list(resolved_rows),
+                "warnings": warnings,
+                "missing_numbers": missing_numbers,
+                "result": result,
+            })
+        return result
 
     def _collect_episode_candidates(self, soup: BeautifulSoup, html: str) -> tuple[List[Dict], Dict[str, int]]:
         per_group: Dict[str, Dict[tuple[int, int], Dict]] = {}
@@ -378,6 +434,26 @@ class UzmoviSerialParser:
             else:
                 misses += 1
             n += 1
+        return best
+
+    def _detect_expected_episode_max(self, html: str, candidates: List[Dict], observed_max: int) -> int:
+        best = observed_max
+        for item in candidates:
+            try:
+                best = max(best, int(item.get("episode", 0) or 0))
+            except Exception:
+                continue
+
+        patterns = [
+            re.compile(r"(\d{1,3})\s*(?:\-|–|\.\.|to)\s*(\d{1,3})\s*(?:qism|qismlar|episode|episodes)", re.IGNORECASE),
+            re.compile(r"(?:jami|total|barcha)\D{0,20}(\d{1,3})\s*(?:qism|qismlar|episode|episodes)", re.IGNORECASE),
+            re.compile(r"(\d{1,3})\s*(?:qism|qismlar|episode|episodes)", re.IGNORECASE),
+        ]
+        for pattern in patterns:
+            for match in pattern.finditer(html or ""):
+                numbers = [int(group) for group in match.groups() if group and group.isdigit()]
+                if numbers:
+                    best = max(best, max(numbers))
         return best
 
     def _compute_missing_numbers(self, episodes: List[Dict]) -> List[int]:

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -46,19 +47,66 @@ type parserSerialSeason struct {
 }
 
 type parserSerialResponse struct {
-	Success     bool                  `json:"success"`
-	Type        string                `json:"type"`
-	Provider    string                `json:"provider"`
-	Title       string                `json:"title"`
-	Year        int                   `json:"year"`
-	Poster      string                `json:"poster"`
-	Backdrop    string                `json:"backdrop"`
-	Description string                `json:"description"`
+	Success        bool                  `json:"success"`
+	Type           string                `json:"type"`
+	Provider       string                `json:"provider"`
+	Title          string                `json:"title"`
+	Year           int                   `json:"year"`
+	Poster         string                `json:"poster"`
+	Backdrop       string                `json:"backdrop"`
+	Description    string                `json:"description"`
 	Episodes       []parserSerialEpisode `json:"episodes"`
 	Seasons        []parserSerialSeason  `json:"seasons"`
 	Warnings       []string              `json:"warnings"`
 	MissingNumbers []int                 `json:"missing_numbers"`
 	Error          string                `json:"error"`
+}
+
+type parserSerialAsyncStartResponse struct {
+	OK      bool   `json:"ok"`
+	JobID   string `json:"job_id"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+type parserSerialAsyncStatus struct {
+	JobID           string                `json:"job_id"`
+	Status          string                `json:"status"`
+	Stage           string                `json:"stage"`
+	Provider        string                `json:"provider"`
+	Message         string                `json:"message"`
+	Title           string                `json:"title"`
+	Year            int                   `json:"year"`
+	Poster          string                `json:"poster"`
+	Backdrop        string                `json:"backdrop"`
+	Description     string                `json:"description"`
+	Episodes        []parserSerialEpisode `json:"episodes"`
+	ExpectedTotal   int                   `json:"expected_total"`
+	DiscoveredCount int                   `json:"discovered_count"`
+	ResolvedCount   int                   `json:"resolved_count"`
+	MissingNumbers  []int                 `json:"missing_numbers"`
+	Warnings        []string              `json:"warnings"`
+	Result          *parserSerialResponse `json:"result"`
+	Error           string                `json:"error"`
+}
+
+func (s parserSerialAsyncStatus) asResponse() parserSerialResponse {
+	if s.Result != nil {
+		return *s.Result
+	}
+	return parserSerialResponse{
+		Success:        len(s.Episodes) > 0,
+		Type:           "serial",
+		Provider:       s.Provider,
+		Title:          s.Title,
+		Year:           s.Year,
+		Poster:         s.Poster,
+		Backdrop:       s.Backdrop,
+		Description:    s.Description,
+		Episodes:       s.Episodes,
+		Warnings:       s.Warnings,
+		MissingNumbers: s.MissingNumbers,
+	}
 }
 
 var serialSlugCleanRe = regexp.MustCompile(`[^a-z0-9]+`)
@@ -158,9 +206,6 @@ func (h *IngestionHandler) runSerialExtractionAsync(
 	log.Printf("[series extractor] started parent_job=%s source=%s source_id=%s url=%s",
 		parentID, source, sourceID, detailURL)
 
-	// Use a long-lived context for the full extraction; parser /serial-details
-	// for a 90-episode serial can take many minutes because it visits every
-	// episode page. Capping at 30 minutes is a sanity guard.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
@@ -168,94 +213,202 @@ func (h *IngestionHandler) runSerialExtractionAsync(
 		log.Printf("[series extractor] mark processing failed parent_job=%s err=%v", parentID, err)
 	}
 
-	params := url.Values{}
-	params.Set("url", detailURL)
-	params.Set("source", source)
-	parserEndpoint := fmt.Sprintf("%s/serial-details?%s", parserBaseURL, params.Encode())
-	log.Printf("[series extractor] calling parser parent_job=%s endpoint=%s", parentID, parserEndpoint)
-
-	body, status, contentType, fetchErr := fetchSerialDetailsWithRetry(parserEndpoint, parentID)
-	if fetchErr != nil {
-		h.failParent(ctx, parentID, fetchErr.Error())
+	parserJobID, err := h.startAsyncSerialParserJob(parserBaseURL, source, detailURL)
+	if err != nil {
+		h.failParent(ctx, parentID, err.Error())
 		return
 	}
 
-	// Reject non-JSON responses up front so the UI doesn't see a raw Go
-	// `invalid character '<' looking for beginning of value` error when the
-	// parser (or an intermediate proxy) returns an HTML error page.
-	if !looksLikeJSON(contentType, body) {
-		reason := fmt.Sprintf("parser returned non-JSON response (HTTP %d, content-type=%q) — likely timeout or upstream error", status, contentType)
-		if status == http.StatusGatewayTimeout || status == http.StatusBadGateway || status == http.StatusServiceUnavailable {
-			reason = fmt.Sprintf("parser timeout (HTTP %d) — please re-import; the source page may be slow", status)
-		}
-		log.Printf("[series extractor] non-json parser response parent_job=%s status=%d ct=%q body=%s",
-			parentID, status, contentType, safeBody(body))
-		h.failParent(ctx, parentID, reason)
-		return
-	}
-
-	var payload parserSerialResponse
-	if err := json.Unmarshal(body, &payload); err != nil {
-		reason := fmt.Sprintf("parser response could not be parsed (HTTP %d) — please re-import", status)
-		log.Printf("[series extractor] json decode failed parent_job=%s status=%d err=%v body=%s",
-			parentID, status, err, safeBody(body))
-		h.failParent(ctx, parentID, reason)
-		return
-	}
-	if !payload.Success {
-		reason := payload.Error
-		if reason == "" {
-			reason = "parser could not extract serial"
-		}
-		h.failParent(ctx, parentID, reason)
+	payload, createdCount, series, seasonsCount, err := h.pollSerialParserJob(ctx, source, sourceID, title, parserBaseURL, parserJobID, parentID)
+	if err != nil {
+		h.failParent(ctx, parentID, err.Error())
 		return
 	}
 	if len(payload.Episodes) == 0 {
 		h.failParent(ctx, parentID, "parser returned no episodes")
 		return
 	}
-
-	resolvedTitle := strings.TrimSpace(payload.Title)
-	if resolvedTitle == "" {
-		resolvedTitle = title
+	if err := h.completeParent(ctx, parentID, seasonsCount, len(payload.Episodes), createdCount, series.ID, series.Slug, payload.MissingNumbers); err != nil {
+		log.Printf("[series extractor] complete parent failed parent_job=%s err=%v", parentID, err)
 	}
+}
 
-	series, err := h.upsertSeries(ctx, resolvedTitle, &payload)
+func (h *IngestionHandler) startAsyncSerialParserJob(parserBaseURL, source, detailURL string) (string, error) {
+	body, _ := json.Marshal(map[string]string{
+		"source": source,
+		"url":    detailURL,
+	})
+	endpoint := fmt.Sprintf("%s/serial/extract/start", strings.TrimRight(parserBaseURL, "/"))
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		h.failParent(ctx, parentID, fmt.Sprintf("failed to upsert series: %v", err))
-		return
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := serialDetailsClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to start parser serial extraction: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if !looksLikeJSON(resp.Header.Get("Content-Type"), respBody) {
+		return "", fmt.Errorf("parser async start returned non-json response (HTTP %d)", resp.StatusCode)
 	}
 
-	seasonsSet := map[int]struct{}{}
-	for _, ep := range payload.Episodes {
-		s := ep.Season
-		if s <= 0 {
-			s = 1
+	var start parserSerialAsyncStartResponse
+	if err := json.Unmarshal(respBody, &start); err != nil {
+		return "", fmt.Errorf("failed to decode parser async start response: %w", err)
+	}
+	if resp.StatusCode != http.StatusAccepted || strings.TrimSpace(start.JobID) == "" {
+		msg := start.Message
+		if msg == "" {
+			msg = string(respBody)
 		}
-		seasonsSet[s] = struct{}{}
+		return "", fmt.Errorf("parser async start failed (HTTP %d): %s", resp.StatusCode, msg)
 	}
-	log.Printf("[series extractor] found seasons=%d episodes=%d parent_job=%s",
-		len(seasonsSet), len(payload.Episodes), parentID)
+	return start.JobID, nil
+}
 
+func (h *IngestionHandler) pollSerialParserJob(
+	ctx context.Context,
+	source, sourceID, fallbackTitle, parserBaseURL, parserJobID, parentID string,
+) (parserSerialResponse, int, *models.Series, int, error) {
+	endpoint := fmt.Sprintf("%s/serial/extract/status/%s", strings.TrimRight(parserBaseURL, "/"), url.PathEscape(parserJobID))
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	var (
+		createdCount int
+		lastLoggedAt int
+		series       *models.Series
+	)
 	seasonCache := map[int]*models.Season{}
-	createdCount := 0
-	skipped := 0
+	seenSeasons := map[int]struct{}{}
 
-	for _, ep := range payload.Episodes {
+	for {
+		status, err := fetchSerialAsyncStatus(endpoint)
+		if err != nil {
+			return parserSerialResponse{}, createdCount, nil, 0, err
+		}
+		payload := status.asResponse()
+
+		resolvedTitle := strings.TrimSpace(payload.Title)
+		if resolvedTitle == "" {
+			resolvedTitle = fallbackTitle
+		}
+		if series == nil && resolvedTitle != "" {
+			series, err = h.upsertSeries(ctx, resolvedTitle, &payload)
+			if err != nil {
+				return parserSerialResponse{}, createdCount, nil, 0, fmt.Errorf("failed to upsert series: %w", err)
+			}
+		}
+		if series != nil {
+			createdCount, err = h.createIncrementalEpisodeJobs(ctx, series, seasonCache, seenSeasons, source, sourceID, payload.Episodes, createdCount)
+			if err != nil {
+				return parserSerialResponse{}, createdCount, series, len(seenSeasons), err
+			}
+		}
+
+		if _, err := h.updateParentExtractionProgress(ctx, parentID, payload, createdCount, buildParentProgressMessage(status, createdCount)); err != nil {
+			log.Printf("[series extractor] progress update failed parent_job=%s err=%v", parentID, err)
+		}
+		resolvedCount := maxInt(status.ResolvedCount, len(status.Episodes))
+		if resolvedCount >= lastLoggedAt+5 {
+			lastLoggedAt = resolvedCount - (resolvedCount % 5)
+			expected := status.ExpectedTotal
+			if expected <= 0 {
+				expected = resolvedCount
+			}
+			_ = h.appendParentLog(ctx, parentID, fmt.Sprintf("Extracting episodes %d/%d. Created child jobs: %d", resolvedCount, expected, createdCount), "info")
+		}
+
+		switch strings.ToLower(status.Status) {
+		case "queued", "processing":
+			select {
+			case <-ctx.Done():
+				return parserSerialResponse{}, createdCount, series, len(seenSeasons), fmt.Errorf("serial extraction timed out")
+			case <-ticker.C:
+			}
+		case "completed":
+			if len(payload.Episodes) == 0 {
+				return payload, createdCount, series, len(seenSeasons), fmt.Errorf("parser returned no episodes")
+			}
+			if series == nil {
+				series, err = h.upsertSeries(ctx, resolvedTitle, &payload)
+				if err != nil {
+					return parserSerialResponse{}, createdCount, nil, len(seenSeasons), fmt.Errorf("failed to upsert series: %w", err)
+				}
+			}
+			return payload, createdCount, series, len(seenSeasons), nil
+		case "failed":
+			msg := strings.TrimSpace(status.Error)
+			if msg == "" {
+				msg = "parser serial extraction failed"
+			}
+			return payload, createdCount, series, len(seenSeasons), fmt.Errorf(msg)
+		default:
+			select {
+			case <-ctx.Done():
+				return parserSerialResponse{}, createdCount, series, len(seenSeasons), fmt.Errorf("serial extraction timed out")
+			case <-ticker.C:
+			}
+		}
+	}
+}
+
+func fetchSerialAsyncStatus(endpoint string) (parserSerialAsyncStatus, error) {
+	resp, err := serialDetailsClient.Get(endpoint)
+	if err != nil {
+		return parserSerialAsyncStatus{}, fmt.Errorf("failed to poll parser serial extraction: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if !looksLikeJSON(resp.Header.Get("Content-Type"), body) {
+		return parserSerialAsyncStatus{}, fmt.Errorf("parser async status returned non-json response (HTTP %d)", resp.StatusCode)
+	}
+	var status parserSerialAsyncStatus
+	if err := json.Unmarshal(body, &status); err != nil {
+		return parserSerialAsyncStatus{}, fmt.Errorf("failed to decode parser async status: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		msg := strings.TrimSpace(status.Error)
+		if msg == "" {
+			msg = strings.TrimSpace(status.Message)
+		}
+		if msg == "" {
+			msg = fmt.Sprintf("parser async status failed (HTTP %d)", resp.StatusCode)
+		}
+		return parserSerialAsyncStatus{}, fmt.Errorf(msg)
+	}
+	return status, nil
+}
+
+func (h *IngestionHandler) createIncrementalEpisodeJobs(
+	ctx context.Context,
+	series *models.Series,
+	seasonCache map[int]*models.Season,
+	seenSeasons map[int]struct{},
+	source, sourceID string,
+	episodes []parserSerialEpisode,
+	createdCount int,
+) (int, error) {
+	for _, ep := range episodes {
 		if ep.VideoURL == "" {
-			skipped++
 			continue
 		}
 		seasonNum := ep.Season
 		if seasonNum <= 0 {
 			seasonNum = 1
 		}
+		seenSeasons[seasonNum] = struct{}{}
+
 		season, ok := seasonCache[seasonNum]
 		if !ok {
 			s, err := h.upsertSeason(ctx, series.ID, seasonNum)
 			if err != nil {
-				log.Printf("[series extractor] upsert season s%d failed parent_job=%s err=%v", seasonNum, parentID, err)
-				continue
+				return createdCount, fmt.Errorf("failed to upsert season %d: %w", seasonNum, err)
 			}
 			season = s
 			seasonCache[seasonNum] = season
@@ -263,30 +416,97 @@ func (h *IngestionHandler) runSerialExtractionAsync(
 
 		episode, err := h.upsertEpisode(ctx, series.ID, season.ID, ep, series.PosterURL)
 		if err != nil {
-			log.Printf("[series extractor] upsert episode S%02dE%02d failed parent_job=%s err=%v",
-				seasonNum, ep.Episode, parentID, err)
-			continue
+			return createdCount, fmt.Errorf("failed to upsert episode S%02dE%02d: %w", seasonNum, ep.Episode, err)
 		}
-
 		_, created, err := h.createEpisodeJob(ctx, series, season, episode, source, sourceID, ep, seasonNum)
 		if err != nil {
-			log.Printf("[series extractor] create job S%02dE%02d failed parent_job=%s err=%v",
-				seasonNum, ep.Episode, parentID, err)
-			continue
+			return createdCount, fmt.Errorf("failed to create episode job S%02dE%02d: %w", seasonNum, ep.Episode, err)
 		}
 		if created {
 			createdCount++
 		}
 	}
+	return createdCount, nil
+}
 
-	log.Printf("[series extractor] created child jobs=%d skipped=%d parent_job=%s",
-		createdCount, skipped, parentID)
-	if len(payload.Warnings) > 0 {
-		log.Printf("[series extractor] warnings parent_job=%s warnings=%v", parentID, payload.Warnings)
+func buildParentProgressMessage(status parserSerialAsyncStatus, createdCount int) string {
+	expected := status.ExpectedTotal
+	if expected <= 0 {
+		expected = maxInt(status.ResolvedCount, len(status.Episodes))
 	}
-	if err := h.completeParent(ctx, parentID, len(seasonsSet), len(payload.Episodes), createdCount, series.ID, series.Slug, payload.MissingNumbers); err != nil {
-		log.Printf("[series extractor] complete parent failed parent_job=%s err=%v", parentID, err)
+	if expected <= 0 {
+		expected = len(status.Episodes)
 	}
+	message := strings.TrimSpace(status.Message)
+	if message == "" {
+		message = fmt.Sprintf("Extracting episodes %d/%d...", maxInt(status.ResolvedCount, len(status.Episodes)), expected)
+	}
+	if len(status.MissingNumbers) > 0 {
+		message = fmt.Sprintf("%s Created child jobs: %d. Missing: %v", message, createdCount, status.MissingNumbers)
+	} else {
+		message = fmt.Sprintf("%s Created child jobs: %d", message, createdCount)
+	}
+	return message
+}
+
+func (h *IngestionHandler) updateParentExtractionProgress(ctx context.Context, id string, payload parserSerialResponse, createdCount int, message string) (*mongo.UpdateResult, error) {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return nil, err
+	}
+	expected := len(payload.Episodes)
+	if expected <= 0 {
+		expected = createdCount
+	}
+	progress := 0
+	if expected > 0 {
+		progress = int(float64(createdCount) / float64(expected) * 100)
+	}
+	update := bson.M{
+		"updated_at":         time.Now(),
+		"message":            message,
+		"progress":           progress,
+		"episode_count":      len(payload.Episodes),
+		"child_jobs_created": createdCount,
+		"missing_episodes":   payload.MissingNumbers,
+	}
+	seasons := map[int]struct{}{}
+	for _, ep := range payload.Episodes {
+		season := ep.Season
+		if season <= 0 {
+			season = 1
+		}
+		seasons[season] = struct{}{}
+	}
+	update["seasons_count"] = len(seasons)
+	return h.jobRepo.GetCollection().UpdateByID(ctx, objID, bson.M{"$set": update})
+}
+
+func (h *IngestionHandler) appendParentLog(ctx context.Context, id, message, level string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return err
+	}
+	_, err = h.jobRepo.GetCollection().UpdateByID(ctx, objID, bson.M{
+		"$push": bson.M{
+			"logs": models.IngestionLog{
+				Timestamp: time.Now(),
+				Message:   message,
+				Level:     level,
+			},
+		},
+		"$set": bson.M{
+			"updated_at": time.Now(),
+		},
+	})
+	return err
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (h *IngestionHandler) markParentProcessing(ctx context.Context, id string) error {
@@ -296,12 +516,13 @@ func (h *IngestionHandler) markParentProcessing(ctx context.Context, id string) 
 	}
 	now := time.Now()
 	_, err = h.jobRepo.GetCollection().UpdateByID(ctx, objID, bson.M{"$set": bson.M{
-		"status":                 models.IngestionStatusProcessing,
-		"stage":                  string(models.IngestionStatusProcessing),
-		"processing_started_at":  now,
-		"started_at":             now,
-		"updated_at":             now,
-		"message":                "Extracting episodes",
+		"status":                models.IngestionStatusProcessing,
+		"stage":                 string(models.IngestionStatusProcessing),
+		"progress":              0,
+		"processing_started_at": now,
+		"started_at":            now,
+		"updated_at":            now,
+		"message":               "Extracting episodes",
 	}})
 	return err
 }
@@ -317,6 +538,7 @@ func (h *IngestionHandler) failParent(ctx context.Context, id, reason string) {
 		"status":       models.IngestionStatusFailed,
 		"stage":        string(models.IngestionStatusFailed),
 		"error":        reason,
+		"message":      reason,
 		"completed_at": now,
 		"updated_at":   now,
 	}})
@@ -331,6 +553,10 @@ func (h *IngestionHandler) completeParent(
 		return err
 	}
 	now := time.Now()
+	message := fmt.Sprintf("Extracting finished: %d episodes discovered, %d child jobs created", episodes, childJobs)
+	if len(missing) > 0 {
+		message = fmt.Sprintf("%s. Missing: %v", message, missing)
+	}
 	update := bson.M{
 		"status":             models.IngestionStatusCompleted,
 		"stage":              string(models.IngestionStatusCompleted),
@@ -342,7 +568,7 @@ func (h *IngestionHandler) completeParent(
 		"series_slug":        seriesSlug,
 		"completed_at":       now,
 		"updated_at":         now,
-		"message":            fmt.Sprintf("Extracted %d episodes (%d new jobs)", episodes, childJobs),
+		"message":            message,
 	}
 	if len(missing) > 0 {
 		update["missing_episodes"] = missing
