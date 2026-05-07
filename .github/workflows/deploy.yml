@@ -8,7 +8,6 @@ on:
 
 jobs:
   deploy-web:
-  needs: ci
   runs-on: ubuntu-latest
   steps:
     - name: Deploy to Web VPS
@@ -25,7 +24,6 @@ jobs:
           echo "Deployment completed"
 
   deploy-worker:
-  needs: ci
   runs-on: ubuntu-latest
   steps:
     - name: Deploy to Worker VPS
