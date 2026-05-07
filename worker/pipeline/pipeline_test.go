@@ -15,15 +15,17 @@ func TestCanonicalizeEpisodeID(t *testing.T) {
 		fetched   string
 		pass      bool
 	}{
-		{"6954:s01e010", "10", true},
-		{"6954:s01e010", "11", false},
+		{"6954:s01e09", "9", true},
+		{"6954:s01e10", "10", true},
+		{"6954:s01e13", "13", true},
+		{"6954:s01e09", "10", false},
 	}
 
 	for _, tt := range tests {
 		epNum := tt.fetched
-		if len(epNum) < 3 {
+		if len(epNum) < 2 {
 			if val, err := strconv.Atoi(epNum); err == nil {
-				epNum = fmt.Sprintf("%03d", val)
+				epNum = fmt.Sprintf("%02d", val)
 			}
 		}
 

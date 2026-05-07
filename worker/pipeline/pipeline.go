@@ -1029,11 +1029,11 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 					// Ensure we have a clean episode number
 					rawFetched := strings.TrimSpace(result.SourceID)
 					
-					// If rawFetched is just numeric, pad it as 3 digits
+					// If rawFetched is just numeric, pad it as 2 digits
 					epNum := rawFetched
-					if len(epNum) < 3 {
+					if len(epNum) < 2 {
 						if val, err := strconv.Atoi(epNum); err == nil {
-							epNum = fmt.Sprintf("%03d", val)
+							epNum = fmt.Sprintf("%02d", val)
 						}
 					}
 
