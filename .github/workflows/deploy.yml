@@ -1,4 +1,12 @@
-deploy-web:
+name: Deploy FilmoraUz
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy-web:
   needs: ci
   runs-on: ubuntu-latest
   steps:
@@ -15,7 +23,7 @@ deploy-web:
           make vps-pull-web
           echo "Deployment completed"
 
-deploy-worker:
+  deploy-worker:
   needs: ci
   runs-on: ubuntu-latest
   steps:
