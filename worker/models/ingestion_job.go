@@ -109,11 +109,16 @@ type IngestionJob struct {
 	IsPremium   bool   `bson:"is_premium,omitempty" json:"is_premium,omitempty"`
 
 	// Quality info from source (Asilmedia etc.)
-	SourceQuality      string   `bson:"source_quality,omitempty" json:"source_quality,omitempty"`
-	AvailableQualities []string `bson:"available_qualities,omitempty" json:"available_qualities,omitempty"`
-	SourceResolution   string   `bson:"source_resolution,omitempty" json:"source_resolution,omitempty"`
-	GeneratedQualities []string `bson:"generated_qualities,omitempty" json:"generated_qualities,omitempty"`
-	MasterPlaylistURL  string   `bson:"master_playlist_url,omitempty" json:"master_playlist_url,omitempty"`
+	SourceQuality        string   `bson:"source_quality,omitempty" json:"source_quality,omitempty"`
+	SelectedQuality      string   `bson:"selected_quality,omitempty" json:"selected_quality,omitempty"`
+	SelectedVideoURL     string   `bson:"selected_video_url,omitempty" json:"selected_video_url,omitempty"`
+	AvailableQualities   []string `bson:"available_qualities,omitempty" json:"available_qualities,omitempty"`
+	SourceResolution     string   `bson:"source_resolution,omitempty" json:"source_resolution,omitempty"`
+	GeneratedQualities   []string `bson:"generated_qualities,omitempty" json:"generated_qualities,omitempty"`
+	MasterPlaylistURL    string   `bson:"master_playlist_url,omitempty" json:"master_playlist_url,omitempty"`
+	IdentityConfidence   float64  `bson:"identity_confidence,omitempty" json:"identity_confidence,omitempty"`
+	ClassifierConfidence float64  `bson:"classifier_confidence,omitempty" json:"classifier_confidence,omitempty"`
+	ClassifierEvidence   string   `bson:"classifier_evidence,omitempty" json:"classifier_evidence,omitempty"`
 
 	// Serial ingestion linkage. Set only when this job processes a single
 	// episode (ContentType == "episode"); otherwise left empty for movies.
@@ -160,7 +165,9 @@ type ParsedMovieMetadata struct {
 	Quality      string        `bson:"quality" json:"quality"`
 	Translation  string        `bson:"translation" json:"translation"`
 	// Selected best video URL (single string for convenience)
-	VideoURL string `bson:"video_url,omitempty" json:"video_url,omitempty"`
+	VideoURL             string  `bson:"video_url,omitempty" json:"video_url,omitempty"`
+	ClassifierConfidence float64 `bson:"classifier_confidence,omitempty" json:"classifier_confidence,omitempty"`
+	ClassifierEvidence   string  `bson:"classifier_evidence,omitempty" json:"classifier_evidence,omitempty"`
 }
 
 // VideoSource represents a video source

@@ -63,10 +63,12 @@ type parserSerialResponse struct {
 }
 
 type parserSerialAsyncStartResponse struct {
-	OK      bool   `json:"ok"`
-	JobID   string `json:"job_id"`
-	Status  string `json:"status"`
-	Message string `json:"message"`
+	OK          bool   `json:"ok"`
+	ParserJobID string `json:"parser_job_id"`
+	JobID       string `json:"job_id"`
+	Status      string `json:"status"`
+	Message     string `json:"message"`
+	Error       string `json:"error"`
 }
 
 type parserSerialAsyncStatus struct {
@@ -234,11 +236,16 @@ func (h *IngestionHandler) runSerialExtractionAsync(
 }
 
 func (h *IngestionHandler) startAsyncSerialParserJob(parserBaseURL, source, detailURL string) (string, error) {
+	if err := checkParserHealth(parserBaseURL); err != nil {
+		return "", err
+	}
+
 	body, _ := json.Marshal(map[string]string{
 		"source": source,
 		"url":    detailURL,
 	})
 	endpoint := fmt.Sprintf("%s/serial/extract/start", strings.TrimRight(parserBaseURL, "/"))
+	log.Printf("[serial import] parser_start_url=%s", endpoint)
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -252,6 +259,8 @@ func (h *IngestionHandler) startAsyncSerialParserJob(parserBaseURL, source, deta
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
+	log.Printf("[serial import] parser_start_url=%s status=%d content_type=%s body_preview_first_300_chars=%q",
+		endpoint, resp.StatusCode, resp.Header.Get("Content-Type"), parserRawPrefix(respBody, 300))
 	if !looksLikeJSON(resp.Header.Get("Content-Type"), respBody) {
 		return "", fmt.Errorf("parser async start returned non-json response (HTTP %d)", resp.StatusCode)
 	}
@@ -260,14 +269,41 @@ func (h *IngestionHandler) startAsyncSerialParserJob(parserBaseURL, source, deta
 	if err := json.Unmarshal(respBody, &start); err != nil {
 		return "", fmt.Errorf("failed to decode parser async start response: %w", err)
 	}
-	if resp.StatusCode != http.StatusAccepted || strings.TrimSpace(start.JobID) == "" {
-		msg := start.Message
+	parserJobID := strings.TrimSpace(start.ParserJobID)
+	if parserJobID == "" {
+		parserJobID = strings.TrimSpace(start.JobID)
+	}
+	if resp.StatusCode != http.StatusAccepted || parserJobID == "" {
+		msg := strings.TrimSpace(start.Error)
+		if msg == "" {
+			msg = strings.TrimSpace(start.Message)
+		}
 		if msg == "" {
 			msg = string(respBody)
 		}
 		return "", fmt.Errorf("parser async start failed (HTTP %d): %s", resp.StatusCode, msg)
 	}
-	return start.JobID, nil
+	return parserJobID, nil
+}
+
+func checkParserHealth(parserBaseURL string) error {
+	endpoint := fmt.Sprintf("%s/health", strings.TrimRight(parserBaseURL, "/"))
+	resp, err := serialDetailsClient.Get(endpoint)
+	if err != nil {
+		return fmt.Errorf("parser health check failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	log.Printf("[serial import] parser_health_url=%s status=%d content_type=%s body_preview_first_300_chars=%q",
+		endpoint, resp.StatusCode, resp.Header.Get("Content-Type"), parserRawPrefix(body, 300))
+	if !looksLikeJSON(resp.Header.Get("Content-Type"), body) {
+		return fmt.Errorf("parser health returned non-json response (HTTP %d)", resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("parser health check failed (HTTP %d)", resp.StatusCode)
+	}
+	return nil
 }
 
 func (h *IngestionHandler) pollSerialParserJob(

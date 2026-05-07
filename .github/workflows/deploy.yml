@@ -1,0 +1,72 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Frontend Build Check
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Backend Test
+        run: cd backend && go test ./...
+
+      - name: Worker Test
+        run: cd worker && go test ./...
+
+  deploy-web:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Web VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.WEB_HOST }}
+          username: ${{ secrets.WEB_USER }}
+          key: ${{ secrets.WEB_SSH_KEY }}
+          port: ${{ secrets.WEB_PORT }}
+          script: |
+            echo "Deploying web server..."
+            cd /opt/filmorauz
+            make vps-pull-web
+            echo "Deployment completed"
+
+  deploy-worker:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Worker VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.WORKER_HOST }}
+          username: ${{ secrets.WORKER_USER }}
+          key: ${{ secrets.WORKER_SSH_KEY }}
+          port: ${{ secrets.WORKER_PORT }}
+          script: |
+            echo "Deploying worker server..."
+            cd /opt/filmorauz
+            make vps-pull-worker
+            echo "Deployment completed"

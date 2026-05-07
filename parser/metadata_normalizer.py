@@ -602,10 +602,17 @@ def create_worker_payload(
         "quality": quality,
         "translation": translation,
         "original_title": original_title,
+        "type": metadata.get("type", "unknown"),
+        "source_id": metadata.get("source_id", ""),
+        "detail_url": metadata.get("detail_url", page_url),
         
         # Source quality info (for Asilmedia and other sources with multiple qualities)
         "source_quality": source_quality,
         "available_qualities": available_qualities,
+        "selected_quality": source_quality or quality,
+        "selected_video_url": video_url if video_url else "",
+        "source_resolution": metadata.get("source_resolution", ""),
+        "video_urls": metadata.get("video_urls", []),
         
         # Source tracking
         "source": source,

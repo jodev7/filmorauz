@@ -115,13 +115,9 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 		// Non-fatal: the HLS exists, admin can re-run or patch the row.
 	}
 
-	if err := p.updateStatus(jobID, models.IngestionStatusCompleted, 100); err != nil {
-		log.Printf("[EPISODE] WARNING: final status update failed: %v", err)
-	}
-
 	// === Clip generation ===
-	// Trigger at the episode level only, after the job has been marked
-	// completed, while the processed source still exists on disk.
+	// Trigger at the episode level before the job is marked completed so the
+	// status reflects the full ingestion lifecycle, not just HLS availability.
 	log.Printf("[CLIPS] episode completed → generating clips")
 	log.Printf("[EPISODE] clip_generation start series_slug=%s season=%d episode=%d processed_master=%s local_path=%s",
 		job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, processedMaster, localPath)
@@ -158,6 +154,9 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	// pipeline. Catches the parser MP4 if `localPath` ever pointed at
 	// something the inline cleanupFile refused (path mismatch, race with a
 	// parallel write, etc.). In dev mode this is a no-op.
+	if err := p.updateStatus(jobID, models.IngestionStatusCompleted, 100); err != nil {
+		log.Printf("[EPISODE] WARNING: final status update failed: %v", err)
+	}
 	job.Status = models.IngestionStatusCompleted
 	p.CleanupAfterSuccess(job, localPath, hlsDir)
 

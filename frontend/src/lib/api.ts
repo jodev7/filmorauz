@@ -1829,9 +1829,13 @@ export interface IngestionJob {
   missing_episodes?: number[];
   // Source quality (selected by parser, validated by worker after download)
   source_quality?: string;
+  selected_quality?: string;
+  selected_video_url?: string;
   source_resolution?: string;
   available_qualities?: string[];
   generated_qualities?: string[];
+  classifier_confidence?: number;
+  classifier_evidence?: string;
   file_size?: number;
 }
 
@@ -1845,6 +1849,10 @@ export interface SearchResult {
   detail_url: string;
   source: string;
   type?: "movie" | "serial";
+  confidence?: number;
+  available_qualities?: string[];
+  selected_quality?: string;
+  selected_video_url?: string;
 }
 
 export interface IngestionJobInput {
@@ -2009,6 +2017,10 @@ export interface CatalogItem {
   description: string;
   genres: string[];
   detail_url: string;
+  confidence?: number;
+  available_qualities?: string[];
+  selected_quality?: string;
+  selected_video_url?: string;
 }
 
 export interface CatalogResponse {
@@ -2035,6 +2047,38 @@ export interface CatalogImportInput {
   detail_url: string;
   title: string;
   type?: "movie" | "serial";
+  year?: number;
+  poster?: string;
+  force_confirmed?: boolean;
+}
+
+export interface ImportConfirmationPayload {
+  source: string;
+  source_id: string;
+  detail_url: string;
+  title: string;
+  year?: number;
+  type?: string;
+  poster?: string;
+}
+
+export interface ImportConfirmationResponse {
+  error: string;
+  reason?: string;
+  confidence: number;
+  selected: ImportConfirmationPayload;
+  fetched: ImportConfirmationPayload;
+  requires_confirmation: true;
+}
+
+export class ImportConfirmationError extends Error {
+  response: ImportConfirmationResponse;
+
+  constructor(response: ImportConfirmationResponse) {
+    super(response.error || "Admin confirmation required");
+    this.name = "ImportConfirmationError";
+    this.response = response;
+  }
 }
 
 export interface CatalogCategory {
@@ -2118,6 +2162,9 @@ export async function importFromCatalog(
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
+    if (res.status === 409 && (err as { requires_confirmation?: boolean }).requires_confirmation) {
+      throw new ImportConfirmationError(err as ImportConfirmationResponse);
+    }
     throw new Error((err as { error?: string }).error || "Failed to import from catalog");
   }
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;

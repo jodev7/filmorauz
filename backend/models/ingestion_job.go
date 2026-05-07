@@ -104,11 +104,16 @@ type IngestionJob struct {
 	IsPremium   bool   `bson:"is_premium,omitempty" json:"is_premium,omitempty"`       // Premium content flag
 
 	// Quality info from source (Asilmedia etc.)
-	SourceQuality      string   `bson:"source_quality,omitempty" json:"source_quality,omitempty"`
-	AvailableQualities []string `bson:"available_qualities,omitempty" json:"available_qualities,omitempty"`
-	SourceResolution   string   `bson:"source_resolution,omitempty" json:"source_resolution,omitempty"`
-	GeneratedQualities []string `bson:"generated_qualities,omitempty" json:"generated_qualities,omitempty"`
-	MasterPlaylistURL  string   `bson:"master_playlist_url,omitempty" json:"master_playlist_url,omitempty"`
+	SourceQuality        string   `bson:"source_quality,omitempty" json:"source_quality,omitempty"`
+	SelectedQuality      string   `bson:"selected_quality,omitempty" json:"selected_quality,omitempty"`
+	SelectedVideoURL     string   `bson:"selected_video_url,omitempty" json:"selected_video_url,omitempty"`
+	AvailableQualities   []string `bson:"available_qualities,omitempty" json:"available_qualities,omitempty"`
+	SourceResolution     string   `bson:"source_resolution,omitempty" json:"source_resolution,omitempty"`
+	GeneratedQualities   []string `bson:"generated_qualities,omitempty" json:"generated_qualities,omitempty"`
+	MasterPlaylistURL    string   `bson:"master_playlist_url,omitempty" json:"master_playlist_url,omitempty"`
+	IdentityConfidence   float64  `bson:"identity_confidence,omitempty" json:"identity_confidence,omitempty"`
+	ClassifierConfidence float64  `bson:"classifier_confidence,omitempty" json:"classifier_confidence,omitempty"`
+	ClassifierEvidence   string   `bson:"classifier_evidence,omitempty" json:"classifier_evidence,omitempty"`
 
 	// Serial ingestion linkage. Set only when this job processes a single
 	// episode (ContentType == "episode"); otherwise left empty for movies.
@@ -147,16 +152,18 @@ type IngestionLog struct {
 
 // ParsedMovieMetadata represents metadata extracted from the parser
 type ParsedMovieMetadata struct {
-	Title        string        `bson:"title" json:"title"`
-	Description  string        `bson:"description" json:"description"`
-	Poster       string        `bson:"poster" json:"poster"`
-	Backdrop     string        `bson:"backdrop" json:"backdrop"`
-	Year         int           `bson:"year" json:"year"`
-	Genres       []string      `bson:"genres" json:"genres"`
-	Country      string        `bson:"country" json:"country"`
-	Duration     int           `bson:"duration" json:"duration"`
-	VideoPageURL string        `bson:"video_page_url" json:"video_page_url"`
-	VideoURLs    []VideoSource `bson:"video_urls" json:"video_urls"`
+	Title                string        `bson:"title" json:"title"`
+	Description          string        `bson:"description" json:"description"`
+	Poster               string        `bson:"poster" json:"poster"`
+	Backdrop             string        `bson:"backdrop" json:"backdrop"`
+	Year                 int           `bson:"year" json:"year"`
+	Genres               []string      `bson:"genres" json:"genres"`
+	Country              string        `bson:"country" json:"country"`
+	Duration             int           `bson:"duration" json:"duration"`
+	VideoPageURL         string        `bson:"video_page_url" json:"video_page_url"`
+	VideoURLs            []VideoSource `bson:"video_urls" json:"video_urls"`
+	ClassifierConfidence float64       `bson:"classifier_confidence,omitempty" json:"classifier_confidence,omitempty"`
+	ClassifierEvidence   string        `bson:"classifier_evidence,omitempty" json:"classifier_evidence,omitempty"`
 }
 
 // VideoSource represents a video source

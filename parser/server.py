@@ -72,8 +72,9 @@ from kinolar import KinolarParser
 from asilmedia_serial import AsilmediaSerialParser
 from freekino_serial import FreekinoSerialParser
 from uzmovi_serial import UzmoviSerialParser
-from downloader_service import DownloaderService
+from downloader_service import DownloaderService, _validate_download_target
 from metadata_normalizer import normalize_metadata, validate_metadata, create_worker_payload
+from helpers import sort_video_candidates, normalize_quality_label, quality_height, detect_content_type
 from source_config import get_source_config
 
 # Enable debug logging in development
@@ -281,6 +282,18 @@ def _update_serial_job(job_id: str, **fields):
             return
         job.update(fields)
         job["updated_at"] = int(time.time())
+
+
+def _classifier_confidence(content_type: str, evidence: str) -> float:
+    kind = (content_type or "").strip().lower()
+    reason = (evidence or "").strip().lower()
+    if kind == "unknown":
+        return 0.0
+    if any(token in reason for token in ("episode", "season", "serial", "fasl", "qism", "barcha qismlar")):
+        return 0.95
+    if any(token in reason for token in ("single playback", "single source", "download button", "movie")):
+        return 0.90
+    return 0.85
 
 
 def _run_serial_extract_job(job_id: str, provider: str, serial_url: str):
@@ -812,9 +825,21 @@ def _run_claimed_download(job: dict, parser_base_url: str):
         raise RuntimeError("claimed job missing job_id")
 
     video_url, referer = _resolve_claimed_job_video(job, parser_base_url)
+    source = (job.get("source") or "").strip()
+    selected_quality = (job.get("source_quality") or "").strip()
+    metadata = job.get("metadata") or {}
+    if not selected_quality and isinstance(metadata, dict):
+        selected_quality = (metadata.get("quality") or "").strip()
+    if source == "asilmedia" and not selected_quality:
+        raise RuntimeError("selected_quality is empty for asilmedia job")
+    ok, validation_error = _validate_download_target(video_url, referer=referer or None)
+    if not ok:
+        raise RuntimeError(f"selected_url={video_url} validation_failed={validation_error}")
     output_name = build_job_output_name(job_id, "queue_download")
 
-    logger.info(f"[QUEUE] download start job_id={job_id} source={job.get('source')} output={output_name}")
+    logger.info(f"[download] job={job_id} source={source} selected_quality={selected_quality or 'auto'}")
+    logger.info(f"[download] url={video_url}")
+    logger.info(f"[QUEUE] download start job_id={job_id} source={source} output={output_name}")
     result = downloader_service.smart_download(
         url=video_url,
         output_name=output_name,
@@ -1000,13 +1025,14 @@ class ParserHandler(BaseHTTPRequestHandler):
             
             # FIXED: Accept any URL that passes validation, even if type is unknown
             # This is more lenient for uzmovi URLs which may not have standard extensions
-            confidence = 0.9 if url_type in ["mp4", "m3u8", "mpd"] else 0.7
+            confidence = 0.9 if url_type in ["mp4", "m3u8", "mpd", "hls"] else 0.7
             
             # Create candidate
+            quality = normalize_quality_label(v.get("quality", "auto"))
             candidate = MediaCandidate(
                 url=url,
                 type=url_type,
-                quality=v.get("quality", "auto"),
+                quality=quality,
                 source_hint=v.get("type", "unknown"),
                 confidence=confidence
             )
@@ -1021,8 +1047,38 @@ class ParserHandler(BaseHTTPRequestHandler):
             logger.info(f"[SERVER] ═══════════════════════════════════════════")
             return None, None
         
-        # Use the enhanced selection function
-        best_candidate = choose_best_media_candidate(candidates)
+        candidate_dicts = sort_video_candidates([
+            {
+                "url": c.url,
+                "type": c.type,
+                "quality": c.quality,
+                "confidence": c.confidence,
+                "height": quality_height(c.quality, c.url),
+            }
+            for c in candidates
+        ])
+        logger.info("[quality] candidates=%s", json.dumps([
+            {
+                "quality": item.get("quality", "unknown"),
+                "height": item.get("height", 0),
+                "type": item.get("type", "unknown"),
+                "url": safe_truncate(item.get("url", ""), 160),
+            }
+            for item in candidate_dicts
+        ]))
+
+        # Use the enhanced selection function after quality ordering so equal
+        # quality/type candidates still benefit from its confidence logic.
+        best_candidate = choose_best_media_candidate([
+            MediaCandidate(
+                url=item["url"],
+                type=item.get("type", "unknown"),
+                quality=item.get("quality", "unknown"),
+                source_hint=item.get("type", "unknown"),
+                confidence=float(item.get("confidence", 0.7)),
+            )
+            for item in candidate_dicts
+        ])
         
         if best_candidate:
             logger.info(f"[SERVER] ═══════════════════════════════════════════")
@@ -1030,6 +1086,7 @@ class ParserHandler(BaseHTTPRequestHandler):
             logger.info(f"[SERVER]   type: {best_candidate.type}")
             logger.info(f"[SERVER]   url: {best_candidate.url}")
             logger.info(f"[SERVER]   confidence: {best_candidate.confidence}")
+            logger.info(f"[quality] selected={best_candidate.quality} url={best_candidate.url}")
             logger.info(f"[SERVER] ═══════════════════════════════════════════")
             return best_candidate.url, best_candidate.type
         
@@ -1232,7 +1289,7 @@ class ParserHandler(BaseHTTPRequestHandler):
         
         # Routes
         if path == "/health":
-            self._send_json({"status": "ok"})
+            self._send_json({"ok": True, "status": "ok", "service": "parser"})
             return
 
         # Instagram publish status sidecar lookup.
@@ -1352,11 +1409,17 @@ class ParserHandler(BaseHTTPRequestHandler):
                 serialized_results = []
                 for r in results:
                     if hasattr(r, 'to_dict'):
-                        serialized_results.append(r.to_dict())
+                        item = r.to_dict()
                     elif isinstance(r, dict):
-                        serialized_results.append(r)
+                        item = dict(r)
                     else:
-                        serialized_results.append(r)
+                        item = r
+                    if isinstance(item, dict):
+                        item.setdefault("confidence", 0.7)
+                        item.setdefault("available_qualities", [])
+                        item.setdefault("selected_quality", "")
+                        item.setdefault("selected_video_url", "")
+                    serialized_results.append(item)
                 
                 self._send_json({
                     "source": source,
@@ -1570,6 +1633,10 @@ class ParserHandler(BaseHTTPRequestHandler):
                 
                 # Normalize metadata
                 normalized_metadata = normalize_metadata(details, source, source_base_url)
+                normalized_metadata["type"] = details.get("type", "")
+                normalized_metadata["source_id"] = details.get("source_id", source_id)
+                normalized_metadata["detail_url"] = details.get("detail_url", detail_url or source_id)
+                normalized_metadata["video_urls"] = details.get("video_urls", [])
                 
                 # Validate and log warnings
                 is_valid, warnings = validate_metadata(normalized_metadata)
@@ -1593,20 +1660,43 @@ class ParserHandler(BaseHTTPRequestHandler):
                 source_quality = ""
                 available_qualities = []
                 video_urls_list = details.get('video_urls', [])
+                video_urls_list = sort_video_candidates(video_urls_list)
                 
                 # Extract quality from selected video URL
                 if video_url:
                     for v in video_urls_list:
                         if v.get('url') == video_url:
-                            source_quality = v.get('quality', '')
+                            source_quality = normalize_quality_label(v.get('quality', ''))
                             break
                 
                 # Get all available qualities from video_urls
                 for v in video_urls_list:
-                    q = v.get('quality', '')
+                    q = normalize_quality_label(v.get('quality', ''))
                     if q and q != 'unknown' and q not in available_qualities:
                         available_qualities.append(q)
                 
+                if not source_quality:
+                    source_quality = normalize_quality_label(normalized_metadata.get("quality", ""))
+
+                classifier_evidence = str(details.get("content_type_reason") or "")
+                currentType = (details.get("type") or "").strip().lower()
+                if currentType == "series":
+                    currentType = "serial"
+                if currentType not in ("movie", "serial"):
+                    inferredType, inferredReason = detect_content_type(
+                        details.get("detail_url", detail_url or source_id),
+                        source,
+                    )
+                    currentType = inferredType
+                    classifier_evidence = inferredReason
+                    logger.info(f"[type] inferred={currentType} reason={inferredReason}")
+                classifier_confidence = _classifier_confidence(currentType, classifier_evidence)
+                logger.info(f"[classifier] type={currentType} confidence={classifier_confidence:.2f} evidence={classifier_evidence}")
+                normalized_metadata["type"] = currentType
+                normalized_metadata["source_id"] = details.get("source_id", source_id)
+                normalized_metadata["detail_url"] = details.get("detail_url", detail_url or source_id)
+                normalized_metadata["video_urls"] = video_urls_list
+
                 if source_quality:
                     logger.info(f"[PARSER] Source quality: {source_quality}")
                 if available_qualities:
@@ -1661,6 +1751,11 @@ class ParserHandler(BaseHTTPRequestHandler):
                     response_payload["detail_url"] = detail_url or ""
                     response_payload["video_found"] = False
                     response_payload["download_needed"] = False
+                    response_payload["type"] = currentType
+                    response_payload["source_id"] = normalized_metadata["source_id"]
+                    response_payload["detail_url"] = normalized_metadata["detail_url"]
+                    response_payload["classifier_confidence"] = classifier_confidence
+                    response_payload["classifier_evidence"] = classifier_evidence
                     if http_status:
                         response_payload["http_status"] = http_status
                     logger.error(
@@ -1673,131 +1768,13 @@ class ParserHandler(BaseHTTPRequestHandler):
                 logger.info(f"[PARSER] Final video URL: {safe_truncate(video_url, 80)}... (type: {url_type})")
                 logger.info(f"[PARSER] selected source url - type={url_type}, quality={source_quality or 'auto'}, url={safe_truncate(video_url, 120)}...")
 
-                if source in ("uzmovi", "freekino"):
-                    page_url = details.get('video_page_url', detail_url or source_id)
-                    verify_ok, verify_error = self._verify_video_url(video_url, page_url)
-                    if not verify_ok:
-                        logger.error(f"[PARSER] URL verification failed for {source}: {verify_error}")
-                        response_payload = create_worker_payload(
-                            source=source,
-                            source_url=source_base_url,
-                            page_url=page_url,
-                            video_url=video_url,
-                            video_url_type=url_type,
-                            metadata=normalized_metadata,
-                            local_path=""
-                        )
-                        response_payload["success"] = False
-                        response_payload["error"] = f"video_url_verify_failed: {verify_error}"
-                        response_payload["video_found"] = True
-                        response_payload["download_needed"] = False
-                        self._send_json(response_payload, 422)
-                        return
-
-                    output_name = build_job_output_name(job_id, normalized_metadata.get("title") or source_id or "download")
-                    backend_job_id = job_id if job_id else ""
-
-                    logger.info(f"[PARSER] download started - source={source}, output_name={output_name}")
-                    download_result = downloader_service.smart_download(
-                        url=video_url,
-                        output_name=output_name,
-                        job_id=output_name,
-                        backend_job_id=backend_job_id,
-                        referer=page_url,
-                    )
-
-                    if not download_result.get("success"):
-                        error_msg = download_result.get("error", "Download failed")
-                        logger.error(f"[PARSER] download failed - source={source}, error={error_msg}")
-                        response_payload = create_worker_payload(
-                            source=source,
-                            source_url=source_base_url,
-                            page_url=page_url,
-                            video_url=video_url,
-                            video_url_type=url_type,
-                            metadata=normalized_metadata,
-                            local_path=""
-                        )
-                        response_payload["success"] = False
-                        response_payload["error"] = f"download_failed: {error_msg}"
-                        response_payload["video_found"] = True
-                        response_payload["download_needed"] = False
-                        self._send_json(response_payload, 500)
-                        return
-
-                    local_path = resolve_downloaded_artifact(job_id, download_result.get("file_path", ""))
-                    if not local_path:
-                        logger.error(f"[ERROR] file missing at {local_path or '(empty)'}")
-                        logger.error(f"[PARSER] download completed without local_path - source={source}, local_path={local_path}")
-                        response_payload = create_worker_payload(
-                            source=source,
-                            source_url=source_base_url,
-                            page_url=page_url,
-                            video_url=video_url,
-                            video_url_type=url_type,
-                            metadata=normalized_metadata,
-                            local_path=""
-                        )
-                        response_payload["success"] = False
-                        response_payload["error"] = "download_completed_without_local_path"
-                        response_payload["video_found"] = True
-                        response_payload["download_needed"] = False
-                        self._send_json(response_payload, 500)
-                        return
-                    if local_path != download_result.get("file_path", ""):
-                        logger.info(f"[AUTO_RECOVER] job={job_id} found file={local_path} -> repaired")
-
-                    file_size = os.path.getsize(local_path)
-                    if file_size <= 0:
-                        logger.error(f"[PARSER] downloaded file is empty - source={source}, local_path={local_path}")
-                        response_payload = create_worker_payload(
-                            source=source,
-                            source_url=source_base_url,
-                            page_url=page_url,
-                            video_url=video_url,
-                            video_url_type=url_type,
-                            metadata=normalized_metadata,
-                            local_path=""
-                        )
-                        response_payload["success"] = False
-                        response_payload["error"] = "downloaded_file_empty"
-                        response_payload["video_found"] = True
-                        response_payload["download_needed"] = False
-                        self._send_json(response_payload, 500)
-                        return
-
-                    logger.info(f"[PARSER] download completed - source={source}, local_path={local_path}, size={file_size}")
-                    logger.info(f"[PARSER] local_path - {local_path}")
-
-                    response_payload = create_worker_payload(
-                        source=source,
-                        source_url=source_base_url,
-                        page_url=page_url,
-                        video_url=video_url,
-                        video_url_type=url_type,
-                        metadata=normalized_metadata,
-                        local_path=local_path,
-                        source_quality=source_quality,
-                        available_qualities=available_qualities
-                    )
-                    response_payload["success"] = True
-                    response_payload["video_found"] = True
-                    response_payload["download_needed"] = False
-                    response_payload["download_completed"] = True
-                    response_payload["video_page_url"] = page_url
-                    response_payload["file_path"] = local_path
-                    response_payload["file_size"] = file_size
-                    self._send_json(response_payload)
-                    return
-                
-                # NEW FLOW: /details returns metadata + source URL only, NO download
-                # Worker will call /download separately with the source URL
-                # Return metadata + best source URL + quality info
-                
+                # /details returns metadata + source URL only. Downloading is
+                # always delegated to /download so parser detail requests stay
+                # fast and deterministic.
                 response_payload = create_worker_payload(
                     source=source,
                     source_url=source_base_url,
-                    page_url=detail_url if detail_url else source_id,
+                    page_url=details.get('video_page_url', detail_url or source_id),
                     video_url=video_url,
                     video_url_type=url_type,
                     metadata=normalized_metadata,
@@ -1812,6 +1789,14 @@ class ParserHandler(BaseHTTPRequestHandler):
                 response_payload["download_needed"] = True  # Worker must call /download
                 response_payload["download_completed"] = False
                 response_payload["video_page_url"] = details.get('video_page_url', detail_url or source_id)
+                response_payload["selected_quality"] = source_quality
+                response_payload["selected_video_url"] = video_url
+                response_payload["type"] = currentType
+                response_payload["source_id"] = normalized_metadata["source_id"]
+                response_payload["detail_url"] = normalized_metadata["detail_url"]
+                response_payload["confidence"] = float(details.get("confidence") or 0.9)
+                response_payload["classifier_confidence"] = classifier_confidence
+                response_payload["classifier_evidence"] = classifier_evidence
                 
                 logger.info(f"[PARSER] /details returning metadata + source URL (download pending)")
                 logger.info(f"[PARSER]   video_url: {video_url[:80]}...")
@@ -1833,10 +1818,17 @@ class ParserHandler(BaseHTTPRequestHandler):
             job_id = query.get("job_id", [""])[0]
             output_name = query.get("output_name", [""])[0]
             quality = query.get("quality", [""])[0]
+            selected_quality = query.get("selected_quality", [""])[0]
             referer = query.get("referer", [""])[0]
+            force = query.get("force", [""])[0] == "1"
             
             logger.info(f"[PARSER] /download called — job_id={job_id}")
             logger.info(f"[PARSER] new download started — job_id={job_id}, url={safe_truncate(video_url, 60)}")
+            if selected_quality:
+                logger.info(f"[download] job={job_id} source={source or 'unknown'} selected_quality={selected_quality}")
+            if force and job_id:
+                logger.info(f"[PARSER] force restart requested — job_id={job_id}")
+                clear_active_download(job_id)
             
             if not video_url:
                 self._send_error("Missing 'video_url' parameter")
@@ -1986,7 +1978,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                     "success": False,
                     "status": "not_found",
                     "message": "No download found for this job_id",
-                })
+                }, 404)
                 return
             
             response = {
@@ -2372,65 +2364,70 @@ class ParserHandler(BaseHTTPRequestHandler):
         logger.info(f"[SERVER] {self.command} {self.path}")
 
         if path == "/serial/extract/start":
-            body = self._read_json_body()
-            serial_url = (body.get("url", "") or "").strip()
-            source_hint = (body.get("source", "") or "").strip().lower()
+            try:
+                body = self._read_json_body()
+                serial_url = (body.get("url", "") or "").strip()
+                source_hint = (body.get("source", "") or "").strip().lower()
 
-            if not serial_url:
-                self._send_error("Missing 'url' field", 400)
-                return
+                if not serial_url:
+                    self._send_json({"ok": False, "error": "Missing 'url' field"}, status=400)
+                    return
 
-            provider = source_hint or _detect_serial_provider(serial_url)
-            if provider not in SERIAL_PARSERS:
-                self._send_error(
-                    f"Unsupported serial provider. Supported: {sorted(SERIAL_PARSERS.keys())}",
-                    400,
+                provider = source_hint or _detect_serial_provider(serial_url)
+                if provider not in SERIAL_PARSERS:
+                    self._send_json({
+                        "ok": False,
+                        "error": f"Unsupported serial provider. Supported: {sorted(SERIAL_PARSERS.keys())}",
+                    }, status=400)
+                    return
+
+                job_id = hashlib.sha1(f"{provider}:{serial_url}:{time.time()}:{random.random()}".encode("utf-8")).hexdigest()[:16]
+                now = int(time.time())
+                with _serial_jobs_lock:
+                    _serial_extract_jobs[job_id] = {
+                        "job_id": job_id,
+                        "status": "queued",
+                        "stage": "queued",
+                        "provider": provider,
+                        "url": serial_url,
+                        "message": "Queued for extraction",
+                        "episodes": [],
+                        "expected_total": 0,
+                        "discovered_count": 0,
+                        "resolved_count": 0,
+                        "missing_numbers": [],
+                        "warnings": [],
+                        "title": "",
+                        "year": 0,
+                        "poster": "",
+                        "backdrop": "",
+                        "description": "",
+                        "error": "",
+                        "created_at": now,
+                        "updated_at": now,
+                        "result": None,
+                    }
+
+                thread = threading.Thread(
+                    target=_run_serial_extract_job,
+                    args=(job_id, provider, serial_url),
+                    daemon=True,
                 )
-                return
-
-            job_id = hashlib.sha1(f"{provider}:{serial_url}:{time.time()}:{random.random()}".encode("utf-8")).hexdigest()[:16]
-            now = int(time.time())
-            with _serial_jobs_lock:
-                _serial_extract_jobs[job_id] = {
-                    "job_id": job_id,
-                    "status": "queued",
-                    "stage": "queued",
-                    "provider": provider,
-                    "url": serial_url,
-                    "message": "Queued for extraction",
-                    "episodes": [],
-                    "expected_total": 0,
-                    "discovered_count": 0,
-                    "resolved_count": 0,
-                    "missing_numbers": [],
-                    "warnings": [],
-                    "title": "",
-                    "year": 0,
-                    "poster": "",
-                    "backdrop": "",
-                    "description": "",
-                    "error": "",
-                    "created_at": now,
-                    "updated_at": now,
-                    "result": None,
-                }
-
-            thread = threading.Thread(
-                target=_run_serial_extract_job,
-                args=(job_id, provider, serial_url),
-                daemon=True,
-            )
-            thread.start()
-            self._send_json(
-                {
-                    "ok": True,
-                    "job_id": job_id,
-                    "status": "queued",
-                    "provider": provider,
-                    "message": "Serial extraction queued",
-                },
-                status=202,
-            )
+                thread.start()
+                self._send_json(
+                    {
+                        "ok": True,
+                        "parser_job_id": job_id,
+                        "job_id": job_id,
+                        "status": "queued",
+                        "provider": provider,
+                        "message": "started",
+                    },
+                    status=202,
+                )
+            except Exception as exc:
+                logger.exception("[SERIAL] async start failed")
+                self._send_json({"ok": False, "error": str(exc)}, status=500)
             return
         
         # /download - Download a video

@@ -12,7 +12,7 @@ import {
   searchSource, createIngestionJob, getIngestionJobs,
   retryIngestionJob, IngestionJob, SearchResult, IngestionStatus,
   listCatalog, listCatalogCategories, CatalogItem, CatalogResponse, CatalogCategory,
-  createManualImport, importFromCatalog
+  createManualImport, importFromCatalog, ImportConfirmationError, ImportConfirmationResponse
 } from "@/lib/api";
 import MediaImage from "@/components/ui/MediaImage";
 
@@ -26,6 +26,19 @@ type SeasonGroup = {
 type JobGroup = 
   | { type: "single"; job: IngestionJob }
   | { type: "serial"; id: string; title: string; seasons: SeasonGroup[]; expanded: boolean; totalEpisodes: number; totalSeasons: number };
+
+type PendingImportConfirmation = {
+  input: {
+    source: string;
+    source_id: string;
+    detail_url: string;
+    title: string;
+    type?: "movie" | "serial";
+    year?: number;
+    poster?: string;
+  };
+  response: ImportConfirmationResponse;
+};
 
 function getSearchResultContentType(result: SearchResult): "movie" | "serial" | "" {
   const rawType = (((result as any).type || (result as any).content_type || "") + "").toLowerCase();
@@ -684,6 +697,7 @@ function CatalogTab({
   const [importing, setImporting] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [error, setError] = useState("");
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingImportConfirmation | null>(null);
   const [directUrl, setDirectUrl] = useState("");
   const [directImporting, setDirectImporting] = useState(false);
   const [categories, setCategories] = useState<CatalogCategory[]>([]);
@@ -756,6 +770,7 @@ function CatalogTab({
     
     setImporting(item.source_id);
     setError("");
+    setPendingConfirmation(null);
     
     try {
       // Send empty type when parser flagged it "unknown" so the backend re-
@@ -763,16 +778,35 @@ function CatalogTab({
       // soup heuristics) instead of refusing the import.
       const rawType = (item.type || "").toLowerCase();
       const importType = (rawType === "movie" || rawType === "serial" || rawType === "series") ? rawType : "";
-      await importFromCatalog(token, {
+      const input = {
         source: source.id,
         source_id: item.source_id,
         detail_url: item.detail_url,
         title: item.title,
+        year: item.year,
+        poster: item.poster,
         type: importType as "movie" | "serial",
-      });
+      };
+      await importFromCatalog(token, input);
       onImportSuccess();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Import failed");
+      if (err instanceof ImportConfirmationError) {
+        setPendingConfirmation({
+          input: {
+            source: source.id,
+            source_id: item.source_id,
+            detail_url: item.detail_url,
+            title: item.title,
+            year: item.year,
+            poster: item.poster,
+            type: importType as "movie" | "serial",
+          },
+          response: err.response,
+        });
+        setError("");
+      } else {
+        setError(err instanceof Error ? err.message : "Import failed");
+      }
     } finally {
       setImporting(null);
     }
@@ -783,19 +817,39 @@ function CatalogTab({
     
     setImporting(result.source_id);
     setError("");
+    setPendingConfirmation(null);
     
     try {
       const importType = getSearchResultContentType(result);
-      await importFromCatalog(token, {
+      const input = {
         source: result.source,
         source_id: result.source_id,
         detail_url: result.detail_url,
         title: result.title,
+        year: result.year,
+        poster: result.poster || result.img,
         type: importType as "movie" | "serial",
-      });
+      };
+      await importFromCatalog(token, input);
       onImportSuccess();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Import failed");
+      if (err instanceof ImportConfirmationError) {
+        setPendingConfirmation({
+          input: {
+            source: result.source,
+            source_id: result.source_id,
+            detail_url: result.detail_url,
+            title: result.title,
+            year: result.year,
+            poster: result.poster || result.img,
+            type: importType as "movie" | "serial",
+          },
+          response: err.response,
+        });
+        setError("");
+      } else {
+        setError(err instanceof Error ? err.message : "Import failed");
+      }
     } finally {
       setImporting(null);
     }
@@ -806,6 +860,7 @@ function CatalogTab({
     
     setDirectImporting(true);
     setError("");
+    setPendingConfirmation(null);
     
     try {
       await importFromCatalog(token, {
@@ -825,6 +880,24 @@ function CatalogTab({
       setError(msg);
     } finally {
       setDirectImporting(false);
+    }
+  };
+
+  const handleForceConfirmImport = async () => {
+    if (!token || !pendingConfirmation) return;
+    setImporting(pendingConfirmation.input.source_id || pendingConfirmation.input.detail_url);
+    setError("");
+    try {
+      await importFromCatalog(token, {
+        ...pendingConfirmation.input,
+        force_confirmed: true,
+      });
+      setPendingConfirmation(null);
+      onImportSuccess();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Import failed");
+    } finally {
+      setImporting(null);
     }
   };
 
@@ -955,6 +1028,12 @@ function CatalogTab({
                       {result.year && result.year !== 0 && (
                         <span className="text-xs text-gray-400">{result.year}</span>
                       )}
+                      {typeof result.confidence === "number" && result.confidence > 0 && (
+                        <span className="text-xs text-gray-500">Confidence {(result.confidence * 100).toFixed(0)}%</span>
+                      )}
+                      {result.available_qualities && result.available_qualities.length > 0 && (
+                        <span className="text-xs text-gray-500">Q: {result.available_qualities.join(", ")}</span>
+                      )}
                       {(() => {
                         const t = getSearchResultContentType(result);
                         if (t === "serial") {
@@ -991,6 +1070,48 @@ function CatalogTab({
       )}
 
       {/* Error display */}
+      {pendingConfirmation && (
+        <div className="bg-amber-500/10 border border-amber-500/30 text-amber-100 rounded-lg px-4 py-4 space-y-3">
+          <div className="flex items-center gap-2 text-amber-300">
+            <AlertTriangle className="w-4 h-4" />
+            <span className="font-semibold">Admin confirmation required</span>
+          </div>
+          <p className="text-sm">
+            Confidence {(pendingConfirmation.response.confidence * 100).toFixed(1)}%. Selected result does not confidently match fetched detail page.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+            <div className="bg-brand-dark/60 rounded p-3 border border-brand-border">
+              <p className="text-gray-400 mb-1">Selected</p>
+              <p>{pendingConfirmation.response.selected.title || "-"}</p>
+              <p className="text-gray-400">{pendingConfirmation.response.selected.year || "-"}</p>
+              <p className="text-gray-400">{pendingConfirmation.response.selected.type || "-"}</p>
+              <p className="text-gray-500 break-all mt-1">{pendingConfirmation.response.selected.detail_url || "-"}</p>
+            </div>
+            <div className="bg-brand-dark/60 rounded p-3 border border-brand-border">
+              <p className="text-gray-400 mb-1">Fetched</p>
+              <p>{pendingConfirmation.response.fetched.title || "-"}</p>
+              <p className="text-gray-400">{pendingConfirmation.response.fetched.year || "-"}</p>
+              <p className="text-gray-400">{pendingConfirmation.response.fetched.type || "-"}</p>
+              <p className="text-gray-500 break-all mt-1">{pendingConfirmation.response.fetched.detail_url || "-"}</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleForceConfirmImport}
+              disabled={!!importing}
+              className="bg-amber-600 hover:bg-amber-700 disabled:opacity-60 px-4 py-2 rounded-lg text-sm"
+            >
+              Import anyway
+            </button>
+            <button
+              onClick={() => setPendingConfirmation(null)}
+              className="bg-brand-card border border-brand-border hover:bg-gray-700 px-4 py-2 rounded-lg text-sm"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       {error && (
         <div className="bg-red-500/10 border border-red-500/30 text-red-400 rounded-lg px-4 py-3">
           {error}
@@ -1061,10 +1182,18 @@ function CatalogTab({
                     {item.year && item.year !== 0 && (
                       <span className="text-xs text-gray-400">{item.year}</span>
                     )}
+                    {typeof item.confidence === "number" && item.confidence > 0 && (
+                      <span className="text-xs text-gray-500">Confidence {(item.confidence * 100).toFixed(0)}%</span>
+                    )}
                     {item.genres && item.genres.length > 0 && (
                       <span className="text-xs text-gray-500 truncate">{item.genres.slice(0, 2).join(", ")}</span>
                     )}
                   </div>
+                  {item.available_qualities && item.available_qualities.length > 0 && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Qualities: {item.available_qualities.join(", ")}
+                    </p>
+                  )}
                   {item.description && (
                     <p className="text-xs text-gray-500 mt-2 line-clamp-2">{item.description}</p>
                   )}
@@ -1630,11 +1759,21 @@ function JobsTab({
                 {job.locked_until && <> • Locked until <span className="text-white">{new Date(job.locked_until).toLocaleString()}</span></>}
               </p>
             )}
-            {(job.source_quality || job.source_resolution || job.total_bytes) && (
+            {(job.source_quality || job.selected_quality || job.source_resolution || job.total_bytes || (job.available_qualities && job.available_qualities.length > 0)) && (
               <p className="text-xs text-gray-400 mt-1">
-                {job.source_quality && <span className="mr-3">Source quality: <span className="text-white">{job.source_quality}</span></span>}
+                {(job.selected_quality || job.source_quality) && <span className="mr-3">Selected quality: <span className="text-white">{job.selected_quality || job.source_quality}</span></span>}
                 {job.source_resolution && <span className="mr-3">Resolution: <span className="text-white">{job.source_resolution}</span></span>}
+                {job.available_qualities && job.available_qualities.length > 0 && <span className="mr-3">Available: <span className="text-white">{job.available_qualities.join(", ")}</span></span>}
                 {!!job.total_bytes && <span>Size: <span className="text-white">{(job.total_bytes / (1024 * 1024)).toFixed(1)} MB</span></span>}
+              </p>
+            )}
+            {(job.classifier_confidence || job.classifier_evidence) && (
+              <p className="text-xs text-gray-500 mt-1">
+                Classifier
+                {typeof job.classifier_confidence === "number" && job.classifier_confidence > 0 && (
+                  <span className="ml-1 text-white">{(job.classifier_confidence * 100).toFixed(0)}%</span>
+                )}
+                {job.classifier_evidence && <span className="ml-2">{job.classifier_evidence}</span>}
               </p>
             )}
             {job.content_type === "serial_parent" && (

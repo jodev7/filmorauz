@@ -68,16 +68,17 @@ func main() {
 
 	// Pipeline configuration
 	pipeConfig := pipeline.Config{
-		ParserURL:              getEnv("PARSER_URL", "http://localhost:8082"),
-		TempDir:                getEnv("TEMP_DIR", "./tmp"),
-		TMDBAPIKey:             getEnv("TMDB_API_KEY", ""),                          // TMDB API key for metadata enrichment
-		DB:                     db,                                                  // Pass database for movie insertion
-		BackendURL:             getEnv("BACKEND_BASE_URL", "http://localhost:8080"), // Backend API URL for Telegram notifications
-		WorkerToken:            getEnv("WORKER_TOKEN", ""),                          // Token for worker-to-backend authentication
-		MaxRenditionConcurrent: getEnvAsInt("MAX_RENDITION_CONCURRENT", 3),          // Max parallel FFmpeg processes
-		SegmentUploadWorkers:   getEnvAsInt("SEGMENT_UPLOAD_WORKERS", 20),           // Concurrent segment uploads per rendition
-		SegmentUploadRetries:   getEnvAsInt("SEGMENT_UPLOAD_RETRIES", 5),            // Max retries per segment (increased from 3→5)
-		SegmentDuration:        getEnvAsInt("SEGMENT_DURATION", 6),                  // HLS segment duration in seconds (default 6s - production safe)
+		ParserURL:                 getEnv("PARSER_URL", "http://localhost:8082"),
+		TempDir:                   getEnv("TEMP_DIR", "./tmp"),
+		TMDBAPIKey:                getEnv("TMDB_API_KEY", ""),                          // TMDB API key for metadata enrichment
+		DB:                        db,                                                  // Pass database for movie insertion
+		BackendURL:                getEnv("BACKEND_BASE_URL", "http://localhost:8080"), // Backend API URL for Telegram notifications
+		WorkerToken:               getEnv("WORKER_TOKEN", ""),                          // Token for worker-to-backend authentication
+		RequireClipsBeforePublish: getEnv("REQUIRE_CLIPS_BEFORE_PUBLISH", "true") != "false",
+		MaxRenditionConcurrent:    getEnvAsInt("MAX_RENDITION_CONCURRENT", 3), // Max parallel FFmpeg processes
+		SegmentUploadWorkers:      getEnvAsInt("SEGMENT_UPLOAD_WORKERS", 20),  // Concurrent segment uploads per rendition
+		SegmentUploadRetries:      getEnvAsInt("SEGMENT_UPLOAD_RETRIES", 5),   // Max retries per segment (increased from 3→5)
+		SegmentDuration:           getEnvAsInt("SEGMENT_DURATION", 6),         // HLS segment duration in seconds (default 6s - production safe)
 		StorageConfig: storage.Config{
 			Mode:       getStorageMode(), // Uses ENV variable: development -> dev, production -> prod
 			LocalPath:  getEnv("LOCAL_STORAGE_PATH", "./uploads"),

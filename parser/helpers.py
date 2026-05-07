@@ -3,7 +3,8 @@ Helper utilities for parsing
 """
 import re
 import os
-from typing import List, Dict, Any, Optional
+from difflib import SequenceMatcher
+from typing import List, Dict, Any, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 
@@ -145,6 +146,99 @@ def normalize_for_match(text: str) -> str:
     if not text:
         return ""
     return clean_text(text).lower()
+
+
+def normalize_identity_text(text: str) -> str:
+    """Normalize human-readable identity text for fuzzy equality checks."""
+    if not text:
+        return ""
+    text = clean_text(text).lower()
+    text = re.sub(r"[\"'`’“”.,:;!?()\[\]{}_/\\|-]+", " ", text)
+    text = re.sub(r"\b(uzbekcha|tarjima|tarjimaasi|o'zbek tilida|ozbek tilida|barcha qismlar|premyera)\b", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def title_similarity(a: str, b: str) -> float:
+    """Return a 0..1 similarity score for two titles."""
+    a_norm = normalize_identity_text(a)
+    b_norm = normalize_identity_text(b)
+    if not a_norm or not b_norm:
+        return 0.0
+    if a_norm == b_norm:
+        return 1.0
+    a_tokens = set(a_norm.split())
+    b_tokens = set(b_norm.split())
+    token_jaccard = len(a_tokens & b_tokens) / max(1, len(a_tokens | b_tokens))
+    sequence = SequenceMatcher(None, a_norm, b_norm).ratio()
+    return max(sequence, token_jaccard)
+
+
+def normalize_quality_label(label: str) -> str:
+    if not label:
+        return "unknown"
+    raw = clean_text(label).lower()
+    if raw in ("original", "source", "auto"):
+        return raw
+    if "full hd" in raw or "fhd" in raw:
+        return "1080p"
+    if raw == "hd":
+        return "720p"
+    if raw == "sd":
+        return "480p"
+    match = re.search(r"(2160|1440|1080|720|480|360|240)", raw)
+    if match:
+        return f"{match.group(1)}p"
+    return raw
+
+
+def quality_height(label: str, url: str = "") -> int:
+    label = normalize_quality_label(label)
+    if label == "original":
+        return 10000
+    match = re.search(r"(2160|1440|1080|720|480|360|240)", label)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"(2160|1440|1080|720|480|360|240)", (url or "").lower())
+    if match:
+        return int(match.group(1))
+    return 0
+
+
+def score_video_candidate(candidate: Dict[str, Any]) -> Tuple[int, int, float, int]:
+    """Score a parsed video candidate. Higher is better."""
+    url = candidate.get("url", "")
+    parsed_type = (candidate.get("type") or "").lower()
+    quality = candidate.get("quality", "")
+    height = int(candidate.get("height") or quality_height(quality, url))
+    type_priority = {
+        "m3u8": 40,
+        "hls": 40,
+        "mpd": 35,
+        "ism": 30,
+        "mp4": 25,
+        "direct_mp4": 25,
+        "direct_download": 20,
+        "unknown": 10,
+    }
+    confidence = float(candidate.get("confidence") or 0)
+    return (
+        height,
+        type_priority.get(parsed_type, 0),
+        confidence,
+        -len(url or ""),
+    )
+
+
+def sort_video_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    ordered = []
+    for candidate in candidates or []:
+        item = dict(candidate)
+        item["quality"] = normalize_quality_label(item.get("quality", ""))
+        item["height"] = int(item.get("height") or quality_height(item.get("quality", ""), item.get("url", "")))
+        ordered.append(item)
+    ordered.sort(key=score_video_candidate, reverse=True)
+    return ordered
 
 
 def filter_and_rank_results(

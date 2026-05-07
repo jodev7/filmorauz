@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -11,11 +12,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/filmorauz/worker/models"
 )
 
 const DefaultMaxRenditionConcurrency = 2
+const ffmpegInactivityTimeout = 10 * time.Minute
 
 // MasterPlaylistName is the canonical filename for the HLS master playlist.
 // Standardized on index.m3u8 so the same name is used at every layer (master
@@ -52,6 +56,65 @@ func ffmpegThreadsFromEnv() string {
 		return strconv.Itoa(n)
 	}
 	return "1"
+}
+
+func runFFmpegWithProgressTimeout(cmd *exec.Cmd, stderrBuf *bytes.Buffer, inactivityTimeout time.Duration, onLine func(string)) error {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+	cmd.Stderr = stderrBuf
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start ffmpeg: %w", err)
+	}
+
+	var lastActivity atomic.Int64
+	lastActivity.Store(time.Now().UnixNano())
+
+	scanDone := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		buf := make([]byte, 0, 64*1024)
+		scanner.Buffer(buf, 1024*1024)
+		for scanner.Scan() {
+			lastActivity.Store(time.Now().UnixNano())
+			if onLine != nil {
+				onLine(scanner.Text())
+			}
+		}
+		scanDone <- scanner.Err()
+	}()
+
+	watchdogDone := make(chan struct{})
+	go func() {
+		defer close(watchdogDone)
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			last := time.Unix(0, lastActivity.Load())
+			if time.Since(last) < inactivityTimeout {
+				continue
+			}
+			log.Printf("[ffmpeg] inactivity timeout after %s, killing process pid=%d", inactivityTimeout, cmd.Process.Pid)
+			_ = cmd.Process.Kill()
+			return
+		}
+	}()
+
+	waitErr := cmd.Wait()
+	<-watchdogDone
+	scanErr := <-scanDone
+	if scanErr != nil {
+		return fmt.Errorf("ffmpeg stdout scan failed: %w", scanErr)
+	}
+	if waitErr != nil {
+		if time.Since(time.Unix(0, lastActivity.Load())) >= inactivityTimeout {
+			return fmt.Errorf("ffmpeg killed after %s inactivity: %s", inactivityTimeout, stderrBuf.String())
+		}
+		return waitErr
+	}
+	return nil
 }
 
 // RenditionConfig defines the configuration for a single HLS rendition
@@ -467,16 +530,7 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 	log.Printf("[HLS] ffmpeg %s", strings.Join(ffmpegArgs, " "))
 
 	cmd := exec.Command("ffmpeg", ffmpegArgs...)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("failed to create stdout pipe for base video: %w", err)
-	}
 	var stderrBuf bytes.Buffer
-	cmd.Stderr = &stderrBuf
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start ffmpeg base video: %w", err)
-	}
 
 	// Get total output duration (input minus cut) for progress mapping
 	inputDurationMs, _ := p.getVideoDurationMs(inputPath)
@@ -492,37 +546,23 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 		jobStatusCallback(models.IngestionStatusProcessing, 45)
 	}
 
-	// Read ffmpeg progress and map to 45-52% overall range
-	buffer := make([]byte, 4096)
-	for {
-		n, readErr := stdout.Read(buffer)
-		if readErr != nil {
-			break
-		}
-		if n > 0 {
-			lines := strings.Split(string(buffer[:n]), "\n")
-			for _, line := range lines {
-				if strings.HasPrefix(line, "out_time_ms=") {
-					value := strings.TrimSpace(strings.TrimPrefix(line, "out_time_ms="))
-					if t, parseErr := strconv.ParseInt(value, 10, 64); parseErr == nil && totalMs > 0 {
-						outTimeMs := t / 1000 // Convert microseconds to milliseconds
-						pct := int((outTimeMs * 100) / totalMs)
-						// Map 0-100% ffmpeg progress to 45-52% overall
-						overallProgress := 45 + int(float64(pct)*0.07)
-						if overallProgress > 52 {
-							overallProgress = 52
-						}
-						if overallProgress > lastReportedProgress && jobStatusCallback != nil {
-							lastReportedProgress = overallProgress
-							jobStatusCallback(models.IngestionStatusProcessing, overallProgress)
-						}
-					}
+	if err := runFFmpegWithProgressTimeout(cmd, &stderrBuf, ffmpegInactivityTimeout, func(line string) {
+		if strings.HasPrefix(line, "out_time_ms=") {
+			value := strings.TrimSpace(strings.TrimPrefix(line, "out_time_ms="))
+			if t, parseErr := strconv.ParseInt(value, 10, 64); parseErr == nil && totalMs > 0 {
+				outTimeMs := t / 1000 // Convert microseconds to milliseconds
+				pct := int((outTimeMs * 100) / totalMs)
+				overallProgress := 45 + int(float64(pct)*0.07)
+				if overallProgress > 52 {
+					overallProgress = 52
+				}
+				if overallProgress > lastReportedProgress && jobStatusCallback != nil {
+					lastReportedProgress = overallProgress
+					jobStatusCallback(models.IngestionStatusProcessing, overallProgress)
 				}
 			}
 		}
-	}
-
-	if err := cmd.Wait(); err != nil {
+	}); err != nil {
 		stderr := stderrBuf.String()
 		log.Printf("[HLS] ===== FFMPEG BASE VIDEO FAILED =====")
 		log.Printf("[HLS] Error: %v", err)
@@ -640,57 +680,31 @@ func (p *Pipeline) generateHLSRendition(jobID, baseVideoPath, outputDir string, 
 
 	// Run ffmpeg with progress tracking
 	cmd := exec.Command("ffmpeg", ffmpegArgs...)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
 	var stderrBuf bytes.Buffer
-	cmd.Stderr = &stderrBuf
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start ffmpeg: %w", err)
-	}
 
 	// Read progress output and calculate total duration from base video
 	totalMs, _ := p.getVideoDurationMs(baseVideoPath)
 	var lastReportedProgress int = 0
 
-	// Read progress output
-	buffer := make([]byte, 4096)
-	for {
-		n, err := stdout.Read(buffer)
-		if err != nil {
-			break
-		}
-		if n > 0 {
-			output := string(buffer[:n])
-			lines := strings.Split(output, "\n")
-			for _, line := range lines {
-				if strings.HasPrefix(line, "out_time_ms=") {
-					value := strings.TrimPrefix(line, "out_time_ms=")
-					if t, err := strconv.ParseInt(value, 10, 64); err == nil && totalMs > 0 {
-						outTimeMs := t / 1000 // Convert to ms
-						progress := int((outTimeMs * 100) / totalMs)
-						// Map rendition progress (0-100) to overall progress band for this rendition
-						overallProgress := baseProgress + int(float64(progress)*0.3)
-						if overallProgress > 92 {
-							overallProgress = 92
-						}
-						// Only report if progress changed by at least 3%
-						if overallProgress-lastReportedProgress >= 3 || progress >= 100 {
-							lastReportedProgress = overallProgress
-							if jobStatusCallback != nil {
-								jobStatusCallback(models.IngestionStatusProcessing, overallProgress)
-							}
-						}
+	err := runFFmpegWithProgressTimeout(cmd, &stderrBuf, ffmpegInactivityTimeout, func(line string) {
+		if strings.HasPrefix(line, "out_time_ms=") {
+			value := strings.TrimPrefix(line, "out_time_ms=")
+			if t, err := strconv.ParseInt(value, 10, 64); err == nil && totalMs > 0 {
+				outTimeMs := t / 1000 // Convert to ms
+				progress := int((outTimeMs * 100) / totalMs)
+				overallProgress := baseProgress + int(float64(progress)*0.3)
+				if overallProgress > 92 {
+					overallProgress = 92
+				}
+				if overallProgress-lastReportedProgress >= 3 || progress >= 100 {
+					lastReportedProgress = overallProgress
+					if jobStatusCallback != nil {
+						jobStatusCallback(models.IngestionStatusProcessing, overallProgress)
 					}
 				}
 			}
 		}
-	}
-
-	// Wait for command to finish
-	err = cmd.Wait()
+	})
 	if err != nil {
 		log.Printf("[HLS] ===== FFMPEG %s RENDITION FAILED =====", rendition.Name)
 		log.Printf("[HLS] Error: %v", err)

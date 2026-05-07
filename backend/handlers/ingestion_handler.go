@@ -131,15 +131,46 @@ func parserMapToCatalogItem(raw map[string]interface{}) CatalogItem {
 	}
 
 	return CatalogItem{
-		SourceID:    parserValueAsString(raw["source_id"]),
-		Title:       parserValueAsString(raw["title"]),
-		Year:        parserValueAsInt(raw["year"]),
-		Type:        itemType,
-		Poster:      poster,
-		Description: parserValueAsString(raw["description"]),
-		Genres:      parserValueAsStringSlice(raw["genres"]),
-		DetailURL:   parserValueAsString(raw["detail_url"]),
+		SourceID:           parserValueAsString(raw["source_id"]),
+		Title:              parserValueAsString(raw["title"]),
+		Year:               parserValueAsInt(raw["year"]),
+		Type:               itemType,
+		Poster:             poster,
+		Description:        parserValueAsString(raw["description"]),
+		Genres:             parserValueAsStringSlice(raw["genres"]),
+		DetailURL:          parserValueAsString(raw["detail_url"]),
+		Confidence:         math.Max(0, math.Min(1, parserValueAsFloat(raw["confidence"]))),
+		AvailableQualities: parserValueAsStringSlice(raw["available_qualities"]),
+		SelectedQuality:    parserValueAsString(raw["selected_quality"]),
+		SelectedVideoURL:   parserValueAsString(raw["selected_video_url"]),
 	}
+}
+
+func parserValueAsFloat(v interface{}) float64 {
+	switch t := v.(type) {
+	case float64:
+		return t
+	case float32:
+		return float64(t)
+	case int:
+		return float64(t)
+	case int32:
+		return float64(t)
+	case int64:
+		return float64(t)
+	case json.Number:
+		if f, err := t.Float64(); err == nil {
+			return f
+		}
+	case string:
+		if t == "" {
+			return 0
+		}
+		if f, err := strconv.ParseFloat(strings.TrimSpace(t), 64); err == nil {
+			return f
+		}
+	}
+	return 0
 }
 
 func parseCatalogResponseFlexible(body []byte, page int, limit int) (CatalogResponse, error) {
@@ -1332,16 +1363,18 @@ func (h *IngestionHandler) ParserClaimJob(c *gin.Context) {
 
 	log.Printf("[INGESTION] PARSER: Claimed job %s for download", job.ID.Hex())
 	c.JSON(http.StatusOK, gin.H{
-		"job_id":      job.ID.Hex(),
-		"title":       job.Title,
-		"source":      job.Source,
-		"source_id":   job.SourceID,
-		"detail_url":  job.DetailURL,
-		"video_url":   job.VideoURL,
-		"local_path":  job.LocalPath,
-		"status":      job.Status,
-		"contentType": job.ContentType,
-		"metadata":    job.Metadata,
+		"job_id":              job.ID.Hex(),
+		"title":               job.Title,
+		"source":              job.Source,
+		"source_id":           job.SourceID,
+		"detail_url":          job.DetailURL,
+		"video_url":           job.VideoURL,
+		"local_path":          job.LocalPath,
+		"status":              job.Status,
+		"contentType":         job.ContentType,
+		"metadata":            job.Metadata,
+		"source_quality":      job.SourceQuality,
+		"available_qualities": job.AvailableQualities,
 	})
 }
 
@@ -1363,14 +1396,18 @@ var (
 
 // CatalogItem represents an item from the source catalog
 type CatalogItem struct {
-	SourceID    string   `json:"source_id"`
-	Title       string   `json:"title"`
-	Year        int      `json:"year"`
-	Type        string   `json:"type"` // "movie" or "serial"
-	Poster      string   `json:"poster"`
-	Description string   `json:"description"`
-	Genres      []string `json:"genres"`
-	DetailURL   string   `json:"detail_url"`
+	SourceID           string   `json:"source_id"`
+	Title              string   `json:"title"`
+	Year               int      `json:"year"`
+	Type               string   `json:"type"` // "movie" or "serial"
+	Poster             string   `json:"poster"`
+	Description        string   `json:"description"`
+	Genres             []string `json:"genres"`
+	DetailURL          string   `json:"detail_url"`
+	Confidence         float64  `json:"confidence,omitempty"`
+	AvailableQualities []string `json:"available_qualities,omitempty"`
+	SelectedQuality    string   `json:"selected_quality,omitempty"`
+	SelectedVideoURL   string   `json:"selected_video_url,omitempty"`
 }
 
 // CatalogResponse represents the paginated catalog response
@@ -1695,11 +1732,14 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 	}()
 
 	var input struct {
-		Source    string `json:"source" binding:"required"`
-		SourceID  string `json:"source_id"`
-		DetailURL string `json:"detail_url"`
-		Title     string `json:"title"`
-		Type      string `json:"type"` // "movie" or "serial"
+		Source         string `json:"source" binding:"required"`
+		SourceID       string `json:"source_id"`
+		DetailURL      string `json:"detail_url"`
+		Title          string `json:"title"`
+		Type           string `json:"type"` // "movie" or "serial"
+		Year           int    `json:"year"`
+		Poster         string `json:"poster"`
+		ForceConfirmed bool   `json:"force_confirmed"`
 	}
 
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -1708,9 +1748,10 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 		return
 	}
 
-	// For direct URL import mode: if source_id or type missing but detail_url is provided,
-	// fetch details from parser first so we can route movie/series correctly.
-	if input.DetailURL != "" && (input.SourceID == "" || input.Type == "") {
+	// Always re-fetch /details before import and verify that the selected card
+	// still matches the parser detail page. This blocks wrong-movie imports when
+	// search cards are ambiguous or stale.
+	if input.DetailURL != "" {
 		detailsURL := fmt.Sprintf("%s/details?source=%s&url=%s", h.parserURL, input.Source, url.QueryEscape(input.DetailURL))
 		log.Printf("[DIRECT_IMPORT] fetching details url=%s source=%s", input.DetailURL, input.Source)
 		resp, err := h.httpClient.Get(detailsURL)
@@ -1724,6 +1765,48 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 			// Treat 200 and 422 alike for metadata pickup — 422 still contains
 			// title/source_id/type when the parser couldn't resolve a video URL.
 			if resp.StatusCode == 200 || resp.StatusCode == 422 {
+				selectedIdentity := importIdentitySnapshot{
+					Source:    input.Source,
+					SourceID:  input.SourceID,
+					DetailURL: input.DetailURL,
+					Title:     input.Title,
+					Year:      input.Year,
+					Type:      input.Type,
+					Poster:    input.Poster,
+				}
+				fetchedIdentity := importIdentitySnapshot{
+					Source:    input.Source,
+					SourceID:  parserValueAsString(details["source_id"]),
+					DetailURL: parserValueAsString(details["detail_url"]),
+					Title:     parserValueAsString(details["title"]),
+					Year:      parserValueAsInt(details["year"]),
+					Type:      parserValueAsString(details["type"]),
+					Poster:    parserValueAsString(details["poster"]),
+				}
+				if fetchedIdentity.DetailURL == "" {
+					fetchedIdentity.DetailURL = input.DetailURL
+				}
+				if fetchedIdentity.SourceID == "" {
+					fetchedIdentity.SourceID = input.SourceID
+				}
+				confidence := identityConfidence(selectedIdentity, fetchedIdentity)
+				log.Printf("[identity] selected=%s", identityLogString(selectedIdentity))
+				log.Printf("[identity] fetched=%s", identityLogString(fetchedIdentity))
+				log.Printf("[identity] confidence=%.3f", confidence)
+				if !input.ForceConfirmed && (normalizeIdentityType(fetchedIdentity.Type) == "unknown" || confidence < 0.85) {
+					c.JSON(http.StatusConflict, gin.H{
+						"error":                 "admin confirmation required",
+						"reason":                "selected result did not confidently match fetched detail page",
+						"confidence":            confidence,
+						"selected":              selectedIdentity,
+						"fetched":               fetchedIdentity,
+						"requires_confirmation": true,
+					})
+					return
+				}
+				if input.ForceConfirmed {
+					log.Printf("[identity] force_confirmed=true accepted confidence=%.3f", confidence)
+				}
 				if sid, ok := details["source_id"].(string); ok && sid != "" && input.SourceID == "" {
 					input.SourceID = sid
 				}
@@ -1736,6 +1819,21 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 					if t, ok := details["type"].(string); ok {
 						input.Type = t
 					}
+				}
+				if input.Year == 0 {
+					input.Year = parserValueAsInt(details["year"])
+				}
+				if input.Poster == "" {
+					input.Poster = parserValueAsString(details["poster"])
+				}
+				if input.Title == "" {
+					input.Title = fetchedIdentity.Title
+				}
+				if input.SourceID == "" {
+					input.SourceID = fetchedIdentity.SourceID
+				}
+				if input.DetailURL == "" {
+					input.DetailURL = fetchedIdentity.DetailURL
 				}
 			} else {
 				log.Printf("[DIRECT_IMPORT] parser /details returned status=%d", resp.StatusCode)
@@ -1756,10 +1854,10 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 	if normalizedType != "" && normalizedType != "movie" && normalizedType != "serial" {
 		log.Printf("[DIRECT_IMPORT] unsupported content_type=%q url=%s", input.Type, input.DetailURL)
 		c.JSON(http.StatusUnprocessableEntity, gin.H{
-			"error":        "Content type could not be detected",
-			"reason":       fmt.Sprintf("parser returned unsupported type: %q", input.Type),
-			"detail_url":   input.DetailURL,
-			"source":       input.Source,
+			"error":      "Content type could not be detected",
+			"reason":     fmt.Sprintf("parser returned unsupported type: %q", input.Type),
+			"detail_url": input.DetailURL,
+			"source":     input.Source,
 		})
 		return
 	}

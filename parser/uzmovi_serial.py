@@ -165,7 +165,7 @@ class UzmoviSerialParser:
                 min_ep, max_ep = min(eps_in_top), max(eps_in_top)
                 detected_expected_max = self._detect_expected_episode_max(resp.text, episode_candidates, max_ep)
                 # Probe upward past the observed max (cap probe range for safety).
-                probe_target = max(max_ep + 30, detected_expected_max, 500)
+                probe_target = max(max_ep + 30, detected_expected_max)
                 probe_max = self._probe_upper_bound(top_group_id, max_ep, hard_cap=probe_target)
                 final_max = max(max_ep, detected_expected_max, probe_max)
                 if final_max > max_ep:

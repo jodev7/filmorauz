@@ -65,11 +65,10 @@ g_start_time = 0
 # make for *validation* must give up quickly so the next strategy can fire.
 URL_PROBE_TIMEOUT = int(os.environ.get("URL_PROBE_TIMEOUT", "12"))
 
-# Stuck-state watchdog window for manifest downloads. If no bytes are written
-# to the output / save dir within this window, the running attempt is killed
-# so the strategy loop can move on. Configurable via env to allow operations
-# to tune without redeploying.
-M3U8_STUCK_TIMEOUT_SECONDS = int(os.environ.get("M3U8_STUCK_TIMEOUT_SECONDS", "10"))
+# Kill any downloader subprocess if it produces no stdout/stderr activity and
+# no output bytes for too long. This prevents jobs from sitting at
+# status=downloading progress=0 forever after a hung aria2/ffmpeg handshake.
+DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS = int(os.environ.get("DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS", "300"))
 
 
 def _build_stream_headers(referer: str | None) -> dict:
@@ -229,6 +228,46 @@ def _resolve_stream_url(url: str, stream_type: str,
     # don't block here. Just log and pass the original URL through.
     logger.warning(f"[RESOLVE] {stream_type} URL probe inconclusive: {head_err} (continuing with original URL)")
     return url, f"probe_failed:{head_err[:120]}"
+
+
+def _validate_download_target(url: str, referer: str | None = None) -> tuple[bool, str]:
+    """Validate that a download target exists and serves HTTP/HTTPS media bytes."""
+    if not url:
+        return False, "video_url is empty"
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return False, f"invalid URL scheme/netloc: {url}"
+
+    headers = _build_stream_headers(referer)
+    range_headers = dict(headers)
+    range_headers["Range"] = "bytes=0-0"
+    attempts = [
+        ("HEAD", headers),
+        ("GET_RANGE", range_headers),
+        ("GET", headers),
+    ]
+
+    last_error = "download target validation failed"
+    for method, req_headers in attempts:
+        try:
+            if method == "HEAD":
+                resp = http_session.head(url, headers=req_headers, timeout=URL_PROBE_TIMEOUT, allow_redirects=True)
+            else:
+                resp = http_session.get(url, headers=req_headers, timeout=URL_PROBE_TIMEOUT, allow_redirects=True, stream=True)
+            try:
+                if resp.status_code in (200, 206):
+                    return True, ""
+                last_error = f"{method} returned HTTP {resp.status_code}"
+            finally:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+        except requests.exceptions.RequestException as exc:
+            last_error = f"{method} request failed: {exc}"
+
+    return False, last_error
 
 
 def _check_range_support(url: str, headers: dict) -> tuple[bool, int]:
@@ -698,6 +737,21 @@ class DownloaderService:
 
         return "unknown"
 
+    def _selected_quality_for_log(self, url: str, referer: str | None = None) -> str:
+        lower = (url or "").lower()
+        match = re.search(r'(\d{3,4})p', lower)
+        if match:
+            return f"{match.group(1)}p"
+        if ".m3u8" in lower:
+            return "hls"
+        if ".mp4" in lower:
+            return "mp4"
+        if referer:
+            ref_match = re.search(r'(\d{3,4})p', referer.lower())
+            if ref_match:
+                return f"{ref_match.group(1)}p"
+        return "auto"
+
     def _download_mp4(self, url: str, output_path: str, job_id: str | None = None, backend_job_id: str | None = None, referer: str | None = None) -> str:
         """
         Download mp4 with parallel streaming support.
@@ -1107,6 +1161,9 @@ class DownloaderService:
         """
         logger.info(f"[DOWNLOAD] _download_manifest: url={url[:80]}..., job_id={job_id}, backend_job_id={backend_job_id}")
         logger.info(f"[DOWNLOAD] Manifest detected: HLS/DASH stream")
+        log_job_id = backend_job_id or job_id or "-"
+        logger.info(f"[download] job={log_job_id} source=unknown selected_quality={self._selected_quality_for_log(url, referer)}")
+        logger.info(f"[download] url={url}")
         
         download_start_time = time.time()
         
@@ -1176,6 +1233,7 @@ class DownloaderService:
         try:
             logger.info(f"[DOWNLOAD] Starting ffmpeg HLS download: {output_path}")
             logger.info(f"[DOWNLOAD] FFmpeg command: {' '.join(cmd[:5])}...")
+            logger.info(f"[download] command={' '.join(cmd)}")
             
             # Start ffmpeg process
             process = subprocess.Popen(
@@ -1188,11 +1246,15 @@ class DownloaderService:
             )
 
             stderr_lines = []
+            last_activity_at = time.time()
+            last_output_size = 0
 
             def consume_stderr():
+                nonlocal last_activity_at
                 for raw_line in process.stderr:
                     line = raw_line.rstrip()
                     stderr_lines.append(line)
+                    last_activity_at = time.time()
                     if "Error" in line or "Failed" in line:
                         logger.warning(f"[DOWNLOAD] FFmpeg stderr: {line}")
                     elif line:
@@ -1201,14 +1263,14 @@ class DownloaderService:
             stderr_thread = threading.Thread(target=consume_stderr, daemon=True)
             stderr_thread.start()
 
-            # Stuck-at-0 watchdog: kill ffmpeg if the output file hasn't grown
-            # past 0 bytes within M3U8_STUCK_TIMEOUT_SECONDS so the strategy
-            # loop can move on instead of waiting on a hung TLS handshake.
+            # Kill ffmpeg if there is no stderr/stdout activity and no byte
+            # growth for 5 minutes. This is the operational definition of a
+            # hung downloader for ingestion jobs.
             _stop_watchdog = threading.Event()
             _killed_for_stuck = threading.Event()
 
             def _watchdog():
-                start = time.time()
+                nonlocal last_activity_at, last_output_size
                 while not _stop_watchdog.is_set():
                     if _stop_watchdog.wait(timeout=1):
                         break
@@ -1216,12 +1278,12 @@ class DownloaderService:
                         size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
                     except OSError:
                         size = 0
-                    if size > 0:
-                        return
-                    if time.time() - start >= M3U8_STUCK_TIMEOUT_SECONDS:
+                    if size > last_output_size:
+                        last_output_size = size
+                        last_activity_at = time.time()
+                    if time.time() - last_activity_at >= DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS:
                         logger.warning(
-                            f"[DOWNLOAD] FFmpeg HLS produced 0 bytes after "
-                            f"{M3U8_STUCK_TIMEOUT_SECONDS}s — killing process"
+                            f"[download] no progress timeout killed process"
                         )
                         _killed_for_stuck.set()
                         try:
@@ -1244,6 +1306,8 @@ class DownloaderService:
             
             for line in process.stdout:
                 line = line.strip()
+                if line:
+                    last_activity_at = time.time()
                 
                 # Parse progress
                 if "out_time_ms=" in line:
@@ -1303,16 +1367,18 @@ class DownloaderService:
             logger.info(f"[DOWNLOAD] FFmpeg exited with code {return_code} after {download_duration:.1f}s")
 
             if _killed_for_stuck.is_set():
+                stderr_output = "\n".join(stderr_lines).strip()
+                logger.error(f"[download] stderr={stderr_output or '(empty)'}")
                 raise DownloadError(
-                    f"m3u8 fetch failed: ffmpeg HLS stalled at 0 bytes for {M3U8_STUCK_TIMEOUT_SECONDS}s "
-                    f"(manifest unreachable or returned non-HLS content)"
+                    f"selected_url={url} inactivity_timeout={DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS}s stderr={stderr_output or 'empty'}"
                 )
 
             stderr_output = "\n".join(stderr_lines).strip()
             if return_code != 0:
+                logger.error(f"[download] stderr={stderr_output or '(empty)'}")
                 logger.error(f"[DOWNLOAD] FFmpeg stderr (full):\n{stderr_output or '(empty)'}")
                 stderr_tail = stderr_output[-1000:] if stderr_output else "no stderr captured"
-                raise DownloadError(f"FFmpeg failed with exit code {return_code}: {stderr_tail}")
+                raise DownloadError(f"selected_url={url} ffmpeg_exit={return_code} stderr={stderr_tail}")
             
             # CRITICAL: Verify file exists
             output_path = _ensure_absolute_file_path(output_path)
@@ -1645,6 +1711,8 @@ class DownloaderService:
         """
         logger.info(f"[DOWNLOADER] smart_download called: url={url[:50]}..., output_name={output_name}")
         logger.info(f"[DOWNLOADER] job_id={job_id}, backend_job_id='{backend_job_id}', max_retries={max_retries}")
+        logger.info(f"[download] job={backend_job_id or job_id or '-'} source=unknown selected_quality={self._selected_quality_for_log(url, referer)}")
+        logger.info(f"[download] url={url}")
 
         # === YOUTUBE FAST-PATH ===
         if is_youtube_url(url):
@@ -1670,6 +1738,20 @@ class DownloaderService:
             raise DownloadError(error_msg)
         
         logger.info(f"[DOWNLOADER] URL validation passed: {url[:80]}...")
+
+        ok, validation_error = _validate_download_target(url, referer=referer)
+        if not ok:
+            error_msg = f"selected_url={url} validation_failed={validation_error}"
+            logger.error(f"[DOWNLOADER] {error_msg}")
+            if backend_job_id:
+                report_progress_to_backend(backend_job_id, {
+                    "stage": "failed",
+                    "status": "failed",
+                    "progress": 0,
+                    "message": error_msg,
+                    "error": error_msg,
+                })
+            raise DownloadError(error_msg)
 
         # Detect stream type before using it
         stream_type = self.detect_url_type(url)

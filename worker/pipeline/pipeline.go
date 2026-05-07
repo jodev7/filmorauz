@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,117 @@ func normalizeDuplicateTitle(title string) string {
 	return strings.ToLower(re.ReplaceAllString(trimmed, " "))
 }
 
+func normalizeQualityLabel(label string) string {
+	lower := strings.ToLower(strings.TrimSpace(label))
+	switch lower {
+	case "", "unknown":
+		return "unknown"
+	case "full hd", "fhd":
+		return "1080p"
+	case "hd":
+		return "720p"
+	case "sd":
+		return "480p"
+	case "original", "source", "auto":
+		return lower
+	}
+	match := regexp.MustCompile(`(2160|1440|1080|720|480|360|240)`).FindString(lower)
+	if match != "" {
+		return match + "p"
+	}
+	return lower
+}
+
+func qualityHeight(label, rawURL string) int {
+	normalized := normalizeQualityLabel(label)
+	match := regexp.MustCompile(`(2160|1440|1080|720|480|360|240)`).FindString(normalized)
+	if match != "" {
+		if n, err := strconv.Atoi(match); err == nil {
+			return n
+		}
+	}
+	match = regexp.MustCompile(`(2160|1440|1080|720|480|360|240)`).FindString(strings.ToLower(rawURL))
+	if match != "" {
+		if n, err := strconv.Atoi(match); err == nil {
+			return n
+		}
+	}
+	if normalized == "original" {
+		return 10000
+	}
+	return 0
+}
+
+func normalizeIdentityURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return trimmed
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	parsed.Path = strings.TrimSuffix(parsed.Path, "/")
+	return strings.ToLower(parsed.Scheme + "://" + parsed.Host + parsed.Path)
+}
+
+func expectedQualitySatisfied(selected string, actualHeight int) bool {
+	want := qualityHeight(selected, "")
+	if want == 0 || actualHeight <= 0 {
+		return true
+	}
+	switch {
+	case want >= 1080:
+		return actualHeight >= 900
+	case want >= 720:
+		return actualHeight >= 600
+	case want >= 480:
+		return actualHeight >= 400
+	default:
+		return actualHeight >= want-40
+	}
+}
+
+func chooseDownloadCandidates(meta *models.ParsedMovieMetadata, selectedURL string) []models.VideoSource {
+	if meta == nil {
+		return nil
+	}
+	candidates := append([]models.VideoSource(nil), meta.VideoURLs...)
+	if len(candidates) == 0 && strings.TrimSpace(meta.VideoURL) != "" {
+		candidates = append(candidates, models.VideoSource{
+			URL:     meta.VideoURL,
+			Type:    "unknown",
+			Quality: meta.Quality,
+		})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		left := qualityHeight(candidates[i].Quality, candidates[i].URL)
+		right := qualityHeight(candidates[j].Quality, candidates[j].URL)
+		if left != right {
+			return left > right
+		}
+		leftType := strings.ToLower(candidates[i].Type)
+		rightType := strings.ToLower(candidates[j].Type)
+		typeRank := map[string]int{"m3u8": 4, "hls": 4, "mpd": 3, "ism": 2, "mp4": 1}
+		if typeRank[leftType] != typeRank[rightType] {
+			return typeRank[leftType] > typeRank[rightType]
+		}
+		return len(candidates[i].URL) < len(candidates[j].URL)
+	})
+	if strings.TrimSpace(selectedURL) != "" {
+		for idx := range candidates {
+			if strings.TrimSpace(candidates[idx].URL) == strings.TrimSpace(selectedURL) {
+				chosen := candidates[idx]
+				candidates = append([]models.VideoSource{chosen}, append(candidates[:idx], candidates[idx+1:]...)...)
+				break
+			}
+		}
+	}
+	return candidates
+}
+
 type needsManualError struct {
 	Reason string
 }
@@ -57,17 +169,18 @@ func (e *needsManualError) Error() string {
 
 // Config holds pipeline configuration
 type Config struct {
-	ParserURL              string
-	TempDir                string
-	StorageConfig          storage.Config
-	TMDBAPIKey             string          // TMDB API key for metadata enrichment
-	DB                     *mongo.Database // MongoDB database for movie insertion
-	BackendURL             string          // Backend API URL for Telegram notifications
-	WorkerToken            string          // Token for worker-to-backend authentication
-	MaxRenditionConcurrent int             // Max concurrent FFmpeg processes (default: 2)
-	SegmentUploadWorkers   int             // Concurrent segment uploads per rendition (default: 10)
-	SegmentUploadRetries   int             // Max retries per segment (default: 5)
-	SegmentDuration        int             // HLS segment duration in seconds (default: 6)
+	ParserURL                 string
+	TempDir                   string
+	StorageConfig             storage.Config
+	TMDBAPIKey                string          // TMDB API key for metadata enrichment
+	DB                        *mongo.Database // MongoDB database for movie insertion
+	BackendURL                string          // Backend API URL for Telegram notifications
+	WorkerToken               string          // Token for worker-to-backend authentication
+	RequireClipsBeforePublish bool            // Block final completion until clips succeed
+	MaxRenditionConcurrent    int             // Max concurrent FFmpeg processes (default: 2)
+	SegmentUploadWorkers      int             // Concurrent segment uploads per rendition (default: 10)
+	SegmentUploadRetries      int             // Max retries per segment (default: 5)
+	SegmentDuration           int             // HLS segment duration in seconds (default: 6)
 }
 
 // Pipeline handles the video ingestion pipeline
@@ -183,12 +296,29 @@ func (p *Pipeline) ProcessDownloadJob(ctx context.Context, job *models.Ingestion
 	if err := p.jobRepo.UpdateMetadata(ctx, jobID, metadata); err != nil {
 		log.Printf("[WORKER] download metadata update failed job_id=%s err=%v", jobID, err)
 	}
+	job.ClassifierConfidence = metadata.ClassifierConfidence
+	job.ClassifierEvidence = metadata.ClassifierEvidence
 
-	videoURL := strings.TrimSpace(metadata.VideoURL)
-	selectedQuality := strings.TrimSpace(metadata.Quality)
+	candidates := chooseDownloadCandidates(metadata, metadata.VideoURL)
+	if len(candidates) == 0 {
+		return p.failDownloadJob(jobID, fmt.Errorf("no downloadable video candidates returned by parser"))
+	}
+	availableQualities := []string{}
+	seenQualities := map[string]struct{}{}
+	for _, candidate := range candidates {
+		q := normalizeQualityLabel(candidate.Quality)
+		if q != "" && q != "unknown" {
+			if _, ok := seenQualities[q]; !ok {
+				seenQualities[q] = struct{}{}
+				availableQualities = append(availableQualities, q)
+			}
+		}
+	}
+	videoURL := strings.TrimSpace(candidates[0].URL)
+	selectedQuality := normalizeQualityLabel(firstNonEmptyString(candidates[0].Quality, metadata.Quality))
 	log.Printf("[WORKER] selected download source job_id=%s selected_quality=%q video_url=%s", jobID, selectedQuality, safeTruncate(videoURL, 160))
-	if err := p.jobRepo.UpdateVideoURL(ctx, jobID, videoURL); err != nil {
-		log.Printf("[WORKER] failed to persist video_url job_id=%s err=%v", jobID, err)
+	if err := p.jobRepo.UpdateSourceSelection(ctx, jobID, videoURL, selectedQuality, availableQualities, job.ClassifierConfidence, job.ClassifierEvidence); err != nil {
+		log.Printf("[WORKER] failed to persist source selection job_id=%s err=%v", jobID, err)
 	}
 
 	if err := validateDownloadURL(videoURL); err != nil {
@@ -204,12 +334,40 @@ func (p *Pipeline) ProcessDownloadJob(ctx context.Context, job *models.Ingestion
 	}
 
 	job.Metadata = metadata
-	job.VideoURL = videoURL
-	log.Printf("[WORKER] downloader command job_id=%s endpoint=%s/download video_url=%s", jobID, p.config.ParserURL, safeTruncate(videoURL, 160))
+	var downloadErr error
+	for idx, candidate := range candidates {
+		job.VideoURL = strings.TrimSpace(candidate.URL)
+		job.SourceQuality = normalizeQualityLabel(firstNonEmptyString(candidate.Quality, metadata.Quality))
+		log.Printf("[WORKER] downloader command job_id=%s endpoint=%s/download candidate=%d/%d selected_quality=%s video_url=%s",
+			jobID, p.config.ParserURL, idx+1, len(candidates), job.SourceQuality, safeTruncate(job.VideoURL, 160))
+		if err := p.jobRepo.UpdateSourceSelection(ctx, jobID, job.VideoURL, job.SourceQuality, availableQualities, job.ClassifierConfidence, job.ClassifierEvidence); err != nil {
+			log.Printf("[WORKER] failed to persist candidate selection job_id=%s err=%v", jobID, err)
+		}
 
-	localPath, err = p.startDownloadAndPoll(ctx, job)
-	if err != nil {
-		return p.failDownloadJob(jobID, fmt.Errorf("download failed for url %q: %w", videoURL, err))
+		localPath, err = p.startDownloadAndPoll(ctx, job, idx > 0)
+		if err != nil {
+			downloadErr = err
+			continue
+		}
+		if width, height, probeErr := p.getInputResolution(localPath); probeErr == nil {
+			job.SourceResolution = fmt.Sprintf("%dx%d", width, height)
+			if err := p.jobRepo.UpdateSourceResolution(ctx, jobID, job.SourceResolution); err != nil {
+				log.Printf("[WORKER] failed to persist source resolution job_id=%s err=%v", jobID, err)
+			}
+			log.Printf("[WORKER] ffprobe validation job_id=%s selected_quality=%s actual_height=%d actual_width=%d", jobID, job.SourceQuality, height, width)
+			if !expectedQualitySatisfied(job.SourceQuality, height) {
+				downloadErr = fmt.Errorf("selected_quality=%s but actual source resolution=%dx%d for selected_url=%s", job.SourceQuality, width, height, job.VideoURL)
+				p.cleanupFile(localPath)
+				localPath = ""
+				log.Printf("[WORKER] source quality mismatch job_id=%s err=%v", jobID, downloadErr)
+				continue
+			}
+		}
+		downloadErr = nil
+		break
+	}
+	if downloadErr != nil {
+		return p.failDownloadJob(jobID, fmt.Errorf("download failed for url %q: %w", videoURL, downloadErr))
 	}
 
 	if err := p.jobRepo.TransitionToProcessing(ctx, jobID, localPath); err != nil {
@@ -560,6 +718,22 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 			log.Printf("[STAGE] clip_generation end — clips generated from final movie")
 		}
 	}
+	if movieResult != nil && movieResult.MovieID != nil {
+		clipsStatus := "completed"
+		pipelineStatus := "ready"
+		pipelineComplete := true
+		if clipGenerationFailed {
+			clipsStatus = "failed"
+			pipelineStatus = "waiting_for_clips"
+			pipelineComplete = !p.config.RequireClipsBeforePublish
+		}
+		if err := p.updateMoviePipelineState(ctx, movieResult.MovieID, pipelineStatus, clipsStatus, pipelineComplete); err != nil {
+			log.Printf("[PIPELINE] WARNING: failed to update movie pipeline state: %v", err)
+		}
+	}
+	if clipGenerationFailed && p.config.RequireClipsBeforePublish {
+		return fmt.Errorf("clip generation failed and REQUIRE_CLIPS_BEFORE_PUBLISH=true")
+	}
 
 	// ===== CLEANUP PROCESSED MASTER =====
 	// Delete processed_master.mp4 now that HLS is uploaded and clips are saved.
@@ -758,19 +932,29 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 	var result struct {
 		models.ParsedMovieMetadata
 		// NEW: Add download response fields for file handoff
-		Success           bool   `json:"success"`
-		FilePath          string `json:"file_path"`
-		LocalPath         string `json:"local_path"`
-		FileName          string `json:"file_name"`
-		FileSize          int64  `json:"file_size"`
-		StreamType        string `json:"stream_type"`
-		DownloadCompleted bool   `json:"download_completed"`
-		DownloadNeeded    bool   `json:"download_needed"`
-		VideoFound        bool   `json:"video_found"`
-		VideoURL          string `json:"video_url"` // Best source URL from /details
-		Error             string `json:"error"`
-		DownloadError     string `json:"download_error"`
-		ManualReason      string `json:"manual_reason"`
+		Success              bool     `json:"success"`
+		FilePath             string   `json:"file_path"`
+		LocalPath            string   `json:"local_path"`
+		FileName             string   `json:"file_name"`
+		FileSize             int64    `json:"file_size"`
+		StreamType           string   `json:"stream_type"`
+		DownloadCompleted    bool     `json:"download_completed"`
+		DownloadNeeded       bool     `json:"download_needed"`
+		VideoFound           bool     `json:"video_found"`
+		VideoURL             string   `json:"video_url"` // Best source URL from /details
+		SelectedVideoURL     string   `json:"selected_video_url"`
+		SelectedQuality      string   `json:"selected_quality"`
+		SourceQuality        string   `json:"source_quality"`
+		AvailableQualities   []string `json:"available_qualities"`
+		ClassifierConfidence float64  `json:"classifier_confidence"`
+		ClassifierEvidence   string   `json:"classifier_evidence"`
+		SourceID             string   `json:"source_id"`
+		DetailURL            string   `json:"detail_url"`
+		Type                 string   `json:"type"`
+		Poster               string   `json:"poster"`
+		Error                string   `json:"error"`
+		DownloadError        string   `json:"download_error"`
+		ManualReason         string   `json:"manual_reason"`
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -831,6 +1015,14 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 	log.Printf("[DETAILS] response received — job_id=%s, title=%s, video_url=%s, download_needed=%v, local_path=%s",
 		jobID, safeTruncate(result.Title, 60), safeTruncate(result.VideoURL, 80), result.DownloadNeeded, result.LocalPath)
 
+	if strings.TrimSpace(result.SourceID) != "" && strings.TrimSpace(job.SourceID) != "" && strings.TrimSpace(result.SourceID) != strings.TrimSpace(job.SourceID) {
+		return nil, "", fmt.Errorf("identity mismatch: expected source_id=%s fetched source_id=%s", job.SourceID, result.SourceID)
+	}
+	if strings.TrimSpace(result.DetailURL) != "" && strings.TrimSpace(job.DetailURL) != "" &&
+		normalizeIdentityURL(result.DetailURL) != normalizeIdentityURL(job.DetailURL) {
+		return nil, "", fmt.Errorf("identity mismatch: expected detail_url=%s fetched detail_url=%s", job.DetailURL, result.DetailURL)
+	}
+
 	// Validate core fields from /details
 	if !result.Success {
 		return nil, "", fmt.Errorf("parser returned success=false")
@@ -878,7 +1070,14 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 	p.log(jobID, fmt.Sprintf("Parsed: %s (%d)", result.Title, result.Year), "info")
 
 	// Copy selected video URL into metadata for later use
-	result.ParsedMovieMetadata.VideoURL = result.VideoURL
+	if strings.TrimSpace(result.SelectedVideoURL) != "" {
+		result.ParsedMovieMetadata.VideoURL = result.SelectedVideoURL
+	} else {
+		result.ParsedMovieMetadata.VideoURL = result.VideoURL
+	}
+	result.ParsedMovieMetadata.Quality = firstNonEmptyString(result.SelectedQuality, result.SourceQuality, result.ParsedMovieMetadata.Quality)
+	result.ParsedMovieMetadata.ClassifierConfidence = result.ClassifierConfidence
+	result.ParsedMovieMetadata.ClassifierEvidence = result.ClassifierEvidence
 
 	// Return metadata and local_path (may be empty if parser will download separately)
 	return &result.ParsedMovieMetadata, localPath, nil
@@ -1043,7 +1242,7 @@ func (p *Pipeline) callParserDownloadWithReferer(jobID, videoURL, referer string
 
 // startDownloadAndPoll calls /download once then polls /progress
 // This is the main download flow for new jobs
-func (p *Pipeline) startDownloadAndPoll(ctx context.Context, job *models.IngestionJob) (string, error) {
+func (p *Pipeline) startDownloadAndPoll(ctx context.Context, job *models.IngestionJob, force bool) (string, error) {
 	jobID := job.ID.Hex()
 	videoURL := job.VideoURL
 	// Pass the source page as Referer — freekino/uzmovi/asilmedia CDNs reject
@@ -1062,10 +1261,15 @@ func (p *Pipeline) startDownloadAndPoll(ctx context.Context, job *models.Ingesti
 	// Build download endpoint URL
 	parserEndpoint := fmt.Sprintf("%s/download", p.config.ParserURL)
 	params := url.Values{}
+	params.Set("source", job.Source)
 	params.Set("video_url", videoURL)
 	params.Set("job_id", jobID)
+	params.Set("selected_quality", strings.TrimSpace(job.SourceQuality))
 	if referer != "" {
 		params.Set("referer", referer)
+	}
+	if force {
+		params.Set("force", "1")
 	}
 	safeName := regexp.MustCompile(`[^\w\s-]`).ReplaceAllString(jobID, "")
 	safeName = regexp.MustCompile(`[-\s]+`).ReplaceAllString(safeName, "_")
@@ -1701,37 +1905,43 @@ func (p *Pipeline) processDirectUploadJob(ctx context.Context, job *models.Inges
 	log.Printf("[DIRECT_UPLOAD] deleting temp input after full success: %s", localTempPath)
 	p.cleanupFile(localTempPath)
 
-	// Step 5: Generate clips (optional - don't fail if clips fail)
+	// Step 5: Generate clips and keep movie unpublished until clip policy is satisfied.
+	clipGenerationFailed := false
 	if movieResult != nil {
-		movieCode := fmt.Sprintf("%d", time.Now().Unix()%10000) // Generate a code since we didn't get one from DB
-
-		// Create a simple MovieCreationResult for clip generation
-		clipMovieResult := &MovieCreationResult{
-			MovieID:      movieResult,
-			Code:         movieCode,
-			Slug:         createMovieSlug(title),
-			DisplayTitle: title,
-		}
-
 		log.Printf("[DIRECT_UPLOAD] Generating clips for movie: %s", title)
-		if clipErr := p.generateClips(ctx, canonicalFolderName, movieCode, clipMovieResult, masterPath, hlsDir); clipErr != nil {
+		if clipErr := p.generateClips(ctx, canonicalFolderName, movieResult.Code, movieResult, masterPath, hlsDir); clipErr != nil {
+			clipGenerationFailed = true
 			log.Printf("[DIRECT_UPLOAD] WARNING: Clip generation failed: %v", clipErr)
-			log.Printf("[DIRECT_UPLOAD] Movie created successfully, but clips were not generated")
 		} else {
 			log.Printf("[DIRECT_UPLOAD] Clips generated successfully")
 		}
+		if movieResult.MovieID != nil {
+			clipsStatus := "completed"
+			pipelineStatus := "ready"
+			pipelineComplete := true
+			if clipGenerationFailed {
+				clipsStatus = "failed"
+				pipelineStatus = "waiting_for_clips"
+				pipelineComplete = !p.config.RequireClipsBeforePublish
+			}
+			if err := p.updateMoviePipelineState(ctx, movieResult.MovieID, pipelineStatus, clipsStatus, pipelineComplete); err != nil {
+				log.Printf("[DIRECT_UPLOAD] WARNING: failed to update movie pipeline state: %v", err)
+			}
+		}
 	}
-
-	// Update status to completed
-	if err := p.updateStatus(jobID, models.IngestionStatusCompleted, 100); err != nil {
-		log.Printf("[DIRECT_UPLOAD] Failed to mark job completed: %v", err)
+	if clipGenerationFailed && p.config.RequireClipsBeforePublish {
+		return fmt.Errorf("clip generation failed and REQUIRE_CLIPS_BEFORE_PUBLISH=true")
 	}
 
 	// Step 6: Cleanup B2 temp file
 	if err := p.cleanupTempFile(job); err != nil {
-		log.Printf("[DIRECT_UPLOAD] Warning: failed to cleanup temp file from B2: %v", err)
-	} else {
-		log.Printf("[DIRECT_UPLOAD] Cleaned up B2 temp file")
+		return fmt.Errorf("cleanup temp file from B2: %w", err)
+	}
+	log.Printf("[DIRECT_UPLOAD] Cleaned up B2 temp file")
+
+	// Update status to completed only after clips/cleanup are done.
+	if err := p.updateStatus(jobID, models.IngestionStatusCompleted, 100); err != nil {
+		log.Printf("[DIRECT_UPLOAD] Failed to mark job completed: %v", err)
 	}
 
 	log.Printf("[DIRECT_UPLOAD] Job %s completed successfully", jobID)
@@ -2112,7 +2322,7 @@ func (p *Pipeline) uploadProcessedFiles(job *models.IngestionJob, hlsDir string,
 
 // createMovieInDatabase creates the movie entry in the main database
 // Uses the same logic as createMovieInDatabaseWithEnrichment for direct upload
-func (p *Pipeline) createMovieInDatabase(job *models.IngestionJob, metadata *models.ParsedMovieMetadata, streamingURL string) (interface{}, error) {
+func (p *Pipeline) createMovieInDatabase(job *models.IngestionJob, metadata *models.ParsedMovieMetadata, streamingURL string) (*MovieCreationResult, error) {
 	jobID := job.ID.Hex()
 
 	if metadata == nil {
@@ -2180,11 +2390,15 @@ func (p *Pipeline) createMovieInDatabase(job *models.IngestionJob, metadata *mod
 			"source_url": job.DetailURL,
 			"source_id":  job.SourceID,
 		},
-		"quality":    maxQuality,
-		"is_premium": job.IsPremium,
-		"status":     "published",
-		"created_at": time.Now(),
-		"updated_at": time.Now(),
+		"quality":            maxQuality,
+		"is_premium":         job.IsPremium,
+		"status":             "processing",
+		"pipeline_status":    "processing",
+		"pipeline_complete":  false,
+		"clips_status":       "pending",
+		"selected_video_url": job.VideoURL,
+		"created_at":         time.Now(),
+		"updated_at":         time.Now(),
 	}
 
 	existingDoc, duplicateReason, err := p.findExistingMovieForImport(
@@ -2204,7 +2418,7 @@ func (p *Pipeline) createMovieInDatabase(job *models.IngestionJob, metadata *mod
 	}
 	if existingDoc != nil {
 		log.Printf("[DIRECT_UPLOAD] DUPLICATE BLOCKED: %s - existing movie reused", duplicateReason)
-		return existingDoc["_id"], nil
+		return p.movieCreationResultFromDoc(existingDoc, displayTitle, true), nil
 	}
 
 	// Insert the movie
@@ -2217,7 +2431,12 @@ func (p *Pipeline) createMovieInDatabase(job *models.IngestionJob, metadata *mod
 	log.Printf("[DIRECT_UPLOAD] Movie created: id=%v, code=%s, title=%s", result.InsertedID, code, displayTitle)
 	p.log(jobID, fmt.Sprintf("Movie created: %s (code: %s)", displayTitle, code), "info")
 
-	return result.InsertedID, nil
+	return &MovieCreationResult{
+		MovieID:      result.InsertedID,
+		Code:         code,
+		Slug:         displaySlug,
+		DisplayTitle: displayTitle,
+	}, nil
 }
 
 // createMovieInDatabaseWithEnrichment creates movie with enriched metadata
@@ -2228,6 +2447,29 @@ type MovieCreationResult struct {
 	Slug         string
 	DisplayTitle string
 	IsDuplicate  bool
+}
+
+func (p *Pipeline) updateMoviePipelineState(ctx context.Context, movieID interface{}, pipelineStatus, clipsStatus string, pipelineComplete bool) error {
+	if p.movieCol == nil || movieID == nil {
+		return nil
+	}
+	filterID := movieID
+	if raw, ok := movieID.(string); ok {
+		if oid, err := primitive.ObjectIDFromHex(raw); err == nil {
+			filterID = oid
+		}
+	}
+	filter := bson.M{"_id": filterID}
+	_, err := p.movieCol.UpdateOne(ctx, filter, bson.M{
+		"$set": bson.M{
+			"pipeline_status":   pipelineStatus,
+			"pipeline_complete": pipelineComplete,
+			"clips_status":      clipsStatus,
+			"status":            pipelineStatus,
+			"updated_at":        time.Now(),
+		},
+	})
+	return err
 }
 
 // Uses upsert to handle duplicate slugs - updates existing or inserts new
@@ -2335,6 +2577,10 @@ func (p *Pipeline) createMovieInDatabaseWithEnrichment(
 		"rating_avg":         0,
 		"rating_count":       0,
 		"website_url":        calculateWebsiteURL(displaySlug),
+		"pipeline_status":    "processing",
+		"pipeline_complete":  false,
+		"clips_status":       "pending",
+		"selected_video_url": job.VideoURL,
 		"created_at":         time.Now(),
 		"updated_at":         time.Now(),
 	}

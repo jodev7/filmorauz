@@ -238,6 +238,29 @@ make tidy-worker   # go mod tidy (worker)
 
 ---
 
+## Automated Deployment (CI/CD)
+
+We use GitHub Actions for automated testing and deployment.
+
+### Required GitHub Secrets
+Configure these in **GitHub Settings -> Secrets and variables -> Actions**:
+
+- `WEB_HOST`: IP address/hostname of your Web VPS
+- `WEB_USER`: SSH username for Web VPS
+- `WEB_SSH_KEY`: Private SSH key for Web VPS (must have access to the server)
+- `WEB_PORT`: SSH port (usually 22)
+- `WORKER_HOST`: IP address/hostname of your Worker VPS
+- `WORKER_USER`: SSH username for Worker VPS
+- `WORKER_SSH_KEY`: Private SSH key for Worker VPS
+- `WORKER_PORT`: SSH port (usually 22)
+
+### How to use
+- **Automatic**: Pushing to the `main` branch triggers the CI pipeline, followed by automated deployments to both servers.
+- **Manual**: You can trigger the workflow manually in the GitHub UI (**Actions** -> **CI/CD Pipeline** -> **Run workflow**).
+- **Rollback**: To rollback, simply revert the commit in Git and push to `main`. The CI/CD pipeline will automatically deploy the previous state.
+
+---
+
 ## Troubleshooting
 
 **MongoDB connection failed**

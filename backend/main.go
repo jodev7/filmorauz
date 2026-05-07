@@ -397,6 +397,10 @@ func seedAdmin(repo *repositories.UserRepository, adminTelegramID int64) {
 // getParserURL returns the parser service URL from environment variables
 // Supports both PARSER_SERVICE_URL (preferred) and PARSER_URL for compatibility
 func getParserURL() string {
+	if url := os.Getenv("PARSER_BASE_URL"); url != "" {
+		log.Printf("Using PARSER_BASE_URL: %s", url)
+		return url
+	}
 	if url := os.Getenv("INTERNAL_PARSER_URL"); url != "" {
 		log.Printf("Using INTERNAL_PARSER_URL: %s", url)
 		return url

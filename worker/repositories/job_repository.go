@@ -827,11 +827,6 @@ var activeIngestionStatuses = []interface{}{
 }
 
 func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
-	// Processing/uploading watchdog stays at the historical 180 min — those
-	// stages don't update last_progress_at and are dominated by ffmpeg runs
-	// that legitimately take a long time.
-	staleThreshold := 180 * time.Minute
-	staleCutoff := time.Now().Add(-staleThreshold)
 	// Downloads have their own per-byte heartbeat (last_progress_at). Only
 	// recycle a downloading job if the parser has not reported any byte
 	// progress in the last 5 minutes — otherwise an actively-downloading job
@@ -923,31 +918,84 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 		totalRecovered++
 	}
 
-	processResult, err := r.collection.UpdateMany(ctx, bson.M{
-		"status":     bson.M{"$in": []models.IngestionStatus{models.IngestionStatusProcessing, models.IngestionStatusUploading}},
-		"updated_at": bson.M{"$lt": staleCutoff},
-	}, bson.M{
-		"$set": bson.M{
-			"status":     models.IngestionStatusReadyToProcess,
-			"stage":      "ready_to_process",
-			"progress":   100,
-			"updated_at": now,
-			"error":      "Recovered stale processing job after timeout; returned to processing queue automatically",
-		},
-		"$unset": bson.M{
-			"completed_at": "",
-			"worker_id":    "",
-			"locked_until": "",
-		},
-	})
-	if err != nil {
-		log.Printf("[REPO] RecoverStaleJobs(process): ERROR - %v", err)
-		return totalRecovered, err
+	processStages := []struct {
+		status    models.IngestionStatus
+		threshold time.Duration
+		message   string
+	}{
+		{status: models.IngestionStatusProcessing, threshold: 10 * time.Minute, message: "Processing stage stalled for 10 minutes; returned to processing queue automatically"},
+		{status: models.IngestionStatusUploading, threshold: 5 * time.Minute, message: "Upload stage stalled for 5 minutes; returned to processing queue automatically"},
 	}
-	totalRecovered += processResult.ModifiedCount
+	for _, stage := range processStages {
+		stageCutoff := now.Add(-stage.threshold)
+		cursor, findErr := r.collection.Find(ctx, bson.M{
+			"status":     stage.status,
+			"updated_at": bson.M{"$lt": stageCutoff},
+		})
+		if findErr != nil {
+			log.Printf("[REPO] RecoverStaleJobs(%s): ERROR - %v", stage.status, findErr)
+			return totalRecovered, findErr
+		}
+		var staleJobs []models.IngestionJob
+		if err := cursor.All(ctx, &staleJobs); err != nil {
+			cursor.Close(ctx)
+			log.Printf("[REPO] RecoverStaleJobs(%s): decode error - %v", stage.status, err)
+			return totalRecovered, err
+		}
+		cursor.Close(ctx)
+
+		for _, job := range staleJobs {
+			newRetry := job.RetryCount + 1
+			updateSet := bson.M{
+				"updated_at": now,
+			}
+			updateUnset := bson.M{
+				"completed_at":          "",
+				"worker_id":             "",
+				"locked_until":          "",
+				"processing_started_at": "",
+				"last_progress_at":      "",
+			}
+			logLevel := "warning"
+			logMessage := stage.message
+
+			if newRetry >= maxRetries {
+				finalReason := fmt.Sprintf("%s Retry limit exceeded (%d/%d).", stage.message, newRetry, maxRetries)
+				updateSet["status"] = models.IngestionStatusFailed
+				updateSet["stage"] = "failed"
+				updateSet["error"] = finalReason
+				updateSet["message"] = finalReason
+				updateSet["completed_at"] = now
+				logMessage = finalReason
+				logLevel = "error"
+			} else {
+				updateSet["status"] = models.IngestionStatusReadyToProcess
+				updateSet["stage"] = "ready_to_process"
+				updateSet["progress"] = 100
+				updateSet["error"] = stage.message
+				updateSet["message"] = "Waiting for processing retry"
+			}
+
+			_, updateErr := r.collection.UpdateByID(ctx, job.ID, bson.M{
+				"$inc":   bson.M{"retry_count": 1},
+				"$set":   updateSet,
+				"$unset": updateUnset,
+				"$push": bson.M{"logs": models.IngestionLog{
+					Timestamp: now,
+					Message:   logMessage,
+					Level:     logLevel,
+				}},
+			})
+			if updateErr != nil {
+				log.Printf("[REPO] RecoverStaleJobs(%s): update failed job=%s err=%v", stage.status, job.ID.Hex(), updateErr)
+				continue
+			}
+			totalRecovered++
+		}
+	}
 
 	if totalRecovered > 0 {
-		log.Printf("[REPO] RecoverStaleJobs: recovered %d stale jobs older than %s", totalRecovered, staleThreshold)
+		log.Printf("[REPO] RecoverStaleJobs: recovered %d stale jobs", totalRecovered)
 	}
 	return totalRecovered, nil
 }
@@ -1334,5 +1382,46 @@ func (r *JobRepository) UpdateQualityInfo(ctx context.Context, id, sourceQuality
 	}
 
 	_, err = r.collection.UpdateByID(ctx, objID, update)
+	return err
+}
+
+func (r *JobRepository) UpdateSourceSelection(ctx context.Context, id, selectedVideoURL, selectedQuality string, availableQualities []string, classifierConfidence float64, classifierEvidence string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid id")
+	}
+
+	setFields := bson.M{
+		"video_url":           selectedVideoURL,
+		"source_quality":      selectedQuality,
+		"available_qualities": availableQualities,
+		"selected_video_url":  selectedVideoURL,
+		"selected_quality":    selectedQuality,
+		"updated_at":          time.Now(),
+	}
+	if classifierConfidence > 0 {
+		setFields["classifier_confidence"] = classifierConfidence
+	}
+	if strings.TrimSpace(classifierEvidence) != "" {
+		setFields["classifier_evidence"] = classifierEvidence
+	}
+	update := bson.M{
+		"$set": setFields,
+	}
+	_, err = r.collection.UpdateByID(ctx, objID, update)
+	return err
+}
+
+func (r *JobRepository) UpdateSourceResolution(ctx context.Context, id, resolution string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid id")
+	}
+	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
+		"$set": bson.M{
+			"source_resolution": resolution,
+			"updated_at":        time.Now(),
+		},
+	})
 	return err
 }

@@ -48,14 +48,7 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 DEFAULT_TIMEOUT = 60
 PARALLEL_CONNECTIONS = 16  # For aria2c
 
-# Stuck-state watchdog window for manifest downloads (N_m3u8DL-RE / ffmpeg HLS).
-# If no bytes are written to the save dir / output file within this many
-# seconds of the process starting, the attempt is killed so the strategy
-# loop can move on to the next fallback. Configurable so ops can tune it
-# without redeploying. Default is intentionally aggressive — manifests that
-# haven't produced a single byte in N seconds are almost always blocked at
-# the network layer (TLS handshake stuck, 403 returned as HTML, etc.).
-M3U8_STUCK_TIMEOUT_SECONDS = int(os.environ.get("M3U8_STUCK_TIMEOUT_SECONDS", "10"))
+DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS = int(os.environ.get("DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS", "300"))
 
 
 class StreamType(Enum):
@@ -571,16 +564,13 @@ class DDownloaderIntegration:
             total_bytes = 0
             last_progress_reported = -1
 
-            # === Stuck-at-0 watchdog ===
-            # Polls save_dir every second and tracks the largest segment file.
-            # If no bytes appear within M3U8_STUCK_TIMEOUT_SECONDS, kill
-            # N_m3u8DL-RE so the outer strategy loop tries the next fallback
-            # (m3u8 ffmpeg, alternative direct mp4) instead of sitting at 0%.
             _stop_watchdog = threading.Event()
             _killed_for_stuck = threading.Event()
+            last_activity_at = time.time()
+            last_output_size = 0
 
             def _watchdog():
-                start = time.time()
+                nonlocal last_activity_at, last_output_size
                 while not _stop_watchdog.is_set():
                     if _stop_watchdog.wait(timeout=1):
                         break
@@ -600,16 +590,13 @@ class DDownloaderIntegration:
                     except OSError:
                         max_size = 0
 
-                    if max_size > 0:
-                        # Bytes are flowing — let the download run to completion;
-                        # other timeouts (curl --speed-time analogues, ffmpeg
-                        # exit) handle later stalls.
-                        return
+                    if max_size > last_output_size:
+                        last_output_size = max_size
+                        last_activity_at = time.time()
 
-                    if time.time() - start >= M3U8_STUCK_TIMEOUT_SECONDS:
+                    if time.time() - last_activity_at >= DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS:
                         logger.warning(
-                            f"[DDOWNLOADER] N_m3u8DL-RE produced 0 bytes after "
-                            f"{M3U8_STUCK_TIMEOUT_SECONDS}s — killing process"
+                            "[download] no progress timeout killed process"
                         )
                         _killed_for_stuck.set()
                         try:
@@ -635,6 +622,8 @@ class DDownloaderIntegration:
                 
                 if line:
                     line = line.strip()
+                    if line:
+                        last_activity_at = time.time()
                     
                     # Parse size information from N_m3u8DL-RE output
                     # Example: "Downloading: 123.45 MB / 456.78 MB"
@@ -703,17 +692,18 @@ class DDownloaderIntegration:
             watchdog_thread.join(timeout=2)
 
             if _killed_for_stuck.is_set():
+                logger.error(f"[download] stderr={(stderr or '').strip() or '(empty)'}")
                 raise DDdownloaderIntegrationError(
-                    f"N_m3u8DL-RE stalled at 0 bytes for {M3U8_STUCK_TIMEOUT_SECONDS}s — "
-                    f"manifest probably unreachable or returned non-HLS content"
+                    f"selected_url={url} inactivity_timeout={DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS}s stderr={(stderr or '').strip() or 'empty'}"
                 )
 
             logger.info(f"[DOWNLOAD DONE] job_id={os.path.splitext(output_name)[0]} exit_code={process.returncode}")
 
             if process.returncode != 0:
                 stderr_preview = stderr[:500] if stderr else "No stderr"
+                logger.error(f"[download] stderr={stderr_preview}")
                 logger.error(f"[DDOWNLOADER] N_m3u8DL-RE failed: {stderr_preview}")
-                raise DDdownloaderIntegrationError(f"N_m3u8DL-RE failed with code {process.returncode}: {stderr_preview}")
+                raise DDdownloaderIntegrationError(f"selected_url={url} n_m3u8dl_exit={process.returncode} stderr={stderr_preview}")
 
             logger.info(f"[DDOWNLOADER] N_m3u8DL-RE completed successfully")
             final_path = self._detect_final_download_file(save_dir, output_name)
@@ -986,6 +976,7 @@ class DDownloaderIntegration:
             DDdownloaderIntegrationError: If download fails
         """
         logger.info(f"[ARIA2C] Starting MP4 download: url={url[:60]}...")
+        logger.info(f"[download] url={url}")
         
         start_time = time.time()
         
@@ -1064,6 +1055,34 @@ class DDownloaderIntegration:
                 text=True,
                 bufsize=1,
             )
+            last_activity_at = time.time()
+            last_output_size = 0
+            _killed_for_stuck = threading.Event()
+            _stop_watchdog = threading.Event()
+
+            def _watchdog():
+                nonlocal last_activity_at, last_output_size
+                while not _stop_watchdog.is_set():
+                    if _stop_watchdog.wait(timeout=1):
+                        break
+                    try:
+                        size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+                    except OSError:
+                        size = 0
+                    if size > last_output_size:
+                        last_output_size = size
+                        last_activity_at = time.time()
+                    if time.time() - last_activity_at >= DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS:
+                        logger.warning("[download] no progress timeout killed process")
+                        _killed_for_stuck.set()
+                        try:
+                            process.kill()
+                        except Exception:
+                            pass
+                        return
+
+            watchdog_thread = threading.Thread(target=_watchdog, daemon=True)
+            watchdog_thread.start()
             
             # Read stdout line by line while process runs (aria2c progress goes to stdout)
             while True:
@@ -1073,6 +1092,8 @@ class DDownloaderIntegration:
                 
                 if line:
                     line = line.strip()
+                    if line:
+                        last_activity_at = time.time()
                     
                     # Parse full aria2c progress line: [#abc 12MiB/100MiB(12%) CN:4 DL:2.1MiB ETA:40s]
                     aria_match = aria2c_pattern.search(line)
@@ -1129,11 +1150,21 @@ class DDownloaderIntegration:
             
             # Wait for process to complete
             stdout, stderr = process.communicate()
+            _stop_watchdog.set()
+            watchdog_thread.join(timeout=2)
+
+            if _killed_for_stuck.is_set():
+                stderr_preview = (stderr or "").strip()[:1000]
+                logger.error(f"[download] stderr={stderr_preview or '(empty)'}")
+                raise DDdownloaderIntegrationError(
+                    f"selected_url={url} inactivity_timeout={DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS}s stderr={stderr_preview or 'empty'}"
+                )
             
             # Check if file was created
             if not os.path.exists(output_path):
                 stderr_preview = stderr[:500] if stderr else "No stderr"
                 stdout_preview = stdout[:500] if stdout else "No stdout"
+                logger.error(f"[download] stderr={stderr_preview or stdout_preview}")
                 logger.error(f"[ARIA2C] Download failed. stderr: {stderr_preview}, stdout: {stdout_preview}")
                 raise DDdownloaderIntegrationError(f"aria2c failed: {stderr_preview or stdout_preview}")
             
@@ -1145,6 +1176,7 @@ class DDownloaderIntegration:
                 if os.path.getsize(output_path) > 0:
                     logger.warning("[ARIA2C] File exists with content, continuing...")
                 else:
+                    logger.error(f"[download] stderr={stderr_preview}")
                     raise DDdownloaderIntegrationError(f"aria2c failed with code {process.returncode}: {stderr_preview}")
             
             logger.info(f"[ARIA2C] Download completed: {output_path}")
@@ -1417,8 +1449,8 @@ class DDownloaderIntegration:
         except Exception:
             pass
 
-        # Kill ffmpeg if no new bytes arrive for this many seconds
-        INACTIVITY_LIMIT = 120
+        # Kill ffmpeg if no new bytes arrive for too long.
+        INACTIVITY_LIMIT = DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS
 
         try:
             process = subprocess.Popen(
@@ -1493,9 +1525,7 @@ class DDownloaderIntegration:
 
                     idle_secs = time.time() - last_active[0]
                     if idle_secs > INACTIVITY_LIMIT:
-                        logger.warning(
-                            f"[FFMPEG-MP4] No progress for {idle_secs:.0f}s — killing ffmpeg"
-                        )
+                        logger.warning("[download] no progress timeout killed process")
                         _killed_for_inactivity.set()
                         try:
                             process.kill()
@@ -1523,16 +1553,19 @@ class DDownloaderIntegration:
                 watchdog_thread.join(timeout=5)
 
             if _killed_for_inactivity.is_set():
+                snippet = "\n".join(stderr_lines[-10:]) or "no stderr"
+                logger.error(f"[download] stderr={snippet[:1000]}")
                 raise DDdownloaderIntegrationError(
-                    f"ffmpeg stalled: no bytes written for {INACTIVITY_LIMIT}s"
+                    f"selected_url={url} inactivity_timeout={INACTIVITY_LIMIT}s stderr={snippet[:1000]}"
                 )
 
             rc = process.returncode
             logger.info(f"[FFMPEG-MP4] Exit code: {rc}")
             if rc != 0:
                 snippet = "\n".join(stderr_lines[-10:]) or "no stderr"
+                logger.error(f"[download] stderr={snippet[:1000]}")
                 logger.error(f"[FFMPEG-MP4] stderr tail: {snippet[:400]}")
-                raise DDdownloaderIntegrationError(f"ffmpeg failed (exit {rc}): {snippet[:200]}")
+                raise DDdownloaderIntegrationError(f"selected_url={url} ffmpeg_exit={rc} stderr={snippet[:200]}")
 
             if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
                 raise DDdownloaderIntegrationError(
