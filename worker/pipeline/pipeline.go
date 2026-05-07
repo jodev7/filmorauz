@@ -1025,11 +1025,23 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 				seasonEp := parts[1]
 				seasonParts := strings.Split(seasonEp, "e")
 				if len(seasonParts) == 2 {
-					// Handle fetched sourceID that might just be the episode number (e.g., "9" or 9)
+					seasonStr := seasonParts[0]
+					// Ensure we have a clean episode number
 					rawFetched := strings.TrimSpace(result.SourceID)
-					// Canonicalize fetched: parentID + season + rawFetched
-					canonicalFetched := fmt.Sprintf("%s:s%se%03s", parentID, seasonParts[0], rawFetched)
-					log.Printf("[identity] requested=%s raw_fetched=%s canonical_fetched=%s ok=%v", job.SourceID, result.SourceID, canonicalFetched, canonicalFetched == job.SourceID)
+					
+					// If rawFetched is just numeric, pad it as 3 digits
+					epNum := rawFetched
+					if len(epNum) < 3 {
+						if val, err := strconv.Atoi(epNum); err == nil {
+							epNum = fmt.Sprintf("%03d", val)
+						}
+					}
+
+					// Canonicalize fetched: parentID + s + season + e + episode
+					canonicalFetched := fmt.Sprintf("%s:s%se%s", parentID, seasonStr, epNum)
+					
+					log.Printf("[identity-check] content_type=serial_episode job_id=%s requested=%s raw_fetched=%s canonical_fetched=%s pass=%v", jobID, job.SourceID, result.SourceID, canonicalFetched, canonicalFetched == job.SourceID)
+					
 					if canonicalFetched == job.SourceID {
 						goto identity_check_ok
 					}
