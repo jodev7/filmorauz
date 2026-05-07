@@ -17,10 +17,20 @@ import (
 	worker_repositories "github.com/filmorauz/worker/repositories"
 	"github.com/filmorauz/worker/storage"
 	"github.com/joho/godotenv"
-
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-)
+	"os/exec"
+	)
+
+	func getCommitHash() string {
+	cmd := exec.Command("git", "rev-parse", "--short", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
+	}
+
 
 // InitializeLocalStorageURLs sets up the base URLs for local storage based on environment
 func InitializeLocalStorageURLs() {
@@ -102,6 +112,7 @@ func main() {
 	go deletionWorker.Start(workerCtx)
 
 	// Log configuration
+	log.Printf("[CONFIG] Worker starting, commit=%s", getCommitHash())
 	log.Printf("[CONFIG] Pipeline initialized (watermark removal and AI poster generation disabled)")
 	log.Printf("[CONFIG] Storage mode: %s", getStorageMode())
 

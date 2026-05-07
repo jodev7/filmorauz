@@ -8,6 +8,7 @@ import os
 import random
 import re
 import shutil
+import subprocess
 import time
 import urllib.request
 import urllib.error
@@ -18,6 +19,14 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from typing import Optional
 import sys
+
+try:
+    git_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode("utf-8").strip()
+except:
+    git_hash = "unknown"
+
+logger = logging.getLogger(__name__)
+logger.info(f"[PARSER] Starting version={git_hash} built_at={time.strftime('%Y-%m-%d %H:%M:%S')}")
 import hashlib
 import requests
 
