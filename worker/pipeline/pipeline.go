@@ -1015,9 +1015,31 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 	log.Printf("[DETAILS] response received — job_id=%s, title=%s, video_url=%s, download_needed=%v, local_path=%s",
 		jobID, safeTruncate(result.Title, 60), safeTruncate(result.VideoURL, 80), result.DownloadNeeded, result.LocalPath)
 
+	// NEW: Improved identity check for serials
 	if strings.TrimSpace(result.SourceID) != "" && strings.TrimSpace(job.SourceID) != "" && strings.TrimSpace(result.SourceID) != strings.TrimSpace(job.SourceID) {
+		// Check if it's a serial episode (contains 's' and 'e' format)
+		if strings.Contains(job.SourceID, ":s") && strings.Contains(job.SourceID, "e") {
+			parts := strings.Split(job.SourceID, ":s")
+			if len(parts) == 2 {
+				parentID := parts[0]
+				seasonEp := parts[1]
+				seasonParts := strings.Split(seasonEp, "e")
+				if len(seasonParts) == 2 {
+					// Handle fetched sourceID that might just be the episode number (e.g., "9" or 9)
+					rawFetched := strings.TrimSpace(result.SourceID)
+					// Canonicalize fetched: parentID + season + rawFetched
+					canonicalFetched := fmt.Sprintf("%s:s%se%03s", parentID, seasonParts[0], rawFetched)
+					log.Printf("[identity] requested=%s raw_fetched=%s canonical_fetched=%s ok=%v", job.SourceID, result.SourceID, canonicalFetched, canonicalFetched == job.SourceID)
+					if canonicalFetched == job.SourceID {
+						goto identity_check_ok
+					}
+				}
+			}
+		}
 		return nil, "", fmt.Errorf("identity mismatch: expected source_id=%s fetched source_id=%s", job.SourceID, result.SourceID)
 	}
+identity_check_ok:
+
 	if strings.TrimSpace(result.DetailURL) != "" && strings.TrimSpace(job.DetailURL) != "" &&
 		normalizeIdentityURL(result.DetailURL) != normalizeIdentityURL(job.DetailURL) {
 		return nil, "", fmt.Errorf("identity mismatch: expected detail_url=%s fetched detail_url=%s", job.DetailURL, result.DetailURL)
