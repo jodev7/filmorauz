@@ -1270,20 +1270,24 @@ export interface CascadeDeleteB2Summary {
 export interface MovieDeleteResponse {
   success: boolean;
   message?: string;
-  deleted_db: {
+  job_id?: string;
+  status?: string;
+  deleted_db?: {
     movie_id: string;
     title: string;
     clips_deleted: number;
     instagram_schedules_deleted: number;
     publish_jobs_deleted: number;
   };
-  deleted_b2: CascadeDeleteB2Summary;
+  deleted_b2?: CascadeDeleteB2Summary;
 }
 
 export interface SeriesDeleteResponse {
   success: boolean;
   message?: string;
-  deleted_db: {
+  job_id?: string;
+  status?: string;
+  deleted_db?: {
     series_id: string;
     title: string;
     seasons_deleted: number;
@@ -1292,7 +1296,7 @@ export interface SeriesDeleteResponse {
     instagram_schedules_deleted: number;
     publish_jobs_deleted: number;
   };
-  deleted_b2: CascadeDeleteB2Summary;
+  deleted_b2?: CascadeDeleteB2Summary;
 }
 
 export async function adminDeleteMovie(
