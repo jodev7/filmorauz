@@ -14,8 +14,11 @@ import (
 
 	"github.com/filmorauz/worker/models"
 	"github.com/filmorauz/worker/pipeline"
-	"github.com/filmorauz/worker/repositories"
+	worker_repositories "github.com/filmorauz/worker/repositories"
 	"github.com/filmorauz/worker/storage"
+	backend_repositories "github.com/filmorauz/backend/repositories"
+	"github.com/filmorauz/backend/services"
+
 	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -64,7 +67,19 @@ func main() {
 	}
 
 	// Initialize repositories
-	jobRepo := repositories.NewJobRepository(db, workerID)
+	jobRepo := worker_repositories.NewJobRepository(db, workerID)
+	deleteJobRepo := backend_repositories.NewDeleteJobRepository(db)
+
+	movieRepo := backend_repositories.NewMovieRepository(db)
+	seriesRepo := backend_repositories.NewSeriesRepository(db)
+	
+	// Initialize deletion worker
+	deletionWorker := &DeletionWorker{
+		repo:          deleteJobRepo,
+		movieService:  services.NewMovieService(movieRepo, nil, nil, nil, nil, nil, nil),
+		seriesService: services.NewSeriesService(seriesRepo, nil, nil, nil, nil),
+	}
+	go deletionWorker.Start(workerCtx)
 
 	// Pipeline configuration
 	pipeConfig := pipeline.Config{

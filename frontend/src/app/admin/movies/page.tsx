@@ -26,6 +26,7 @@ import MediaImage from "@/components/ui/MediaImage";
 import CascadeDeleteModal, {
   formatCascadeWarning,
 } from "@/components/admin/CascadeDeleteModal";
+import DeleteProgressModal from "@/components/admin/DeleteProgressModal";
 
 type StatusFilter = "all" | "pending" | "approved" | "rejected";
 
@@ -62,6 +63,7 @@ export default function AdminMoviesPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleteJobId, setDeleteJobId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Movie | null>(null);
   const [approving, setApproving] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
@@ -117,14 +119,17 @@ export default function AdminMoviesPage() {
     setDeleting(movie.id);
     try {
       const response = await adminDeleteMovie(token, movie.id);
-      setMovies((prev) => prev.filter((m) => m.id !== movie.id));
-      // Surface partial-failure information when B2 cleanup didn't finish cleanly.
-      const warning = formatCascadeWarning(response?.deleted_b2);
-      if (warning) {
-        alert(`"${movie.title}" o'chirildi, lekin ba'zi fayllar muammoli:\n\n${warning}`);
+      if (response.job_id) {
+        setDeleteJobId(response.job_id);
+      } else {
+        // Fallback for non-async (if job_id missing)
+        setMovies((prev) => prev.filter((m) => m.id !== movie.id));
+        const warning = formatCascadeWarning(response?.deleted_b2);
+        if (warning) alert(`"${movie.title}" o'chirildi, lekin ba'zi fayllar muammoli:\n\n${warning}`);
+        setDeleteTarget(null);
       }
-      setDeleteTarget(null);
-    } finally {
+    } catch (err: any) {
+      alert(err.message || "O'chirishda xatolik");
       setDeleting(null);
     }
   };
@@ -410,7 +415,7 @@ export default function AdminMoviesPage() {
       )}
 
       <CascadeDeleteModal
-        open={deleteTarget !== null}
+        open={deleteTarget !== null && !deleteJobId}
         kind="movie"
         title={deleteTarget?.title ?? ""}
         onConfirm={performDelete}
@@ -418,6 +423,21 @@ export default function AdminMoviesPage() {
           if (deleting === null) setDeleteTarget(null);
         }}
       />
+
+      {deleteJobId && (
+        <DeleteProgressModal
+          jobId={deleteJobId}
+          isOpen={true}
+          onClose={() => {
+            if (deleteTarget) {
+              setMovies((prev) => prev.filter((m) => m.id !== deleteTarget.id));
+              setDeleteTarget(null);
+            }
+            setDeleteJobId(null);
+            setDeleting(null);
+          }}
+        />
+      )}
     </div>
   );
 }

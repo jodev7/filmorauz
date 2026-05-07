@@ -347,47 +347,50 @@ func (h *MovieHandler) UpdateMovie(c *gin.Context) {
 }
 
 // DeleteMovie DELETE /api/admin/movies/:id
-//
-// Cascade deletes the movie row, every clip linked to it, all of those
-// clips' Instagram schedules and multi-platform publish jobs, plus the
-// related B2 assets (HLS folder, poster, backdrop, video file, clip
-// files). Returns a structured summary so the admin UI can show what
-// was actually removed and surface any partial-failure warnings.
-//
-// Status codes:
-//   - 404 when the movie row does not exist
-//   - 400 for invalid IDs
-//   - 200 with deleted_b2.errors populated if B2 cleanup ran into
-//     transient failures (the DB row is still removed in that case)
-//   - 500 only when the DB delete itself fails
+// Initiates an asynchronous background delete job.
 func (h *MovieHandler) DeleteMovie(c *gin.Context) {
 	id := c.Param("id")
-
-	result, err := h.movieService.DeleteMovie(id)
+	movieID, err := primitive.ObjectIDFromHex(id)
 	if err != nil {
-		switch err.Error() {
-		case "movie not found":
-			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "movie not found"})
-		case "invalid movie id":
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid movie id"})
-		default:
-			// DB delete failed — return whatever cleanup we managed plus the error.
-			payload := gin.H{"success": false, "error": err.Error()}
-			if result != nil {
-				payload["deleted_db"] = movieDeleteDBSummary(result)
-				payload["deleted_b2"] = result.B2
-			}
-			c.JSON(http.StatusInternalServerError, payload)
-		}
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid movie id"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success":    !result.Partial,
-		"partial":    result.Partial,
-		"message":    "Movie deleted",
-		"deleted_db": movieDeleteDBSummary(result),
-		"deleted_b2": result.B2,
+	// Check if already queued or deleting
+	repo := repositories.NewDeleteJobRepository(h.movieService.GetDB())
+	existing, _ := repo.FindPending(c.Request.Context(), movieID)
+	if existing != nil {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": "deletion job already in progress", "job_id": existing.ID})
+		return
+	}
+
+	movie, err := h.movieService.GetMovieByID(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "movie not found"})
+		return
+	}
+
+	job := &models.DeleteJob{
+		ContentType:   "movie",
+		ContentID:     movieID,
+		Title:         movie.Title,
+		Status:        "queued",
+		Progress:      0,
+		CurrentStep:   "initializing",
+		DeletedCounts: make(map[string]int),
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+
+	if err := repo.Create(c.Request.Context(), job); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "failed to queue delete job"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"success": true,
+		"job_id":  job.ID,
+		"message": "deletion job queued",
 	})
 }
 

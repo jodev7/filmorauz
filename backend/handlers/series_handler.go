@@ -309,31 +309,51 @@ func (h *SeriesHandler) UpdateSeries(c *gin.Context) {
 // (per-episode HLS folders, series/season/episode imagery, clip files).
 // Returns a structured summary so the admin UI can show what was
 // removed and surface partial-failure warnings.
+// DeleteSeries DELETE /api/admin/series/:id
+// Initiates an asynchronous background delete job.
 func (h *SeriesHandler) DeleteSeries(c *gin.Context) {
 	idStr := c.Param("id")
-	id, err := primitive.ObjectIDFromHex(idStr)
+	seriesID, err := primitive.ObjectIDFromHex(idStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid series id"})
 		return
 	}
 
-	result, err := h.seriesService.DeleteSeries(id)
-	if err != nil {
-		payload := gin.H{"success": false, "error": err.Error()}
-		if result != nil {
-			payload["deleted_db"] = seriesDeleteDBSummary(result)
-			payload["deleted_b2"] = result.B2
-		}
-		c.JSON(http.StatusInternalServerError, payload)
+	// Check if already queued or deleting
+	repo := repositories.NewDeleteJobRepository(h.seriesService.GetDB())
+	existing, _ := repo.FindPending(c.Request.Context(), seriesID)
+	if existing != nil {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "error": "deletion job already in progress", "job_id": existing.ID})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success":    !result.Partial,
-		"partial":    result.Partial,
-		"message":    "series deleted",
-		"deleted_db": seriesDeleteDBSummary(result),
-		"deleted_b2": result.B2,
+	series, err := h.seriesService.GetSeriesByID(seriesID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "series not found"})
+		return
+	}
+
+	job := &models.DeleteJob{
+		ContentType:   "series",
+		ContentID:     seriesID,
+		Title:         series.Title,
+		Status:        "queued",
+		Progress:      0,
+		CurrentStep:   "initializing",
+		DeletedCounts: make(map[string]int),
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+
+	if err := repo.Create(c.Request.Context(), job); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "failed to queue delete job"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"success": true,
+		"job_id":  job.ID,
+		"message": "deletion job queued",
 	})
 }
 

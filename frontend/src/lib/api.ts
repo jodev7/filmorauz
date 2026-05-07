@@ -1984,18 +1984,16 @@ export async function getIngestionJobs(
   return res.json();
 }
 
-// Get a single ingestion job
-export async function getIngestionJob(
-  token: string,
-  jobId: string
-): Promise<IngestionJob> {
-  const res = await fetch(`${API_URL}/admin/ingestion/jobs/${jobId}`, {
+export async function getDeleteJobStatus(token: string, jobId: string): Promise<any> {
+  const res = await fetch(`${API_URL}/admin/delete-jobs/${jobId}`, {
     headers: authHeaders(token),
     cache: "no-store",
   });
-  if (!res.ok) throw new Error("Failed to fetch job");
-  const json = await res.json();
-  return json.data;
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Failed to fetch job status" }));
+    throw new Error(err.error || "Failed to fetch job status");
+  }
+  return res.json();
 }
 
 // Retry a failed job
