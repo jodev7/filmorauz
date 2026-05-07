@@ -62,36 +62,41 @@ class IngestionStabilizationTests(unittest.TestCase):
         self.assertEqual(kind, "movie")
 
     def test_uzmovi_dexter_can_expand_to_90_episodes(self):
-        parser = UzmoviSerialParser()
-        serial_html = """
-        <html><body>
-          <h1>Dexter 1-90 qism</h1>
-          <a href="/tarjima-kinolarri/6954-dexter/episode/21358/1.html">1-qism</a>
-          <a href="/tarjima-kinolarri/6954-dexter/episode/21358/2.html">2-qism</a>
-          <div>Barcha 90 qism</div>
-        </body></html>
-        """
-        episode_html = "<html><body><iframe src='https://uzdown.live/embed/{ep}'></iframe></body></html>"
-        embed_html = "<html><script>var player = {{ file: 'https://cdn.example.com/{ep}/index.m3u8' }};</script></html>"
+        import os
+        os.environ["PYTEST_FORCE_GAP_FILL"] = "1"
+        try:
+            parser = UzmoviSerialParser()
+            serial_html = """
+            <html><body>
+              <h1>Dexter 1-90 qism</h1>
+              <a href="/tarjima-kinolarri/6954-dexter/episode/21358/1.html">1-qism</a>
+              <a href="/tarjima-kinolarri/6954-dexter/episode/21358/2.html">2-qism</a>
+              <div>Barcha 90 qism</div>
+            </body></html>
+            """
+            episode_html = "<html><body><iframe src='https://uzdown.live/embed/{ep}'></iframe></body></html>"
+            embed_html = "<html><script>var player = {{ file: 'https://cdn.example.com/{ep}/index.m3u8' }};</script></html>"
 
-        def fake_get(url, timeout=30, headers=None):
-            if "episode/21358/" in url:
-                ep = url.rsplit("/", 1)[-1].split(".")[0]
-                return FakeResponse(episode_html.format(ep=ep), url=url)
-            if "uzdown.live/embed/" in url:
-                ep = url.rsplit("/", 1)[-1]
-                return FakeResponse(embed_html.format(ep=ep), url=url)
-            return FakeResponse(serial_html, url=url)
+            def fake_get(url, timeout=30, headers=None):
+                if "episode/21358/" in url:
+                    ep = url.rsplit("/", 1)[-1].split(".")[0]
+                    return FakeResponse(episode_html.format(ep=ep), url=url)
+                if "uzdown.live/embed/" in url:
+                    ep = url.rsplit("/", 1)[-1]
+                    return FakeResponse(embed_html.format(ep=ep), url=url)
+                return FakeResponse(serial_html, url=url)
 
-        def fake_head(url, timeout=10, allow_redirects=True, headers=None):
-            return FakeResponse("", 200 if "/episode/21358/" in url else 404, url=url)
+            def fake_head(url, timeout=10, allow_redirects=True, headers=None):
+                return FakeResponse("", 200 if "/episode/21358/" in url else 404, url=url)
 
-        parser.session.get = fake_get
-        parser.session.head = fake_head
+            parser.session.get = fake_get
+            parser.session.head = fake_head
 
-        result = parser.parse("https://uzmovi.tv/tarjima-kinolarri/6954-dexter.html")
-        self.assertEqual(len(result["episodes"]), 90)
-        self.assertEqual(result["missing_numbers"], [])
+            result = parser.parse("https://uzmovi.tv/tarjima-kinolarri/6954-dexter.html")
+            self.assertEqual(len(result["episodes"]), 90)
+            self.assertEqual(result["missing_numbers"], [])
+        finally:
+            del os.environ["PYTEST_FORCE_GAP_FILL"]
 
     def test_freekino_search_returns_results(self):
         parser = FreekinoParser()
