@@ -16,10 +16,8 @@ import (
 	"github.com/filmorauz/worker/pipeline"
 	worker_repositories "github.com/filmorauz/worker/repositories"
 	"github.com/filmorauz/worker/storage"
-	backend_repositories "github.com/filmorauz/backend/repositories"
-	"github.com/filmorauz/backend/services"
-
 	"github.com/joho/godotenv"
+
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -66,21 +64,6 @@ func main() {
 		workerID = hostname + ":" + strconv.Itoa(os.Getpid())
 	}
 
-	// Initialize repositories
-	jobRepo := worker_repositories.NewJobRepository(db, workerID)
-	deleteJobRepo := backend_repositories.NewDeleteJobRepository(db)
-
-	movieRepo := backend_repositories.NewMovieRepository(db)
-	seriesRepo := backend_repositories.NewSeriesRepository(db)
-	
-	// Initialize deletion worker
-	deletionWorker := &DeletionWorker{
-		repo:          deleteJobRepo,
-		movieService:  services.NewMovieService(movieRepo, nil, nil, nil, nil, nil, nil),
-		seriesService: services.NewSeriesService(seriesRepo, nil, nil, nil, nil),
-	}
-	go deletionWorker.Start(workerCtx)
-
 	// Pipeline configuration
 	pipeConfig := pipeline.Config{
 		ParserURL:                 getEnv("PARSER_URL", "http://localhost:8082"),
@@ -105,6 +88,18 @@ func main() {
 			BaseURL:    getEnv("BASE_URL", "http://localhost:8080"), // Base URL for development mode
 		},
 	}
+
+	// Create worker context that can be cancelled
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	defer workerCancel()
+
+	// Initialize repositories
+	jobRepo := worker_repositories.NewJobRepository(db, workerID)
+	deleteJobRepo := worker_repositories.NewDeleteJobRepository(db)
+
+	// Initialize deletion worker
+	deletionWorker := NewDeletionWorker(deleteJobRepo, pipeConfig.BackendURL)
+	go deletionWorker.Start(workerCtx)
 
 	// Log configuration
 	log.Printf("[CONFIG] Pipeline initialized (watermark removal and AI poster generation disabled)")
@@ -196,7 +191,7 @@ func main() {
 	}
 
 	// Create worker context that can be cancelled
-	workerCtx, workerCancel := context.WithCancel(context.Background())
+	workerCtx, workerCancel = context.WithCancel(context.Background())
 	defer workerCancel()
 
 	// Handle shutdown signals
