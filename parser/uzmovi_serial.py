@@ -68,8 +68,6 @@ def _parse_season_number(text: str) -> int:
     return int(m.group(1)) if m else 1
 
 
-def build_episode_key(parent_id: str, season: int, episode: int) -> str:
-    return f"{parent_id}:s{season:02d}e{episode:03d}"
 
 
 class UzmoviSerialParser:
@@ -161,7 +159,7 @@ class UzmoviSerialParser:
             )
             # Add identity key
             entry = choices[0].copy()
-            entry["identity"] = build_episode_key(source_id, entry["season"], entry["episode"])
+            entry["identity"] = EpisodeIdentity(parent_source_id=source_id, season=entry["season"], episode=entry["episode"]).canonical_id
             inventory.append(entry)
 
         # Check if we should perform gap-filling: only if not running tests, 
@@ -211,7 +209,7 @@ class UzmoviSerialParser:
                             "_group_id": top_group_id,
                             "_synthesized": True,
                         }
-                    entry["identity"] = build_episode_key(source_id, entry["season"], entry["episode"])
+                    entry["identity"] = EpisodeIdentity(parent_source_id=source_id, season=entry["season"], episode=entry["episode"]).canonical_id
                     inventory.append(entry)
                     pattern_added += 1
                 inventory.sort(key=lambda it: (it["season"], it["episode"]))
@@ -245,7 +243,7 @@ class UzmoviSerialParser:
 
         for entry in inventory:
             # Validate identity BEFORE extraction
-            requested_key = build_episode_key(source_id, entry["season"], entry["episode"])
+            requested_key = EpisodeIdentity(parent_source_id=source_id, season=entry["season"], episode=entry["episode"]).canonical_id
             if entry.get("identity") != requested_key:
                 logger.error(f"[UZMOVI SERIAL] IDENTITY MISMATCH: requested={requested_key}, found={entry.get('identity')}")
                 continue
@@ -404,7 +402,7 @@ class UzmoviSerialParser:
             )
             # Add identity key
             entry = choices[0].copy()
-            entry["identity"] = build_episode_key(source_id, entry["season"], entry["episode"])
+            entry["identity"] = EpisodeIdentity(parent_source_id=source_id, season=entry["season"], episode=entry["episode"]).canonical_id
             inventory.append(entry)
 
         # Check if we should perform gap-filling: only if not running tests, 
@@ -454,7 +452,7 @@ class UzmoviSerialParser:
                             "_group_id": top_group_id,
                             "_synthesized": True,
                         }
-                    entry["identity"] = build_episode_key(source_id, entry["season"], entry["episode"])
+                    entry["identity"] = EpisodeIdentity(parent_source_id=source_id, season=entry["season"], episode=entry["episode"]).canonical_id
                     inventory.append(entry)
                     pattern_added += 1
                 inventory.sort(key=lambda it: (it["season"], it["episode"]))
@@ -488,7 +486,7 @@ class UzmoviSerialParser:
 
         for entry in inventory:
             # Validate identity BEFORE extraction
-            requested_key = build_episode_key(source_id, entry["season"], entry["episode"])
+            requested_key = EpisodeIdentity(parent_source_id=source_id, season=entry["season"], episode=entry["episode"]).canonical_id
             if entry.get("identity") != requested_key:
                 logger.error(f"[UZMOVI SERIAL] IDENTITY MISMATCH: requested={requested_key}, found={entry.get('identity')}")
                 continue
