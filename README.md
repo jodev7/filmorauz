@@ -3,6 +3,7 @@
 Movie streaming platform. No Docker required — runs natively on your machine.
 
 ---
+[System: Verified Version Sync]
 
 ## Prerequisites
 
