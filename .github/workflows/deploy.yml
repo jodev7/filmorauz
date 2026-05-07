@@ -26,13 +26,6 @@ jobs:
           npm ci
           npm run build
 
-      - name: Bot Build/Test Check
-        run: |
-          cd bot
-          if [ -f package-lock.json ]; then npm ci; else npm install; fi
-          if npm run | grep -q "build"; then npm run build; fi
-          if npm run | grep -q "test"; then npm test; fi
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -41,6 +34,11 @@ jobs:
       - name: Backend Test
         run: |
           cd backend
+          go test ./...
+
+      - name: Bot Test
+        run: |
+          cd bot
           go test ./...
 
       - name: Worker Test
@@ -53,7 +51,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Parser Test
+      - name: Parser Syntax/Test
         run: |
           cd parser
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
