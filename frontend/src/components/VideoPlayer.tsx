@@ -419,6 +419,39 @@ function HLSPlayer({
 
   // Progress hover preview
   const progressContainerRef = useRef<HTMLDivElement>(null);
+  const settingsRef = useRef<HTMLDivElement>(null);
+  const settingsButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
+      if (
+        showSettings &&
+        settingsRef.current &&
+        !settingsRef.current.contains(event.target as Node) &&
+        settingsButtonRef.current &&
+        !settingsButtonRef.current.contains(event.target as Node)
+      ) {
+        setShowSettings(false);
+      }
+    };
+
+    const handleEscKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setShowSettings(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("touchstart", handleClickOutside);
+    document.addEventListener("keydown", handleEscKey);
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("touchstart", handleClickOutside);
+      document.removeEventListener("keydown", handleEscKey);
+    };
+  }, [showSettings]);
+
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverX, setHoverX] = useState(0);
   const [progressWidth, setProgressWidth] = useState(0);
@@ -1296,6 +1329,7 @@ function HLSPlayer({
             {/* Settings — single gear with submenu pattern (root → quality / speed / seek). */}
             <div className="relative">
               <button
+                ref={settingsButtonRef}
                 onClick={() => {
                   setShowSettings((v) => !v);
                   setSettingsPane("root");
@@ -1307,7 +1341,7 @@ function HLSPlayer({
                 <Settings size={18} />
               </button>
               {showSettings && (
-                <div className="absolute bottom-full right-0 mb-2 min-w-[200px] overflow-hidden rounded-lg border border-white/10 bg-black/95 text-xs shadow-xl">
+                <div ref={settingsRef} className="absolute bottom-full right-0 mb-2 min-w-[200px] overflow-hidden rounded-lg border border-white/10 bg-black/95 text-xs shadow-xl">
                   {settingsPane === "root" && (
                     <div className="py-1">
                       {qualities.length > 1 && (
