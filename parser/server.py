@@ -2426,7 +2426,8 @@ class ParserHandler(BaseHTTPRequestHandler):
                     status=202,
                 )
             except Exception as exc:
-                logger.exception("[SERIAL] async start failed")
+                full_traceback = traceback.format_exc()
+                logger.error(f"[SERIAL] async start failed: {exc}\n{full_traceback}")
                 self._send_json({"ok": False, "error": str(exc)}, status=500)
             return
         
@@ -2509,7 +2510,6 @@ class ParserHandler(BaseHTTPRequestHandler):
                     if source_id:
                         output_name = build_job_output_name(f"{source}_{source_id}", "download")
                     else:
-                        import hashlib
                         url_hash = hashlib.md5(detail_url.encode()).hexdigest()[:8]
                         output_name = build_job_output_name(f"{source}_{url_hash}", "download")
                 
@@ -2566,7 +2566,6 @@ class ParserHandler(BaseHTTPRequestHandler):
                         logger.info(f"[SERVER] Progress will be reported to: {progress_url}")
                     
                     # Generate internal job_id for downloader-local progress tracking.
-                    import hashlib
                     internal_job_id = hashlib.md5(output_name.encode()).hexdigest()[:12]
 
                     if backend_job_id:
