@@ -49,7 +49,7 @@ jobs:
           key: ${{ secrets.WEB_SSH_KEY }}
           port: ${{ secrets.WEB_PORT }}
           script: |
-            echo "Deploying web server..."
+            echo "Deploying web server...."
             cd /opt/filmorauz
             make vps-pull-web
             echo "Deployment completed"
