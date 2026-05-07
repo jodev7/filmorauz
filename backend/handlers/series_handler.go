@@ -8,18 +8,21 @@ import (
 	"time"
 
 	"github.com/filmorauz/backend/models"
+	"github.com/filmorauz/backend/repositories"
 	"github.com/filmorauz/backend/services"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type SeriesHandler struct {
 	seriesService   *services.SeriesService
 	telegramService *services.TelegramService
+	db              *mongo.Database
 }
 
-func NewSeriesHandler(seriesService *services.SeriesService) *SeriesHandler {
-	return &SeriesHandler{seriesService: seriesService}
+func NewSeriesHandler(seriesService *services.SeriesService, db *mongo.Database) *SeriesHandler {
+	return &SeriesHandler{seriesService: seriesService, db: db}
 }
 
 // SetTelegramService wires the Telegram service after initialization.
@@ -320,7 +323,7 @@ func (h *SeriesHandler) DeleteSeries(c *gin.Context) {
 	}
 
 	// Check if already queued or deleting
-	repo := repositories.NewDeleteJobRepository(h.seriesService.GetDB())
+	repo := repositories.NewDeleteJobRepository(h.db)
 	existing, _ := repo.FindPending(c.Request.Context(), seriesID)
 	if existing != nil {
 		c.JSON(http.StatusConflict, gin.H{"success": false, "error": "deletion job already in progress", "job_id": existing.ID})

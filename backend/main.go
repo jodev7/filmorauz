@@ -185,7 +185,7 @@ func main() {
 
 	// Initialize handlers
 	authHandler := handlers.NewAuthHandler(authService, notificationService)
-	movieHandler := handlers.NewMovieHandler(movieService, seriesService, userRepo)
+	movieHandler := handlers.NewMovieHandler(movieService, seriesService, userRepo, db)
 	ingestionHandler := handlers.NewIngestionHandler(jobRepo, seriesRepo, seriesService, parserURL, cfg.WorkerUploadURL)
 	uploadHandler := handlers.NewUploadHandler(userRepo, cfg)
 	adminUserHandler := handlers.NewAdminUserHandler(userRepo, movieRepo, seriesRepo, banHistoryRepo, notificationService)
@@ -256,7 +256,7 @@ func main() {
 
 	// Series repository, service, and handler
 	// seriesRepo already initialized above for rating service
-	seriesHandler := handlers.NewSeriesHandler(seriesService)
+	seriesHandler := handlers.NewSeriesHandler(seriesService, db)
 	mediaHandler := handlers.NewMediaHandler(cfg, movieService, seriesService, userRepo)
 	homepageHandler := handlers.NewHomepageHandler(movieService, collectionService, seriesService)
 	sitemapHandler := handlers.NewSitemapHandler(movieRepo, seriesRepo, cfg.BaseSiteURL)

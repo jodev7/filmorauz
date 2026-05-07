@@ -7,12 +7,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
 	"github.com/filmorauz/backend/services"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type MovieHandler struct {
@@ -20,10 +22,11 @@ type MovieHandler struct {
 	seriesService   *services.SeriesService
 	userRepo        *repositories.UserRepository
 	telegramService *services.TelegramService
+	db              *mongo.Database
 }
 
-func NewMovieHandler(movieService *services.MovieService, seriesService *services.SeriesService, userRepo *repositories.UserRepository) *MovieHandler {
-	return &MovieHandler{movieService: movieService, seriesService: seriesService, userRepo: userRepo}
+func NewMovieHandler(movieService *services.MovieService, seriesService *services.SeriesService, userRepo *repositories.UserRepository, db *mongo.Database) *MovieHandler {
+	return &MovieHandler{movieService: movieService, seriesService: seriesService, userRepo: userRepo, db: db}
 }
 
 // SetTelegramService wires the Telegram service after initialization.
@@ -357,7 +360,7 @@ func (h *MovieHandler) DeleteMovie(c *gin.Context) {
 	}
 
 	// Check if already queued or deleting
-	repo := repositories.NewDeleteJobRepository(h.movieService.GetDB())
+	repo := repositories.NewDeleteJobRepository(h.db)
 	existing, _ := repo.FindPending(c.Request.Context(), movieID)
 	if existing != nil {
 		c.JSON(http.StatusConflict, gin.H{"success": false, "error": "deletion job already in progress", "job_id": existing.ID})

@@ -2,9 +2,7 @@ package handlers
 
 import (
 	"net/http"
-	"time"
 
-	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
