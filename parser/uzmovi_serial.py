@@ -79,9 +79,10 @@ class UzmoviSerialParser:
         self.base_url = getattr(self._movie, "BASE_URL", None) or "https://uzmovi.tv"
 
     def parse(self, url: str, progress_callback: Optional[Callable[[Dict], None]] = None) -> Dict:
-        logger.info(f"[UZMOVI SERIAL] parse start url={url}")
         m_sid = re.search(r"/(\d+)-[^/]+\.html", url) or re.search(r"id=(\d+)", url)
         source_id = m_sid.group(1) if m_sid else ""
+        logger.info(f"[UZMOVI SERIAL] parse start url={url} source_id={source_id}")
+
         resp = self._get_with_retry(url, label="serial page")
         if resp is None:
             return {
@@ -117,6 +118,11 @@ class UzmoviSerialParser:
         logger.info(f"[uzmovi serial] source_id={source_id} title={title!r}")
 
         episode_candidates, source_counts = self._collect_episode_candidates(soup, resp.text, source_id)
+        
+        # Deep Trace: Log extracted candidates
+        for cand in episode_candidates:
+             logger.debug(f"[UZMOVI SERIAL] Extracted candidate: identity={cand.get('identity')} title={cand.get('title')} url={cand.get('episode_url')}")
+        
         logger.info(f"[uzmovi serial] found episode buttons: {source_counts.get('visible', 0)}")
         if not episode_candidates:
             return {
