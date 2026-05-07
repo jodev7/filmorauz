@@ -1,4 +1,4 @@
-name: Deploy FilmoraUz
+name: CI/CD FilmoraUz
 
 on:
   push:
@@ -7,9 +7,63 @@ on:
   workflow_dispatch:
 
 jobs:
+  ci:
+    name: Build and Test All Services
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Frontend Build Check
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Bot Build/Test Check
+        run: |
+          cd bot
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          if npm run | grep -q "build"; then npm run build; fi
+          if npm run | grep -q "test"; then npm test; fi
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Backend Test
+        run: |
+          cd backend
+          go test ./...
+
+      - name: Worker Test
+        run: |
+          cd worker
+          go test ./...
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Parser Test
+        run: |
+          cd parser
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          python -m py_compile $(find . -name "*.py" -not -path "./venv/*")
+          if [ -d tests ]; then python -m pytest tests; fi
+
   deploy-web:
     name: Deploy Web VPS
     runs-on: ubuntu-latest
+    needs: ci
 
     steps:
       - name: Deploy to Web VPS
@@ -28,6 +82,7 @@ jobs:
   deploy-worker:
     name: Deploy Worker VPS
     runs-on: ubuntu-latest
+    needs: ci
 
     steps:
       - name: Deploy to Worker VPS
