@@ -241,7 +241,7 @@ func (h *ProcessHandler) buildFFmpegCommand(req ProcessRequest, outputFile strin
 		// overlay at bottom-right with 20px padding.
 		videoChain := "scale=trunc(iw/2)*2:trunc(ih/2)*2"
 		filterComplex := fmt.Sprintf(
-			"[0:v]%s[vscaled];[1:v][vscaled]scale2ref=w=iw*0.18:h=-1[logo][vref];[vref][logo]overlay=W-w-20:H-h-20:shortest=1[out]",
+			"[0:v]%s[vscaled];[1:v]format=rgba,colorchannelmixer=aa=0.8[logo_alpha];[logo_alpha][vscaled]scale2ref=w=iw*0.25:h=-1[logo][vref];[vref][logo]overlay=W-w-20:H-h-20:shortest=1[out]",
 			videoChain,
 		)
 		args = append(args,

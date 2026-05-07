@@ -489,7 +489,7 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 		//   1080p(1920px)→346px  720p(1280px)→230px  360p(640px)→115px
 		// overlay=W-w-20:H-h-20 → bottom-right corner, 20px padding.
 		filterComplex := fmt.Sprintf(
-			"[0:v]%s[vscaled];[1:v][vscaled]scale2ref=w=iw*0.18:h=-1[logo][vref];[vref][logo]overlay=W-w-20:H-h-20:shortest=1[out]",
+			"[0:v]%s[vscaled];[1:v]format=rgba,colorchannelmixer=aa=0.8[logo_alpha];[logo_alpha][vscaled]scale2ref=w=iw*0.25:h=-1[logo][vref];[vref][logo]overlay=W-w-20:H-h-20:shortest=1[out]",
 			videoChain,
 		)
 		filterArgs = []string{
