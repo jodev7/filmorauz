@@ -772,12 +772,12 @@ function CatalogTab({
     setError("");
     setPendingConfirmation(null);
     
+    const rawType = (item.type || "").toLowerCase();
+    const importType = (rawType === "movie" || rawType === "serial" || rawType === "series") ? rawType : "";
     try {
       // Send empty type when parser flagged it "unknown" so the backend re-
       // detects via /details (which fetches the page and runs the strong
       // soup heuristics) instead of refusing the import.
-      const rawType = (item.type || "").toLowerCase();
-      const importType = (rawType === "movie" || rawType === "serial" || rawType === "series") ? rawType : "";
       const input = {
         source: source.id,
         source_id: item.source_id,
@@ -819,8 +819,8 @@ function CatalogTab({
     setError("");
     setPendingConfirmation(null);
     
+    const importType = getSearchResultContentType(result);
     try {
-      const importType = getSearchResultContentType(result);
       const input = {
         source: result.source,
         source_id: result.source_id,
