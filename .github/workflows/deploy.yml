@@ -54,9 +54,13 @@ jobs:
       - name: Parser Syntax/Test
         run: |
           cd parser
+          python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           python -m py_compile $(find . -name "*.py" -not -path "./venv/*")
-          if [ -d tests ]; then python -m pytest tests; fi
+          if [ -d tests ]; then
+            pip install pytest
+            python -m pytest tests
+          fi
 
   deploy-web:
     name: Deploy Web VPS
