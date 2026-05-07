@@ -8,33 +8,37 @@ on:
 
 jobs:
   deploy-web:
-  runs-on: ubuntu-latest
-  steps:
-    - name: Deploy to Web VPS
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.WEB_HOST }}
-        username: ${{ secrets.SSH_USER }}
-        key: ${{ secrets.SSH_PRIVATE_KEY }}
-        port: 22
-        script: |
-          echo "Deploying web server..."
-          cd /opt/filmorauz
-          make vps-pull-web
-          echo "Deployment completed"
+    name: Deploy Web VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to Web VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.WEB_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "🚀 Deploying WEB server..."
+            cd /opt/filmorauz
+            make vps-pull-web
+            echo "✅ WEB deployment completed"
 
   deploy-worker:
-  runs-on: ubuntu-latest
-  steps:
-    - name: Deploy to Worker VPS
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.WORKER_HOST }}
-        username: ${{ secrets.SSH_USER }}
-        key: ${{ secrets.SSH_PRIVATE_KEY }}
-        port: 22
-        script: |
-          echo "Deploying worker server..."
-          cd /opt/filmorauz
-          make vps-pull-worker
-          echo "Deployment completed"
+    name: Deploy Worker VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to Worker VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.WORKER_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "🚀 Deploying WORKER server..."
+            cd /opt/filmorauz
+            make vps-pull-worker
+            echo "✅ WORKER deployment completed"
