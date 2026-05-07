@@ -18,6 +18,7 @@ from typing import Callable, Dict, List, Optional
 
 from bs4 import BeautifulSoup
 
+from identity import EpisodeIdentity, validate_identity
 from uzmovi import UzmoviParser
 
 logger = logging.getLogger(__name__)
@@ -115,7 +116,7 @@ class UzmoviSerialParser:
 
         logger.info(f"[uzmovi serial] source_id={source_id} title={title!r}")
 
-        episode_candidates, source_counts = self._collect_episode_candidates(soup, resp.text)
+        episode_candidates, source_counts = self._collect_episode_candidates(soup, resp.text, source_id)
         logger.info(f"[uzmovi serial] found episode buttons: {source_counts.get('visible', 0)}")
         if not episode_candidates:
             return {
@@ -610,12 +611,11 @@ class UzmoviSerialParser:
             })
         return result
 
-    def _collect_episode_candidates(self, soup: BeautifulSoup, html: str) -> tuple[List[Dict], Dict[str, int]]:
+    def _collect_episode_candidates(self, soup: BeautifulSoup, html: str, source_id: str) -> tuple[List[Dict], Dict[str, int]]:
         per_group: Dict[str, Dict[tuple[int, int], Dict]] = {}
         counts = {"visible": 0, "script": 0}
 
         def add_candidate(href: str, label: str = "", season_hint: Optional[int] = None, bucket: str = "visible") -> None:
-            # Must contain episode path pattern, and not just the serial base.
             if "/episode/" not in href:
                 return
             
@@ -630,12 +630,8 @@ class UzmoviSerialParser:
             
             full = _normalize_episode_href(self.base_url, href)
             season_no = season_hint or _parse_season_number(label) or 1
-            title = (label or f"{ep_no}-qism").strip()
+            identity = EpisodeIdentity(parent_source_id=source_id, season=season_no, episode=ep_no)
             
-            # Filter: ignore titles that clearly look like serial index pages
-            if "barcha" in title.lower() or "serial" in title.lower():
-                return
-                
             key = (season_no, ep_no)
             group_map = per_group.setdefault(group_id, {})
             
@@ -646,7 +642,8 @@ class UzmoviSerialParser:
             group_map[key] = {
                 "season": season_no,
                 "episode": ep_no,
-                "title": title or f"{ep_no}-qism",
+                "identity": identity.canonical_id,
+                "title": (label or f"{ep_no}-qism").strip(),
                 "episode_url": full,
                 "_group_id": group_id,
             }
@@ -670,7 +667,6 @@ class UzmoviSerialParser:
                     add_candidate(str(href), label=label, season_hint=season_hint)
 
         # 3) Raw HTML / inline scripts 
-        # Only capture explicit links that look like episodes
         for match in re.finditer(r'["\'](/tarjima-kinolarri/[^"\']+/episode/\d+/\d+\.html)["\']', html or ""):
             add_candidate(match.group(1), bucket="script")
 
