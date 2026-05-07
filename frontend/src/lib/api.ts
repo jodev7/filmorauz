@@ -255,84 +255,101 @@ export async function getMovies(params?: {
 }
 
 export async function getHomepageData(): Promise<HomepageResponse> {
-  const res = await fetch(`${API_URL}/homepage`, {
-    next: { revalidate: 60 },
-  });
-  if (!res.ok) throw new Error("Failed to fetch homepage data");
-  const json = await res.json();
-  const mapHomepageMovie = (item: any): Movie => ({
-    id: item.id,
-    code: item.code || "",
-    title: item.title || "",
-    description: item.description || "",
-    poster_url: item.poster_thumb_url || item.poster_url || "",
-    poster_thumb_url: item.poster_thumb_url || item.poster_url || "",
-    backdrop_url: item.backdrop_url || item.poster_url || "",
-    year: item.year || 0,
-    genre: item.genre || [],
-    country: item.country || "",
-    video_url: item.video_url || "",
-    embed_url: item.embed_url || "",
-    source_type: item.source_type || "iframe_embed",
-    duration: item.duration || 0,
-    quality: item.quality || "",
-    slug: item.slug || "",
-    views: item.views || 0,
-    rating_avg: item.rating_avg || 0,
-    rating_count: item.rating_count || 0,
-    is_premium: item.is_premium || false,
-    created_at: item.created_at || "",
-    updated_at: item.updated_at || "",
-  });
-
-  return {
-    hero: (json.hero || []).map(mapHomepageMovie),
-    genres: json.genres || [],
-    new_movies: (json.new_movies || []).map(mapHomepageMovie),
-    trending: (json.trending || []).map((item: any) => ({
+  try {
+    const res = await fetch(`${API_URL}/homepage`, {
+      next: { revalidate: 60 },
+      signal: AbortSignal.timeout(5000), // 5s timeout
+    });
+    if (!res.ok) throw new Error("Failed to fetch homepage data");
+    const json = await res.json();
+    const mapHomepageMovie = (item: any): Movie => ({
       id: item.id,
-      title: item.title,
-      slug: item.slug,
-      poster_url: item.poster_url,
-      backdrop_url: item.poster_url,
-      year: item.year,
-      genre: item.genre || [],
-      description: "",
-      code: "",
-      video_url: "",
-      embed_url: "",
-      source_type: "iframe_embed",
-      duration: 0,
-      quality: "",
-      country: "",
-      views: item.views_in_period || 0,
-      rating_avg: 0,
-      rating_count: 0,
-      created_at: "",
-      updated_at: "",
-    })),
-    premium_movies: (json.premium_movies || []).map(mapHomepageMovie),
-    featured_movies: (json.featured_movies || []).map(mapHomepageMovie),
-    featured_collections: json.featured_collections || [],
-    series: (json.series || []).map((item: any) => ({
-      id: item.id,
-      slug: item.slug || "",
+      code: item.code || "",
       title: item.title || "",
       description: item.description || "",
-      poster_url: item.poster_url || "",
+      poster_url: item.poster_thumb_url || item.poster_url || "",
+      poster_thumb_url: item.poster_thumb_url || item.poster_url || "",
       backdrop_url: item.backdrop_url || item.poster_url || "",
       year: item.year || 0,
       genre: item.genre || [],
       country: item.country || "",
+      video_url: item.video_url || "",
+      embed_url: item.embed_url || "",
+      source_type: item.source_type || "iframe_embed",
+      duration: item.duration || 0,
+      quality: item.quality || "",
+      slug: item.slug || "",
       views: item.views || 0,
       rating_avg: item.rating_avg || 0,
       rating_count: item.rating_count || 0,
       is_premium: item.is_premium || false,
-      is_completed: item.is_completed || false,
       created_at: item.created_at || "",
       updated_at: item.updated_at || "",
-    })),
-  };
+    });
+
+    return {
+      hero: (json.hero || []).map(mapHomepageMovie),
+      genres: json.genres || [],
+      new_movies: (json.new_movies || []).map(mapHomepageMovie),
+      trending: (json.trending || []).map((item: any) => ({
+        id: item.id,
+        title: item.title,
+        slug: item.slug,
+        poster_url: item.poster_url,
+        backdrop_url: item.poster_url,
+        year: item.year,
+        genre: item.genre || [],
+        description: "",
+        code: "",
+        video_url: "",
+        embed_url: "",
+        source_type: "iframe_embed",
+        duration: 0,
+        quality: "",
+        country: "",
+        views: item.views_in_period || 0,
+        rating_avg: 0,
+        rating_count: 0,
+        created_at: "",
+        updated_at: "",
+      })),
+      premium_movies: (json.premium_movies || []).map(mapHomepageMovie),
+      featured_movies: (json.featured_movies || []).map(mapHomepageMovie),
+      featured_collections: json.featured_collections || [],
+      series: (json.series || []).map((item: any) => ({
+        id: item.id,
+        slug: item.slug || "",
+        title: item.title || "",
+        description: item.description || "",
+        poster_url: item.poster_url || "",
+        backdrop_url: item.backdrop_url || item.poster_url || "",
+        year: item.year || 0,
+        genre: item.genre || [],
+        country: item.country || "",
+        views: item.views || 0,
+        rating_avg: item.rating_avg || 0,
+        rating_count: item.rating_count || 0,
+        is_premium: item.is_premium || false,
+        is_completed: item.is_completed || false,
+        created_at: item.created_at || "",
+        updated_at: item.updated_at || "",
+      })),
+    };
+  } catch (error) {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("getHomepageData failed:", error);
+    }
+    return {
+      hero: [],
+      genres: [],
+      new_movies: [],
+      trending: [],
+      premium_movies: [],
+      featured_movies: [],
+      featured_collections: [],
+      series: [],
+    };
+  }
 }
 
 export async function getMovie(slug: string): Promise<Movie> {
