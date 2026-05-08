@@ -1248,7 +1248,7 @@ func (r *JobRepository) TransitionToProcessing(ctx context.Context, id, localPat
 	}
 
 	update = append(update, bson.M{
-		"$unset": []string{
+		"$unset": bson.A{
 			"locked_until",
 			"last_progress_at",
 		},

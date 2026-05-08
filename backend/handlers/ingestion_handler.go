@@ -1219,7 +1219,7 @@ func (h *IngestionHandler) UpdateJobProgress(c *gin.Context) {
 						"queued_for_processing_at": bson.M{"$ifNull": bson.A{"$queued_for_processing_at", now}},
 					},
 				},
-				bson.M{"$unset": "completed_at"},
+				bson.M{"$unset": bson.A{"completed_at"}},
 			}
 
 			result, updErr := h.jobRepo.GetCollection().UpdateByID(ctx, objID, update)
