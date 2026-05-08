@@ -31,6 +31,11 @@ func (w *DeletionWorker) Start(ctx context.Context) {
 }
 
 func (w *DeletionWorker) processQueuedJobs(ctx context.Context) {
+	// Fail stale jobs older than 5 minutes
+	if count, err := w.repo.FailStaleJobs(ctx, 5*time.Minute); err == nil && count > 0 {
+		log.Printf("[DeletionWorker] Recovered %d stale deletion jobs", count)
+	}
+
 	jobs, err := w.repo.FindQueued(ctx)
 	if err != nil {
 		log.Printf("[DeletionWorker] Error fetching queued jobs: %v", err)
@@ -48,7 +53,9 @@ func (w *DeletionWorker) processQueuedJobs(ctx context.Context) {
 		url := w.backendURL + "/api/admin/" + job.ContentType + "s/" + job.ContentID.Hex() + "/delete-cascade"
 		
 		req, _ := http.NewRequestWithContext(ctx, "DELETE", url, nil)
-		client := &http.Client{}
+		client := &http.Client{
+			Timeout: 10 * time.Minute, // Hard timeout for backend delete operation
+		}
 		resp, err := client.Do(req)
 
 		if err != nil || resp.StatusCode != http.StatusOK {
@@ -56,6 +63,8 @@ func (w *DeletionWorker) processQueuedJobs(ctx context.Context) {
 			job.Error = "Cascade deletion trigger failed"
 			if err != nil {
 				job.Error = err.Error()
+			} else {
+				job.Error = "Cascade deletion trigger returned status " + resp.Status
 			}
 		} else {
 			job.Status = "completed"

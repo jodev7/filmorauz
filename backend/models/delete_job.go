@@ -17,6 +17,7 @@ type DeleteJob struct {
 	DeletedCounts map[string]int     `bson:"deleted_counts" json:"deleted_counts"`
 	Error         string             `bson:"error,omitempty" json:"error,omitempty"`
 	CreatedAt     time.Time          `bson:"created_at" json:"created_at"`
+	StartedAt     *time.Time         `bson:"started_at,omitempty" json:"started_at,omitempty"`
 	UpdatedAt     time.Time          `bson:"updated_at" json:"updated_at"`
 	CompletedAt   *time.Time         `bson:"completed_at,omitempty" json:"completed_at,omitempty"`
 }

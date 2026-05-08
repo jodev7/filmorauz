@@ -333,7 +333,7 @@ func (s *SeriesService) DeleteSeries(id primitive.ObjectID) (*SeriesDeleteResult
 		B2:       NewB2DeleteSummary(),
 	}
 
-	s.cleanupSeriesStorage(series, result)
+	s.cleanupSeriesStorage(series, result, nil)
 	if len(result.B2.Errors) > 0 {
 		result.Partial = true
 	}
@@ -347,7 +347,7 @@ func (s *SeriesService) DeleteSeries(id primitive.ObjectID) (*SeriesDeleteResult
 	return result, nil
 }
 
-func (s *SeriesService) cleanupSeriesStorage(series *models.Series, result *SeriesDeleteResult) {
+func (s *SeriesService) cleanupSeriesStorage(series *models.Series, result *SeriesDeleteResult, track ProgressTracker) {
 	if series == nil {
 		return
 	}

@@ -2,6 +2,8 @@ package repositories
 
 import (
 	"context"
+	"time"
+
 	"github.com/filmorauz/backend/models"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -16,6 +18,26 @@ func NewDeleteJobRepository(db *mongo.Database) *DeleteJobRepository {
 	return &DeleteJobRepository{
 		collection: db.Collection("delete_jobs"),
 	}
+}
+
+func (r *DeleteJobRepository) FailStaleJobs(ctx context.Context, threshold time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-threshold)
+	filter := bson.M{
+		"status":     "deleting",
+		"updated_at": bson.M{"$lt": cutoff},
+	}
+	update := bson.M{
+		"$set": bson.M{
+			"status":       "failed",
+			"error":        "Deletion timed out after 5 minutes",
+			"updated_at":   time.Now(),
+		},
+	}
+	res, err := r.collection.UpdateMany(ctx, filter, update)
+	if err != nil {
+		return 0, err
+	}
+	return res.ModifiedCount, nil
 }
 
 func (r *DeleteJobRepository) Create(ctx context.Context, job *models.DeleteJob) error {

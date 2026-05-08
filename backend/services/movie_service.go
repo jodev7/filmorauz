@@ -662,7 +662,7 @@ func (s *MovieService) DeleteMovie(id string) (*MovieDeleteResult, error) {
 		B2:      NewB2DeleteSummary(),
 	}
 
-	s.cleanupMovieStorage(objID, movie, result)
+	s.cleanupMovieStorage(objID, movie, result, nil)
 	if len(result.B2.Errors) > 0 {
 		result.Partial = true
 	}
@@ -681,7 +681,7 @@ func (s *MovieService) DeleteMovie(id string) (*MovieDeleteResult, error) {
 // result.B2 instead of being returned as errors — the caller continues
 // to remove the DB row so the movie cannot reappear in the catalog
 // after a partial cleanup.
-func (s *MovieService) cleanupMovieStorage(objID primitive.ObjectID, movie *models.Movie, result *MovieDeleteResult) {
+func (s *MovieService) cleanupMovieStorage(objID primitive.ObjectID, movie *models.Movie, result *MovieDeleteResult, track ProgressTracker) {
 	if s.b2Cleanup == nil {
 		log.Printf("[MOVIE DELETE] B2 cleanup disabled (no service configured) — skipping storage delete")
 	} else {

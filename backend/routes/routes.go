@@ -389,6 +389,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		adminSeries.POST("", seriesHandler.CreateSeries)
 		adminSeries.PUT("/:id", seriesHandler.UpdateSeries)
 		adminSeries.DELETE("/:id", seriesHandler.DeleteSeries)
+		adminSeries.DELETE("/:id/delete-cascade", seriesHandler.DeleteSeriesCascade)
 		adminSeries.PATCH("/:id/approve", seriesHandler.ApproveSeries)
 		adminSeries.PATCH("/:id/reject", seriesHandler.RejectSeries)
 		adminSeries.POST("/:id/seasons", seriesHandler.CreateSeason)

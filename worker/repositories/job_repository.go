@@ -109,6 +109,15 @@ func resolveExistingDownloadedArtifact(jobID, rawPath, downloadDir string) strin
 	return ""
 }
 
+// unset is a helper for safe Mongo unset: unset(field string) => field: ""
+func unset(fields ...string) bson.M {
+	m := bson.M{}
+	for _, f := range fields {
+		m[f] = ""
+	}
+	return m
+}
+
 // JobRepository handles ingestion job persistence
 type JobRepository struct {
 	collection *mongo.Collection
@@ -223,9 +232,7 @@ func (r *JobRepository) ClaimNextJob(ctx context.Context) (*models.IngestionJob,
 			"locked_until":        lockedUntil,
 			"message":             "Worker claimed job; starting download",
 		},
-		"$unset": bson.M{
-			"completed_at": "",
-		},
+		"$unset": unset("completed_at"),
 	}
 
 	opts := options.FindOneAndUpdate().
@@ -272,12 +279,12 @@ func (r *JobRepository) NormalizeQueuedJobs(ctx context.Context) (int64, error) 
 			"message":        "Waiting for worker",
 			"steps.download": false,
 		},
-		"$unset": bson.M{
-			"worker_id":           "",
-			"locked_until":        "",
-			"download_started_at": "",
-			"last_progress_at":    "",
-		},
+		"$unset": unset(
+			"worker_id",
+			"locked_until",
+			"download_started_at",
+			"last_progress_at",
+		),
 	})
 	if err != nil {
 		return 0, err
@@ -738,12 +745,12 @@ func (r *JobRepository) SetError(ctx context.Context, id string, errMsg string) 
 			"stage":      "failed",
 			"updated_at": time.Now(),
 		},
-		"$unset": bson.M{
-			"worker_id":           "",
-			"locked_until":        "",
-			"download_started_at": "",
-			"last_progress_at":    "",
-		},
+		"$unset": unset(
+			"worker_id",
+			"locked_until",
+			"download_started_at",
+			"last_progress_at",
+		),
 	})
 
 	return err
@@ -809,12 +816,12 @@ func (r *JobRepository) IncrementRetry(ctx context.Context, id string) error {
 	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
 		"$inc": bson.M{"retry_count": 1},
 		"$set": setFields,
-		"$unset": bson.M{
-			"worker_id":           "",
-			"locked_until":        "",
-			"download_started_at": "",
-			"last_progress_at":    "",
-		},
+		"$unset": unset(
+			"worker_id",
+			"locked_until",
+			"download_started_at",
+			"last_progress_at",
+		),
 	})
 
 	return err
@@ -868,14 +875,14 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 		updateSet := bson.M{
 			"updated_at": now,
 		}
-		updateUnset := bson.M{
-			"completed_at":          "",
-			"worker_id":             "",
-			"locked_until":          "",
-			"download_started_at":   "",
-			"last_progress_at":      "",
-			"processing_started_at": "",
-		}
+		updateUnset := unset(
+			"completed_at",
+			"worker_id",
+			"locked_until",
+			"download_started_at",
+			"last_progress_at",
+			"processing_started_at",
+		)
 		logLevel := "warning"
 		logMessage := reason
 
@@ -949,13 +956,13 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 			updateSet := bson.M{
 				"updated_at": now,
 			}
-			updateUnset := bson.M{
-				"completed_at":          "",
-				"worker_id":             "",
-				"locked_until":          "",
-				"processing_started_at": "",
-				"last_progress_at":      "",
-			}
+			updateUnset := unset(
+				"completed_at",
+				"worker_id",
+				"locked_until",
+				"processing_started_at",
+				"last_progress_at",
+			)
 			logLevel := "warning"
 			logMessage := stage.message
 
@@ -1241,9 +1248,9 @@ func (r *JobRepository) TransitionToProcessing(ctx context.Context, id, localPat
 	}
 
 	update = append(update, bson.M{
-		"$unset": bson.M{
-			"locked_until":     "",
-			"last_progress_at": "",
+		"$unset": []string{
+			"locked_until",
+			"last_progress_at",
 		},
 	})
 
@@ -1304,10 +1311,10 @@ func (r *JobRepository) RetryFromProcess(ctx context.Context, id string) error {
 			"updated_at":               now,
 			"queued_for_processing_at": now,
 		},
-		"$unset": bson.M{
-			"processing_started_at":  "",
-			"processing_finished_at": "",
-		},
+		"$unset": unset(
+			"processing_started_at",
+			"processing_finished_at",
+		),
 	})
 
 	return err
