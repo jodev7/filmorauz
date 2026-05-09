@@ -925,18 +925,59 @@ class ParserHandler(BaseHTTPRequestHandler):
         return f"http://{host}"
     
     def _send_json(self, data, status=200):
-        """Send JSON response"""
+        """Send JSON response with standard envelope and UTF-8 encoding"""
         try:
+            # Standardize response format
+            response_body = {}
+            
+            if 200 <= status < 300:
+                if isinstance(data, dict):
+                    # Ensure success field
+                    success = data.get("success", True)
+                    # If it's already an envelope, use it
+                    if "data" in data and "success" in data:
+                        response_body = data
+                    else:
+                        # Build standard envelope
+                        response_body["success"] = success
+                        response_body["data"] = data
+                        
+                        # Keep flat fields at root for backward compatibility with worker
+                        for k, v in data.items():
+                            if k != "data":
+                                response_body[k] = v
+                else:
+                    # Non-dict data wrapped in envelope
+                    response_body = {"success": True, "data": data}
+            else:
+                # Error responses
+                if isinstance(data, dict):
+                    response_body["success"] = data.get("success", False)
+                    response_body["error"] = data.get("error", data.get("message", "Unknown error"))
+                    # Keep other fields for debugging
+                    for k, v in data.items():
+                        if k not in ("success", "error"):
+                            response_body[k] = v
+                else:
+                    response_body = {"success": False, "error": str(data)}
+
             self.send_response(status)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
-            self.wfile.write(json.dumps(data).encode())
+            
+            # Use ensure_ascii=False for proper UTF-8 output
+            json_str = json.dumps(response_body, ensure_ascii=False)
+            self.wfile.write(json_str.encode('utf-8'))
         except (BrokenPipeError, ConnectionResetError):
             pass  # client disconnected before response was sent
 
     def _send_error(self, message, status=400):
-        """Send error response"""
-        self._send_json({"error": message}, status)
+        """Send error response using standard format"""
+        error_payload = {
+            "success": False,
+            "error": message
+        }
+        self._send_json(error_payload, status)
     
     def _read_json_body(self):
         """Read and parse JSON body from request"""
@@ -1355,8 +1396,9 @@ class ParserHandler(BaseHTTPRequestHandler):
 
             try:
                 result = SERIAL_PARSERS[provider].parse(serial_url)
-                status = 200 if result.get("success") else 422
-                self._send_json(result, status=status)
+                # Standardize: Always return 200 for successful request processing.
+                # success: False in payload indicates extraction failure (0 episodes).
+                self._send_json(result, status=200)
             except Exception as e:
                 logger.exception(f"[SERIAL] {provider} parse failed")
                 self._send_json(
@@ -1768,10 +1810,12 @@ class ParserHandler(BaseHTTPRequestHandler):
                     if http_status:
                         response_payload["http_status"] = http_status
                     logger.error(
-                        f"[PARSER] /details -> 422 source={source} source_id={source_id} "
+                        f"[PARSER] /details -> 200 (partial) source={source} source_id={source_id} "
                         f"detail_url={detail_url or ''} reason={manual_reason}"
                     )
-                    self._send_json(response_payload, 422)
+                    # Return 200 even if no video found, allowing metadata pickup.
+                    # success: False + error: video_url_not_found will indicate failure to worker.
+                    self._send_json(response_payload, 200)
                     return
                 
                 logger.info(f"[PARSER] Final video URL: {safe_truncate(video_url, 80)}... (type: {url_type})")
