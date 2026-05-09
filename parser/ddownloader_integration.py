@@ -498,7 +498,7 @@ class DDownloaderIntegration:
         # Build N_m3u8DL-RE command
         # Using N_m3u8DL-RE for all manifest types (HLS, DASH, ISM)
         # URL-encode the URL to handle spaces and special characters
-        encoded_url = quote(url, safe=':/')
+        encoded_url = quote(url, safe=':/%')
         cmd = [
             self._n_m3u8dl_path,
             encoded_url,
@@ -539,14 +539,19 @@ class DDownloaderIntegration:
         # Single-line investigation marker. Pairs with the [DOWNLOAD START]
         # log emitted by the outer downloader so a 0%-stuck job's full
         # request shape (URL + Referer + Origin) is grep-able from one place.
-        logger.info(f"[DOWNLOAD START] job_id={os.path.splitext(output_name)[0]} url={url}")
-        logger.info(f"[DOWNLOAD] url={url}")
-        logger.info(f"[HEADERS] referer={referer or '<none>'} origin={origin or '<none>'}")
-        logger.info(f"[DDOWNLOADER] Executing: {' '.join(cmd[:6])}...")
+        logger.info(f"--- [JOB {os.path.splitext(output_name)[0]}] DOWNLOAD START ---")
+        logger.info(f"[JOB {os.path.splitext(output_name)[0]}] URL: {url}")
+        logger.info(f"[JOB {os.path.splitext(output_name)[0]}] Encoded URL: {encoded_url}")
+        logger.info(f"[JOB {os.path.splitext(output_name)[0]}] Referer: {referer or '<none>'}")
+        logger.info(f"[JOB {os.path.splitext(output_name)[0]}] Origin: {origin or '<none>'}")
+        logger.info(f"[JOB {os.path.splitext(output_name)[0]}] Save Dir: {save_dir}")
+        logger.info(f"[JOB {os.path.splitext(output_name)[0]}] Output Name: {output_name}")
+        logger.info(f"[JOB {os.path.splitext(output_name)[0]}] Command: {' '.join(cmd)}")
         
         # Progress tracking for N_m3u8DL-RE downloads
         start_time = time.time()
         last_update_time = start_time
+        last_size_log_time = start_time
         min_time_for_update = 2.0  # Update progress every 2 seconds
         
         try:
@@ -559,6 +564,9 @@ class DDownloaderIntegration:
                 bufsize=1,  # Line buffered
                 cwd=save_dir
             )
+            
+            job_slug = os.path.splitext(output_name)[0]
+            logger.info(f"[JOB {job_slug}] Process PID: {process.pid}")
 
             downloaded_bytes = 0
             total_bytes = 0
@@ -570,16 +578,15 @@ class DDownloaderIntegration:
             last_output_size = 0
 
             def _watchdog():
-                nonlocal last_activity_at, last_output_size
+                nonlocal last_activity_at, last_output_size, last_size_log_time
                 while not _stop_watchdog.is_set():
                     if _stop_watchdog.wait(timeout=1):
                         break
+                    
                     try:
                         sizes = []
                         if os.path.isdir(save_dir):
                             for entry in os.listdir(save_dir):
-                                # Look at any file the downloader is writing —
-                                # tmp segments, partial mp4, etc.
                                 if entry.startswith(output_name) or entry.endswith(('.ts', '.m4s', '.tmp', '.mp4')):
                                     full = os.path.join(save_dir, entry)
                                     try:
@@ -593,10 +600,16 @@ class DDownloaderIntegration:
                     if max_size > last_output_size:
                         last_output_size = max_size
                         last_activity_at = time.time()
+                    
+                    # Periodic size logging as requested (every 2 seconds)
+                    now = time.time()
+                    if now - last_size_log_time >= 2.0:
+                        logger.info(f"[JOB {job_slug}] Current file size: {max_size:,} bytes (activity: {now - last_activity_at:.1f}s ago)")
+                        last_size_log_time = now
 
                     if time.time() - last_activity_at >= DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS:
                         logger.warning(
-                            "[download] no progress timeout killed process"
+                            f"[JOB {job_slug}] NO PROGRESS TIMEOUT ({DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS}s) - killing process"
                         )
                         _killed_for_stuck.set()
                         try:
@@ -760,7 +773,7 @@ class DDownloaderIntegration:
         
         # Build ffmpeg command for HLS download
         # URL-encode the URL to handle spaces and special characters
-        encoded_url = quote(url, safe=':/')
+        encoded_url = quote(url, safe=':/%')
         cmd = [
             self._ffmpeg_path,
             "-y",  # Overwrite output
@@ -987,7 +1000,7 @@ class DDownloaderIntegration:
         
         # Build aria2c command
         # URL-encode the URL to handle spaces and special characters
-        encoded_url = quote(url, safe=':/')
+        encoded_url = quote(url, safe=':/%')
         cmd = [
             self._aria2c_path,
             encoded_url,
@@ -1012,11 +1025,17 @@ class DDownloaderIntegration:
         # Add progress callback via aria2c's stdin for quiet mode
         cmd.extend(["--quiet=false"])
         
-        logger.info(f"[ARIA2C] Executing: {' '.join(cmd[:6])}...")
+        job_slug = os.path.splitext(os.path.basename(output_path))[0]
+        logger.info(f"--- [JOB {job_slug}] ARIA2C START ---")
+        logger.info(f"[JOB {job_slug}] URL: {url}")
+        logger.info(f"[JOB {job_slug}] Encoded URL: {encoded_url}")
+        logger.info(f"[JOB {job_slug}] Referer: {referer or '<none>'}")
+        logger.info(f"[JOB {job_slug}] Command: {' '.join(cmd)}")
         
         # Progress tracking for aria2c downloads
         start_time = time.time()
         last_update_time = start_time
+        last_size_log_time = start_time
         min_time_for_update = 2.0  # Update progress every 2 seconds
         downloaded_bytes = 0
         total_bytes = 0
@@ -1025,10 +1044,7 @@ class DDownloaderIntegration:
         # Parse aria2c output patterns
         import re
         # aria2c console output: [#123abc 12MiB/100MiB(12%) CN:4 DL:2.1MiB ETA:40s]
-        # Pattern extracts: downloaded, total, percentage (group 4), speed
-        # Using \w+ to match any unit format (MiB, MB, M, etc.)
         aria2c_pattern = re.compile(r'\[#[\da-f]+\s+([\d.]+\w+)/([\d.]+\w+)\s*\((\d+)%\).*DL:([\d.]+\w+)', re.IGNORECASE)
-        # Fallback: size pattern like "12.5MiB/100MiB"
         size_pattern = re.compile(r'([\d.]+)\s*([KMGT]?i?B)\s*/\s*([\d.]+)\s*([KMGT]?i?B)', re.IGNORECASE)
         
         def to_bytes(val, unit):
@@ -1047,7 +1063,6 @@ class DDownloaderIntegration:
         
         try:
             # Run download with real-time stdout capture
-            # aria2c outputs progress to stdout, errors to stderr
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -1055,13 +1070,18 @@ class DDownloaderIntegration:
                 text=True,
                 bufsize=1,
             )
+            logger.info(f"[JOB {job_slug}] Process PID: {process.pid}")
+
             last_activity_at = time.time()
             last_output_size = 0
             _killed_for_stuck = threading.Event()
             _stop_watchdog = threading.Event()
+            
+            # Capture first 50 lines of output for debugging startup failures
+            startup_logs = []
 
             def _watchdog():
-                nonlocal last_activity_at, last_output_size
+                nonlocal last_activity_at, last_output_size, last_size_log_time
                 while not _stop_watchdog.is_set():
                     if _stop_watchdog.wait(timeout=1):
                         break
@@ -1072,8 +1092,15 @@ class DDownloaderIntegration:
                     if size > last_output_size:
                         last_output_size = size
                         last_activity_at = time.time()
+                    
+                    # Periodic size logging as requested (every 2 seconds)
+                    now = time.time()
+                    if now - last_size_log_time >= 2.0:
+                        logger.info(f"[JOB {job_slug}] Current file size: {size:,} bytes (activity: {now - last_activity_at:.1f}s ago)")
+                        last_size_log_time = now
+
                     if time.time() - last_activity_at >= DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS:
-                        logger.warning("[download] no progress timeout killed process")
+                        logger.warning(f"[JOB {job_slug}] NO PROGRESS TIMEOUT ({DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS}s) - killing aria2c")
                         _killed_for_stuck.set()
                         try:
                             process.kill()
@@ -1084,7 +1111,7 @@ class DDownloaderIntegration:
             watchdog_thread = threading.Thread(target=_watchdog, daemon=True)
             watchdog_thread.start()
             
-            # Read stdout line by line while process runs (aria2c progress goes to stdout)
+            # Read stdout line by line while process runs
             while True:
                 line = process.stdout.readline()
                 if not line and process.poll() is not None:
@@ -1154,30 +1181,27 @@ class DDownloaderIntegration:
             watchdog_thread.join(timeout=2)
 
             if _killed_for_stuck.is_set():
-                stderr_preview = (stderr or "").strip()[:1000]
-                logger.error(f"[download] stderr={stderr_preview or '(empty)'}")
+                logs_summary = "\n".join(startup_logs)
+                logger.error(f"[JOB {job_slug}] STUCK LOGS:\n{logs_summary}")
                 raise DDdownloaderIntegrationError(
-                    f"selected_url={url} inactivity_timeout={DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS}s stderr={stderr_preview or 'empty'}"
+                    f"selected_url={url} inactivity_timeout={DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS}s startup_logs={logs_summary[:1000]}"
                 )
             
             # Check if file was created
             if not os.path.exists(output_path):
-                stderr_preview = stderr[:500] if stderr else "No stderr"
-                stdout_preview = stdout[:500] if stdout else "No stdout"
-                logger.error(f"[download] stderr={stderr_preview or stdout_preview}")
-                logger.error(f"[ARIA2C] Download failed. stderr: {stderr_preview}, stdout: {stdout_preview}")
-                raise DDdownloaderIntegrationError(f"aria2c failed: {stderr_preview or stdout_preview}")
+                logs_summary = "\n".join(startup_logs)
+                logger.error(f"[JOB {job_slug}] FAILED LOGS:\n{logs_summary}")
+                raise DDdownloaderIntegrationError(f"aria2c failed to create file: {logs_summary[:1000]}")
             
             # Check if download was successful (aria2c returns 0 on success)
             if process.returncode != 0:
-                stderr_preview = stderr[:500] if stderr else "No stderr"
-                logger.warning(f"[ARIA2C] Returned non-zero: {process.returncode}, but file exists")
-                # If file exists and has content, consider it a partial success
+                logs_summary = "\n".join(startup_logs)
+                logger.warning(f"[JOB {job_slug}] aria2c returned {process.returncode}, but file exists")
                 if os.path.getsize(output_path) > 0:
-                    logger.warning("[ARIA2C] File exists with content, continuing...")
+                    logger.warning(f"[JOB {job_slug}] File exists with content, continuing...")
                 else:
-                    logger.error(f"[download] stderr={stderr_preview}")
-                    raise DDdownloaderIntegrationError(f"aria2c failed with code {process.returncode}: {stderr_preview}")
+                    logger.error(f"[JOB {job_slug}] FAILED LOGS:\n{logs_summary}")
+                    raise DDdownloaderIntegrationError(f"aria2c failed with code {process.returncode}: {logs_summary[:1000]}")
             
             logger.info(f"[ARIA2C] Download completed: {output_path}")
             
@@ -1232,6 +1256,8 @@ class DDownloaderIntegration:
             except OSError:
                 pass
 
+        # safe="/%" preserves slash separators and existing escapes.
+        encoded_url = quote(url, safe=':/%')
         cmd = [
             "curl",
             "-L",                        # follow redirects
@@ -1245,15 +1271,14 @@ class DDownloaderIntegration:
         ]
         if referer:
             cmd.extend(["-e", referer])
-        cmd.extend(["-o", output_path, url])
+        cmd.extend(["-o", output_path, encoded_url])
 
-        ref_str = (referer[:60] + "...") if referer and len(referer) > 60 else (referer or "<no referer>")
-        referer_flag = f"-e '{ref_str}'" if referer else "(no -e flag)"
-        logger.info(
-            f"[CURL] Starting: curl -L --fail --connect-timeout 15 "
-            f"--speed-limit 51200 --speed-time 60 "
-            f"-A '<UA>' {referer_flag} -o {os.path.basename(output_path)} <url>"
-        )
+        job_slug = os.path.splitext(os.path.basename(output_path))[0]
+        logger.info(f"--- [JOB {job_slug}] CURL START ---")
+        logger.info(f"[JOB {job_slug}] URL: {url}")
+        logger.info(f"[JOB {job_slug}] Encoded URL: {encoded_url}")
+        logger.info(f"[JOB {job_slug}] Referer: {referer or '<none>'}")
+        logger.info(f"[JOB {job_slug}] Command: {' '.join(cmd)}")
 
         # How long (seconds) with zero byte growth before we consider the download stalled.
         INACTIVITY_LIMIT = 120
@@ -1420,21 +1445,25 @@ class DDownloaderIntegration:
         if referer:
             headers_str += f"Referer: {referer}\r\n"
 
+        # safe="/%" preserves slash separators and existing escapes.
+        encoded_url = quote(url, safe=':/%')
         cmd = [
             self._ffmpeg_path,
             "-y",
             "-loglevel", "error",
             "-stats",
             "-headers", headers_str,
-            "-i", url,
+            "-i", encoded_url,
             "-c", "copy",
             output_path,
         ]
 
-        logger.info(
-            f"[FFMPEG-MP4] Command: ffmpeg -y -loglevel error -stats "
-            f"-headers '...' -i <url> -c copy {os.path.basename(output_path)}"
-        )
+        job_slug = os.path.splitext(os.path.basename(output_path))[0]
+        logger.info(f"--- [JOB {job_slug}] FFMPEG-MP4 START ---")
+        logger.info(f"[JOB {job_slug}] URL: {url}")
+        logger.info(f"[JOB {job_slug}] Encoded URL: {encoded_url}")
+        logger.info(f"[JOB {job_slug}] Referer: {referer or '<none>'}")
+        logger.info(f"[JOB {job_slug}] Command: {' '.join(cmd)}")
 
         # HEAD request for Content-Length so we can compute percentage
         total_bytes = 0

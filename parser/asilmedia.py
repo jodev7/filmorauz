@@ -995,10 +995,13 @@ class AsilmediaParser(BaseParser):
             return raw_url
         if not parts.scheme or not parts.netloc:
             return raw_url
-        # safe="/%" preserves slash separators and existing %XX escapes so
-        # already-encoded URLs aren't double-encoded.
-        safe_path = quote(parts.path, safe="/%:@!$&()*+,;=~-._")
-        safe_query = quote(parts.query, safe="=&%:@!$()*+,;~-._/?") if parts.query else ""
+        
+        # safe="/%" preserves slash separators and existing %XX escapes.
+        # We unquote then quote to ensure spaces and other characters are
+        # consistently encoded without double-encoding % characters.
+        from urllib.parse import unquote
+        safe_path = quote(unquote(parts.path), safe="/%:@!$&()*+,;=~-._")
+        safe_query = quote(unquote(parts.query), safe="=&%:@!$()*+,;~-._/?") if parts.query else ""
         return urlunsplit((parts.scheme, parts.netloc, safe_path, safe_query, parts.fragment))
 
     def _validate_video_url(self, url: str, referer: str = "") -> bool:
@@ -1012,8 +1015,20 @@ class AsilmediaParser(BaseParser):
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Connection": "keep-alive",
             "Referer": referer or self.BASE_URL + "/",
         }
+        
+        # Add Origin header derived from referer
+        from urllib.parse import urlparse
+        if referer:
+            try:
+                parsed = urlparse(referer)
+                if parsed.scheme and parsed.netloc:
+                    headers["Origin"] = f"{parsed.scheme}://{parsed.netloc}"
+            except Exception:
+                pass
         # m3u8 manifests must contain #EXTM3U; a 200 with HTML body is a fake.
         is_manifest = ".m3u8" in url.lower()
         try:
@@ -1759,3 +1774,48 @@ class AsilmediaParser(BaseParser):
             "genres": [],
             "detail_url": detail_url,
         }
+
+if __name__ == "__main__":
+    import sys
+    import logging
+    
+    # Configure logging to stdout for CLI usage
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(levelname)s:%(name)s:%(message)s',
+        stream=sys.stdout
+    )
+    
+    if len(sys.argv) < 2:
+        print("Usage: python asilmedia.py <url_or_query>")
+        sys.exit(1)
+        
+    target = sys.argv[1]
+    parser = AsilmediaParser()
+    
+    if target.startswith("http"):
+        print(f"Resolving details for: {target}")
+        details = parser.get_details(target)
+        print("\n--- Extraction Results ---")
+        print(f"Title: {details.title}")
+        print(f"Year: {details.year}")
+        print(f"Type: {details.type}")
+        print("\nVideo URLs:")
+        for i, v in enumerate(details.video_urls or []):
+            print(f"[{i+1}] Quality: {v.get('quality')} (Height: {v.get('height')})")
+            print(f"    URL: {v.get('url')}")
+            print()
+            
+        if details.video_urls:
+            top = details.video_urls[0]
+            print(f"SELECTED TOP QUALITY: {top.get('quality')} -> {top.get('url')}")
+        else:
+            print("ERROR: No video URLs found or validated!")
+    else:
+        print(f"Searching for: {target}")
+        results = parser.search(target)
+        for r in results:
+            print(f"[{r.source}] {r.title} ({r.year})")
+            print(f"    URL: {r.detail_url}")
+            print(f"    Type: {r.content_type}")
+            print()
