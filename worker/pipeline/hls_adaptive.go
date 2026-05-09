@@ -1015,6 +1015,32 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 
 		log.Printf("[HLS] Collected %d files for parallel upload", len(jobs))
 
+		// Check if we can skip upload
+		log.Printf("[HLS] Checking if HLS files already exist on B2 to skip upload...")
+		if verifyErr := p.verifyUploadedVariants(filepath.Join(hlsDir, MasterPlaylistName), b2Root, folderName); verifyErr == nil {
+			log.Printf("[HLS] Existing complete HLS upload found on B2/CDN, skipping upload phase.")
+			
+			// We need to return the streamingURL. Since we didn't upload, we have to construct it or ask storage.
+			// The CDN URL format is used in storage.go: fileURL = s.cdnURL + "/file/filmorauznet/" + remotePath
+			// Or we can just use the storage.GetPresignedUploadURL to get base info or something, but we don't have GetDownloadURL.
+			// Let's just find the master remote path and use the CDNBaseURL if available.
+			masterRemote := filepath.ToSlash(filepath.Join(b2Root, folderName, MasterPlaylistName))
+			if p.config.StorageConfig.CDNBaseURL != "" {
+				streamingURL = p.config.StorageConfig.CDNBaseURL + "/file/" + p.config.StorageConfig.B2Bucket + "/" + masterRemote
+			} else {
+				streamingURL = masterRemote
+			}
+			log.Printf("[HLS] Skipped upload. Master playlist URL: %s", streamingURL)
+			
+			// Update progress to show uploading is complete
+			if err := p.updateStatus(jobID, models.IngestionStatusUploading, 85); err != nil {
+				log.Printf("[HLS] WARNING: Failed to update status to uploading complete: %v", err)
+			}
+			return streamingURL, nil
+		} else {
+			log.Printf("[HLS] Need to upload. Verification failed: %v", verifyErr)
+		}
+
 		ParallelUploadJobs := make([]struct {
 			LocalPath  string
 			RemotePath string
@@ -1033,7 +1059,26 @@ func (p *Pipeline) uploadAdaptiveHLSFiles(job *models.IngestionJob, hlsDir strin
 			}
 		}
 
+		// Add a heartbeat goroutine to prevent the watchdog from marking the job as stalled
+		// during long parallel uploads (e.g. hundreds of thumbnails)
+		doneHeartbeat := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					log.Printf("[HLS] Heartbeat: updating status to prevent stall during ParallelUpload")
+					p.updateStatus(jobID, models.IngestionStatusUploading, 80)
+				case <-doneHeartbeat:
+					return
+				}
+			}
+		}()
+
 		results, err := p.storage.ParallelUpload(ParallelUploadJobs)
+		close(doneHeartbeat)
+		
 		if err != nil {
 			log.Printf("[HLS] Parallel upload error: %v", err)
 			return "", fmt.Errorf("failed to upload HLS files: %w", err)

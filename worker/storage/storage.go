@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
@@ -572,7 +573,11 @@ func (s *B2Storage) uploadWithUrl(data []byte, uploadUrl, token, remotePath, con
 	// Get cache headers based on file type
 	cacheControl := getCacheHeaders(remotePath, s.cacheTTL)
 
-	req, err := http.NewRequest("POST", uploadUrl, bytes.NewReader(data))
+	// Set explicit timeout for single upload (e.g. 2 minutes max per file to allow quick retry)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", uploadUrl, bytes.NewReader(data))
 	if err != nil {
 		return "", fmt.Errorf("b2 upload: new request: %w", err)
 	}
@@ -670,10 +675,7 @@ func (s *B2Storage) ParallelUpload(jobs []struct {
 				case <-stopFetch:
 					log.Printf("[B2] URL fetcher stopped during send: %d URLs fetched", totalFetched)
 					return
-				case <-time.After(5 * time.Second):
-					// Channel full - workers may be slow; stop fetching
-					log.Printf("[B2] Upload URL channel full after %d URLs, stopping fetch", totalFetched)
-					return
+				// Remove the 5-second timeout that causes the fetcher to silently quit and starve workers
 				}
 			}
 		}
@@ -694,6 +696,7 @@ func (s *B2Storage) ParallelUpload(jobs []struct {
 				maxRetries := MaxRetries
 
 				for attempt := 0; attempt < maxRetries; attempt++ {
+					attemptStart := time.Now()
 					select {
 					case uploadUrl, ok := <-uploadUrlChan:
 						if !ok {
@@ -707,13 +710,21 @@ func (s *B2Storage) ParallelUpload(jobs []struct {
 					}
 
 					if err == nil {
+						uploadDuration := time.Since(attemptStart)
+						log.Printf("[B2_DEEP_LOG] SUCCESS: Uploaded file=%s, bytes=%d, duration=%.2fs, url=%s, attempt=%d", 
+							job.RemotePath, len(job.Data), uploadDuration.Seconds(), url, attempt+1)
 						break
 					}
 
 					if attempt < maxRetries-1 {
-						log.Printf("[B2] Retry %d/%d for %s: %v", attempt+1, maxRetries, job.RemotePath, err)
+						log.Printf("[B2_DEEP_LOG] RETRY_REASON: Retry %d/%d for file=%s: error=%v", attempt+1, maxRetries, job.RemotePath, err)
 						time.Sleep(time.Duration(RetryDelayMs) * time.Millisecond)
 					}
+				}
+
+				if err != nil {
+					log.Printf("[B2_DEEP_LOG] FAILED_FINAL: file=%s, bytes=%d, after=%d attempts, error=%v", 
+						job.RemotePath, len(job.Data), maxRetries, err)
 				}
 
 				results[idx] = parallelUploadResult{
