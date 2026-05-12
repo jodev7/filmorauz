@@ -23,6 +23,7 @@ from urllib.parse import unquote, urlsplit
 from bs4 import BeautifulSoup
 
 from asilmedia import AsilmediaParser
+from helpers import canonical_episode_id
 
 logger = logging.getLogger(__name__)
 

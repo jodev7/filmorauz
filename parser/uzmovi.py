@@ -22,7 +22,8 @@ from helpers import (
     extract_source_id,
     deduplicate_results,
     isValidStreamUrl,
-    select_best_stream_url
+    select_best_stream_url,
+    canonical_episode_id,
 )
 
 # Import media_extractor for specialized uzmovi extraction
@@ -496,6 +497,21 @@ class UzmoviParser(BaseParser):
         movie_type = self._detect_uzmovi_type(detail_url=url, title=title, soup=soup)
         logger.info(f"[PARSER] detected content_type={movie_type} url={url}")
         
+        # If it's a serial episode page, build canonical source_id
+        if movie_type == "serial":
+            from uzmovi_serial import _parse_episode_href, _parse_season_number
+            parsed = _parse_episode_href(url)
+            if parsed:
+                # _parse_episode_href returns (group_id, episode_no)
+                _, episode = parsed
+                # For season, try to find it on page
+                season = _parse_season_number(title) or 1
+                parent_id = source_id
+                source_id = canonical_episode_id(parent_id, season, episode)
+                logger.info(
+                    f"[episode-parse] title={title} parent={parent_id} season={season} episode={episode} source_id={source_id}"
+                )
+
         return MovieDetails(
             title=title,
             description=description,

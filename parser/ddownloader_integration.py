@@ -49,6 +49,33 @@ DEFAULT_TIMEOUT = 60
 PARALLEL_CONNECTIONS = 16  # For aria2c
 
 DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS = int(os.environ.get("DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS", "300"))
+M3U8_STUCK_TIMEOUT_SECONDS = int(os.environ.get("M3U8_STUCK_TIMEOUT_SECONDS", str(DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS)))
+ARIA2C_USER_AGENT = "Mozilla/5.0"
+
+
+def _origin_for_referer(referer: Optional[str]) -> str:
+    referer = (referer or "").strip()
+    if not referer:
+        return ""
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(referer)
+        host = (parsed.netloc or "").lower()
+        if host.endswith("asilmedia.org") or host.endswith("www.asilmedia.org"):
+            return "https://asilmedia.org"
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        pass
+    return ""
+
+
+def _debug(debug_callback, event: str, payload: dict):
+    if debug_callback:
+        try:
+            debug_callback(event, payload)
+        except Exception:
+            pass
 
 
 class StreamType(Enum):
@@ -463,7 +490,8 @@ class DDownloaderIntegration:
         backend_job_id: Optional[str] = None,
         referer: Optional[str] = None,
         progress_callback=None,
-        pid_callback=None
+        pid_callback=None,
+        debug_callback=None,
     ) -> str:
         """
         Download HLS/DASH/ISM streams using N_m3u8DL-RE.
@@ -497,15 +525,8 @@ class DDownloaderIntegration:
             "--log-level", "INFO",
         ]
         
-        origin = ""
+        origin = _origin_for_referer(referer)
         if referer:
-            try:
-                from urllib.parse import urlparse
-                parsed = urlparse(referer)
-                if parsed.scheme and parsed.netloc:
-                    origin = f"{parsed.scheme}://{parsed.netloc}"
-            except Exception:
-                origin = ""
             cmd.extend(["-H", f"Referer: {referer}"])
             if origin:
                 cmd.extend(["-H", f"Origin: {origin}"])
@@ -517,6 +538,12 @@ class DDownloaderIntegration:
 
         logger.info(f"--- [JOB {os.path.splitext(output_name)[0]}] DOWNLOAD START ---")
         logger.info(f"[JOB {os.path.splitext(output_name)[0]}] Command: {' '.join(cmd)}")
+        _debug(debug_callback, "command", {
+            "command": cmd,
+            "command_string": " ".join(cmd),
+            "output_path": output_path,
+            "media_type": "m3u8" if stream_type == StreamType.HLS.value else ("mpd" if stream_type == StreamType.DASH.value else stream_type),
+        })
         
         try:
             process = subprocess.Popen(
@@ -530,6 +557,7 @@ class DDownloaderIntegration:
             
             if pid_callback:
                 pid_callback(process.pid)
+            _debug(debug_callback, "pid", {"pid": process.pid})
                 
             job_slug = os.path.splitext(output_name)[0]
             logger.info(f"[JOB {job_slug}] Process PID: {process.pid}")
@@ -573,6 +601,7 @@ class DDownloaderIntegration:
                     now = time.time()
                     if now - last_size_log_time >= 2.0:
                         logger.info(f"[JOB {job_slug}] Current file size: {max_size:,} bytes (activity: {now - last_activity_at:.1f}s ago)")
+                        _debug(debug_callback, "file_size", {"output_path": output_path, "file_size": max_size})
                         last_size_log_time = now
 
                     if time.time() - last_activity_at >= DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS:
@@ -607,6 +636,7 @@ class DDownloaderIntegration:
                         last_activity_at = time.time()
                         if len(startup_logs) < 50:
                             startup_logs.append(line)
+                        _debug(debug_callback, "stderr", {"line": line})
                     
                     # Parse size information from N_m3u8DL-RE output
                     # Example: "Downloading: 123.45 MB / 456.78 MB"
@@ -673,6 +703,11 @@ class DDownloaderIntegration:
             stdout, stderr = process.communicate()
             _stop_watchdog.set()
             watchdog_thread.join(timeout=2)
+            _debug(debug_callback, "exit", {
+                "exit_code": process.returncode,
+                "stdout": stdout or "",
+                "stderr": stderr or "\n".join(startup_logs),
+            })
 
             if _killed_for_stuck.is_set():
                 logger.error(f"[download] stderr={(stderr or '').strip() or '(empty)'}")
@@ -712,7 +747,8 @@ class DDownloaderIntegration:
         backend_job_id: Optional[str] = None,
         referer: Optional[str] = None,
         progress_callback=None,
-        pid_callback=None
+        pid_callback=None,
+        debug_callback=None,
     ) -> str:
         """
         Download HLS/DASH/ISM streams using ffmpeg directly as fallback.
@@ -755,16 +791,9 @@ class DDownloaderIntegration:
         # ffmpeg requires every custom header in a single -headers blob.
         # Origin is derived from any referer (not just uzmovi) so other
         # CDNs that gate playback on Origin will also serve bytes.
-        origin = ""
         header_lines = []
+        origin = _origin_for_referer(referer)
         if referer:
-            try:
-                from urllib.parse import urlparse
-                parsed = urlparse(referer)
-                if parsed.scheme and parsed.netloc:
-                    origin = f"{parsed.scheme}://{parsed.netloc}"
-            except Exception:
-                origin = ""
             header_lines.append(f"Referer: {referer}")
             if origin:
                 header_lines.append(f"Origin: {origin}")
@@ -787,6 +816,12 @@ class DDownloaderIntegration:
         ])
         
         logger.info(f"[FFMPEG] Executing: {' '.join(cmd[:10])}...")
+        _debug(debug_callback, "command", {
+            "command": cmd,
+            "command_string": " ".join(cmd),
+            "output_path": output_path,
+            "media_type": "m3u8" if stream_type == StreamType.HLS.value else ("mpd" if stream_type == StreamType.DASH.value else stream_type),
+        })
         
         # Progress tracking for ffmpeg downloads
         start_time = time.time()
@@ -812,6 +847,9 @@ class DDownloaderIntegration:
                 bufsize=1,
                 cwd=output_dir
             )
+            if pid_callback:
+                pid_callback(process.pid)
+            _debug(debug_callback, "pid", {"pid": process.pid})
 
             # === Stuck-at-0 watchdog ===
             # ffmpeg writes the output mp4 incrementally; if it never grows,
@@ -854,6 +892,7 @@ class DDownloaderIntegration:
 
                 if line:
                     line = line.strip()
+                    _debug(debug_callback, "stderr", {"line": line})
 
                     # Parse total duration from ffmpeg
                     duration_match = duration_pattern.search(line)
@@ -898,6 +937,12 @@ class DDownloaderIntegration:
             stdout, stderr = process.communicate()
             _stop_watchdog.set()
             watchdog_thread.join(timeout=2)
+            combined_logs = "\n".join(part for part in ["\n".join(startup_logs), stdout or "", stderr or ""] if part).strip()
+            _debug(debug_callback, "exit", {
+                "exit_code": process.returncode,
+                "stdout": stdout or "",
+                "stderr": stderr or "",
+            })
 
             if _killed_for_stuck.is_set():
                 raise DDdownloaderIntegrationError(
@@ -969,26 +1014,27 @@ class DDownloaderIntegration:
             "--connect-timeout=30",
             "--retry-wait=5",
             "--max-tries=3",
-            "--header", f"User-Agent: {USER_AGENT}",
+            f"--header=User-Agent: {ARIA2C_USER_AGENT}",
         ]
         
         # Add referer and origin
         if referer:
-            cmd.extend(["--header", f"Referer: {referer}"])
-            try:
-                from urllib.parse import urlparse
-                parsed = urlparse(referer)
-                if parsed.scheme and parsed.netloc:
-                    origin = f"{parsed.scheme}://{parsed.netloc}"
-                    cmd.extend(["--header", f"Origin: {origin}"])
-            except Exception:
-                pass
+            cmd.append(f"--header=Referer: {referer}")
+            origin = _origin_for_referer(referer)
+            if origin:
+                cmd.append(f"--header=Origin: {origin}")
         
         cmd.extend(["--quiet=false"])
         
         job_slug = os.path.splitext(os.path.basename(output_path))[0]
         logger.info(f"--- [JOB {job_slug}] ARIA2C START ---")
         logger.info(f"[JOB {job_slug}] Command: {' '.join(cmd)}")
+        _debug(debug_callback, "command", {
+            "command": cmd,
+            "command_string": " ".join(cmd),
+            "output_path": output_path,
+            "media_type": "mp4",
+        })
         
         start_time = time.time()
         last_update_time = start_time
@@ -999,6 +1045,7 @@ class DDownloaderIntegration:
         
         import re
         aria2c_pattern = re.compile(r'\[#[\da-f]+\s+([\d.]+\w+)/([\d.]+\w+)\s*\((\d+)%\).*DL:([\d.]+\w+)', re.IGNORECASE)
+        size_pattern = re.compile(r'([\d.]+)\s*([KMGT]?i?B?)\s*/\s*([\d.]+)\s*([KMGT]?i?B?)', re.IGNORECASE)
         
         def to_bytes(val, unit):
             unit = unit.upper().replace('I', '').replace('B', 'B')
@@ -1019,6 +1066,7 @@ class DDownloaderIntegration:
             
             if pid_callback:
                 pid_callback(process.pid)
+            _debug(debug_callback, "pid", {"pid": process.pid})
                 
             logger.info(f"[JOB {job_slug}] Process PID: {process.pid}")
 
@@ -1048,6 +1096,7 @@ class DDownloaderIntegration:
                     now = time.time()
                     if now - last_size_log_time >= 2.0:
                         logger.info(f"[JOB {job_slug}] Current file size: {size:,} bytes (activity: {now - last_activity_at:.1f}s ago)")
+                        _debug(debug_callback, "file_size", {"output_path": output_path, "file_size": size})
                         last_size_log_time = now
 
                     if time.time() - last_activity_at >= DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS:
@@ -1070,6 +1119,7 @@ class DDownloaderIntegration:
                 
                 if line:
                     line = line.strip()
+                    _debug(debug_callback, "stdout", {"line": line})
                     if line:
                         last_activity_at = time.time()
                         if len(startup_logs) < 50:
@@ -1132,6 +1182,12 @@ class DDownloaderIntegration:
             stdout, stderr = process.communicate()
             _stop_watchdog.set()
             watchdog_thread.join(timeout=2)
+            combined_logs = "\n".join(part for part in ["\n".join(startup_logs), stdout or "", stderr or ""] if part).strip()
+            _debug(debug_callback, "exit", {
+                "exit_code": process.returncode,
+                "stdout": stdout or "",
+                "stderr": stderr or "",
+            })
 
             if _killed_for_stuck.is_set():
                 logs_summary = "\n".join(startup_logs)
@@ -1142,13 +1198,13 @@ class DDownloaderIntegration:
             
             # Check if file was created
             if not os.path.exists(output_path):
-                logs_summary = "\n".join(startup_logs)
+                logs_summary = combined_logs
                 logger.error(f"[JOB {job_slug}] FAILED LOGS:\n{logs_summary}")
                 raise DDdownloaderIntegrationError(f"aria2c failed to create file: {logs_summary[:1000]}")
             
             # Check if download was successful (aria2c returns 0 on success)
             if process.returncode != 0:
-                logs_summary = "\n".join(startup_logs)
+                logs_summary = combined_logs
                 logger.warning(f"[JOB {job_slug}] aria2c returned {process.returncode}, but file exists")
                 if os.path.getsize(output_path) > 0:
                     logger.warning(f"[JOB {job_slug}] File exists with content, continuing...")
@@ -1184,6 +1240,7 @@ class DDownloaderIntegration:
         backend_job_id: Optional[str] = None,
         progress_callback=None,
         pid_callback=None,
+        debug_callback=None,
     ) -> str:
         """
         Download a direct MP4 URL using curl with browser-like headers.
@@ -1221,6 +1278,12 @@ class DDownloaderIntegration:
         job_slug = os.path.splitext(os.path.basename(output_path))[0]
         logger.info(f"--- [JOB {job_slug}] CURL START ---")
         logger.info(f"[JOB {job_slug}] Command: {' '.join(cmd)}")
+        _debug(debug_callback, "command", {
+            "command": cmd,
+            "command_string": " ".join(cmd),
+            "output_path": output_path,
+            "media_type": "mp4",
+        })
 
         # How long (seconds) with zero byte growth before we consider the download stalled.
         INACTIVITY_LIMIT = 120
@@ -1288,6 +1351,7 @@ class DDownloaderIntegration:
                     f"[CURL] Progress: {pct}% — {downloaded:,}/{total:,} bytes "
                     f"@ {speed/1024/1024:.1f} MB/s ETA {eta}s"
                 )
+                _debug(debug_callback, "file_size", {"output_path": output_path, "file_size": downloaded})
                 if progress_callback and pct > last_pct:
                     last_pct = pct
                     progress_callback(pct, downloaded, total, speed, eta)
@@ -1304,6 +1368,7 @@ class DDownloaderIntegration:
             
             if pid_callback:
                 pid_callback(process.pid)
+            _debug(debug_callback, "pid", {"pid": process.pid})
                 
             logger.info(f"[CURL] Process PID: {process.pid}")
 
@@ -1332,6 +1397,11 @@ class DDownloaderIntegration:
                 )
 
             rc = process.returncode
+            _debug(debug_callback, "exit", {
+                "exit_code": rc,
+                "stdout": "",
+                "stderr": stderr or "",
+            })
             if DEBUG or rc != 0:
                 logger.info(f"[CURL] Exit code: {rc}")
                 if stderr:
@@ -1385,6 +1455,9 @@ class DDownloaderIntegration:
         headers_str = f"User-Agent: {USER_AGENT}\r\n"
         if referer:
             headers_str += f"Referer: {referer}\r\n"
+            origin = _origin_for_referer(referer)
+            if origin:
+                headers_str += f"Origin: {origin}\r\n"
 
         # safe="/%" preserves slash separators and existing escapes.
         encoded_url = quote(url, safe=':/%')
@@ -1402,6 +1475,12 @@ class DDownloaderIntegration:
         job_slug = os.path.splitext(os.path.basename(output_path))[0]
         logger.info(f"--- [JOB {job_slug}] FFMPEG-MP4 START ---")
         logger.info(f"[JOB {job_slug}] Command: {' '.join(cmd)}")
+        _debug(debug_callback, "command", {
+            "command": cmd,
+            "command_string": " ".join(cmd),
+            "output_path": output_path,
+            "media_type": "mp4",
+        })
 
         # HEAD request for Content-Length so we can compute percentage
         total_bytes = 0
@@ -1429,9 +1508,11 @@ class DDownloaderIntegration:
             
             if pid_callback:
                 pid_callback(process.pid)
+            _debug(debug_callback, "pid", {"pid": process.pid})
                 
             logger.info(f"[FFMPEG-MP4] Process PID: {process.pid}")
             start_time = time.time()
+            stderr_lines = []
             _stop_watchdog = threading.Event()
             _killed_for_inactivity = threading.Event()
 
@@ -1447,6 +1528,7 @@ class DDownloaderIntegration:
                             if not line:
                                 continue
                             stderr_lines.append(line)
+                            _debug(debug_callback, "stderr", {"line": line})
 
                             # Stats line: size= 102400kB time=00:01:23.00 ...
                             m = re.search(r"size=\s*(\d+)kB", line)
@@ -1467,6 +1549,7 @@ class DDownloaderIntegration:
                                     f"{downloaded:,}/{total_bytes:,} bytes "
                                     f"@ {speed/1024/1024:.1f} MB/s ETA {eta}s"
                                 )
+                                _debug(debug_callback, "file_size", {"output_path": output_path, "file_size": downloaded})
                                 if progress_callback:
                                     progress_callback(pct, downloaded, total_bytes, speed, eta)
                 except Exception:
@@ -1531,6 +1614,11 @@ class DDownloaderIntegration:
 
             rc = process.returncode
             logger.info(f"[FFMPEG-MP4] Exit code: {rc}")
+            _debug(debug_callback, "exit", {
+                "exit_code": rc,
+                "stdout": "",
+                "stderr": "\n".join(stderr_lines[-50:]),
+            })
             if rc != 0:
                 snippet = "\n".join(stderr_lines[-10:]) or "no stderr"
                 logger.error(f"[download] stderr={snippet[:1000]}")
@@ -1564,6 +1652,7 @@ class DDownloaderIntegration:
         referer: Optional[str] = None,
         max_retries: int = 3,
         pid_callback=None,
+        debug_callback=None,
     ) -> DownloadResult:
         """
         Main download entry point with retry support and validation.
@@ -1693,7 +1782,8 @@ class DDownloaderIntegration:
                             url, output_path, stream_type,
                             job_id, backend_job_id, referer,
                             progress_callback=progress_callback,
-                            pid_callback=pid_callback
+                            pid_callback=pid_callback,
+                            debug_callback=debug_callback,
                         )
                     except DDdownloaderIntegrationError as e:
                         # Fallback to ffmpeg if N_m3u8DL-RE fails
@@ -1702,7 +1792,8 @@ class DDownloaderIntegration:
                             url, output_path, stream_type,
                             job_id, backend_job_id, referer,
                             progress_callback=progress_callback,
-                            pid_callback=pid_callback
+                            pid_callback=pid_callback,
+                            debug_callback=debug_callback,
                         )
                 elif stream_type == StreamType.MP4.value:
                     # Fallback chain: aria2c → ffmpeg → curl
@@ -1714,7 +1805,8 @@ class DDownloaderIntegration:
                             url, output_path,
                             job_id, backend_job_id, referer,
                             progress_callback=progress_callback,
-                            pid_callback=pid_callback
+                            pid_callback=pid_callback,
+                            debug_callback=debug_callback,
                         )
                         mp4_error = None
                     except DDdownloaderIntegrationError as aria_err:
@@ -1730,7 +1822,8 @@ class DDownloaderIntegration:
                                 job_id=job_id,
                                 backend_job_id=backend_job_id,
                                 progress_callback=progress_callback,
-                                pid_callback=pid_callback
+                                pid_callback=pid_callback,
+                                debug_callback=debug_callback,
                             )
                             mp4_error = None
                         except DDdownloaderIntegrationError as ffmpeg_err:
@@ -1745,7 +1838,8 @@ class DDownloaderIntegration:
                             job_id=job_id,
                             backend_job_id=backend_job_id,
                             progress_callback=progress_callback,
-                            pid_callback=pid_callback
+                            pid_callback=pid_callback,
+                            debug_callback=debug_callback,
                         )
                 else:
                     raise DDdownloaderIntegrationError(f"Unsupported stream type: {stream_type}")

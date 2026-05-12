@@ -834,22 +834,49 @@ var activeIngestionStatuses = []interface{}{
 }
 
 func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
-	// Downloads have their own per-byte heartbeat (last_progress_at). Only
-	// recycle a downloading job if the parser has not reported any byte
-	// progress in the last 5 minutes — otherwise an actively-downloading job
-	// can get yanked back to queue and loop forever.
+	// Downloads have two watchdog windows:
+	//   - zero-byte starts fail/retry after 30 seconds so "Downloading 0%" does
+	//     not sit silently until the broad stale sweep.
+	//   - downloads that have moved bytes keep the older 5 minute stall window.
+	zeroByteStartThreshold := 30 * time.Second
 	downloadStaleThreshold := 5 * time.Minute
+	zeroByteStartCutoff := time.Now().Add(-zeroByteStartThreshold)
 	downloadStaleCutoff := time.Now().Add(-downloadStaleThreshold)
 	now := time.Now()
 	totalRecovered := int64(0)
 
-	// Match downloading jobs that either never reported progress (no
-	// last_progress_at field) and were last updated > download stale window
-	// ago, OR have a last_progress_at older than the window.
+	// Match downloading jobs that either never moved bytes in the first 30s, or
+	// stopped moving bytes for the broader stale window.
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"status": models.IngestionStatusDownloading,
 		"$or": []bson.M{
-			{"last_progress_at": bson.M{"$lt": downloadStaleCutoff}},
+			{
+				"$and": []bson.M{
+					{"progress": bson.M{"$lte": 1}},
+					{
+						"$or": []bson.M{
+							{"downloaded_bytes": bson.M{"$exists": false}},
+							{"downloaded_bytes": bson.M{"$lte": int64(0)}},
+						},
+					},
+					{
+						"$or": []bson.M{
+							{"last_progress_at": bson.M{"$lt": zeroByteStartCutoff}},
+							{
+								"last_progress_at": bson.M{"$exists": false},
+								"updated_at":       bson.M{"$lt": zeroByteStartCutoff},
+							},
+						},
+					},
+				},
+			},
+			{
+				"$or": []bson.M{
+					{"progress": bson.M{"$gt": 1}},
+					{"downloaded_bytes": bson.M{"$gt": int64(0)}},
+				},
+				"last_progress_at": bson.M{"$lt": downloadStaleCutoff},
+			},
 			{
 				"last_progress_at": bson.M{"$exists": false},
 				"updated_at":       bson.M{"$lt": downloadStaleCutoff},
@@ -871,6 +898,9 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 	const maxRetries = 3
 	for _, job := range staleDownloadJobs {
 		reason := "Recovered stale download job after no progress for 5 minutes; returned to queue automatically"
+		if job.Progress <= 1 && job.DownloadedBytes <= 0 {
+			reason = "Download watchdog: progress stayed at 0 with no active downloader PID for 30 seconds; returned to queue automatically"
+		}
 		newRetry := job.RetryCount + 1
 		updateSet := bson.M{
 			"updated_at": now,

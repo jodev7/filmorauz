@@ -20,6 +20,7 @@ from helpers import (
     extract_duration,
     extract_source_id,
     deduplicate_results,
+    canonical_episode_id,
 )
 from media_extractor import (
     is_valid_media_url,
@@ -953,6 +954,24 @@ class AsilmediaParser(BaseParser):
             ct_evidence = ["fallback default movie (no signals)"]
         logger.info(f'[asilmedia type] title="{title}" type={ct} evidence={json.dumps(ct_evidence, ensure_ascii=False)}')
 
+        # If it's a serial, try to extract season/episode from title/page and build canonical source_id
+        if ct == "serial":
+            from asilmedia_serial import _parse_label_season_episode, _parse_url_season_episode
+            # Try to get season/episode from title or breadcrumbs
+            # DLE sites often have "1-fasl 5-qism" in the H1 title
+            parsed = _parse_label_season_episode(title)
+            if not parsed:
+                # Fallback to URL-based extraction if title doesn't have it
+                parsed = _parse_url_season_episode(url)
+            
+            if parsed:
+                season, episode = parsed
+                parent_id = source_id
+                source_id = canonical_episode_id(parent_id, season, episode)
+                logger.info(
+                    f"[episode-parse] title={title} parent={parent_id} season={season} episode={episode} source_id={source_id}"
+                )
+
         return MovieDetails(
             title=title,
             year=year or 0,
@@ -1025,7 +1044,10 @@ class AsilmediaParser(BaseParser):
         if referer:
             try:
                 parsed = urlparse(referer)
-                if parsed.scheme and parsed.netloc:
+                host = (parsed.netloc or "").lower()
+                if host.endswith("asilmedia.org"):
+                    headers["Origin"] = "https://asilmedia.org"
+                elif parsed.scheme and parsed.netloc:
                     headers["Origin"] = f"{parsed.scheme}://{parsed.netloc}"
             except Exception:
                 pass

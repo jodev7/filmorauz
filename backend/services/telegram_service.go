@@ -582,9 +582,24 @@ func resolveMedia(mediaURL string) (tgbotapi.RequestFileData, string, error) {
 // AdPostResult holds the result of posting a single ad to Telegram
 type AdPostResult struct {
 	Target    string `json:"target"`
-	Status    string `json:"status"` // "success" | "failed"
+	Status    string `json:"status"` // "success" | "failed" | "blocked"
 	MessageID int    `json:"message_id,omitempty"`
 	Error     string `json:"error,omitempty"`
+	Blocked   bool   `json:"blocked,omitempty"`
+}
+
+// IsBlockedError checks if a Telegram API error indicates the bot was blocked by the user
+func (s *TelegramService) IsBlockedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	// Common Telegram block/deactivation messages
+	return strings.Contains(errStr, "bot was blocked by the user") ||
+		strings.Contains(errStr, "forbidden: bot was blocked by the user") ||
+		strings.Contains(errStr, "403 forbidden") ||
+		strings.Contains(errStr, "chat not found") ||
+		strings.Contains(errStr, "user is deactivated")
 }
 
 // buildAdKeyboard returns an inline keyboard with a CTA button, or nil if no targetURL.
@@ -665,6 +680,9 @@ func (s *TelegramService) SendAdToChannel(channelTarget, title, description, ima
 
 	if sendErr != nil {
 		log.Printf("[TELEGRAM AD] FAILED channel=%s error=%v", channelTarget, sendErr)
+		if s.IsBlockedError(sendErr) {
+			return AdPostResult{Target: channelTarget, Status: "blocked", Error: sendErr.Error(), Blocked: true}
+		}
 		return AdPostResult{Target: channelTarget, Status: "failed", Error: sendErr.Error()}
 	}
 
@@ -732,6 +750,9 @@ func (s *TelegramService) SendAdToBot(chatID int64, title, description, imageURL
 
 	if sendErr != nil {
 		log.Printf("[TELEGRAM AD] FAILED bot chat_id=%d error=%v", chatID, sendErr)
+		if s.IsBlockedError(sendErr) {
+			return AdPostResult{Target: target, Status: "blocked", Error: sendErr.Error(), Blocked: true}
+		}
 		return AdPostResult{Target: target, Status: "failed", Error: sendErr.Error()}
 	}
 	log.Printf("[TELEGRAM AD] ✓ bot chat_id=%d msg_id=%d", chatID, sentMsg.MessageID)

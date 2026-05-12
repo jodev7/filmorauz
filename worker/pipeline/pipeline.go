@@ -39,6 +39,20 @@ func safeTruncate(s string, maxLen int) string {
 	return s[:maxLen]
 }
 
+func formatOptionalTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+func formatExitCode(code *int) string {
+	if code == nil {
+		return ""
+	}
+	return strconv.Itoa(*code)
+}
+
 func normalizeDuplicateTitle(title string) string {
 	trimmed := strings.TrimSpace(title)
 	re := regexp.MustCompile(`\s+`)
@@ -84,6 +98,23 @@ func qualityHeight(label, rawURL string) int {
 		return 10000
 	}
 	return 0
+}
+
+func normalizeMediaType(rawType, rawURL string) string {
+	lowerType := strings.ToLower(strings.TrimSpace(rawType))
+	lowerURL := strings.ToLower(strings.TrimSpace(rawURL))
+	switch {
+	case strings.Contains(lowerURL, ".m3u8") || lowerType == "hls" || lowerType == "m3u8":
+		return "m3u8"
+	case strings.Contains(lowerURL, ".mpd") || lowerType == "dash" || lowerType == "mpd":
+		return "mpd"
+	case strings.Contains(lowerURL, ".mp4") || lowerType == "mp4" || lowerType == "direct_mp4" || lowerType == "direct_download":
+		return "mp4"
+	case lowerType != "":
+		return lowerType
+	default:
+		return "unknown"
+	}
 }
 
 func normalizeIdentityURL(raw string) string {
@@ -147,8 +178,15 @@ func chooseDownloadCandidates(meta *models.ParsedMovieMetadata, selectedURL stri
 	if strings.TrimSpace(selectedURL) != "" {
 		for idx := range candidates {
 			if strings.TrimSpace(candidates[idx].URL) == strings.TrimSpace(selectedURL) {
-				chosen := candidates[idx]
-				candidates = append([]models.VideoSource{chosen}, append(candidates[:idx], candidates[idx+1:]...)...)
+				chosenHeight := qualityHeight(candidates[idx].Quality, candidates[idx].URL)
+				topHeight := 0
+				if len(candidates) > 0 {
+					topHeight = qualityHeight(candidates[0].Quality, candidates[0].URL)
+				}
+				if chosenHeight >= topHeight {
+					chosen := candidates[idx]
+					candidates = append([]models.VideoSource{chosen}, append(candidates[:idx], candidates[idx+1:]...)...)
+				}
 				break
 			}
 		}
@@ -301,7 +339,7 @@ func (p *Pipeline) ProcessDownloadJob(ctx context.Context, job *models.Ingestion
 
 	candidates := chooseDownloadCandidates(metadata, metadata.VideoURL)
 	if len(candidates) == 0 {
-		return p.failDownloadJob(jobID, fmt.Errorf("no downloadable video candidates returned by parser"))
+		return p.failDownloadJob(jobID, fmt.Errorf("download_url empty after parser resolve"))
 	}
 	availableQualities := []string{}
 	seenQualities := map[string]struct{}{}
@@ -319,7 +357,9 @@ func (p *Pipeline) ProcessDownloadJob(ctx context.Context, job *models.Ingestion
 		return p.failDownloadJob(jobID, fmt.Errorf("download_url empty after parser resolve"))
 	}
 	selectedQuality := normalizeQualityLabel(firstNonEmptyString(candidates[0].Quality, metadata.Quality))
-	log.Printf("[WORKER] selected download source job_id=%s selected_quality=%q video_url=%s", jobID, selectedQuality, safeTruncate(videoURL, 160))
+	mediaType := normalizeMediaType(candidates[0].Type, videoURL)
+	log.Printf("[download-debug] job_id=%s source=%s detail_url=%s video_url=%s download_url=%s selected_quality=%q media_type=%s",
+		jobID, job.Source, safeTruncate(job.DetailURL, 180), safeTruncate(videoURL, 180), safeTruncate(videoURL, 180), selectedQuality, mediaType)
 	if err := p.jobRepo.UpdateSourceSelection(ctx, jobID, videoURL, selectedQuality, availableQualities, job.ClassifierConfidence, job.ClassifierEvidence); err != nil {
 		log.Printf("[WORKER] failed to persist source selection job_id=%s err=%v", jobID, err)
 	}
@@ -340,9 +380,14 @@ func (p *Pipeline) ProcessDownloadJob(ctx context.Context, job *models.Ingestion
 	var downloadErr error
 	for idx, candidate := range candidates {
 		job.VideoURL = strings.TrimSpace(candidate.URL)
+		if job.VideoURL == "" {
+			downloadErr = fmt.Errorf("download_url empty after parser resolve")
+			break
+		}
 		job.SourceQuality = normalizeQualityLabel(firstNonEmptyString(candidate.Quality, metadata.Quality))
-		log.Printf("[WORKER] downloader command job_id=%s endpoint=%s/download candidate=%d/%d selected_quality=%s video_url=%s",
-			jobID, p.config.ParserURL, idx+1, len(candidates), job.SourceQuality, safeTruncate(job.VideoURL, 160))
+		mediaType := normalizeMediaType(candidate.Type, job.VideoURL)
+		log.Printf("[WORKER] downloader command job_id=%s source=%s detail_url=%s endpoint=%s/download candidate=%d/%d selected_quality=%s media_type=%s video_url=%s download_url=%s",
+			jobID, job.Source, safeTruncate(job.DetailURL, 180), p.config.ParserURL, idx+1, len(candidates), job.SourceQuality, mediaType, safeTruncate(job.VideoURL, 180), safeTruncate(job.VideoURL, 180))
 		if err := p.jobRepo.UpdateSourceSelection(ctx, jobID, job.VideoURL, job.SourceQuality, availableQualities, job.ClassifierConfidence, job.ClassifierEvidence); err != nil {
 			log.Printf("[WORKER] failed to persist candidate selection job_id=%s err=%v", jobID, err)
 		}
@@ -984,6 +1029,12 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 		return nil, "", fmt.Errorf("parser returned status %d: %s", resp.StatusCode, string(body))
 	}
 
+	if strings.TrimSpace(result.VideoURL) == "" {
+		log.Printf("[PIPELINE] Parser returned empty video_url job_id=%s source=%s source_id=%s detail_url=%s error=%s reason=%s",
+			jobID, job.Source, job.SourceID, job.DetailURL, result.Error, result.ManualReason)
+		return nil, "", fmt.Errorf("download_url empty after parser resolve")
+	}
+
 	// Check for parser-level errors
 	if result.Error != "" {
 		log.Printf("[PIPELINE] Parser returned error: %s", result.Error)
@@ -1031,7 +1082,7 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 					seasonStr := seasonParts[0]
 					// Ensure we have a clean episode number
 					rawFetched := strings.TrimSpace(result.SourceID)
-					
+
 					// If rawFetched is just numeric, pad it as 2 digits
 					epNum := rawFetched
 					if len(epNum) < 2 {
@@ -1042,9 +1093,9 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 
 					// Canonicalize fetched: parentID + s + season + e + episode
 					canonicalFetched := fmt.Sprintf("%s:s%se%s", parentID, seasonStr, epNum)
-					
+
 					log.Printf("[identity-check] content_type=serial_episode job_id=%s requested=%s raw_fetched=%s canonical_fetched=%s pass=%v", jobID, job.SourceID, result.SourceID, canonicalFetched, canonicalFetched == job.SourceID)
-					
+
 					if canonicalFetched == job.SourceID {
 						goto identity_check_ok
 					}
@@ -1063,9 +1114,6 @@ identity_check_ok:
 	// Validate core fields from /details
 	if !result.Success {
 		return nil, "", fmt.Errorf("parser returned success=false")
-	}
-	if result.VideoURL == "" {
-		return nil, "", fmt.Errorf("parser did not return video_url")
 	}
 	log.Printf("[WORKER] /details returned video_url — job_id=%s, url=%s", jobID, safeTruncate(result.VideoURL, 80))
 	log.Printf("[WORKER] /details returned download_needed=%v — job_id=%s", result.DownloadNeeded, jobID)
@@ -1296,6 +1344,9 @@ func (p *Pipeline) callParserDownloadWithReferer(jobID, videoURL, referer string
 func (p *Pipeline) startDownloadAndPoll(ctx context.Context, job *models.IngestionJob, force bool) (string, error) {
 	jobID := job.ID.Hex()
 	videoURL := job.VideoURL
+	if strings.TrimSpace(videoURL) == "" {
+		return "", fmt.Errorf("download_url empty after parser resolve")
+	}
 	// Pass the source page as Referer — freekino/uzmovi/asilmedia CDNs reject
 	// segment requests without it. Fall back from the explicit video_page_url
 	// (set by /details) to the listing detail_url.
@@ -1327,6 +1378,9 @@ func (p *Pipeline) startDownloadAndPoll(ctx context.Context, job *models.Ingesti
 	params.Set("output_name", safeName+".mp4")
 
 	downloadURL := parserEndpoint + "?" + params.Encode()
+	log.Printf("[download-debug] job_id=%s source=%s detail_url=%s video_url=%s download_url=%s selected_quality=%s media_type=%s parser_download_url=%s",
+		jobID, job.Source, safeTruncate(referer, 180), safeTruncate(videoURL, 180), safeTruncate(videoURL, 180),
+		strings.TrimSpace(job.SourceQuality), normalizeMediaType("", videoURL), safeTruncate(downloadURL, 240))
 
 	// Call /download ONCE - it returns immediately
 	log.Printf("[WORKER] /download called once — job_id=%s", jobID)
@@ -1408,6 +1462,8 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 		lastBytes         int64 = -1
 		lastBytesAt             = time.Now()
 		consecutiveErrors       = 0
+		noPIDSince        time.Time
+		lastProgressAt    time.Time
 	)
 
 	for pollCount := 0; pollCount < maxPollSeconds; pollCount++ {
@@ -1473,6 +1529,19 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 			LocalPath       string  `json:"local_path"`
 			FileSize        int64   `json:"file_size"`
 			Error           string  `json:"error"`
+			PID             int     `json:"pid"`
+			Source          string  `json:"source"`
+			DetailURL       string  `json:"detail_url"`
+			VideoURL        string  `json:"video_url"`
+			DownloadURL     string  `json:"download_url"`
+			SelectedQuality string  `json:"selected_quality"`
+			MediaType       string  `json:"media_type"`
+			CommandString   string  `json:"downloader_command_string"`
+			StdoutTail      string  `json:"stdout_tail"`
+			StderrTail      string  `json:"stderr_tail"`
+			TempOutputPath  string  `json:"temp_output_path"`
+			LastProgressAt  float64 `json:"last_progress_at"`
+			ExitCode        *int    `json:"exit_code"`
 		}
 
 		if err := json.Unmarshal(rawBody, &progress); err != nil {
@@ -1491,6 +1560,9 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 		}
 
 		progressPercent := progress.ProgressPercent
+		if progressPercent < 0 {
+			progressPercent = 0
+		}
 		if progressPercent == 0 && progress.DownloadedBytes > 0 && progress.TotalBytes > 0 {
 			computed := int((float64(progress.DownloadedBytes) / float64(progress.TotalBytes)) * 100)
 			if computed > 0 {
@@ -1498,13 +1570,38 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 			}
 		}
 
+		if progress.LastProgressAt > 0 {
+			sec := int64(progress.LastProgressAt)
+			nsec := int64((progress.LastProgressAt - float64(sec)) * 1e9)
+			lastProgressAt = time.Unix(sec, nsec)
+		}
 		stalledFor := time.Since(lastBytesAt)
-		log.Printf("[WORKER] /progress poll=%d job_id=%s status=%s pct=%d%% bytes=%d/%d speed=%.2fMB/s eta=%ds stalled_for=%s",
-			pollCount, jobID, progress.Status, progressPercent,
-			progress.DownloadedBytes, progress.TotalBytes, progress.SpeedMBps, progress.EtaSeconds,
-			stalledFor.Truncate(time.Second))
+		log.Printf("[download-debug] poll=%d job_id=%s source=%s detail_url=%s video_url=%s download_url=%s selected_quality=%s media_type=%s pid=%d status=%s pct=%d%% bytes=%d/%d file_size=%d temp_output_path=%s last_progress_at=%s stalled_for=%s command=%s exit_code=%s stdout=%s stderr=%s",
+			pollCount, jobID, firstNonEmptyString(progress.Source, job.Source), safeTruncate(firstNonEmptyString(progress.DetailURL, job.DetailURL), 180),
+			safeTruncate(firstNonEmptyString(progress.VideoURL, videoURL), 180), safeTruncate(firstNonEmptyString(progress.DownloadURL, videoURL), 180),
+			firstNonEmptyString(progress.SelectedQuality, job.SourceQuality), firstNonEmptyString(progress.MediaType, normalizeMediaType("", videoURL)),
+			progress.PID, progress.Status, progressPercent, progress.DownloadedBytes, progress.TotalBytes, progress.FileSize,
+			safeTruncate(progress.TempOutputPath, 180), formatOptionalTime(lastProgressAt), stalledFor.Truncate(time.Second),
+			safeTruncate(progress.CommandString, 400), formatExitCode(progress.ExitCode), safeTruncate(progress.StdoutTail, 400), safeTruncate(progress.StderrTail, 600))
 
 		if progress.Status == "downloading" || progress.Status == "starting" {
+			if progressPercent == 0 && progress.DownloadedBytes == 0 && progress.PID == 0 {
+				if noPIDSince.IsZero() {
+					noPIDSince = time.Now()
+				}
+				if time.Since(noPIDSince) >= 30*time.Second {
+					reason := strings.TrimSpace(progress.Error)
+					if reason == "" {
+						reason = strings.TrimSpace(progress.StderrTail)
+					}
+					if reason == "" {
+						reason = "downloader process did not start"
+					}
+					return "", fmt.Errorf("downloader process did not start: %s", safeTruncate(reason, 1000))
+				}
+			} else {
+				noPIDSince = time.Time{}
+			}
 			msg := fmt.Sprintf("Downloading: %d%%", progressPercent)
 			if progress.SpeedMBps > 0 {
 				msg += fmt.Sprintf(" (%.1f MB/s)", progress.SpeedMBps)
@@ -1520,6 +1617,7 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 		if progress.DownloadedBytes > lastBytes {
 			lastBytes = progress.DownloadedBytes
 			lastBytesAt = time.Now()
+			lastProgressAt = lastBytesAt
 		} else if progress.Status == "downloading" || progress.Status == "starting" {
 			if stalledFor >= noProgressTimeout {
 				return "", fmt.Errorf("download watchdog: no byte progress for %s (status=%s, bytes=%d/%d) — downloader appears stuck or process dead",
@@ -1546,7 +1644,24 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 		}
 
 		if progress.Status == "failed" {
-			return "", fmt.Errorf("parser /download reported failed: %s", progress.Error)
+			reason := strings.TrimSpace(progress.Error)
+			if reason == "" {
+				reason = strings.TrimSpace(progress.StderrTail)
+			}
+			if reason == "" && progress.ExitCode != nil {
+				reason = fmt.Sprintf("downloader exited with code %d", *progress.ExitCode)
+			}
+			if reason == "" {
+				reason = "unknown parser download failure"
+			}
+			return "", fmt.Errorf("parser /download reported failed: %s", safeTruncate(reason, 1200))
+		}
+		if progress.ExitCode != nil && *progress.ExitCode != 0 {
+			reason := strings.TrimSpace(progress.StderrTail)
+			if reason == "" {
+				reason = strings.TrimSpace(progress.Error)
+			}
+			return "", fmt.Errorf("downloader exited with code %d: %s", *progress.ExitCode, safeTruncate(reason, 1200))
 		}
 	}
 

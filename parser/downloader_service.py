@@ -71,6 +71,22 @@ URL_PROBE_TIMEOUT = int(os.environ.get("URL_PROBE_TIMEOUT", "12"))
 DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS = int(os.environ.get("DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS", "300"))
 
 
+def _origin_for_referer(referer: str | None) -> str:
+    referer = (referer or "").strip()
+    if not referer:
+        return ""
+    try:
+        parsed = urlparse(referer)
+        host = (parsed.netloc or "").lower()
+        if host.endswith("asilmedia.org") or host.endswith("www.asilmedia.org"):
+            return "https://asilmedia.org"
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        pass
+    return ""
+
+
 def _build_stream_headers(referer: str | None) -> dict:
     """Return the header bag uzmovi/freekino/asilmedia CDNs require to serve
     m3u8 manifests *and* the .ts segments that follow.
@@ -89,12 +105,9 @@ def _build_stream_headers(referer: str | None) -> dict:
     referer = (referer or "").strip()
     if referer:
         headers["Referer"] = referer
-        try:
-            parsed = urlparse(referer)
-            if parsed.scheme and parsed.netloc:
-                headers["Origin"] = f"{parsed.scheme}://{parsed.netloc}"
-        except Exception:
-            pass
+        origin = _origin_for_referer(referer)
+        if origin:
+            headers["Origin"] = origin
     return headers
 
 
@@ -199,9 +212,7 @@ def _resolve_stream_url(url: str, stream_type: str,
         raise DownloadError(f"m3u8 fetch failed: {err}")
 
     # mp4 / dash / ism — light HEAD probe, with http fallback for TLS/connect errors.
-    headers = {"User-Agent": "Mozilla/5.0"}
-    if referer:
-        headers["Referer"] = referer
+    headers = _build_stream_headers(referer)
     try:
         resp = http_session.head(url, headers=headers, timeout=URL_PROBE_TIMEOUT, allow_redirects=True)
         if 200 <= resp.status_code < 400:
@@ -767,9 +778,7 @@ class DownloaderService:
             os.makedirs(output_dir, exist_ok=True)
         
         # Prepare headers
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        if referer:
-            headers["Referer"] = referer
+        headers = _build_stream_headers(referer)
         
         # Check if server supports range requests
         supports_range, total_size = _check_range_support(url, headers)
@@ -1136,7 +1145,7 @@ class DownloaderService:
                 })
             raise DownloadError(f"Download failed: {str(e)}")
 
-    def _download_manifest(self, url: str, output_path: str, job_id: str | None = None, backend_job_id: str | None = None, referer: str | None = None, pid_callback=None) -> str:
+    def _download_manifest(self, url: str, output_path: str, job_id: str | None = None, backend_job_id: str | None = None, referer: str | None = None, pid_callback=None, debug_callback=None) -> str:
         """
         Download HLS/DASH manifest using ffmpeg.
         This is a robust, reliable method for downloading streaming content.
@@ -1234,6 +1243,13 @@ class DownloaderService:
             logger.info(f"[DOWNLOAD] Starting ffmpeg HLS download: {output_path}")
             logger.info(f"[DOWNLOAD] FFmpeg command: {' '.join(cmd[:5])}...")
             logger.info(f"[download] command={' '.join(cmd)}")
+            if debug_callback:
+                debug_callback("command", {
+                    "command": cmd,
+                    "command_string": " ".join(cmd),
+                    "output_path": output_path,
+                    "media_type": "m3u8" if ".m3u8" in url.lower() else ("mpd" if ".mpd" in url.lower() else "manifest"),
+                })
             
             # Start ffmpeg process
             process = subprocess.Popen(
@@ -1247,6 +1263,8 @@ class DownloaderService:
             
             if pid_callback:
                 pid_callback(process.pid)
+            if debug_callback:
+                debug_callback("pid", {"pid": process.pid})
             
             logger.info(f"[download] PID={process.pid}")
             
@@ -1259,6 +1277,8 @@ class DownloaderService:
                 for raw_line in process.stderr:
                     line = raw_line.rstrip()
                     stderr_lines.append(line)
+                    if debug_callback:
+                        debug_callback("stderr", {"line": line})
                     last_activity_at = time.time()
                     if "Error" in line or "Failed" in line:
                         logger.warning(f"[DOWNLOAD] FFmpeg stderr: {line}")
@@ -1286,6 +1306,8 @@ class DownloaderService:
                     if size > last_output_size:
                         last_output_size = size
                         last_activity_at = time.time()
+                    if debug_callback:
+                        debug_callback("file_size", {"output_path": output_path, "file_size": size})
                     if time.time() - last_activity_at >= DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS:
                         logger.warning(
                             f"[download] no progress timeout killed process"
@@ -1312,6 +1334,8 @@ class DownloaderService:
             for line in process.stdout:
                 line = line.strip()
                 if line:
+                    if debug_callback:
+                        debug_callback("stdout", {"line": line})
                     last_activity_at = time.time()
                 
                 # Parse progress
@@ -1370,6 +1394,12 @@ class DownloaderService:
 
             download_duration = time.time() - download_start_time
             logger.info(f"[DOWNLOAD] FFmpeg exited with code {return_code} after {download_duration:.1f}s")
+            if debug_callback:
+                debug_callback("exit", {
+                    "exit_code": return_code,
+                    "stderr": "\n".join(stderr_lines).strip(),
+                    "stdout": "",
+                })
 
             if _killed_for_stuck.is_set():
                 stderr_output = "\n".join(stderr_lines).strip()
@@ -1477,7 +1507,8 @@ class DownloaderService:
         job_id: str | None = None,
         backend_job_id: str | None = None,
         referer: str | None = None,
-        pid_callback=None
+        pid_callback=None,
+        debug_callback=None,
     ) -> str:
         """
         Download MP4 using aria2c with parallel connections.
@@ -1498,7 +1529,8 @@ class DownloaderService:
             backend_job_id=backend_job_id,
             referer=referer,
             max_retries=3,
-            pid_callback=pid_callback
+            pid_callback=pid_callback,
+            debug_callback=debug_callback,
         )
         
         if not result.success:
@@ -1517,7 +1549,8 @@ class DownloaderService:
         job_id: str | None = None,
         backend_job_id: str | None = None,
         referer: str | None = None,
-        pid_callback=None
+        pid_callback=None,
+        debug_callback=None,
     ) -> str:
         """
         Download HLS/DASH/ISM manifest using DDownloader's N_m3u8DL-RE.
@@ -1563,7 +1596,8 @@ class DownloaderService:
             backend_job_id=backend_job_id,
             referer=referer,
             max_retries=3,
-            pid_callback=pid_callback
+            pid_callback=pid_callback,
+            debug_callback=debug_callback,
         )
         
         if not result.success:
@@ -1684,6 +1718,7 @@ class DownloaderService:
         max_retries: int = 3,
         progress_callback=None,
         pid_callback=None,
+        debug_callback=None,
     ) -> dict:
         """
         Download video with retry support and validation.
@@ -1807,7 +1842,7 @@ class DownloaderService:
                 strategy_builders.append(("direct", lambda attempt_job_id: self._download_mp4_with_aria2c(
                     url, output_path,
                     job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
-                    pid_callback=pid_callback
+                    pid_callback=pid_callback, debug_callback=debug_callback,
                 )))
             strategy_builders.append(("direct_fallback", lambda attempt_job_id: self._download_mp4(
                 url, output_path,
@@ -1816,19 +1851,19 @@ class DownloaderService:
             strategy_builders.append(("alternative_manifest", lambda attempt_job_id: self._download_manifest(
                 url, output_path,
                 job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
-                pid_callback=pid_callback
+                pid_callback=pid_callback, debug_callback=debug_callback,
             )))
         elif stream_type in ("hls", "dash", "ism"):
             if DDdownloaderIntegration is not None and USE_DDOWNLOADER:
                 strategy_builders.append(("m3u8_primary", lambda attempt_job_id: self._download_manifest_with_ddownloader(
                     url, output_path, stream_type,
                     job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
-                    pid_callback=pid_callback
+                    pid_callback=pid_callback, debug_callback=debug_callback,
                 )))
             strategy_builders.append(("m3u8_ffmpeg", lambda attempt_job_id: self._download_manifest(
                 url, output_path,
                 job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
-                pid_callback=pid_callback
+                pid_callback=pid_callback, debug_callback=debug_callback,
             )))
             strategy_builders.append(("alternative_direct", lambda attempt_job_id: self._download_mp4(
                 url, output_path,

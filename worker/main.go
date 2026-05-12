@@ -20,17 +20,16 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"os/exec"
-	)
+)
 
-	func getCommitHash() string {
+func getCommitHash() string {
 	cmd := exec.Command("git", "rev-parse", "--short", "HEAD")
 	out, err := cmd.Output()
 	if err != nil {
 		return "unknown"
 	}
 	return strings.TrimSpace(string(out))
-	}
-
+}
 
 // InitializeLocalStorageURLs sets up the base URLs for local storage based on environment
 func InitializeLocalStorageURLs() {
@@ -217,7 +216,7 @@ func main() {
 
 	// Stale-job protection - resets stuck jobs back into the appropriate queue.
 	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
+		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 
 		// Run once at startup so restarting the worker recovers leftover stuck jobs.

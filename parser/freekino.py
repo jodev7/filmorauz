@@ -11,6 +11,11 @@ from typing import List, Dict, Any, Optional
 from urllib.parse import urljoin, quote, unquote
 from bs4 import BeautifulSoup
 
+from helpers import (
+    extract_source_id,
+    canonical_episode_id,
+)
+
 from media_extractor import (
     is_valid_media_url,
     classify_media_url,
@@ -715,10 +720,26 @@ class FreekinoParser:
             from helpers import detect_content_type as _detect_ct
             ct, ct_reason = _detect_ct(url, "freekino", soup=soup)
             if ct == "unknown":
-                ct = "serial" if "/serial/" in url else "movie"
+                ct = "serial" if "/serial/" in url or "/serie/" in url else "movie"
                 ct_reason = "fallback by url"
             result["type"] = ct
             logger.info(f"[PARSER] detected content_type={ct} reason={ct_reason} url={url}")
+
+            source_id = extract_source_id(url)
+            result["source_id"] = source_id
+
+            # If it's a serial episode, build canonical source_id
+            if ct == "serial" and "/serie/" in url:
+                from freekino_serial import _parse_season_episode
+                parsed = _parse_season_episode(url)
+                if parsed:
+                    season, episode = parsed
+                    parent_id = source_id
+                    source_id = canonical_episode_id(parent_id, season, episode)
+                    result["source_id"] = source_id
+                    logger.info(
+                        f"[episode-parse] title={result['title']} parent={parent_id} season={season} episode={episode} source_id={source_id}"
+                    )
 
             # Video — extract all quality variants
             all_entries, quality_urls = self._extract_video(soup, response.url)

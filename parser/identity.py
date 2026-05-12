@@ -11,7 +11,7 @@ class EpisodeIdentity:
 
     @property
     def canonical_id(self) -> str:
-        return f"{self.parent_source_id}:s{self.season:02d}e{self.episode:03d}"
+        return f"{self.parent_source_id}:s{self.season:02d}e{self.episode:02d}"
 
     def __str__(self) -> str:
         return self.canonical_id

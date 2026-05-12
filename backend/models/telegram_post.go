@@ -14,10 +14,12 @@ type TelegramPost struct {
 	SendToBotUsers      bool               `bson:"send_to_bot_users" json:"send_to_bot_users"`
 	InlineButtonText    string             `bson:"inline_button_text,omitempty" json:"inline_button_text,omitempty"`
 	InlineButtonURL     string             `bson:"inline_button_url,omitempty" json:"inline_button_url,omitempty"`
-	ChannelsSentCount   int                `bson:"channels_sent_count" json:"channels_sent_count"`
-	ChannelsFailedCount int                `bson:"channels_failed_count" json:"channels_failed_count"`
-	BotSentCount        int                `bson:"bot_sent_count" json:"bot_sent_count"`
-	BotFailedCount      int                `bson:"bot_failed_count" json:"bot_failed_count"`
+	ChannelsSentCount    int                `bson:"channels_sent_count" json:"channels_sent_count"`
+	ChannelsBlockedCount int                `bson:"channels_blocked_count" json:"channels_blocked_count"`
+	ChannelsFailedCount  int                `bson:"channels_failed_count" json:"channels_failed_count"`
+	BotSentCount         int                `bson:"bot_sent_count" json:"bot_sent_count"`
+	BotBlockedCount      int                `bson:"bot_blocked_count" json:"bot_blocked_count"`
+	BotFailedCount       int                `bson:"bot_failed_count" json:"bot_failed_count"`
 	SentByUserID        primitive.ObjectID `bson:"sent_by_user_id" json:"sent_by_user_id"`
 	SentByName          string             `bson:"sent_by_name" json:"sent_by_name"`
 	SentAt              time.Time          `bson:"sent_at" json:"sent_at"`

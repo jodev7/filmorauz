@@ -39,11 +39,13 @@ type TelegramPostRequest struct {
 }
 
 type TelegramPostResponse struct {
-	ChannelsSent   int      `json:"channels_sent"`
-	ChannelsFailed int      `json:"channels_failed"`
-	BotSent        int      `json:"bot_sent"`
-	BotFailed      int      `json:"bot_failed"`
-	Errors         []string `json:"errors,omitempty"`
+	ChannelsSent    int      `json:"channels_sent"`
+	ChannelsBlocked int      `json:"channels_blocked"`
+	ChannelsFailed  int      `json:"channels_failed"`
+	BotSent         int      `json:"bot_sent"`
+	BotBlocked      int      `json:"bot_blocked"`
+	BotFailed       int      `json:"bot_failed"`
+	Errors          []string `json:"errors,omitempty"`
 }
 
 func (h *TelegramPostHandler) SendPost(c *gin.Context) {
@@ -85,11 +87,13 @@ func (h *TelegramPostHandler) SendPost(c *gin.Context) {
 	}
 
 	response := &TelegramPostResponse{
-		ChannelsSent:   0,
-		ChannelsFailed: 0,
-		BotSent:        0,
-		BotFailed:      0,
-		Errors:         []string{},
+		ChannelsSent:    0,
+		ChannelsBlocked: 0,
+		ChannelsFailed:  0,
+		BotSent:         0,
+		BotBlocked:      0,
+		BotFailed:       0,
+		Errors:          []string{},
 	}
 
 	if h.telegramService == nil {
@@ -125,6 +129,8 @@ func (h *TelegramPostHandler) SendPost(c *gin.Context) {
 
 			if result.Status == "success" {
 				response.ChannelsSent++
+			} else if result.Status == "blocked" {
+				response.ChannelsBlocked++
 			} else {
 				response.ChannelsFailed++
 				if result.Error != "" {
@@ -154,6 +160,8 @@ func (h *TelegramPostHandler) SendPost(c *gin.Context) {
 
 				if result.Status == "success" {
 					response.BotSent++
+				} else if result.Status == "blocked" {
+					response.BotBlocked++
 				} else {
 					response.BotFailed++
 					if result.Error != "" && len(response.Errors) < 50 {
@@ -182,22 +190,25 @@ func (h *TelegramPostHandler) SendPost(c *gin.Context) {
 				}
 			}
 		}
+	historyPost := &models.TelegramPost{
+		Text:                 req.Text,
+		ImageURL:             req.ImageURL,
+		SendToChannels:       req.SendToChannels,
+		SendToBotUsers:       req.SendToBot,
+		InlineButtonText:     req.InlineButtonText,
+		InlineButtonURL:      req.InlineButtonURL,
+		ChannelsSentCount:    response.ChannelsSent,
+		ChannelsBlockedCount: response.ChannelsBlocked,
+		ChannelsFailedCount:  response.ChannelsFailed,
+		BotSentCount:         response.BotSent,
+		BotBlockedCount:      response.BotBlocked,
+		BotFailedCount:       response.BotFailed,
+		SentByUserID:         sentByUserID,
+		SentByName:           sentByName,
+		SentAt:               now,
+		CreatedAt:            now,
 	}
 
-	historyPost := &models.TelegramPost{
-		Text:                req.Text,
-		ImageURL:            req.ImageURL,
-		SendToChannels:      req.SendToChannels,
-		SendToBotUsers:      req.SendToBot,
-		InlineButtonText:    btnText,
-		InlineButtonURL:     btnURL,
-		ChannelsSentCount:   response.ChannelsSent,
-		ChannelsFailedCount: response.ChannelsFailed,
-		BotSentCount:        response.BotSent,
-		BotFailedCount:      response.BotFailed,
-		SentByUserID:        sentByUserID,
-		SentByName:          sentByName,
-	}
 	if err := h.postRepo.Create(historyPost); err != nil {
 		log.Printf("[TELEGRAM POST] failed to save history: %v", err)
 	}

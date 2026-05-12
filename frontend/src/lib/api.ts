@@ -3663,8 +3663,10 @@ export interface TelegramPostRequest {
 
 export interface TelegramPostResult {
   channels_sent: number;
+  channels_blocked: number;
   channels_failed: number;
   bot_sent: number;
+  bot_blocked: number;
   bot_failed: number;
   errors?: string[];
 }
@@ -3678,8 +3680,10 @@ export interface TelegramPost {
   inline_button_text?: string;
   inline_button_url?: string;
   channels_sent_count: number;
+  channels_blocked_count: number;
   channels_failed_count: number;
   bot_sent_count: number;
+  bot_blocked_count: number;
   bot_failed_count: number;
   sent_by_user_id: string;
   sent_by_name: string;

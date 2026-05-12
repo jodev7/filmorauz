@@ -23,6 +23,21 @@ func TestChooseDownloadCandidatesPrefersHighestQuality(t *testing.T) {
 	}
 }
 
+func TestChooseDownloadCandidatesDoesNotPromoteLowerSelectedURL(t *testing.T) {
+	meta := &models.ParsedMovieMetadata{
+		VideoURLs: []models.VideoSource{
+			{URL: "https://cdn.example.com/video-1080.mp4", Quality: "1080p", Type: "mp4"},
+			{URL: "https://cdn.example.com/video-720.mp4", Quality: "720p", Type: "mp4"},
+			{URL: "https://cdn.example.com/video-480.mp4", Quality: "480p", Type: "mp4"},
+		},
+	}
+
+	candidates := chooseDownloadCandidates(meta, "https://cdn.example.com/video-720.mp4")
+	if got := candidates[0].Quality; got != "1080p" {
+		t.Fatalf("expected highest downloadable quality to stay first, got %q", got)
+	}
+}
+
 func TestExpectedQualitySatisfied(t *testing.T) {
 	if expectedQualitySatisfied("1080p", 850) {
 		t.Fatalf("1080p should not be satisfied by 850px height")

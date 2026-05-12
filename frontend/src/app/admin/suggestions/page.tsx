@@ -266,7 +266,7 @@ export default function AdminSuggestionsPage() {
                        suggestion.user?.full_name || 
                        suggestion.user?.telegram_username || 
                        suggestion.user_name || 
-                       suggestion.user_id.slice(0, 8)}
+                       suggestion.user_id?.slice(0, 8)}
                     </Link>
                   </td>
                   <td className="px-4 py-3">

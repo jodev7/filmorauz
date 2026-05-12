@@ -26,6 +26,9 @@ func (s *TelegramService) SendTextPostToChannel(channelTarget, text string) AdPo
 	sentMsg, sendErr := api.Send(msg)
 	if sendErr != nil {
 		log.Printf("[TELEGRAM POST] FAILED channel=%s error=%v", channelTarget, sendErr)
+		if s.IsBlockedError(sendErr) {
+			return AdPostResult{Target: channelTarget, Status: "blocked", Error: sendErr.Error(), Blocked: true}
+		}
 		return AdPostResult{Target: channelTarget, Status: "failed", Error: sendErr.Error()}
 	}
 
@@ -85,6 +88,9 @@ func (s *TelegramService) SendPostWithImageToChannel(channelTarget, text, imageU
 	sentMsg, sendErr := api.Send(msg)
 	if sendErr != nil {
 		log.Printf("[TELEGRAM POST] FAILED channel=%s error=%v", channelTarget, sendErr)
+		if s.IsBlockedError(sendErr) {
+			return AdPostResult{Target: channelTarget, Status: "blocked", Error: sendErr.Error(), Blocked: true}
+		}
 		return AdPostResult{Target: channelTarget, Status: "failed", Error: sendErr.Error()}
 	}
 
@@ -143,6 +149,9 @@ func (s *TelegramService) SendTextPostWithButtonToChannel(channelTarget, text, b
 	)
 	sentMsg, sendErr := api.Send(msg)
 	if sendErr != nil {
+		if s.IsBlockedError(sendErr) {
+			return AdPostResult{Target: channelTarget, Status: "blocked", Error: sendErr.Error(), Blocked: true}
+		}
 		return AdPostResult{Target: channelTarget, Status: "failed", Error: sendErr.Error()}
 	}
 	return AdPostResult{Target: channelTarget, Status: "success", MessageID: sentMsg.MessageID}
@@ -169,6 +178,9 @@ func (s *TelegramService) SendPostWithImageAndButtonToChannel(channelTarget, tex
 	)
 	sentMsg, sendErr := api.Send(msg)
 	if sendErr != nil {
+		if s.IsBlockedError(sendErr) {
+			return AdPostResult{Target: channelTarget, Status: "blocked", Error: sendErr.Error(), Blocked: true}
+		}
 		return AdPostResult{Target: channelTarget, Status: "failed", Error: sendErr.Error()}
 	}
 	return AdPostResult{Target: channelTarget, Status: "success", MessageID: sentMsg.MessageID}
@@ -194,6 +206,9 @@ func (s *TelegramService) SendTextPostWithButtonToBot(chatID int64, text, button
 	)
 	sentMsg, sendErr := api.Send(msg)
 	if sendErr != nil {
+		if s.IsBlockedError(sendErr) {
+			return AdPostResult{Target: target, Status: "blocked", Error: sendErr.Error(), Blocked: true}
+		}
 		return AdPostResult{Target: target, Status: "failed", Error: sendErr.Error()}
 	}
 	return AdPostResult{Target: target, Status: "success", MessageID: sentMsg.MessageID}
@@ -224,6 +239,9 @@ func (s *TelegramService) SendPostWithImageAndButtonToBot(chatID int64, text, im
 	)
 	sentMsg, sendErr := api.Send(msg)
 	if sendErr != nil {
+		if s.IsBlockedError(sendErr) {
+			return AdPostResult{Target: target, Status: "blocked", Error: sendErr.Error(), Blocked: true}
+		}
 		return AdPostResult{Target: target, Status: "failed", Error: sendErr.Error()}
 	}
 	return AdPostResult{Target: target, Status: "success", MessageID: sentMsg.MessageID}

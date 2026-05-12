@@ -303,11 +303,15 @@ def extract_source_id(url: str) -> str:
         return ""
     
     # Standard patterns
-    for pattern in ["/film/", "/movie/", "/serial/", "/kinolar/", "/multfilmlar/"]:
+    for pattern in ["/film/", "/movie/", "/serial/", "/kinolar/", "/multfilmlar/", "/serie/", "/episode/"]:
         if pattern in url:
             parts = url.split(pattern)
             if len(parts) > 1:
                 id_part = parts[1].split("/")[0].split("?")[0].split("#")[0]
+                # If it's something like "12345-slug", take only the numeric part
+                id_match = re.match(r'^(\d+)', id_part)
+                if id_match:
+                    return id_match.group(1)
                 if id_part:
                     return id_part
     
@@ -334,6 +338,13 @@ def extract_source_id(url: str) -> str:
         return match.group(1)
     
     return ""
+
+
+def canonical_episode_id(parent_id: str, season: int, episode: int) -> str:
+    """Build canonical source_id for an episode: parentID:sXXeXX"""
+    if not parent_id:
+        return ""
+    return f"{parent_id}:s{season:02d}e{episode:02d}"
 
 
 def create_debug_summary(

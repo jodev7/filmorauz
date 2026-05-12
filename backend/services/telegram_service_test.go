@@ -1,6 +1,9 @@
 package services
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestNormalizeTelegramImageURL(t *testing.T) {
 	tests := []struct {
@@ -37,5 +40,32 @@ func TestNormalizeTelegramImageURL(t *testing.T) {
 				t.Fatalf("NormalizeTelegramImageURL(%q) = %q, want %q", tt.raw, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsBlockedError(t *testing.T) {
+	s := &TelegramService{}
+	tests := []struct {
+		errText string
+		want    bool
+	}{
+		{"Forbidden: bot was blocked by the user", true},
+		{"403 Forbidden", true},
+		{"Bad Request: chat not found", true},
+		{"Forbidden: user is deactivated", true},
+		{"Something went wrong", false},
+		{"400 Bad Request", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		var err error
+		if tt.errText != "" {
+			err = fmt.Errorf("%s", tt.errText)
+		}
+		got := s.IsBlockedError(err)
+		if got != tt.want {
+			t.Errorf("IsBlockedError(%q) = %v, want %v", tt.errText, got, tt.want)
+		}
 	}
 }

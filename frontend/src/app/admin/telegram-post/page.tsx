@@ -9,8 +9,10 @@ import MediaImage from "@/components/ui/MediaImage";
 
 interface TelegramPostResult {
   channels_sent: number;
+  channels_blocked: number;
   channels_failed: number;
   bot_sent: number;
+  bot_blocked: number;
   bot_failed: number;
   error?: string;
 }
@@ -119,7 +121,7 @@ export default function TelegramPostPage() {
       setResult(data);
       await loadHistory();
     } catch {
-      setResult({ channels_sent: 0, channels_failed: 0, bot_sent: 0, bot_failed: 0, error: "Request failed" });
+      setResult({ channels_sent: 0, channels_blocked: 0, channels_failed: 0, bot_sent: 0, bot_blocked: 0, bot_failed: 0, error: "Request failed" });
     } finally {
       setSending(false);
     }
@@ -266,30 +268,42 @@ export default function TelegramPostPage() {
             {result.error ? (
               <p className="text-red-400 text-sm">{result.error}</p>
             ) : (
-              <div className="space-y-1 text-sm">
-                <p className="flex items-center gap-2">
-                  <span className="text-gray-400">Channels:</span>
-                  <CheckCircle size={14} className="text-green-400" />
-                  <span className="text-green-400">{result.channels_sent} sent</span>
-                  {result.channels_failed > 0 && (
-                    <>
-                      <XCircle size={14} className="text-red-400 ml-2" />
-                      <span className="text-red-400">{result.channels_failed} failed</span>
-                    </>
-                  )}
-                </p>
-                <p className="flex items-center gap-2">
-                  <span className="text-gray-400">Bot users:</span>
-                  <CheckCircle size={14} className="text-green-400" />
-                  <span className="text-green-400">{result.bot_sent} sent</span>
-                  {result.bot_failed > 0 && (
-                    <>
-                      <XCircle size={14} className="text-red-400 ml-2" />
-                      <span className="text-red-400">{result.bot_failed} failed</span>
-                    </>
-                  )}
-                </p>
-              </div>
+            <div className="space-y-1 text-sm">
+              <p className="flex items-center gap-2">
+                <span className="text-gray-400">Channels:</span>
+                <CheckCircle size={14} className="text-green-400" />
+                <span className="text-green-400">{result.channels_sent} sent</span>
+                {result.channels_blocked > 0 && (
+                  <>
+                    <XCircle size={14} className="text-orange-400 ml-2" />
+                    <span className="text-orange-400">{result.channels_blocked} blocked</span>
+                  </>
+                )}
+                {result.channels_failed > 0 && (
+                  <>
+                    <XCircle size={14} className="text-red-400 ml-2" />
+                    <span className="text-red-400">{result.channels_failed} failed</span>
+                  </>
+                )}
+              </p>
+              <p className="flex items-center gap-2">
+                <span className="text-gray-400">Bot users:</span>
+                <CheckCircle size={14} className="text-green-400" />
+                <span className="text-green-400">{result.bot_sent} sent</span>
+                {result.bot_blocked > 0 && (
+                  <>
+                    <XCircle size={14} className="text-orange-400 ml-2" />
+                    <span className="text-orange-400">{result.bot_blocked} blocked</span>
+                  </>
+                )}
+                {result.bot_failed > 0 && (
+                  <>
+                    <XCircle size={14} className="text-red-400 ml-2" />
+                    <span className="text-red-400">{result.bot_failed} failed</span>
+                  </>
+                )}
+              </p>
+            </div>
             )}
           </div>
         )}
@@ -332,12 +346,14 @@ export default function TelegramPostPage() {
                       {post.send_to_channels && (
                         <span className="flex items-center gap-1">
                           <Hash size={12} /> Kanallar: {post.channels_sent_count}
+                          {post.channels_blocked_count > 0 && <span className="text-orange-400">/{post.channels_blocked_count}</span>}
                           {post.channels_failed_count > 0 && <span className="text-red-400">/{post.channels_failed_count}</span>}
                         </span>
                       )}
                       {post.send_to_bot_users && (
                         <span className="flex items-center gap-1">
                           <Users size={12} /> Bot: {post.bot_sent_count}
+                          {post.bot_blocked_count > 0 && <span className="text-orange-400">/{post.bot_blocked_count}</span>}
                           {post.bot_failed_count > 0 && <span className="text-red-400">/{post.bot_failed_count}</span>}
                         </span>
                       )}

@@ -662,14 +662,37 @@ def _download_remote_video_to_path(video_url: str, output_path: str):
     except requests.RequestException as exc:
         raise Exception(f"Video download request failed for {video_url}: {exc}") from exc
 
+def _guess_media_type(url: str) -> str:
+    lower = (url or "").lower()
+    if ".m3u8" in lower:
+        return "m3u8"
+    if ".mpd" in lower:
+        return "mpd"
+    if ".ism" in lower:
+        return "ism"
+    if ".mp4" in lower:
+        return "mp4"
+    return "unknown"
+
+
+def _tail_text(text: str, limit: int = 4000) -> str:
+    if not text:
+        return ""
+    return text[-limit:]
+
+
 class DownloadState:
     """Represents the state of an active download"""
-    def __init__(self, job_id, source_url, output_name):
+    def __init__(self, job_id, source_url, output_name, source="", detail_url="", selected_quality=""):
         self.job_id = job_id
+        self.source = source
         self.source_url = source_url
+        self.video_url = source_url
+        self.download_url = source_url
         self.output_name = output_name
         self.status = "starting"  # starting, downloading, completed, failed
         self.started_at = time.time()
+        self.last_progress_at = self.started_at
         self.done = False
         self.progress_percent = 0
         self.downloaded_bytes = 0
@@ -680,12 +703,65 @@ class DownloadState:
         self.file_size = 0
         self.error = ""
         self.pid = 0
+        self.detail_url = detail_url
+        self.referer = detail_url
+        self.selected_quality = selected_quality
+        self.media_type = _guess_media_type(source_url)
+        self.downloader_command = []
+        self.downloader_command_string = ""
+        self.stdout_tail = ""
+        self.stderr_tail = ""
+        self.exit_code = None
+        self.temp_output_path = ""
+
+    def append_stdout(self, line: str):
+        if line:
+            self.stdout_tail = _tail_text((self.stdout_tail + "\n" + line).strip())
+
+    def append_stderr(self, line: str):
+        if line:
+            self.stderr_tail = _tail_text((self.stderr_tail + "\n" + line).strip())
+
+    def apply_debug_event(self, event: str, payload: dict):
+        if not isinstance(payload, dict):
+            return
+        if event == "command":
+            cmd = payload.get("command") or []
+            self.downloader_command = cmd
+            self.downloader_command_string = payload.get("command_string") or " ".join(str(x) for x in cmd)
+            self.temp_output_path = payload.get("output_path", self.temp_output_path)
+            self.media_type = payload.get("media_type", self.media_type)
+        elif event == "pid":
+            self.pid = int(payload.get("pid") or 0)
+        elif event == "stdout":
+            self.append_stdout(str(payload.get("line") or ""))
+        elif event == "stderr":
+            self.append_stderr(str(payload.get("line") or ""))
+        elif event == "exit":
+            self.exit_code = payload.get("exit_code")
+            if payload.get("stderr"):
+                self.append_stderr(str(payload.get("stderr")))
+            if payload.get("stdout"):
+                self.append_stdout(str(payload.get("stdout")))
+        elif event == "file_size":
+            file_size = int(payload.get("file_size") or 0)
+            if file_size > self.file_size:
+                self.last_progress_at = time.time()
+                self.downloaded_bytes = max(self.downloaded_bytes, file_size)
+                if self.total_bytes <= 0:
+                    self.progress_percent = max(self.progress_percent, 1)
+            self.file_size = file_size
+            self.temp_output_path = payload.get("output_path", self.temp_output_path)
+        elif event == "media_type":
+            self.media_type = payload.get("media_type", self.media_type)
 
     def to_dict(self):
         return {
             "job_id": self.job_id,
+            "source": self.source,
             "status": self.status,
             "started_at": self.started_at,
+            "last_progress_at": self.last_progress_at,
             "done": self.done,
             "progress_percent": self.progress_percent,
             "downloaded_bytes": self.downloaded_bytes,
@@ -696,8 +772,20 @@ class DownloadState:
             "file_size": self.file_size,
             "error": self.error,
             "source_url": self.source_url,
+            "video_url": self.video_url,
+            "download_url": self.download_url,
             "output_name": self.output_name,
             "pid": self.pid,
+            "detail_url": self.detail_url,
+            "referer": self.referer,
+            "selected_quality": self.selected_quality,
+            "media_type": self.media_type,
+            "downloader_command": self.downloader_command,
+            "downloader_command_string": self.downloader_command_string,
+            "stdout_tail": self.stdout_tail,
+            "stderr_tail": self.stderr_tail,
+            "exit_code": self.exit_code,
+            "temp_output_path": self.temp_output_path,
         }
 def get_active_download(job_id):
     """Get active download state for job_id"""
@@ -1885,7 +1973,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                 clear_active_download(job_id)
             
             if not video_url:
-                self._send_error("Missing 'video_url' parameter")
+                self._send_error("download_url empty after parser resolve")
                 return
             
             if job_id:
@@ -1927,9 +2015,23 @@ class ParserHandler(BaseHTTPRequestHandler):
                     clear_active_download(job_id)
             
             # Create new download state
-            state = DownloadState(job_id, video_url, output_name)
+            state = DownloadState(
+                job_id,
+                video_url,
+                output_name,
+                source=source,
+                detail_url=referer,
+                selected_quality=selected_quality or quality,
+            )
             set_active_download(job_id, state)
-            logger.info(f"[PARSER] new background download started — job_id={job_id}")
+            logger.info(
+                f"[PARSER] new background download started — job_id={job_id}, "
+                f"source={source}, detail_url={safe_truncate(referer, 160)}, "
+                f"video_url={safe_truncate(video_url, 160)}, "
+                f"download_url={safe_truncate(video_url, 160)}, "
+                f"selected_quality={selected_quality or quality or 'auto'}, "
+                f"media_type={state.media_type}"
+            )
             
             # Start download in background thread
             def background_download():
@@ -1945,6 +2047,9 @@ class ParserHandler(BaseHTTPRequestHandler):
                             state.total_bytes = total
                             state.speed_mbps = speed / (1024 * 1024) if speed > 0 else 0.0
                             state.eta_seconds = eta
+                            state.file_size = downloaded
+                            if downloaded > 0:
+                                state.last_progress_at = time.time()
                             state.status = "downloading"
                     
                     # PID callback to update state
@@ -1952,6 +2057,35 @@ class ParserHandler(BaseHTTPRequestHandler):
                         state = get_active_download(job_id)
                         if state:
                             state.pid = pid
+
+                    def debug_callback(event, payload):
+                        state = get_active_download(job_id)
+                        if state:
+                            state.apply_debug_event(event, payload or {})
+                        if event == "command":
+                            logger.info(
+                                f"[download-debug] job_id={job_id} source={source or 'unknown'} "
+                                f"detail_url={safe_truncate(referer, 180)} "
+                                f"video_url={safe_truncate(video_url, 180)} "
+                                f"download_url={safe_truncate(video_url, 180)} "
+                                f"selected_quality={selected_quality or quality or 'auto'} "
+                                f"media_type={(payload or {}).get('media_type', state.media_type if state else 'unknown')} "
+                                f"temp_output_path={(payload or {}).get('output_path', '')} "
+                                f"command={(payload or {}).get('command_string') or ' '.join(str(x) for x in (payload or {}).get('command', []))}"
+                            )
+                        elif event == "pid":
+                            logger.info(f"[download-debug] job_id={job_id} downloader_pid={(payload or {}).get('pid', 0)}")
+                        elif event == "exit":
+                            logger.info(
+                                f"[download-debug] job_id={job_id} exit_code={(payload or {}).get('exit_code')} "
+                                f"stderr={safe_truncate(str((payload or {}).get('stderr') or ''), 1000)}"
+                            )
+                        elif event == "file_size":
+                            logger.info(
+                                f"[download-debug] job_id={job_id} temp_output_path={(payload or {}).get('output_path', '')} "
+                                f"file_size={(payload or {}).get('file_size', 0)} "
+                                f"last_progress_at={state.last_progress_at if state else 0}"
+                            )
 
                     download_result = downloader_service.smart_download(
                         url=video_url,
@@ -1961,6 +2095,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                         referer=referer if referer else None,
                         progress_callback=progress_callback,
                         pid_callback=pid_callback,
+                        debug_callback=debug_callback,
                     )
                     
                     if not download_result.get("success"):
@@ -1971,6 +2106,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                             state.status = "failed"
                             state.error = error_msg
                             state.done = True
+                            state.exit_code = state.exit_code if state.exit_code is not None else -1
                         return
                     
                     local_path = resolve_downloaded_artifact(job_id, download_result.get("file_path", ""))
@@ -1997,6 +2133,9 @@ class ParserHandler(BaseHTTPRequestHandler):
                         state.file_size = file_size
                         state.downloaded_bytes = file_size
                         state.total_bytes = file_size
+                        state.file_size = file_size
+                        state.last_progress_at = time.time()
+                        state.media_type = stream_type
                         
                 except Exception as e:
                     error_msg = str(e)
@@ -2006,6 +2145,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                         state.status = "failed"
                         state.error = error_msg
                         state.done = True
+                        state.exit_code = state.exit_code if state.exit_code is not None else -1
             
             # Start background thread
             download_thread = threading.Thread(target=background_download, daemon=True)
@@ -2055,6 +2195,19 @@ class ParserHandler(BaseHTTPRequestHandler):
                 "error": state.error,
                 "done": state.done,
                 "pid": state.pid,
+                "source": state.source,
+                "detail_url": state.detail_url,
+                "video_url": state.video_url,
+                "download_url": state.download_url,
+                "selected_quality": state.selected_quality,
+                "media_type": state.media_type,
+                "downloader_command": state.downloader_command,
+                "downloader_command_string": state.downloader_command_string,
+                "stdout_tail": state.stdout_tail,
+                "stderr_tail": state.stderr_tail,
+                "exit_code": state.exit_code,
+                "temp_output_path": state.temp_output_path,
+                "last_progress_at": state.last_progress_at,
             }
             
             logger.info(f"[PARSER] /progress response — job_id={job_id}, status={response['status']}, percent={response['progress_percent']}%")
