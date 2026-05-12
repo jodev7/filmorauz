@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/filmorauz/backend/config"
 	"github.com/filmorauz/backend/models"
@@ -190,6 +191,9 @@ func (h *TelegramPostHandler) SendPost(c *gin.Context) {
 				}
 			}
 		}
+	}
+
+	now := time.Now()
 	historyPost := &models.TelegramPost{
 		Text:                 req.Text,
 		ImageURL:             req.ImageURL,
