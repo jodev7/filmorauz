@@ -122,6 +122,8 @@ class AsilmediaSerialParser:
         if m_year:
             year = int(m_year.group(0))
 
+        parent_id = extract_source_id(url)
+
         grouped: Dict[tuple[int, int], Dict] = {}
         duplicates_removed = 0
 
