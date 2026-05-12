@@ -23,7 +23,7 @@ from urllib.parse import unquote, urlsplit
 from bs4 import BeautifulSoup
 
 from asilmedia import AsilmediaParser
-from helpers import canonical_episode_id
+from helpers import canonical_episode_id, extract_source_id
 
 logger = logging.getLogger(__name__)
 
@@ -163,11 +163,14 @@ class AsilmediaSerialParser:
                         "episode_url": url,
                         "detail_url": url,
                         "source_episode_url": url,
+                        "source_id": canonical_episode_id(parent_id, season, episode_no),
                         "video_url": "",
                         "poster": poster,
                         "quality_urls": {},
                     },
                 )
+                if key not in grouped:
+                    logger.info(f"[episode-parse] title={item['title']} parent={parent_id} season={season} episode={episode_no} source_id={item['source_id']}")
                 item["quality_urls"][quality_key] = href
                 current = item.get("video_url") or ""
                 if not current or _rank_quality(href) > _rank_quality(current):
@@ -205,11 +208,13 @@ class AsilmediaSerialParser:
                         "episode_url": url,
                         "detail_url": url,
                         "source_episode_url": url,
+                        "source_id": canonical_episode_id(parent_id, season, episode_no),
                         "video_url": "",
                         "poster": poster,
                         "quality_urls": {},
                     },
                 )
+                logger.info(f"[episode-parse] title={item['title']} parent={parent_id} season={season} episode={episode_no} source_id={item['source_id']}")
                 quality_match = _QUALITY_RE.search(href)
                 quality_key = f"{quality_match.group(1)}p" if quality_match else "unknown"
                 item["quality_urls"][quality_key] = href

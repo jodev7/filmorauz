@@ -1774,7 +1774,10 @@ class ParserHandler(BaseHTTPRequestHandler):
                 # Normalize metadata
                 normalized_metadata = normalize_metadata(details, source, source_base_url)
                 normalized_metadata["type"] = details.get("type", "")
-                normalized_metadata["source_id"] = details.get("source_id", source_id)
+                parsed_source_id = details.get("source_id", source_id)
+                if source_id and ":s" in source_id and "e" in source_id.lower():
+                    parsed_source_id = source_id
+                normalized_metadata["source_id"] = parsed_source_id
                 normalized_metadata["detail_url"] = details.get("detail_url", detail_url or source_id)
                 normalized_metadata["video_urls"] = details.get("video_urls", [])
                 
@@ -1833,7 +1836,10 @@ class ParserHandler(BaseHTTPRequestHandler):
                 classifier_confidence = _classifier_confidence(currentType, classifier_evidence)
                 logger.info(f"[classifier] type={currentType} confidence={classifier_confidence:.2f} evidence={classifier_evidence}")
                 normalized_metadata["type"] = currentType
-                normalized_metadata["source_id"] = details.get("source_id", source_id)
+                parsed_source_id = details.get("source_id", source_id)
+                if source_id and ":s" in source_id and "e" in source_id.lower():
+                    parsed_source_id = source_id
+                normalized_metadata["source_id"] = parsed_source_id
                 normalized_metadata["detail_url"] = details.get("detail_url", detail_url or source_id)
                 normalized_metadata["video_urls"] = video_urls_list
 

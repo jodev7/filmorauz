@@ -25,7 +25,7 @@ const (
 
 // SuggestionUser represents minimal user info for suggestions
 type SuggestionUser struct {
-	ID               string `json:"id"`
+	ID               string `json:"_id"`
 	Username         string `json:"username,omitempty"`
 	FullName         string `json:"full_name,omitempty"`
 	TelegramUsername string `json:"telegram_username,omitempty"`

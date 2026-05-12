@@ -56,6 +56,9 @@ func (s *TelegramService) SendTextPostToBot(chatID int64, text string) AdPostRes
 
 	sentMsg, sendErr := api.Send(msg)
 	if sendErr != nil {
+		if s.IsBlockedError(sendErr) {
+			return AdPostResult{Target: target, Status: "blocked", Error: sendErr.Error(), Blocked: true}
+		}
 		log.Printf("[TELEGRAM POST] FAILED bot chat_id=%d error=%v", chatID, sendErr)
 		return AdPostResult{Target: target, Status: "failed", Error: sendErr.Error()}
 	}
@@ -125,6 +128,9 @@ func (s *TelegramService) SendPostWithImageToBot(chatID int64, text, imageURL st
 
 	sentMsg, sendErr := api.Send(msg)
 	if sendErr != nil {
+		if s.IsBlockedError(sendErr) {
+			return AdPostResult{Target: target, Status: "blocked", Error: sendErr.Error(), Blocked: true}
+		}
 		log.Printf("[TELEGRAM POST] FAILED bot chat_id=%d error=%v", chatID, sendErr)
 		return AdPostResult{Target: target, Status: "failed", Error: sendErr.Error()}
 	}

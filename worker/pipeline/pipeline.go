@@ -1292,10 +1292,17 @@ func (p *Pipeline) callParserDownloadWithReferer(jobID, videoURL, referer string
 
 		// NEW: Check for stale download process
 		if progress.Status == "downloading" || progress.Status == "starting" {
-			if progress.ProgressPercent == 0 && progress.PID == 0 {
+			activePID := progress.PID > 0
+			if activePID {
+				if killErr := exec.Command("kill", "-0", fmt.Sprint(progress.PID)).Run(); killErr != nil {
+					activePID = false
+				}
+			}
+
+			if progress.ProgressPercent == 0 && !activePID {
 				staleSeconds++
 				if staleSeconds >= 30 {
-					return "", fmt.Errorf("downloader process did not start after 30s (progress 0%%, no PID)")
+					return "", fmt.Errorf("Download watchdog: progress stayed at 0 with no active downloader PID for 30 seconds")
 				}
 			} else {
 				staleSeconds = 0

@@ -3743,7 +3743,7 @@ export interface Suggestion {
   user_id: string;
   user_name: string;
   user?: {
-    id: string;
+    _id: string;
     username?: string;
     full_name?: string;
     telegram_username?: string;

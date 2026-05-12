@@ -1078,6 +1078,18 @@ class DDownloaderIntegration:
             
             # Capture first 50 lines of output for debugging startup failures
             startup_logs = []
+            stderr_lines = []
+
+            def consume_stderr():
+                for line in process.stderr:
+                    if line:
+                        line = line.strip()
+                        _debug(debug_callback, "stderr", {"line": line})
+                        if len(stderr_lines) < 50:
+                            stderr_lines.append(line)
+            
+            stderr_thread = threading.Thread(target=consume_stderr, daemon=True)
+            stderr_thread.start()
 
             def _watchdog():
                 nonlocal last_activity_at, last_output_size, last_size_log_time
@@ -1179,14 +1191,16 @@ class DDownloaderIntegration:
                             progress_callback(progress, downloaded_bytes, total_bytes, speed, eta)
             
             # Wait for process to complete
-            stdout, stderr = process.communicate()
+            process.wait()
             _stop_watchdog.set()
             watchdog_thread.join(timeout=2)
-            combined_logs = "\n".join(part for part in ["\n".join(startup_logs), stdout or "", stderr or ""] if part).strip()
+            stderr_thread.join(timeout=2)
+            
+            combined_logs = "\n".join(part for part in ["\n".join(startup_logs), "\n".join(stderr_lines)] if part).strip()
             _debug(debug_callback, "exit", {
                 "exit_code": process.returncode,
-                "stdout": stdout or "",
-                "stderr": stderr or "",
+                "stdout": "",
+                "stderr": "\n".join(stderr_lines),
             })
 
             if _killed_for_stuck.is_set():
