@@ -3738,6 +3738,12 @@ export interface Suggestion {
   id: string;
   user_id: string;
   user_name: string;
+  user?: {
+    id: string;
+    username?: string;
+    full_name?: string;
+    telegram_username?: string;
+  };
   type: "movie" | "series";
   title: string;
   message: string;

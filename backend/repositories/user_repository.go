@@ -85,6 +85,23 @@ func (r *UserRepository) FindByID(id string) (*models.User, error) {
 	return &user, nil
 }
 
+func (r *UserRepository) FindByIDs(ids []primitive.ObjectID) ([]models.User, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cursor, err := r.col.Find(ctx, bson.M{"_id": bson.M{"$in": ids}})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var users []models.User
+	if err := cursor.All(ctx, &users); err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
 // UserStats represents public user statistics
 type UserStats struct {
 	CommentsCount  int64 `json:"comments_count"`

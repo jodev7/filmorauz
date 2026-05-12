@@ -315,6 +315,9 @@ func (p *Pipeline) ProcessDownloadJob(ctx context.Context, job *models.Ingestion
 		}
 	}
 	videoURL := strings.TrimSpace(candidates[0].URL)
+	if videoURL == "" {
+		return p.failDownloadJob(jobID, fmt.Errorf("download_url empty after parser resolve"))
+	}
 	selectedQuality := normalizeQualityLabel(firstNonEmptyString(candidates[0].Quality, metadata.Quality))
 	log.Printf("[WORKER] selected download source job_id=%s selected_quality=%q video_url=%s", jobID, selectedQuality, safeTruncate(videoURL, 160))
 	if err := p.jobRepo.UpdateSourceSelection(ctx, jobID, videoURL, selectedQuality, availableQualities, job.ClassifierConfidence, job.ClassifierEvidence); err != nil {
@@ -1180,6 +1183,7 @@ func (p *Pipeline) callParserDownloadWithReferer(jobID, videoURL, referer string
 	// Poll /progress until download completes
 	maxPollCount := 7200 // Max 2 hours (7200 * 1 second)
 	pollInterval := 1 * time.Second
+	staleSeconds := 0
 
 	for pollCount := 0; pollCount < maxPollCount; pollCount++ {
 		time.Sleep(pollInterval)
@@ -1214,6 +1218,7 @@ func (p *Pipeline) callParserDownloadWithReferer(jobID, videoURL, referer string
 			FileSize        int64   `json:"file_size"`
 			Error           string  `json:"error"`
 			Done            bool    `json:"done"`
+			PID             int     `json:"pid"`
 		}
 
 		if err := json.Unmarshal(rawBody, &progress); err != nil {
@@ -1237,8 +1242,20 @@ func (p *Pipeline) callParserDownloadWithReferer(jobID, videoURL, referer string
 			}
 		}
 
-		log.Printf("[WORKER] polling — job_id=%s, status=%s, progress_percent=%d%%, downloaded=%d/%d",
-			jobIDCopy, progress.Status, progress.ProgressPercent, progress.DownloadedBytes, progress.TotalBytes)
+		// NEW: Check for stale download process
+		if progress.Status == "downloading" || progress.Status == "starting" {
+			if progress.ProgressPercent == 0 && progress.PID == 0 {
+				staleSeconds++
+				if staleSeconds >= 30 {
+					return "", fmt.Errorf("downloader process did not start after 30s (progress 0%%, no PID)")
+				}
+			} else {
+				staleSeconds = 0
+			}
+		}
+
+		log.Printf("[WORKER] polling — job_id=%s, status=%s, progress_percent=%d%%, downloaded=%d/%d, pid=%d, stale=%ds",
+			jobIDCopy, progress.Status, progress.ProgressPercent, progress.DownloadedBytes, progress.TotalBytes, progress.PID, staleSeconds)
 
 		// Check if download completed
 		if progress.Status == "completed" {

@@ -258,11 +258,15 @@ export default function AdminSuggestionsPage() {
                   </td>
                   <td className="px-4 py-3">
                     <Link
-                      href={`/admin/users/${suggestion.user_id}`}
+                      href={`/user/${suggestion.user_id}`}
                       className="text-blue-400 hover:underline flex items-center gap-1"
                     >
                       <User size={12} />
-                      {suggestion.user_name || suggestion.user_id.slice(0, 8)}
+                      {suggestion.user?.username || 
+                       suggestion.user?.full_name || 
+                       suggestion.user?.telegram_username || 
+                       suggestion.user_name || 
+                       suggestion.user_id.slice(0, 8)}
                     </Link>
                   </td>
                   <td className="px-4 py-3">

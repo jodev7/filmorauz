@@ -462,25 +462,11 @@ class DDownloaderIntegration:
         job_id: Optional[str] = None,
         backend_job_id: Optional[str] = None,
         referer: Optional[str] = None,
-        progress_callback=None
+        progress_callback=None,
+        pid_callback=None
     ) -> str:
         """
         Download HLS/DASH/ISM streams using N_m3u8DL-RE.
-        
-        Args:
-            url: Stream manifest URL
-            output_path: Output file path (without extension)
-            stream_type: Type of stream (hls, dash, ism)
-            job_id: Internal job ID for progress
-            backend_job_id: Backend job ID for progress
-            referer: Optional referer header
-            progress_callback: Optional callback for progress updates
-            
-        Returns:
-            Path to downloaded file
-            
-        Raises:
-            DDdownloaderIntegrationError: If download fails
         """
         logger.info(f"[DDOWNLOADER] Starting manifest download: type={stream_type}, url={url[:60]}...")
         
@@ -496,8 +482,6 @@ class DDownloaderIntegration:
         save_dir = output_dir if output_dir else self.download_dir
         
         # Build N_m3u8DL-RE command
-        # Using N_m3u8DL-RE for all manifest types (HLS, DASH, ISM)
-        # URL-encode the URL to handle spaces and special characters
         encoded_url = quote(url, safe=':/%')
         cmd = [
             self._n_m3u8dl_path,
@@ -508,16 +492,11 @@ class DDownloaderIntegration:
             "--del-after-done",
             "--decryption-engine", "FFMPEG",
             "--decryption-binary-path", self._ffmpeg_path,
-            "-mt",  # Multi-threaded
-            "-M", "format=mp4",  # Output as MP4
-            "--log-level", "INFO",  # Enable logging for progress
+            "-mt",
+            "-M", "format=mp4",
+            "--log-level", "INFO",
         ]
         
-        # Build the full CDN header set (Referer + Origin + UA + Accept).
-        # Origin is derived from referer's scheme+host so freekino /
-        # asilmedia / etc. all work without a per-domain branch — the
-        # uzmovi-only "if 'uzmovi' in referer" check left every other CDN
-        # serving 0 bytes / 403.
         origin = ""
         if referer:
             try:
@@ -536,35 +515,22 @@ class DDownloaderIntegration:
         cmd.extend(["-H", "Accept-Language: en-US,en;q=0.9"])
         cmd.extend(["-H", "Connection: keep-alive"])
 
-        # Single-line investigation marker. Pairs with the [DOWNLOAD START]
-        # log emitted by the outer downloader so a 0%-stuck job's full
-        # request shape (URL + Referer + Origin) is grep-able from one place.
         logger.info(f"--- [JOB {os.path.splitext(output_name)[0]}] DOWNLOAD START ---")
-        logger.info(f"[JOB {os.path.splitext(output_name)[0]}] URL: {url}")
-        logger.info(f"[JOB {os.path.splitext(output_name)[0]}] Encoded URL: {encoded_url}")
-        logger.info(f"[JOB {os.path.splitext(output_name)[0]}] Referer: {referer or '<none>'}")
-        logger.info(f"[JOB {os.path.splitext(output_name)[0]}] Origin: {origin or '<none>'}")
-        logger.info(f"[JOB {os.path.splitext(output_name)[0]}] Save Dir: {save_dir}")
-        logger.info(f"[JOB {os.path.splitext(output_name)[0]}] Output Name: {output_name}")
         logger.info(f"[JOB {os.path.splitext(output_name)[0]}] Command: {' '.join(cmd)}")
         
-        # Progress tracking for N_m3u8DL-RE downloads
-        start_time = time.time()
-        last_update_time = start_time
-        last_size_log_time = start_time
-        min_time_for_update = 2.0  # Update progress every 2 seconds
-        
         try:
-            # Run download with real-time output capture
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                bufsize=1,  # Line buffered
+                bufsize=1,
                 cwd=save_dir
             )
             
+            if pid_callback:
+                pid_callback(process.pid)
+                
             job_slug = os.path.splitext(output_name)[0]
             logger.info(f"[JOB {job_slug}] Process PID: {process.pid}")
 
@@ -576,6 +542,8 @@ class DDownloaderIntegration:
             _killed_for_stuck = threading.Event()
             last_activity_at = time.time()
             last_output_size = 0
+            last_size_log_time = time.time()
+            startup_logs = []
 
             def _watchdog():
                 nonlocal last_activity_at, last_output_size, last_size_log_time
@@ -637,6 +605,8 @@ class DDownloaderIntegration:
                     line = line.strip()
                     if line:
                         last_activity_at = time.time()
+                        if len(startup_logs) < 50:
+                            startup_logs.append(line)
                     
                     # Parse size information from N_m3u8DL-RE output
                     # Example: "Downloading: 123.45 MB / 456.78 MB"
@@ -741,7 +711,8 @@ class DDownloaderIntegration:
         job_id: Optional[str] = None,
         backend_job_id: Optional[str] = None,
         referer: Optional[str] = None,
-        progress_callback=None
+        progress_callback=None,
+        pid_callback=None
     ) -> str:
         """
         Download HLS/DASH/ISM streams using ffmpeg directly as fallback.
@@ -969,29 +940,13 @@ class DDownloaderIntegration:
         job_id: Optional[str] = None,
         backend_job_id: Optional[str] = None,
         referer: Optional[str] = None,
-        progress_callback=None
+        progress_callback=None,
+        pid_callback=None,
     ) -> str:
         """
         Download MP4 files using aria2c with parallel connections.
-        
-        Args:
-            url: Direct MP4 URL
-            output_path: Output file path
-            job_id: Internal job ID for progress
-            backend_job_id: Backend job ID for progress
-            referer: Optional referer header
-            progress_callback: Optional callback for progress updates
-            
-        Returns:
-            Path to downloaded file
-            
-        Raises:
-            DDdownloaderIntegrationError: If download fails
         """
         logger.info(f"[ARIA2C] Starting MP4 download: url={url[:60]}...")
-        logger.info(f"[download] url={url}")
-        
-        start_time = time.time()
         
         # Ensure output directory exists
         output_dir = os.path.dirname(output_path)
@@ -999,70 +954,61 @@ class DDownloaderIntegration:
             os.makedirs(output_dir, exist_ok=True)
         
         # Build aria2c command
-        # URL-encode the URL to handle spaces and special characters
         encoded_url = quote(url, safe=':/%')
         cmd = [
             self._aria2c_path,
             encoded_url,
             "-d", output_dir,
             "-o", os.path.basename(output_path),
-            "-x", str(PARALLEL_CONNECTIONS),  # Parallel connections
-            "-s", "4",  # Split into 4 parts
-            "-k", "1M",  # Minimum chunk size 1M
-            "--file-allocation=none",  # Don't pre-allocate (faster for large files)
-            "--continue=true",  # Continue partial downloads
-            f"--user-agent={USER_AGENT}",
+            "-x", str(PARALLEL_CONNECTIONS),
+            "-s", "4",
+            "-k", "1M",
+            "--file-allocation=none",
+            "--continue=true",
             "--timeout=60",
             "--connect-timeout=30",
             "--retry-wait=5",
             "--max-tries=3",
+            "--header", f"User-Agent: {USER_AGENT}",
         ]
         
-        # Add referer if provided
+        # Add referer and origin
         if referer:
-            cmd.extend([f"--referer={referer}"])
+            cmd.extend(["--header", f"Referer: {referer}"])
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(referer)
+                if parsed.scheme and parsed.netloc:
+                    origin = f"{parsed.scheme}://{parsed.netloc}"
+                    cmd.extend(["--header", f"Origin: {origin}"])
+            except Exception:
+                pass
         
-        # Add progress callback via aria2c's stdin for quiet mode
         cmd.extend(["--quiet=false"])
         
         job_slug = os.path.splitext(os.path.basename(output_path))[0]
         logger.info(f"--- [JOB {job_slug}] ARIA2C START ---")
-        logger.info(f"[JOB {job_slug}] URL: {url}")
-        logger.info(f"[JOB {job_slug}] Encoded URL: {encoded_url}")
-        logger.info(f"[JOB {job_slug}] Referer: {referer or '<none>'}")
         logger.info(f"[JOB {job_slug}] Command: {' '.join(cmd)}")
         
-        # Progress tracking for aria2c downloads
         start_time = time.time()
         last_update_time = start_time
-        last_size_log_time = start_time
-        min_time_for_update = 2.0  # Update progress every 2 seconds
+        min_time_for_update = 2.0
         downloaded_bytes = 0
         total_bytes = 0
         last_progress_reported = -1
         
-        # Parse aria2c output patterns
         import re
-        # aria2c console output: [#123abc 12MiB/100MiB(12%) CN:4 DL:2.1MiB ETA:40s]
         aria2c_pattern = re.compile(r'\[#[\da-f]+\s+([\d.]+\w+)/([\d.]+\w+)\s*\((\d+)%\).*DL:([\d.]+\w+)', re.IGNORECASE)
-        size_pattern = re.compile(r'([\d.]+)\s*([KMGT]?i?B)\s*/\s*([\d.]+)\s*([KMGT]?i?B)', re.IGNORECASE)
         
         def to_bytes(val, unit):
             unit = unit.upper().replace('I', '').replace('B', 'B')
-            if unit in ('B', ''):
-                return val
-            elif unit in ('KB', 'K'):
-                return val * 1024
-            elif unit in ('MB', 'M'):
-                return val * 1024 * 1024
-            elif unit in ('GB', 'G'):
-                return val * 1024 * 1024 * 1024
-            elif unit in ('TB', 'T'):
-                return val * 1024 * 1024 * 1024 * 1024
+            if unit in ('B', ''): return val
+            elif unit in ('KB', 'K'): return val * 1024
+            elif unit in ('MB', 'M'): return val * 1024 * 1024
+            elif unit in ('GB', 'G'): return val * 1024 * 1024 * 1024
             return val
         
         try:
-            # Run download with real-time stdout capture
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -1070,10 +1016,15 @@ class DDownloaderIntegration:
                 text=True,
                 bufsize=1,
             )
+            
+            if pid_callback:
+                pid_callback(process.pid)
+                
             logger.info(f"[JOB {job_slug}] Process PID: {process.pid}")
 
             last_activity_at = time.time()
             last_output_size = 0
+            last_size_log_time = time.time()
             _killed_for_stuck = threading.Event()
             _stop_watchdog = threading.Event()
             
@@ -1121,6 +1072,8 @@ class DDownloaderIntegration:
                     line = line.strip()
                     if line:
                         last_activity_at = time.time()
+                        if len(startup_logs) < 50:
+                            startup_logs.append(line)
                     
                     # Parse full aria2c progress line: [#abc 12MiB/100MiB(12%) CN:4 DL:2.1MiB ETA:40s]
                     aria_match = aria2c_pattern.search(line)
@@ -1230,18 +1183,10 @@ class DDownloaderIntegration:
         job_id: Optional[str] = None,
         backend_job_id: Optional[str] = None,
         progress_callback=None,
+        pid_callback=None,
     ) -> str:
         """
         Download a direct MP4 URL using curl with browser-like headers.
-
-        curl -L --fail --connect-timeout 15 --speed-limit 51200 --speed-time 60
-             -A "<USER_AGENT>" [-e "<referer>"]
-             -o "<output_path>" "<url>"
-
-        Progress is approximated by polling the output file size every 3 s
-        in a background thread so the backend job does not appear stuck.
-
-        Raises DDdownloaderIntegrationError on failure or timeout.
         """
         DEBUG = os.environ.get("PARSER_DEBUG", "").lower() == "true"
 
@@ -1275,9 +1220,6 @@ class DDownloaderIntegration:
 
         job_slug = os.path.splitext(os.path.basename(output_path))[0]
         logger.info(f"--- [JOB {job_slug}] CURL START ---")
-        logger.info(f"[JOB {job_slug}] URL: {url}")
-        logger.info(f"[JOB {job_slug}] Encoded URL: {encoded_url}")
-        logger.info(f"[JOB {job_slug}] Referer: {referer or '<none>'}")
         logger.info(f"[JOB {job_slug}] Command: {' '.join(cmd)}")
 
         # How long (seconds) with zero byte growth before we consider the download stalled.
@@ -1359,6 +1301,11 @@ class DDownloaderIntegration:
                 stderr=subprocess.PIPE,
                 text=True,
             )
+            
+            if pid_callback:
+                pid_callback(process.pid)
+                
+            logger.info(f"[CURL] Process PID: {process.pid}")
 
             monitor_thread.start()
 
@@ -1423,16 +1370,10 @@ class DDownloaderIntegration:
         job_id: Optional[str] = None,
         backend_job_id: Optional[str] = None,
         progress_callback=None,
+        pid_callback=None,
     ) -> str:
         """
         Download a direct MP4 URL using ffmpeg (primary tool for signed CDN URLs).
-
-        ffmpeg -y -loglevel error -stats
-               -headers "User-Agent: <UA>\\r\\nReferer: <referer>\\r\\n"
-               -i "<url>" -c copy "<output>"
-
-        Progress is parsed from ffmpeg's -stats stderr output (size= field).
-        Raises DDdownloaderIntegrationError on failure.
         """
         logger.info(f"[FFMPEG-MP4] Starting direct MP4 download: url={url[:80]}...")
 
@@ -1460,9 +1401,6 @@ class DDownloaderIntegration:
 
         job_slug = os.path.splitext(os.path.basename(output_path))[0]
         logger.info(f"--- [JOB {job_slug}] FFMPEG-MP4 START ---")
-        logger.info(f"[JOB {job_slug}] URL: {url}")
-        logger.info(f"[JOB {job_slug}] Encoded URL: {encoded_url}")
-        logger.info(f"[JOB {job_slug}] Referer: {referer or '<none>'}")
         logger.info(f"[JOB {job_slug}] Command: {' '.join(cmd)}")
 
         # HEAD request for Content-Length so we can compute percentage
@@ -1488,8 +1426,11 @@ class DDownloaderIntegration:
                 stderr=subprocess.PIPE,
                 text=True,
             )
-
-            stderr_lines: list = []
+            
+            if pid_callback:
+                pid_callback(process.pid)
+                
+            logger.info(f"[FFMPEG-MP4] Process PID: {process.pid}")
             start_time = time.time()
             _stop_watchdog = threading.Event()
             _killed_for_inactivity = threading.Event()
@@ -1622,6 +1563,7 @@ class DDownloaderIntegration:
         backend_job_id: Optional[str] = None,
         referer: Optional[str] = None,
         max_retries: int = 3,
+        pid_callback=None,
     ) -> DownloadResult:
         """
         Main download entry point with retry support and validation.
@@ -1750,7 +1692,8 @@ class DDownloaderIntegration:
                         path = self._download_with_ddownloader(
                             url, output_path, stream_type,
                             job_id, backend_job_id, referer,
-                            progress_callback=progress_callback
+                            progress_callback=progress_callback,
+                            pid_callback=pid_callback
                         )
                     except DDdownloaderIntegrationError as e:
                         # Fallback to ffmpeg if N_m3u8DL-RE fails
@@ -1758,14 +1701,11 @@ class DDownloaderIntegration:
                         path = self._download_manifest_with_ffmpeg(
                             url, output_path, stream_type,
                             job_id, backend_job_id, referer,
-                            progress_callback=progress_callback
+                            progress_callback=progress_callback,
+                            pid_callback=pid_callback
                         )
                 elif stream_type == StreamType.MP4.value:
                     # Fallback chain: aria2c → ffmpeg → curl
-                    # aria2c: fastest for generic MP4s.
-                    # ffmpeg: preferred for signed CDN URLs (e.g. video-cdn.org / freekino)
-                    #         because it sends proper browser-like headers and is not throttled.
-                    # curl: last resort (CDNs often throttle it to ~0.1 MB/s).
                     mp4_error = None
 
                     # 1. aria2c
@@ -1773,23 +1713,15 @@ class DDownloaderIntegration:
                         path = self._download_with_aria2c(
                             url, output_path,
                             job_id, backend_job_id, referer,
-                            progress_callback=progress_callback
+                            progress_callback=progress_callback,
+                            pid_callback=pid_callback
                         )
                         mp4_error = None
                     except DDdownloaderIntegrationError as aria_err:
                         mp4_error = aria_err
                         logger.warning(f"[DDOWNLOADER] aria2c failed ({aria_err}), trying ffmpeg")
-                        if backend_job_id:
-                            try:
-                                from downloader_service import report_progress_to_backend
-                                report_progress_to_backend(backend_job_id, {
-                                    "stage": "download", "status": "retrying",
-                                    "progress": 0, "message": "aria2c failed, trying ffmpeg...",
-                                })
-                            except Exception:
-                                pass
 
-                    # 2. ffmpeg (if aria2c failed) — handles signed CDN URLs well
+                    # 2. ffmpeg (if aria2c failed)
                     if mp4_error is not None:
                         try:
                             path = self._download_mp4_with_ffmpeg(
@@ -1798,22 +1730,14 @@ class DDownloaderIntegration:
                                 job_id=job_id,
                                 backend_job_id=backend_job_id,
                                 progress_callback=progress_callback,
+                                pid_callback=pid_callback
                             )
                             mp4_error = None
                         except DDdownloaderIntegrationError as ffmpeg_err:
                             mp4_error = ffmpeg_err
                             logger.warning(f"[DDOWNLOADER] ffmpeg failed ({ffmpeg_err}), trying curl")
-                            if backend_job_id:
-                                try:
-                                    from downloader_service import report_progress_to_backend
-                                    report_progress_to_backend(backend_job_id, {
-                                        "stage": "download", "status": "retrying",
-                                        "progress": 0, "message": "ffmpeg failed, trying curl...",
-                                    })
-                                except Exception:
-                                    pass
 
-                    # 3. curl (last resort — may be throttled by CDN)
+                    # 3. curl
                     if mp4_error is not None:
                         path = self._download_with_curl(
                             url, output_path,
@@ -1821,6 +1745,7 @@ class DDownloaderIntegration:
                             job_id=job_id,
                             backend_job_id=backend_job_id,
                             progress_callback=progress_callback,
+                            pid_callback=pid_callback
                         )
                 else:
                     raise DDdownloaderIntegrationError(f"Unsupported stream type: {stream_type}")

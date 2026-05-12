@@ -63,6 +63,23 @@ func (s *SuggestionService) GetSuggestionsByUser(ctx context.Context, userID pri
 		return nil, err
 	}
 
+	// Populate user (we already have the user ID)
+	user, err := s.userRepo.FindByID(userID.Hex())
+	if err == nil && user != nil {
+		sUser := &models.SuggestionUser{
+			ID:               user.ID.Hex(),
+			Username:         user.TelegramUser,
+			FullName:         strings.TrimSpace(fmt.Sprintf("%s %s", user.FirstName, user.LastName)),
+			TelegramUsername: user.TelegramUser,
+		}
+		if sUser.FullName == "" {
+			sUser.FullName = user.DisplayName
+		}
+		for i := range suggestions {
+			suggestions[i].User = sUser
+		}
+	}
+
 	return &models.SuggestionListResponse{
 		Suggestions: suggestions,
 		Total:       total,
@@ -75,6 +92,42 @@ func (s *SuggestionService) GetSuggestions(ctx context.Context, page, limit int,
 	suggestions, total, err := s.suggestionRepo.List(page, limit, status)
 	if err != nil {
 		return nil, err
+	}
+
+	// Populate users
+	if len(suggestions) > 0 {
+		userIDs := make([]primitive.ObjectID, 0)
+		userIDMap := make(map[primitive.ObjectID]bool)
+
+		for _, sugg := range suggestions {
+			if !userIDMap[sugg.UserID] {
+				userIDs = append(userIDs, sugg.UserID)
+				userIDMap[sugg.UserID] = true
+			}
+		}
+
+		users, err := s.userRepo.FindByIDs(userIDs)
+		if err == nil {
+			userMap := make(map[primitive.ObjectID]*models.SuggestionUser)
+			for _, u := range users {
+				sUser := &models.SuggestionUser{
+					ID:               u.ID.Hex(),
+					Username:         u.TelegramUser,
+					FullName:         strings.TrimSpace(fmt.Sprintf("%s %s", u.FirstName, u.LastName)),
+					TelegramUsername: u.TelegramUser,
+				}
+				if sUser.FullName == "" {
+					sUser.FullName = u.DisplayName
+				}
+				userMap[u.ID] = sUser
+			}
+
+			for i := range suggestions {
+				if sUser, ok := userMap[suggestions[i].UserID]; ok {
+					suggestions[i].User = sUser
+				}
+			}
+		}
 	}
 
 	return &models.SuggestionListResponse{
@@ -90,7 +143,28 @@ func (s *SuggestionService) GetSuggestionByID(ctx context.Context, id string) (*
 	if err != nil {
 		return nil, err
 	}
-	return s.suggestionRepo.FindByID(objID)
+	suggestion, err := s.suggestionRepo.FindByID(objID)
+	if err != nil {
+		return nil, err
+	}
+
+	if suggestion != nil {
+		user, err := s.userRepo.FindByID(suggestion.UserID.Hex())
+		if err == nil && user != nil {
+			sUser := &models.SuggestionUser{
+				ID:               user.ID.Hex(),
+				Username:         user.TelegramUser,
+				FullName:         strings.TrimSpace(fmt.Sprintf("%s %s", user.FirstName, user.LastName)),
+				TelegramUsername: user.TelegramUser,
+			}
+			if sUser.FullName == "" {
+				sUser.FullName = user.DisplayName
+			}
+			suggestion.User = sUser
+		}
+	}
+
+	return suggestion, nil
 }
 
 func (s *SuggestionService) UpdateSuggestionStatus(ctx context.Context, id string, status models.SuggestionStatus, adminMessage, reviewedBy string) (*models.Suggestion, error) {

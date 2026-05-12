@@ -679,7 +679,8 @@ class DownloadState:
         self.local_path = ""
         self.file_size = 0
         self.error = ""
-    
+        self.pid = 0
+
     def to_dict(self):
         return {
             "job_id": self.job_id,
@@ -696,8 +697,8 @@ class DownloadState:
             "error": self.error,
             "source_url": self.source_url,
             "output_name": self.output_name,
+            "pid": self.pid,
         }
-
 def get_active_download(job_id):
     """Get active download state for job_id"""
     with _downloads_lock:
@@ -1946,6 +1947,12 @@ class ParserHandler(BaseHTTPRequestHandler):
                             state.eta_seconds = eta
                             state.status = "downloading"
                     
+                    # PID callback to update state
+                    def pid_callback(pid):
+                        state = get_active_download(job_id)
+                        if state:
+                            state.pid = pid
+
                     download_result = downloader_service.smart_download(
                         url=video_url,
                         output_name=output_name,
@@ -1953,6 +1960,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                         backend_job_id=backend_job_id,
                         referer=referer if referer else None,
                         progress_callback=progress_callback,
+                        pid_callback=pid_callback,
                     )
                     
                     if not download_result.get("success"):
@@ -2046,6 +2054,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                 "file_size": state.file_size,
                 "error": state.error,
                 "done": state.done,
+                "pid": state.pid,
             }
             
             logger.info(f"[PARSER] /progress response — job_id={job_id}, status={response['status']}, percent={response['progress_percent']}%")

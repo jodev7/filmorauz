@@ -1136,7 +1136,7 @@ class DownloaderService:
                 })
             raise DownloadError(f"Download failed: {str(e)}")
 
-    def _download_manifest(self, url: str, output_path: str, job_id: str | None = None, backend_job_id: str | None = None, referer: str | None = None) -> str:
+    def _download_manifest(self, url: str, output_path: str, job_id: str | None = None, backend_job_id: str | None = None, referer: str | None = None, pid_callback=None) -> str:
         """
         Download HLS/DASH manifest using ffmpeg.
         This is a robust, reliable method for downloading streaming content.
@@ -1244,7 +1244,12 @@ class DownloaderService:
                 bufsize=1,
                 env=env
             )
-
+            
+            if pid_callback:
+                pid_callback(process.pid)
+            
+            logger.info(f"[download] PID={process.pid}")
+            
             stderr_lines = []
             last_activity_at = time.time()
             last_output_size = 0
@@ -1471,26 +1476,11 @@ class DownloaderService:
         output_path: str,
         job_id: str | None = None,
         backend_job_id: str | None = None,
-        referer: str | None = None
+        referer: str | None = None,
+        pid_callback=None
     ) -> str:
         """
         Download MP4 using aria2c with parallel connections.
-        
-        This is the preferred method for direct MP4 downloads as aria2c provides
-        better performance with parallel connections and automatic retries.
-        
-        Args:
-            url: Direct MP4 URL
-            output_path: Output file path
-            job_id: Internal job ID for progress
-            backend_job_id: Backend job ID for progress
-            referer: Optional referer header
-            
-        Returns:
-            Path to downloaded file
-            
-        Raises:
-            DownloadError: If download fails
         """
         if DDdownloaderIntegration is None:
             raise DownloadError("DDownloader integration not available for aria2c")
@@ -1507,7 +1497,8 @@ class DownloaderService:
             job_id=job_id,
             backend_job_id=backend_job_id,
             referer=referer,
-            max_retries=3
+            max_retries=3,
+            pid_callback=pid_callback
         )
         
         if not result.success:
@@ -1525,7 +1516,8 @@ class DownloaderService:
         stream_type: str,
         job_id: str | None = None,
         backend_job_id: str | None = None,
-        referer: str | None = None
+        referer: str | None = None,
+        pid_callback=None
     ) -> str:
         """
         Download HLS/DASH/ISM manifest using DDownloader's N_m3u8DL-RE.
@@ -1570,7 +1562,8 @@ class DownloaderService:
             job_id=job_id,
             backend_job_id=backend_job_id,
             referer=referer,
-            max_retries=3
+            max_retries=3,
+            pid_callback=pid_callback
         )
         
         if not result.success:
@@ -1690,6 +1683,7 @@ class DownloaderService:
         referer: str | None = None,
         max_retries: int = 3,
         progress_callback=None,
+        pid_callback=None,
     ) -> dict:
         """
         Download video with retry support and validation.
@@ -1813,6 +1807,7 @@ class DownloaderService:
                 strategy_builders.append(("direct", lambda attempt_job_id: self._download_mp4_with_aria2c(
                     url, output_path,
                     job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
+                    pid_callback=pid_callback
                 )))
             strategy_builders.append(("direct_fallback", lambda attempt_job_id: self._download_mp4(
                 url, output_path,
@@ -1821,16 +1816,19 @@ class DownloaderService:
             strategy_builders.append(("alternative_manifest", lambda attempt_job_id: self._download_manifest(
                 url, output_path,
                 job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
+                pid_callback=pid_callback
             )))
         elif stream_type in ("hls", "dash", "ism"):
             if DDdownloaderIntegration is not None and USE_DDOWNLOADER:
                 strategy_builders.append(("m3u8_primary", lambda attempt_job_id: self._download_manifest_with_ddownloader(
                     url, output_path, stream_type,
                     job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
+                    pid_callback=pid_callback
                 )))
             strategy_builders.append(("m3u8_ffmpeg", lambda attempt_job_id: self._download_manifest(
                 url, output_path,
                 job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
+                pid_callback=pid_callback
             )))
             strategy_builders.append(("alternative_direct", lambda attempt_job_id: self._download_mp4(
                 url, output_path,

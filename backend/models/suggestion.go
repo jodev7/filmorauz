@@ -23,11 +23,20 @@ const (
 	SuggestionStatusRejected SuggestionStatus = "rejected"
 )
 
+// SuggestionUser represents minimal user info for suggestions
+type SuggestionUser struct {
+	ID               string `json:"id"`
+	Username         string `json:"username,omitempty"`
+	FullName         string `json:"full_name,omitempty"`
+	TelegramUsername string `json:"telegram_username,omitempty"`
+}
+
 // Suggestion represents a movie/series suggestion from a user
 type Suggestion struct {
 	ID              primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	UserID          primitive.ObjectID `bson:"user_id" json:"user_id"`
 	UserName        string             `bson:"user_name" json:"user_name"`
+	User            *SuggestionUser    `bson:"-" json:"user,omitempty"`
 	Type            SuggestionType     `bson:"type" json:"type"`
 	Title           string             `bson:"title" json:"title"`
 	Message         string             `bson:"message" json:"message"`
