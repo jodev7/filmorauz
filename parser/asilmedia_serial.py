@@ -173,6 +173,11 @@ class AsilmediaSerialParser:
                 )
                 if key not in grouped:
                     logger.info(f"[episode-parse] title={item['title']} parent={parent_id} season={season} episode={episode_no} source_id={item['source_id']}")
+                # ENHANCED: Validate URL before accepting
+                if not self._movie._validate_video_url(href, referer=url):
+                    logger.warning(f"[episode-parse] dropping unreachable video URL for {item.get('source_id', parent_id)}: {href[:60]}")
+                    continue
+
                 item["quality_urls"][quality_key] = href
                 current = item.get("video_url") or ""
                 if not current or _rank_quality(href) > _rank_quality(current):
@@ -219,6 +224,11 @@ class AsilmediaSerialParser:
                 logger.info(f"[episode-parse] title={item['title']} parent={parent_id} season={season} episode={episode_no} source_id={item['source_id']}")
                 quality_match = _QUALITY_RE.search(href)
                 quality_key = f"{quality_match.group(1)}p" if quality_match else "unknown"
+                # ENHANCED: Validate URL before accepting
+                if not self._movie._validate_video_url(href, referer=url):
+                    logger.warning(f"[episode-parse] dropping unreachable video URL for {item.get('source_id', parent_id)}: {href[:60]}")
+                    continue
+
                 item["quality_urls"][quality_key] = href
                 current = item.get("video_url") or ""
                 if not current or _rank_quality(href) > _rank_quality(current):

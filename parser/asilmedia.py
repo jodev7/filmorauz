@@ -1097,76 +1097,65 @@ class AsilmediaParser(BaseParser):
         Enhanced to detect and extract quality-labeled download/watch links from the page.
         """
         video_urls = []
-        quality_urls = {}  # Map resolution (int) to URL
         
         if DEBUG:
             logger.info(f"[ASILMEDIA DLE] === VIDEO EXTRACTION ===")
         
         # FIRST: Try to find quality-labeled download links on the page
         # These are typically buttons/links that say "1080p", "720p", etc.
-        quality_entries, quality_map = self._extract_quality_links(soup, page_url)
+        quality_entries, _ = self._extract_quality_links(soup, page_url)
         if quality_entries:
             if DEBUG:
                 logger.info(f"[ASILMEDIA DLE] Found {len(quality_entries)} quality-labeled video URLs")
                 for q in quality_entries:
                     logger.info(f"[ASILMEDIA DLE]   Quality: {q.get('quality')}, URL: {q.get('url')[:60]}...")
             video_urls.extend(quality_entries)
-            quality_urls = quality_map
         
-        # If we found quality links, use those (best quality selection happens in server.py)
-        if quality_urls:
-            if DEBUG:
-                logger.info(f"[ASILMEDIA DLE] Using quality-labeled links, skipping other extraction")
-        
-        # SECOND: If no quality links found, try direct video links
-        if not quality_urls:
-            direct_links = soup.select("a[href*='.mp4'], a[href*='.m3u8']")
-            for link in direct_links:
-                href = link.get("href", "")
-                if href and (href.endswith(".mp4") or href.endswith(".m3u8")):
-                    if not any(skip in href for skip in ['/film/', '/page/', 'asilmedia.org']):
-                        video_urls.append({
-                            "quality": "direct",
-                            "url": normalize_url(href, self.BASE_URL),
-                            "type": "direct_mp4" if href.endswith(".mp4") else "hls"
-                        })
-                        if DEBUG:
-                            logger.info(f"[ASILMEDIA DLE] Found direct video: {href}")
-        
-        # THIRD: If still no quality URLs, try iframe
-        if not quality_urls:
-            iframe = soup.select_one("iframe[src]")
-            if iframe:
-                iframe_src = iframe.get("src", "")
-                if iframe_src:
-                    if DEBUG:
-                        logger.info(f"[ASILMEDIA DLE] Found iframe: {iframe_src}")
-                    
-                    iframe_videos = self._extract_video_from_iframe(iframe_src, page_url)
-                    video_urls.extend(iframe_videos)
-                    
-                    if not iframe_videos:
-                        if DEBUG:
-                            logger.warning(f"[ASILMEDIA DLE] No actual video URL found in iframe: {iframe_src}")
-        
-        # FOURTH: Video elements
-        if not quality_urls:
-            video_elements = soup.select("video[src], video source[src]")
-            for video in video_elements:
-                src = video.get("src", "") or (video.find("source") and video.find("source").get("src"))
-                if src:
+        # SECOND: Try direct video links
+        direct_links = soup.select("a[href*='.mp4'], a[href*='.m3u8']")
+        for link in direct_links:
+            href = link.get("href", "")
+            if href and (href.endswith(".mp4") or href.endswith(".m3u8")):
+                if not any(skip in href for skip in ['/film/', '/page/', 'asilmedia.org']):
                     video_urls.append({
-                        "quality": "unknown",
-                        "url": normalize_url(src, self.BASE_URL),
-                        "type": "html5_video"
+                        "quality": "direct",
+                        "url": normalize_url(href, self.BASE_URL),
+                        "type": "direct_mp4" if href.endswith(".mp4") else "hls"
                     })
                     if DEBUG:
-                        logger.info(f"[ASILMEDIA DLE] Found HTML5 video: {src}")
+                        logger.info(f"[ASILMEDIA DLE] Found direct video: {href}")
+        
+        # THIRD: Try iframe
+        iframe = soup.select_one("iframe[src], iframe[data-player-src]")
+        if iframe:
+            iframe_src = iframe.get("data-player-src") or iframe.get("src", "")
+            if iframe_src:
+                if DEBUG:
+                    logger.info(f"[ASILMEDIA DLE] Found iframe: {iframe_src}")
+                
+                iframe_videos = self._extract_video_from_iframe(iframe_src, page_url)
+                video_urls.extend(iframe_videos)
+                
+                if not iframe_videos:
+                    if DEBUG:
+                        logger.warning(f"[ASILMEDIA DLE] No actual video URL found in iframe: {iframe_src}")
+        
+        # FOURTH: Video elements
+        video_elements = soup.select("video[src], video source[src]")
+        for video in video_elements:
+            src = video.get("src", "") or (video.find("source") and video.find("source").get("src"))
+            if src:
+                video_urls.append({
+                    "quality": "unknown",
+                    "url": normalize_url(src, self.BASE_URL),
+                    "type": "html5_video"
+                })
+                if DEBUG:
+                    logger.info(f"[ASILMEDIA DLE] Found HTML5 video: {src}")
         
         # FIFTH: JavaScript extraction
-        if not quality_urls:
-            script_videos = self._extract_video_from_scripts(soup, page_url)
-            video_urls.extend(script_videos)
+        script_videos = self._extract_video_from_scripts(soup, page_url)
+        video_urls.extend(script_videos)
         
         # Sanitize: percent-encode paths so URLs with spaces/apostrophes/parens
         # — common in Asilmedia's download links built from the movie title —
@@ -1180,8 +1169,9 @@ class AsilmediaParser(BaseParser):
         seen = set()
         unique = []
         for v in video_urls:
-            if v["url"] and v["url"] not in seen:
-                seen.add(v["url"])
+            url = v.get("url", "")
+            if url and url not in seen:
+                seen.add(url)
                 unique.append(v)
 
         # Validate against the origin so callers never see a URL that 404s.
@@ -1238,66 +1228,76 @@ class AsilmediaParser(BaseParser):
         if DEBUG:
             logger.info(f"[ASILMEDIA DLE] === QUALITY LINK EXTRACTION ===")
         
-        # Pattern 1: Look for links with quality text (e.g., buttons saying "1080p", "720p")
-        quality_patterns = [
-            r'1080p', r'1080', r'full\s*hd', r'fullhd',
-            r'720p', r'720', r'hd',
-            r'480p', r'480', r'sd',
-            r'360p', r'360',
-        ]
-        
-        # Find all links that might be quality selectors
-        all_links = soup.find_all("a", href=True)
-
         media_url_re = re.compile(r'\.(?:mp4|m3u8|m3u|mpd)(?:[?#]|$)', re.IGNORECASE)
+        
+        # Pattern 1: Look for links and buttons with quality text
+        # These are typically buttons/links that say "1080p", "720p", etc.
+        
+        # Collect all potential tags that might hold a URL
+        candidates = []
+        for tag in soup.find_all(["a", "button", "div", "span"], attrs={"href": True}):
+            candidates.append((tag, tag.get("href", "")))
+        for tag in soup.find_all(["a", "button", "div", "span"], attrs={"data-url": True}):
+            candidates.append((tag, tag.get("data-url", "")))
+        for tag in soup.find_all(["a", "button", "div", "span"], attrs={"data-src": True}):
+            candidates.append((tag, tag.get("data-src", "")))
+        for tag in soup.find_all(["a", "button", "div", "span"], attrs={"data-player-src": True}):
+            candidates.append((tag, tag.get("data-player-src", "")))
 
-        for link in all_links:
-            href = link.get("href", "")
-            text = link.get_text(" ", strip=True)
-            text_lc = text.lower()
-
-            if not href:
-                continue
-
-            # Only accept hrefs that look like media files (allow query strings).
-            if not media_url_re.search(href):
+        for tag, raw_url in candidates:
+            if not raw_url:
                 continue
             
-            # Skip navigation links that might contain 'asilmedia.org' but aren't media
-            # (e.g. internal links, search pages, category pages)
-            if any(skip in href for skip in ['/film/', '/page/', '/category/', '/search']):
+            # Clean and normalize
+            url = raw_url.strip()
+            if not url or url.startswith(("javascript:", "#")):
+                continue
+                
+            text = tag.get_text(" ", strip=True)
+            text_lc = text.lower()
+            
+            # Skip navigation links
+            if any(skip in url for skip in ['/film/', '/page/', '/category/', '/search']):
                 continue
 
-            # Detect quality from link text, title attr, and href itself.
+            # Detect quality from text, title, data-attributes, and URL itself
             height = _detect_quality_height(
                 text_lc,
-                link.get("title", ""),
-                link.get("data-quality", ""),
-                href,
+                tag.get("title", ""),
+                tag.get("data-quality", ""),
+                tag.get("data-name", ""),
+                url,
             )
+            
             if height <= 0:
-                # No usable quality marker; skip — the caller has fallback paths
-                # (playerjs / scripts) that do tag quality.
                 continue
 
-            error = validate_media_url_strict(href)
-            if error:
-                if DEBUG:
-                    logger.info(f"[ASILMEDIA DLE] Skip quality link (invalid): {href[:60]} - {error}")
+            # Basic validation (strict validation happens later in _extract_video_urls)
+            if not media_url_re.search(url) and not any(ind in url.lower() for ind in ["srv", "uzdown", "fayllar"]):
                 continue
 
-            url = normalize_url(href, self.BASE_URL)
+            error = validate_media_url_strict(url)
+            if error and not any(ind in url.lower() for ind in ["srv", "uzdown", "fayllar"]):
+                continue
+
+            normalized = normalize_url(url, self.BASE_URL)
             label = f"{height}p"
 
+            # Add to entries. We now allow multiple URLs per quality.
+            # quality_map will store the FIRST working one for logging.
+            entries.append({
+                "quality": label,
+                "url": normalized,
+                "type": classify_media_url(normalized),
+                "height": height,
+                "source_tag": tag.name,
+            })
+            
             if height not in quality_map:
-                quality_map[height] = url
-                entries.append({
-                    "quality": label,
-                    "url": url,
-                    "type": classify_media_url(url),
-                    "height": height,
-                })
-                logger.info(f"[asilmedia] quality candidate text={text_lc[:40]!r} {label} url={url[:120]}")
+                quality_map[height] = normalized
+                
+            if DEBUG:
+                logger.info(f"[asilmedia] quality candidate [{tag.name}] {label} url={normalized[:120]}")
         
         # Pattern 2: Look for PlayerJS-style quality entries in scripts
         playerjs_entries = self._extract_playerjs_quality(soup, page_url)
@@ -1305,57 +1305,37 @@ class AsilmediaParser(BaseParser):
             height = _detect_quality_height(entry.get("quality", ""), entry.get("url", ""))
             if height <= 0:
                 continue
+                
+            entry["quality"] = f"{height}p"
+            entry["height"] = height
+            entries.append(entry)
+            
             if height not in quality_map:
                 quality_map[height] = entry["url"]
-                entry["quality"] = f"{height}p"
-                entry["height"] = height
-                entries.append(entry)
+                
+            if DEBUG:
                 logger.info(f"[asilmedia] quality candidate (playerjs) {height}p url={entry['url'][:120]}")
         
-        # Pattern 3: Look for quality buttons in specific containers
-        # Common patterns: .quality-list, .download-buttons, .player-qualities
-        quality_containers = soup.select(".quality-list, .download-buttons, .player-qualities, .video-qualities, [class*='quality']")
-        for container in quality_containers:
-            links = container.find_all("a", href=True)
-            for link in links:
-                href = link.get("href", "")
-                text = link.get_text(" ", strip=True)
+        # Deduplicate entries by URL before returning
+        seen_urls = set()
+        unique_entries = []
+        for e in entries:
+            u = e.get("url")
+            if u and u not in seen_urls:
+                seen_urls.add(u)
+                unique_entries.append(e)
 
-                if not href or not media_url_re.search(href):
-                    continue
+        # Sort entries by height descending
+        unique_entries.sort(key=lambda e: int(e.get("height") or 0), reverse=True)
 
-                height = _detect_quality_height(text, link.get("title", ""), href)
-                if height <= 0:
-                    continue
-
-                error = validate_media_url_strict(href)
-                if error:
-                    continue
-
-                url = normalize_url(href, self.BASE_URL)
-
-                if height not in quality_map:
-                    quality_map[height] = url
-                    entries.append({
-                        "quality": f"{height}p",
-                        "url": url,
-                        "type": classify_media_url(url),
-                        "height": height,
-                    })
-                    logger.info(f"[asilmedia] quality candidate (container) {height}p url={url[:120]}")
-
-        # Sort entries by height descending so callers can pick entries[0] as
-        # the highest available quality without re-sorting.
-        entries.sort(key=lambda e: int(e.get("height") or _label_to_int(e.get("quality", ""))), reverse=True)
-
-        # Build a compact "found qualities" log line per the asilmedia spec.
+        # Build a compact "found qualities" log line
         if quality_map:
             summary = ",".join(
-                f"{h}p={(quality_map[h] or '')[:80]}" for h in sorted(quality_map.keys(), reverse=True)
+                f"{h}p={(quality_map[h] or '')[:60]}" for h in sorted(quality_map.keys(), reverse=True)
             )
             logger.info(f"[asilmedia] found qualities: {summary}")
 
-        return entries, quality_map
+        return unique_entries, quality_map
     
     def _extract_playerjs_quality(self, soup, page_url: str) -> List[Dict[str, str]]:
         """Extract quality-labeled video URLs from PlayerJS-style scripts"""
@@ -1418,7 +1398,8 @@ class AsilmediaParser(BaseParser):
                 "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
             }
             
-            response = self.session.get(iframe_url, headers=headers, timeout=30, allow_redirects=True)
+            # CRITICAL: use stream=True so we don't download the whole file if it's a direct video
+            response = self.session.get(iframe_url, headers=headers, timeout=30, allow_redirects=True, stream=True)
             iframe_final_url = response.url
             
             if DEBUG:
@@ -1438,7 +1419,13 @@ class AsilmediaParser(BaseParser):
                 return video_urls
             
             # Parse HTML
-            soup = BeautifulSoup(response.content, "lxml")
+            # Only read the first 1MB of HTML content to be safe
+            html_content = b""
+            for chunk in response.iter_content(chunk_size=1024*1024):
+                html_content = chunk
+                break # Just get first 1MB
+                
+            soup = BeautifulSoup(html_content, "lxml")
             
             # Try video element
             video = soup.select_one("video[src], video source[src]")

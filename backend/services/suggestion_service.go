@@ -75,6 +75,9 @@ func (s *SuggestionService) GetSuggestionsByUser(ctx context.Context, userID pri
 		if sUser.FullName == "" {
 			sUser.FullName = user.DisplayName
 		}
+		if sUser.FullName == "" && user.TelegramUser != "" {
+			sUser.FullName = "@" + user.TelegramUser
+		}
 		for i := range suggestions {
 			suggestions[i].User = sUser
 		}
@@ -119,6 +122,9 @@ func (s *SuggestionService) GetSuggestions(ctx context.Context, page, limit int,
 				if sUser.FullName == "" {
 					sUser.FullName = u.DisplayName
 				}
+				if sUser.FullName == "" && u.TelegramUser != "" {
+					sUser.FullName = "@" + u.TelegramUser
+				}
 				userMap[u.ID] = sUser
 			}
 
@@ -159,6 +165,9 @@ func (s *SuggestionService) GetSuggestionByID(ctx context.Context, id string) (*
 			}
 			if sUser.FullName == "" {
 				sUser.FullName = user.DisplayName
+			}
+			if sUser.FullName == "" && user.TelegramUser != "" {
+				sUser.FullName = "@" + user.TelegramUser
 			}
 			suggestion.User = sUser
 		}

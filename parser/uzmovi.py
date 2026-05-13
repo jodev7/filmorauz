@@ -42,9 +42,9 @@ DEBUG = os.environ.get("PARSER_DEBUG", "false").lower() == "true"
 
 
 class UzmoviParser(BaseParser):
-    """Parser for uzmovi.tv"""
+    """Parser for uzmovi.tv (current mirror: uzmovi.net)"""
     
-    BASE_URL = "https://uzmovi.tv"
+    BASE_URL = "https://uzmovi.net"
     
     # Specific card selectors (order matters - most specific first)
     CARD_SELECTORS = [
@@ -201,15 +201,17 @@ class UzmoviParser(BaseParser):
         return "movie"
     
     def search(self, query: str) -> List[SearchResult]:
-        """Search for movies on uzmovi.tv using the site's real search form."""
+        """Search for movies on uzmovi.tv (mirror: uzmovi.net) using the site's real search form."""
         results: List[SearchResult] = []
-        search_url = f"{self.BASE_URL}/search.html"
+        # Modern Uzmovi mirror uses /search?q=...
+        search_url = f"{self.BASE_URL}/search"
         params = {
-            "do": "search",
-            "subaction": "search",
-            "story": query,
+            "q": query,
         }
         try:
+            # Establish session cookies first (required by uzmovi.net)
+            self.session.get(self.BASE_URL, timeout=30)
+            
             response = self.session.get(search_url, params=params, timeout=30, allow_redirects=True)
             response.raise_for_status()
             soup = BeautifulSoup(response.content, "lxml")
