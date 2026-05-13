@@ -262,8 +262,8 @@ export default function AdminSuggestionsPage() {
                       className="text-blue-400 hover:underline flex items-center gap-1"
                     >
                       <User size={12} />
-                      {suggestion.user?.username || 
-                       suggestion.user?.full_name || 
+                      {suggestion.user?.full_name || 
+                       suggestion.user?.username || 
                        suggestion.user?.telegram_username || 
                        suggestion.user_name ||
                        `User ${suggestion.user_id?.slice(-4)}`}
