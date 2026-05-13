@@ -1732,14 +1732,14 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 	}()
 
 	var input struct {
-		Source         string `json:"source" binding:"required"`
-		SourceID       string `json:"source_id"`
-		DetailURL      string `json:"detail_url"`
-		Title          string `json:"title"`
-		Type           string `json:"type"` // "movie" or "serial"
-		Year           int    `json:"year"`
-		Poster         string `json:"poster"`
-		ForceConfirmed bool   `json:"force_confirmed"`
+		Source         string      `json:"source" binding:"required"`
+		SourceID       string      `json:"source_id"`
+		DetailURL      string      `json:"detail_url"`
+		Title          string      `json:"title"`
+		Type           string      `json:"type"` // "movie" or "serial"
+		Year           interface{} `json:"year"`
+		Poster         string      `json:"poster"`
+		ForceConfirmed bool        `json:"force_confirmed"`
 	}
 
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -1747,6 +1747,9 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Normalize year to int
+	finalYear := parserValueAsInt(input.Year)
 
 	// Always re-fetch /details before import and verify that the selected card
 	// still matches the parser detail page. This blocks wrong-movie imports when
@@ -1770,7 +1773,7 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 					SourceID:  input.SourceID,
 					DetailURL: input.DetailURL,
 					Title:     input.Title,
-					Year:      input.Year,
+					Year:      finalYear,
 					Type:      input.Type,
 					Poster:    input.Poster,
 				}
