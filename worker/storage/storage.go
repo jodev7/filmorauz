@@ -446,7 +446,10 @@ func (s *B2Storage) uploadBytes(data []byte, remotePath, contentType string) (st
 	// B2 handles folder creation via path prefix automatically.
 	// X-Bz-Info-* values must be URL-encoded; otherwise commas in Cache-Control
 	// are rejected as bad percent-encoded strings by B2.
-	req, err := http.NewRequest("POST", uploadURL, bytes.NewReader(data))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", uploadURL, bytes.NewReader(data))
 	if err != nil {
 		return "", fmt.Errorf("b2 upload: build request: %w", err)
 	}

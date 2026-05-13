@@ -431,6 +431,24 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	jobID := job.ID.Hex()
 	log.Printf("[PIPELINE] Starting processing for job %s", jobID)
 
+	// Global heartbeat for the entire pipeline execution
+	heartbeatCtx, heartbeatCancel := context.WithCancel(ctx)
+	defer heartbeatCancel()
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+				if err := p.jobRepo.Heartbeat(context.Background(), jobID); err != nil {
+					log.Printf("[HEARTBEAT] Error updating heartbeat for job %s: %v", jobID, err)
+				}
+			}
+		}
+	}()
+
 	// Handle direct_upload source - download from B2 temp path
 	if job.Source == "direct_upload" {
 		return p.processDirectUploadJob(ctx, job)
@@ -1477,7 +1495,18 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 		time.Sleep(pollInterval)
 
 		progressURL := fmt.Sprintf("%s/progress?job_id=%s", p.config.ParserURL, jobID)
-		progressResp, err := p.httpClient.Get(progressURL)
+		
+		reqCtx, reqCancel := context.WithTimeout(ctx, 15*time.Second)
+		req, reqErr := http.NewRequestWithContext(reqCtx, "GET", progressURL, nil)
+		var progressResp *http.Response
+		var err error
+		if reqErr == nil {
+			progressResp, err = p.httpClient.Do(req)
+		} else {
+			err = reqErr
+		}
+		reqCancel()
+
 		if err != nil {
 			consecutiveErrors++
 			log.Printf("[WORKER] /progress transport error — job_id=%s, err=%v, consecutive=%d/%d",
@@ -1626,6 +1655,12 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 			lastBytesAt = time.Now()
 			lastProgressAt = lastBytesAt
 		} else if progress.Status == "downloading" || progress.Status == "starting" {
+			// FAST-FAIL: If download is stuck at 0 bytes for 60 seconds, fail immediately.
+			// This typically indicates a 403 Forbidden, expired token, or blocked CDN.
+			if progress.DownloadedBytes == 0 && stalledFor >= 60*time.Second {
+				return "", fmt.Errorf("fast-fail: download stuck at 0 bytes for 60s (possible 403 Forbidden or expired token)")
+			}
+
 			if stalledFor >= noProgressTimeout {
 				return "", fmt.Errorf("download watchdog: no byte progress for %s (status=%s, bytes=%d/%d) — downloader appears stuck or process dead",
 					stalledFor.Truncate(time.Second), progress.Status, progress.DownloadedBytes, progress.TotalBytes)
@@ -2210,26 +2245,6 @@ func (p *Pipeline) processVideo(job *models.IngestionJob, inputPath string, cano
 	}
 
 	jobID := job.ID.Hex()
-
-	// Heartbeat: update job every 30 seconds during processing to prevent stale-job detection
-	// FFmpeg processing can take 30-60+ minutes, so we need heartbeats to keep the job alive
-	heartbeatCtx, heartbeatCancel := context.WithCancel(context.Background())
-	defer heartbeatCancel()
-	go func() {
-		heartbeatTicker := time.NewTicker(30 * time.Second)
-		defer heartbeatTicker.Stop()
-		for {
-			select {
-			case <-heartbeatCtx.Done():
-				return
-			case <-heartbeatTicker.C:
-				// Heartbeat update - only update timestamp, keep current progress/status
-				if err := p.jobRepo.Heartbeat(context.Background(), jobID); err == nil {
-					log.Printf("[WORKER] heartbeat: job %s still processing", jobID)
-				}
-			}
-		}
-	}()
 
 	metadata := job.Metadata
 	if metadata == nil {
