@@ -66,7 +66,10 @@ export default function AdminDashboard() {
   };
 
   // Get display name for user
-  const getUserDisplayName = (u: { display_name?: string; username?: string; telegram_id?: number }) => {
+  const getUserDisplayName = (u: { display_name?: string; first_name?: string; last_name?: string; username?: string; telegram_id?: number }) => {
+    if (u.first_name || u.last_name) {
+      return [u.first_name, u.last_name].filter(Boolean).join(" ");
+    }
     if (u.display_name) return u.display_name;
     if (u.username) return `@${u.username}`;
     if (u.telegram_id) return `ID: ${u.telegram_id}`;

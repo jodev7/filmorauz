@@ -75,6 +75,8 @@ func (h *AdminUserHandler) DashboardStats(c *gin.Context) {
 	type userResponse struct {
 		ID               string  `json:"id"`
 		DisplayName      string  `json:"display_name"`
+		FirstName        string  `json:"first_name"`
+		LastName         string  `json:"last_name"`
 		Username         string  `json:"username"`
 		TelegramID       int64   `json:"telegram_id"`
 		Role             string  `json:"role"`
@@ -95,6 +97,8 @@ func (h *AdminUserHandler) DashboardStats(c *gin.Context) {
 		recentUsersResp[i] = userResponse{
 			ID:               u.ID.Hex(),
 			DisplayName:      u.DisplayName,
+			FirstName:        u.FirstName,
+			LastName:         u.LastName,
 			Username:         u.TelegramUser,
 			TelegramID:       u.TelegramID,
 			Role:             u.Role,
@@ -318,6 +322,8 @@ func (h *AdminUserHandler) ListUsers(c *gin.Context) {
 	type userResponse struct {
 		ID               string  `json:"id"`
 		DisplayName      string  `json:"display_name"`
+		FirstName        string  `json:"first_name"`
+		LastName         string  `json:"last_name"`
 		Username         string  `json:"username"`
 		TelegramID       int64   `json:"telegram_id"`
 		Role             string  `json:"role"`
@@ -360,6 +366,8 @@ func (h *AdminUserHandler) ListUsers(c *gin.Context) {
 		usersResp[i] = userResponse{
 			ID:               u.ID.Hex(),
 			DisplayName:      u.DisplayName,
+			FirstName:        u.FirstName,
+			LastName:         u.LastName,
 			Username:         u.TelegramUser,
 			TelegramID:       u.TelegramID,
 			Role:             u.Role,

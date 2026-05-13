@@ -2194,6 +2194,8 @@ export async function importFromCatalog(
 export interface AdminUser {
   id: string;
   display_name: string;
+  first_name?: string;
+  last_name?: string;
   username: string;
   telegram_id: number;
   role: string;

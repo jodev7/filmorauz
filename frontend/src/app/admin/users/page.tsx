@@ -164,6 +164,9 @@ export default function AdminUsersPage() {
 
   // Get display name
   const getDisplayName = (u: AdminUser) => {
+    if (u.first_name || u.last_name) {
+      return [u.first_name, u.last_name].filter(Boolean).join(" ");
+    }
     if (u.display_name) return u.display_name;
     if (u.username) return `@${u.username}`;
     if (u.telegram_id) return `ID: ${u.telegram_id}`;
