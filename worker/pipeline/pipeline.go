@@ -1089,7 +1089,9 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 
 	// NEW: Improved identity check for serials
 	if strings.TrimSpace(result.SourceID) != "" && strings.TrimSpace(job.SourceID) != "" && strings.TrimSpace(result.SourceID) != strings.TrimSpace(job.SourceID) {
-		// Check if it's a serial episode (contains 's' and 'e' format)
+		// Fix 1: Serial Episode Extraction Mismatch
+		// If job.SourceID contains :s and e, and result.SourceID is strictly numeric,
+		// dynamically construct the canonical string and compare it.
 		if strings.Contains(job.SourceID, ":s") && strings.Contains(job.SourceID, "e") {
 			parts := strings.Split(job.SourceID, ":s")
 			if len(parts) == 2 {
@@ -1098,24 +1100,19 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 				seasonParts := strings.Split(seasonEp, "e")
 				if len(seasonParts) == 2 {
 					seasonStr := seasonParts[0]
-					// Ensure we have a clean episode number
 					rawFetched := strings.TrimSpace(result.SourceID)
 
-					// If rawFetched is just numeric, pad it as 2 digits
-					epNum := rawFetched
-					if len(epNum) < 2 {
-						if val, err := strconv.Atoi(epNum); err == nil {
-							epNum = fmt.Sprintf("%02d", val)
+					// Check if rawFetched is strictly numeric
+					if numericEpisode, convErr := strconv.Atoi(rawFetched); convErr == nil {
+						// Dynamically construct canonical string: {parentID}:s{seasonStr}e{paddedEpisode}
+						canonicalFetched := fmt.Sprintf("%s:s%se%02d", parentID, seasonStr, numericEpisode)
+
+						log.Printf("[identity-check] serial_mismatch_fix job_id=%s requested=%s raw_fetched=%s canonical_fetched=%s",
+							jobID, job.SourceID, rawFetched, canonicalFetched)
+
+						if canonicalFetched == job.SourceID {
+							goto identity_check_ok
 						}
-					}
-
-					// Canonicalize fetched: parentID + s + season + e + episode
-					canonicalFetched := fmt.Sprintf("%s:s%se%s", parentID, seasonStr, epNum)
-
-					log.Printf("[identity-check] content_type=serial_episode job_id=%s requested=%s raw_fetched=%s canonical_fetched=%s pass=%v", jobID, job.SourceID, result.SourceID, canonicalFetched, canonicalFetched == job.SourceID)
-
-					if canonicalFetched == job.SourceID {
-						goto identity_check_ok
 					}
 				}
 			}
@@ -1655,10 +1652,11 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 			lastBytesAt = time.Now()
 			lastProgressAt = lastBytesAt
 		} else if progress.Status == "downloading" || progress.Status == "starting" {
-			// FAST-FAIL: If download is stuck at 0 bytes for 60 seconds, fail immediately.
+			// Fix 2: Fast-Fail for 0% Stuck Downloads
+			// If download is stuck at 0 bytes for 60 seconds, fail immediately.
 			// This typically indicates a 403 Forbidden, expired token, or blocked CDN.
 			if progress.DownloadedBytes == 0 && stalledFor >= 60*time.Second {
-				return "", fmt.Errorf("fast-fail: download stuck at 0 bytes for 60s (possible 403 Forbidden or expired token)")
+				return "", fmt.Errorf("fast-fail: download stuck at 0 bytes for 60s (possible 403 Forbidden)")
 			}
 
 			if stalledFor >= noProgressTimeout {
