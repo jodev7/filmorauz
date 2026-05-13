@@ -388,7 +388,7 @@ func (s *B2Storage) authorize() error {
 // B2 upload URLs cannot be safely reused across concurrent goroutines (B2 rejects
 // concurrent POSTs to the same upload URL), so we fetch a fresh one per call.
 func (s *B2Storage) getUploadURL() (uploadURL, token string, err error) {
-	s.mu.Lock()
+	s.mu.Lock()	
 	apiURL := s.apiURL
 	authToken := s.authToken
 	bucketID := s.bucketID

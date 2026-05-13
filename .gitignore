@@ -25,8 +25,18 @@ frontend/out/
 dist/
 build/
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+parser/venv/
+.venv/
+
 # Uploads & media
 uploads/
+parser/downloads/
+parser/progress/
 *.mp4
 *.mkv
 *.avi
@@ -53,24 +63,9 @@ Thumbs.db
 .vscode/settings.json
 .idea/
 
-#Claude settings
+# Claude settings
 .claude
 .kilo
 
-
-#Worker
+# Worker
 worker/readyvideo
-
-
-
-
-venv/
-parser/venv/
-.venv/
-node_modules/
-uploads/
-*.mp4
-*.mkv
-*.avi
-*.mov
-.env

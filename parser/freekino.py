@@ -744,18 +744,28 @@ class FreekinoParser:
             # Video — extract all quality variants
             all_entries, quality_urls = self._extract_video(soup, response.url)
 
-            # Final sanity pass: drop any entry whose URL still carries
-            # multi-URL artifacts. video_url must be a single, real URL.
-            clean_entries = []
-            for e in all_entries or []:
-                u = (e or {}).get("url", "")
-                if not u or any(ch in u for ch in ('[', ']', ',')):
-                    logger.warning(f"[FREEKINO] dropping malformed entry: quality={e.get('quality','?')}, url={u[:120]}")
+            # Sanitize and Validate: probe each candidate against the origin
+            # failed entries are dropped, ensuring we never hand the worker a broken link.
+            validated: List[Dict[str, str]] = []
+            seen_urls = set()
+            for entry in all_entries or []:
+                u = entry.get("url", "")
+                if not u or u in seen_urls:
                     continue
-                clean_entries.append(e)
-            all_entries = clean_entries
-            quality_urls = {res: url for res, url in (quality_urls or {}).items()
-                            if url and not any(ch in url for ch in ('[', ']', ','))}
+                
+                # Probe the URL
+                if self._validate_video_url(u, referer=url):
+                    validated.append(entry)
+                    seen_urls.add(u)
+                else:
+                    logger.warning(f"[FREEKINO] dropping unreachable video URL: {u[:120]}")
+            
+            all_entries = validated
+            # Re-sort by resolution descending
+            all_entries.sort(key=lambda e: self._label_to_int(e.get("quality", "")), reverse=True)
+            
+            # Update quality_urls to only include validated ones
+            quality_urls = {self._label_to_int(e.get("quality", "")): e["url"] for e in all_entries if e.get("quality")}
 
             if all_entries:
                 # Build video_urls list expected by server._extract_best_video_url()
@@ -970,6 +980,9 @@ class FreekinoParser:
 
     def _entry_from_url(self, url: str, base_url: str, quality: str = "auto"):
         url = self._decode_video_url(url, base_url)
+        # Sanitize: percent-encode paths so URLs with spaces/apostrophes/parens become RFC-valid
+        url = self._sanitize_video_url(url)
+        
         # Stricter character class: excludes ',', '[', ']' so the regex cannot
         # swallow across multiple Playerjs entries like "[480p]a.mp4,[720p]b.mp4".
         media_match = re.search(
@@ -988,6 +1001,72 @@ class FreekinoParser:
         if validate_media_url_strict(url):
             return None
         return {"url": url, "type": classify_media_url(url), "quality": quality or "auto"}
+
+    @staticmethod
+    def _sanitize_video_url(raw_url: str) -> str:
+        """Percent-encode the path/query of a URL while leaving the scheme,
+        host, and existing percent-escapes intact.
+        """
+        if not raw_url:
+            return ""
+        try:
+            from urllib.parse import urlsplit, urlunsplit, quote, unquote
+        except Exception:
+            return raw_url
+        try:
+            parts = urlsplit(raw_url.strip())
+        except Exception:
+            return raw_url
+        if not parts.scheme or not parts.netloc:
+            return raw_url
+        
+        safe_path = quote(unquote(parts.path), safe="/%:@!$&()*+,;=~-._")
+        safe_query = quote(unquote(parts.query), safe="=&%:@!$()*+,;~-._/?") if parts.query else ""
+        return urlunsplit((parts.scheme, parts.netloc, safe_path, safe_query, parts.fragment))
+
+    def _validate_video_url(self, url: str, referer: str = "") -> bool:
+        """Probe a candidate video URL with HEAD/GET to ensure it works."""
+        if not url or not url.lower().startswith(("http://", "https://")):
+            return False
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Referer": referer or self.BASE_URL + "/",
+        }
+        
+        is_manifest = ".m3u8" in url.lower() or ".mpd" in url.lower()
+        try:
+            # Try HEAD first
+            try:
+                r = self.session.head(url, headers=headers, timeout=10, allow_redirects=True)
+                if r.status_code in (200, 206) and not is_manifest:
+                    return True
+            except Exception:
+                pass
+
+            # Fallback: tiny ranged GET
+            r = self.session.get(
+                url,
+                headers={**headers, "Range": "bytes=0-2047"},
+                timeout=12,
+                stream=True,
+                allow_redirects=True,
+            )
+            try:
+                if r.status_code not in (200, 206):
+                    return False
+                if is_manifest:
+                    chunk = next(r.iter_content(chunk_size=2048), b"") or b""
+                    return chunk.lstrip().startswith(b"#EXTM3U") or b"MPD" in chunk
+                return True
+            finally:
+                try:
+                    r.close()
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.info(f"[FREEKINO] validation probe failed url={url[:80]} err={exc}")
+            return False
 
     def _parse_playerjs_file(self, script_content: str, base_url: str = ""):
         """

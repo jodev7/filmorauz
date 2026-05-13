@@ -1111,6 +1111,7 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 							jobID, job.SourceID, rawFetched, canonicalFetched)
 
 						if canonicalFetched == job.SourceID {
+							result.SourceID = job.SourceID
 							goto identity_check_ok
 						}
 					}

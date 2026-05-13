@@ -145,6 +145,41 @@ class BaseParser(ABC):
         """Return the base URL of the source"""
         pass
     
+    def _build_browser_headers(self, referer: Optional[str] = None) -> Dict[str, str]:
+        """Standardize browser headers across all parsers"""
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Connection": "keep-alive",
+        }
+        if referer:
+            headers["Referer"] = referer
+            origin = self._origin_for_referer(referer)
+            if origin:
+                headers["Origin"] = origin
+        return headers
+
+    def _origin_for_referer(self, referer: Optional[str]) -> str:
+        """Derive Origin from Referer, handling mirrors correctly"""
+        referer = (referer or "").strip()
+        if not referer:
+            return ""
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(referer)
+            host = (parsed.netloc or "").lower()
+            
+            # Known providers with multiple mirrors
+            if any(p in host for p in ["asilmedia", "uzmovi", "freekino"]):
+                return f"{parsed.scheme}://{parsed.netloc}"
+                
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}"
+        except Exception:
+            pass
+        return ""
+
     def _fetch_page(self, url: str, timeout: int = 30) -> BeautifulSoup:
         """Fetch a page and return BeautifulSoup object."""
         try:

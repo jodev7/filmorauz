@@ -1576,16 +1576,48 @@ class UzmoviParser(BaseParser):
         
         return 'unknown'
     
-    def _dedupe_media_urls(self, media_urls: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    def _detect_quality_height(self, *texts: str) -> int:
+        """Best-effort detect a pixel height from any of the supplied strings."""
+        for text in texts:
+            if not text:
+                continue
+            t = str(text).lower()
+            # Explicit numeric height like 1080p / 720
+            m = re.search(r'\b(2160|1440|1080|720|480|360|240)p?\b', t)
+            if m:
+                return int(m.group(1))
+            # URL fragments like _1080., -720p., /480/.
+            m = re.search(r'[_/\-](2160|1440|1080|720|480|360|240)p?[_./\-]', t)
+            if m:
+                return int(m.group(1))
+            
+            # Synonyms
+            for pattern, height in [
+                (r'4k|2160p?', 2160),
+                (r'full\s*hd|fhd|1080p?', 1080),
+                (r'\bhd\b|720p?', 720),
+                (r'\bsd\b|480p?', 480),
+                (r'360p?', 360),
+                (r'240p?', 240),
+            ]:
+                if re.search(pattern, t):
+                    return height
+        return 0
+
+    def _label_to_int(self, label: str) -> int:
+        """Extract numeric resolution from a quality label."""
+        if not label:
+            return 0
+        m = re.search(r'(\d{3,4})', str(label))
+        return int(m.group(1)) if m else 0
+
+    def _dedupe_media_urls(self, media_urls: List[Dict[str, str]], page_url: str = "") -> List[Dict[str, str]]:
         """
         Deduplicate media URLs while preserving all unique types.
         If both mp4 and m3u8 exist, keep both.
         
         IMPORTANT: Validates URLs using is_valid_media_url from media_extractor
-        to ensure only valid stream URLs are returned.
-        
-        [FIXED] Now uses both isValidStreamUrl and is_valid_media_url for thorough validation.
-        [ENHANCED] Added comprehensive logging for debugging URL filtering.
+        AND probes the origin to ensure the URL is reachable and serves media.
         """
         seen = set()
         unique = []
@@ -1609,8 +1641,11 @@ class UzmoviParser(BaseParser):
             
             # Skip empty URLs
             if not url:
-                logger.info(f"[UZMOVI]   SKIP: Empty URL")
                 continue
+
+            # Sanitize URL: fix spaces/special chars
+            url = self._sanitize_video_url(url)
+            media["url"] = url
 
             parsed = urlparse(url)
             if "{" in url or "}" in url or not parsed.netloc:
@@ -1633,7 +1668,6 @@ class UzmoviParser(BaseParser):
                 continue
             
             # CRITICAL: Validate URL is a real stream URL, not HTML page
-            # First try the faster isValidStreamUrl
             if not isValidStreamUrl(url):
                 logger.info(f"[UZMOVI]   REJECTED (isValidStreamUrl=False): {url[:100]}... (type: {media.get('type', 'unknown')})")
                 invalid_rejected += 1
@@ -1646,6 +1680,12 @@ class UzmoviParser(BaseParser):
                 invalid_rejected += 1
                 continue
             
+            # PROBE validation: ensure the URL is actually reachable and serves media
+            if not self._validate_video_url(url, referer=page_url):
+                logger.info(f"[UZMOVI]   REJECTED (probe failed): {url[:100]}... (type: {media.get('type', 'unknown')})")
+                invalid_rejected += 1
+                continue
+
             # URL is valid - add it
             seen.add(url)
             unique.append(media)
@@ -1659,15 +1699,80 @@ class UzmoviParser(BaseParser):
         logger.info(f"[UZMOVI]   Accepted: {accepted_count}")
         logger.info(f"[UZMOVI]   Final unique URLs: {len(unique)}")
         
-        if unique:
-            logger.info(f"[UZMOVI] === FINAL VALID URLs ===")
-            for i, u in enumerate(unique):
-                logger.info(f"[UZMOVI]   Final[{i}]: type={u.get('type', 'unknown')}, url={u.get('url', '')[:120]}...")
-        
-        if invalid_rejected > 0:
-            logger.warning(f"[UZMOVI] Filtered out {invalid_rejected} invalid URL(s) during deduplication")
+        # Re-sort unique entries by detected height so the caller's "first
+        # entry == highest quality" expectation always holds.
+        unique.sort(
+            key=lambda v: self._detect_quality_height(v.get("quality", ""), v.get("url", "")),
+            reverse=True,
+        )
         
         return unique
+
+    @staticmethod
+    def _sanitize_video_url(raw_url: str) -> str:
+        """Percent-encode the path/query of a URL while leaving the scheme,
+        host, and existing percent-escapes intact.
+        """
+        if not raw_url:
+            return ""
+        try:
+            from urllib.parse import urlsplit, urlunsplit, quote, unquote
+        except Exception:
+            return raw_url
+        try:
+            parts = urlsplit(raw_url.strip())
+        except Exception:
+            return raw_url
+        if not parts.scheme or not parts.netloc:
+            return raw_url
+        
+        safe_path = quote(unquote(parts.path), safe="/%:@!$&()*+,;=~-._")
+        safe_query = quote(unquote(parts.query), safe="=&%:@!$()*+,;~-._/?") if parts.query else ""
+        return urlunsplit((parts.scheme, parts.netloc, safe_path, safe_query, parts.fragment))
+
+    def _validate_video_url(self, url: str, referer: str = "") -> bool:
+        """Probe a candidate video URL with HEAD/GET to ensure it works."""
+        if not url or not url.lower().startswith(("http://", "https://")):
+            return False
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Referer": referer or self.BASE_URL + "/",
+        }
+        
+        is_manifest = ".m3u8" in url.lower() or ".mpd" in url.lower()
+        try:
+            # Try HEAD first
+            try:
+                r = self.session.head(url, headers=headers, timeout=10, allow_redirects=True)
+                if r.status_code in (200, 206) and not is_manifest:
+                    return True
+            except Exception:
+                pass
+
+            # Fallback: tiny ranged GET
+            r = self.session.get(
+                url,
+                headers={**headers, "Range": "bytes=0-2047"},
+                timeout=12,
+                stream=True,
+                allow_redirects=True,
+            )
+            try:
+                if r.status_code not in (200, 206):
+                    return False
+                if is_manifest:
+                    chunk = next(r.iter_content(chunk_size=2048), b"") or b""
+                    return chunk.lstrip().startswith(b"#EXTM3U") or b"MPD" in chunk
+                return True
+            finally:
+                try:
+                    r.close()
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.info(f"[UZMOVI] validation probe failed url={url[:80]} err={exc}")
+            return False
     
     def _extract_media_with_playwright(self, url: str) -> List[Dict[str, str]]:
         """
@@ -1860,7 +1965,7 @@ class UzmoviParser(BaseParser):
                 browser.close()
             
             # Deduplicate
-            media_urls = self._dedupe_media_urls(media_urls)
+            media_urls = self._dedupe_media_urls(media_urls, page_url=url)
             
             if DEBUG:
                 mp4_count = sum(1 for m in media_urls if m['type'] == 'mp4')
@@ -2069,7 +2174,7 @@ class UzmoviParser(BaseParser):
         logger.info(f"[UZMOVI] === STEP 5: Deduplication ===")
         logger.info(f"[UZMOVI] Before deduplication: {len(media_urls)} URLs")
         
-        media_urls = self._dedupe_media_urls(media_urls)
+        media_urls = self._dedupe_media_urls(media_urls, page_url=url)
         
         logger.info(f"[UZMOVI] After deduplication: {len(media_urls)} URLs")
         
@@ -2083,7 +2188,7 @@ class UzmoviParser(BaseParser):
             
             if playwright_media:
                 media_urls.extend(playwright_media)
-                media_urls = self._dedupe_media_urls(media_urls)
+                media_urls = self._dedupe_media_urls(media_urls, page_url=url)
                 logger.info(f"[UZMOVI] After Playwright fallback: {len(media_urls)} URLs")
             else:
                 logger.error(f"[UZMOVI] Playwright also failed to find any media URLs!")

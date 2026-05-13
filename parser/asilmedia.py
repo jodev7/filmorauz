@@ -1045,8 +1045,8 @@ class AsilmediaParser(BaseParser):
             try:
                 parsed = urlparse(referer)
                 host = (parsed.netloc or "").lower()
-                if host.endswith("asilmedia.org"):
-                    headers["Origin"] = "https://asilmedia.org"
+                if "asilmedia" in host:
+                    headers["Origin"] = f"{parsed.scheme}://{parsed.netloc}"
                 elif parsed.scheme and parsed.netloc:
                     headers["Origin"] = f"{parsed.scheme}://{parsed.netloc}"
             except Exception:
@@ -1259,12 +1259,13 @@ class AsilmediaParser(BaseParser):
             if not href:
                 continue
 
-            # Skip non-video links
-            if any(skip in href for skip in ['/film/', '/page/', '/category/', '/search', 'asilmedia.org']):
-                continue
-
             # Only accept hrefs that look like media files (allow query strings).
             if not media_url_re.search(href):
+                continue
+            
+            # Skip navigation links that might contain 'asilmedia.org' but aren't media
+            # (e.g. internal links, search pages, category pages)
+            if any(skip in href for skip in ['/film/', '/page/', '/category/', '/search']):
                 continue
 
             # Detect quality from link text, title attr, and href itself.

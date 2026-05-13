@@ -17,6 +17,7 @@ from typing import Dict, List, Optional
 from bs4 import BeautifulSoup
 
 from freekino import FreekinoParser, clean_text, normalize_url, extract_year
+from helpers import canonical_episode_id, extract_source_id
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,9 @@ class FreekinoSerialParser:
         year_el = soup.select_one(".year, [class*='year'], .date")
         if year_el:
             year = extract_year(year_el.get_text()) or 0
+
+        source_id = extract_source_id(url)
+        parent_id = source_id
 
         ep_links, duplicates_removed, source_counts = self._collect_episode_links(soup, resp.text)
 
@@ -166,6 +170,7 @@ class FreekinoSerialParser:
                     "episode_url": href,
                     "detail_url": href,
                     "source_episode_url": href,
+                    "source_id": canonical_episode_id(parent_id, season, episode),
                     "video_url": video_url,
                     "quality_urls": quality_urls or {},
                     "poster": poster,

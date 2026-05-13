@@ -50,7 +50,7 @@ PARALLEL_CONNECTIONS = 16  # For aria2c
 
 DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS = int(os.environ.get("DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS", "300"))
 M3U8_STUCK_TIMEOUT_SECONDS = int(os.environ.get("M3U8_STUCK_TIMEOUT_SECONDS", str(DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS)))
-ARIA2C_USER_AGENT = "Mozilla/5.0"
+ARIA2C_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 
 def _origin_for_referer(referer: Optional[str]) -> str:
@@ -61,8 +61,13 @@ def _origin_for_referer(referer: Optional[str]) -> str:
         from urllib.parse import urlparse
         parsed = urlparse(referer)
         host = (parsed.netloc or "").lower()
-        if host.endswith("asilmedia.org") or host.endswith("www.asilmedia.org"):
-            return "https://asilmedia.org"
+        
+        # Asilmedia uses multiple mirrors (org, net, biz, uz, etc.)
+        if "asilmedia" in host:
+            # For any asilmedia mirror, use the canonical origin if possible, 
+            # or just the host's own origin.
+            return f"{parsed.scheme}://{parsed.netloc}"
+            
         if parsed.scheme and parsed.netloc:
             return f"{parsed.scheme}://{parsed.netloc}"
     except Exception:

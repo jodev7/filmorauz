@@ -78,8 +78,11 @@ def _origin_for_referer(referer: str | None) -> str:
     try:
         parsed = urlparse(referer)
         host = (parsed.netloc or "").lower()
-        if host.endswith("asilmedia.org") or host.endswith("www.asilmedia.org"):
-            return "https://asilmedia.org"
+        
+        # Asilmedia uses multiple mirrors (org, net, biz, uz, etc.)
+        if "asilmedia" in host:
+            return f"{parsed.scheme}://{parsed.netloc}"
+            
         if parsed.scheme and parsed.netloc:
             return f"{parsed.scheme}://{parsed.netloc}"
     except Exception:

@@ -157,9 +157,11 @@ class UzmoviSerialParser:
                     item["episode_url"],
                 )
             )
-            # Add identity key
+            # Add identity key and canonical source_id
             entry = choices[0].copy()
-            entry["identity"] = EpisodeIdentity(parent_source_id=source_id, season=entry["season"], episode=entry["episode"]).canonical_id
+            canonical_id = EpisodeIdentity(parent_source_id=source_id, season=entry["season"], episode=entry["episode"]).canonical_id
+            entry["identity"] = canonical_id
+            entry["source_id"] = canonical_id
             inventory.append(entry)
 
         # Check if we should perform gap-filling: only if not running tests, 
@@ -413,9 +415,11 @@ class UzmoviSerialParser:
                     item["episode_url"],
                 )
             )
-            # Add identity key
+            # Add identity key and canonical source_id
             entry = choices[0].copy()
-            entry["identity"] = EpisodeIdentity(parent_source_id=source_id, season=entry["season"], episode=entry["episode"]).canonical_id
+            canonical_id = EpisodeIdentity(parent_source_id=source_id, season=entry["season"], episode=entry["episode"]).canonical_id
+            entry["identity"] = canonical_id
+            entry["source_id"] = canonical_id
             inventory.append(entry)
 
         # Check if we should perform gap-filling: only if not running tests, 
@@ -790,6 +794,21 @@ class UzmoviSerialParser:
                 backoff *= 2
         return None
 
+    @staticmethod
+    def _sanitize_video_url(raw_url: str) -> str:
+        if not raw_url:
+            return ""
+        try:
+            from urllib.parse import urlsplit, urlunsplit, quote, unquote
+            parts = urlsplit(raw_url.strip())
+            if not parts.scheme or not parts.netloc:
+                return raw_url
+            safe_path = quote(unquote(parts.path), safe="/%:@!$&()*+,;=~-._")
+            safe_query = quote(unquote(parts.query), safe="=&%:@!$()*+,;~-._/?") if parts.query else ""
+            return urlunsplit((parts.scheme, parts.netloc, safe_path, safe_query, parts.fragment))
+        except Exception:
+            return raw_url
+
     def _extract_episode_video(self, episode_url: str) -> str:
         try:
             resp = self._get_with_retry(episode_url, label="episode")
@@ -804,7 +823,7 @@ class UzmoviSerialParser:
                 if embed_src:
                     video = self._extract_video_from_embed(embed_src, episode_url)
                     if video:
-                        return video
+                        return self._sanitize_video_url(video)
 
             # Hidden player/data attrs on the episode page itself.
             for el in soup.find_all(True):
@@ -812,17 +831,18 @@ class UzmoviSerialParser:
                     val = el.get(attr) if hasattr(el, "get") else None
                     if not val:
                         continue
-                    if ".m3u8" in str(val) or ".mp4" in str(val):
-                        return str(val).strip()
-                    if "embed" in str(val) or "player" in str(val):
-                        video = self._extract_video_from_embed(str(val).strip(), episode_url)
+                    val_str = str(val).strip()
+                    if ".m3u8" in val_str or ".mp4" in val_str:
+                        return self._sanitize_video_url(val_str)
+                    if "embed" in val_str or "player" in val_str:
+                        video = self._extract_video_from_embed(val_str, episode_url)
                         if video:
-                            return video
+                            return self._sanitize_video_url(video)
 
             # Script/player config on the episode page.
             m = _FILE_RE.search(resp.text)
             if m:
-                return m.group(1).strip()
+                return self._sanitize_video_url(m.group(1).strip())
             return ""
         except Exception as e:
             logger.warning(f"[UZMOVI SERIAL] episode fetch error url={episode_url} err={e}")
