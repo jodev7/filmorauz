@@ -3469,6 +3469,40 @@ class ParserHandler(BaseHTTPRequestHandler):
         logger.info(f"{self.address_string()} - {format % args}")
 
 
+def _cleanup_stale_state():
+    """Remove leftover .tmp / .part files and stale progress JSON on startup."""
+    import time as _time
+    parser_root = Path(__file__).parent
+    removed = 0
+
+    # Stale download artifacts
+    if os.path.isdir(DOWNLOAD_DIR):
+        for entry in os.listdir(DOWNLOAD_DIR):
+            if entry.endswith((".tmp", ".part", ".aria2", ".ytdl")):
+                full = os.path.join(DOWNLOAD_DIR, entry)
+                try:
+                    if _time.time() - os.path.getmtime(full) > 600:  # >10 min old
+                        os.remove(full)
+                        removed += 1
+                except OSError:
+                    pass
+
+    # Stale progress checkpoints (older than 1h)
+    progress_dir = parser_root / "progress"
+    if progress_dir.is_dir():
+        cutoff = _time.time() - 3600
+        for p in progress_dir.glob("*.json"):
+            try:
+                if p.stat().st_mtime < cutoff:
+                    p.unlink()
+                    removed += 1
+            except OSError:
+                pass
+
+    if removed:
+        logger.info(f"[STARTUP] Cleaned up {removed} stale download/progress file(s)")
+
+
 def run_server(host="0.0.0.0", port=8082):
     """Run the parser API server"""
     # IMPORTANT: Validate BACKEND_URL is set for progress reporting
@@ -3483,6 +3517,14 @@ def run_server(host="0.0.0.0", port=8082):
     else:
         logger.info(f"Backend URL configured: {BACKEND_URL}")
     
+    # Clean up stale state from previous runs:
+    # - orphaned .tmp / .part / partial chunk files in DOWNLOAD_DIR
+    # - stuck progress JSON files older than 1 hour
+    try:
+        _cleanup_stale_state()
+    except Exception as _e:
+        logger.warning(f"[STARTUP] Stale-state cleanup failed: {_e}")
+
     server_address = (host, port)
     # Set the server address string for use in handlers
     ParserHandler.server_address_str = f"http://{host}:{port}"

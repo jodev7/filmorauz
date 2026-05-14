@@ -225,6 +225,16 @@ class KinolarParser(BaseParser):
                 v_url = iframe.get("src", "")
                 if v_url.startswith("//"):
                     v_url = "https:" + v_url
+                # Resolve embed iframe to actual media candidates (m3u8/mp4)
+                try:
+                    from media_extractor import resolve_embed_to_candidates
+                    resolved = resolve_embed_to_candidates(v_url, referer=url, session=self.session)
+                    if resolved:
+                        video_urls.extend(resolved)
+                        logger.info(f"[KINOLAR] Resolved iframe -> {len(resolved)} candidate(s)")
+                except Exception as e:
+                    logger.warning(f"[KINOLAR] iframe resolver error: {e}")
+                # Always keep the iframe URL itself as a last-resort fallback
                 video_urls.append({"url": v_url, "type": "iframe_embed", "quality": "unknown"})
                 
             return MovieDetails(

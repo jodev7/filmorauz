@@ -943,10 +943,23 @@ class FreekinoParser:
             cleaned += "=" * ((4 - len(cleaned) % 4) % 4)
             decoded = base64.b64decode(cleaned).decode("utf-8", errors="ignore")
             decoded = re.sub(r'[\x00-\x1f]', '', decoded).strip()
-            if decoded:
+            if decoded and ("http" in decoded or "//" in decoded):
                 return decoded
         except Exception as e:
-            logger.info(f"[FREEKINO] hash2 decode failed: {e}")
+            logger.info(f"[FREEKINO] hash2 decode (markers) failed: {e}")
+
+        # Fallback: try plain base64 of the entire payload without marker stripping
+        # — covers the case where freekino rotates HASH2_MARKERS and the stripped
+        # version no longer decodes cleanly.
+        try:
+            payload = encoded.replace("//", "")
+            payload += "=" * ((4 - len(payload) % 4) % 4)
+            decoded = base64.b64decode(payload).decode("utf-8", errors="ignore")
+            decoded = re.sub(r'[\x00-\x1f]', '', decoded).strip()
+            if decoded and ("http" in decoded or "//" in decoded):
+                return decoded
+        except Exception as e:
+            logger.info(f"[FREEKINO] hash2 decode (plain) failed: {e}")
 
         return ""
 

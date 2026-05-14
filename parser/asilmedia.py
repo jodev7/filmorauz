@@ -1121,19 +1121,35 @@ class AsilmediaParser(BaseParser):
                     logger.info(f"[ASILMEDIA DLE]   Quality: {q.get('quality')}, URL: {q.get('url')[:60]}...")
             video_urls.extend(quality_entries)
         
-        # SECOND: Try direct video links
-        direct_links = soup.select("a[href*='.mp4'], a[href*='.m3u8']")
+        # SECOND: Try direct video links (including onclick handlers and data-* attrs)
+        direct_links = []
+        for sel in ("a[href*='.mp4']", "a[href*='.m3u8']",
+                    "a[onclick*='.mp4']", "a[onclick*='.m3u8']",
+                    "[data-url*='.mp4']", "[data-url*='.m3u8']",
+                    "[data-src*='.mp4']", "[data-src*='.m3u8']"):
+            direct_links.extend(soup.select(sel))
         for link in direct_links:
-            href = link.get("href", "")
-            if href and (href.endswith(".mp4") or href.endswith(".m3u8")):
-                if not any(skip in href for skip in ['/film/', '/page/', 'asilmedia.org']):
-                    video_urls.append({
-                        "quality": "direct",
-                        "url": normalize_url(href, self.BASE_URL),
-                        "type": "direct_mp4" if href.endswith(".mp4") else "hls"
-                    })
-                    if DEBUG:
-                        logger.info(f"[ASILMEDIA DLE] Found direct video: {href}")
+            href = link.get("href") or link.get("data-url") or link.get("data-src") or ""
+            if not href:
+                onclick = link.get("onclick", "")
+                m = re.search(r"https?://[^\s'\"]+\.(?:mp4|m3u8)[^\s'\"]*", onclick)
+                if m:
+                    href = m.group(0)
+            href = (href or "").strip()
+            href_l = href.lower()
+            if not href_l:
+                continue
+            # Only skip page-like routes, never reject by domain alone
+            if any(skip in href_l for skip in ['/film/', '/page/', '/category/', '/search']):
+                continue
+            if ".mp4" in href_l or ".m3u8" in href_l:
+                video_urls.append({
+                    "quality": "direct",
+                    "url": normalize_url(href, self.BASE_URL),
+                    "type": "direct_mp4" if ".mp4" in href_l else "hls",
+                })
+                if DEBUG:
+                    logger.info(f"[ASILMEDIA DLE] Found direct video: {href}")
         
         # THIRD: Try iframe
         iframe = soup.select_one("iframe[src], iframe[data-player-src]")

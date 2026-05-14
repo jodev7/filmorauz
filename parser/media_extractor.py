@@ -239,8 +239,10 @@ def classify_media_url(url: str, headers: Dict[str, str] = None) -> str:
     for domain in uzmovi_video_domains:
         if domain in url_lower:
             # Check for manifest indicators
-            if any(ind in url_lower for ind in ["index", "playlist", "m3u8", "mpd"]):
-                return "m3u8" if "m3u8" in url_lower or "index" in url_lower or "playlist" in url_lower else "mpd"
+            if "mpd" in url_lower:
+                return "mpd"
+            if any(ind in url_lower for ind in ["index", "playlist", "m3u8", "/hls/", "chunk", "segment"]):
+                return "m3u8"
             # Default to mp4 for uzmovi CDN URLs without explicit manifest extension
             return "mp4"
     
@@ -396,9 +398,8 @@ def is_valid_media_url(url: str, headers: Dict[str, str] = None) -> Tuple[bool, 
     
     for domain in uzmovi_domains:
         if domain in url_lower:
-            # Check if it has a proper URL structure (has slashes for path)
-            if "/" in url and len(url) > 20:
-                # Accept any URL from uzmovi domains with a path - they are likely video URLs
+            # Accept any URL from uzmovi domains that has a path component
+            if "/" in url.split("://", 1)[-1]:
                 return True, f"Valid media from uzmovi domain: {domain}"
     
     # === VALIDATION: Known video CDN patterns ===
@@ -1409,5 +1410,126 @@ def select_best_stream_url(urls: List[Dict[str, str]]) -> Optional[Dict[str, str
             "type": best.type,
             "quality": best.quality,
         }
-    
+
     return None
+
+
+# ============================================================================
+# SHARED IFRAME RESOLVER (kinolar / kinochilar / uzmedia / generic embeds)
+# ============================================================================
+
+def resolve_embed_to_candidates(
+    iframe_url: str,
+    referer: str = "",
+    max_depth: int = 2,
+    session: requests.Session = None,
+) -> List[Dict[str, Any]]:
+    """
+    Fetch an embed iframe URL and return a list of resolved playable video
+    candidates in parser format ({"url", "type", "quality"}).
+
+    Recursively follows nested iframes up to `max_depth` levels — many uCoz/DLE
+    sites point at an outer player page that itself iframes the real CDN host.
+
+    Always returns a list (possibly empty). Never raises.
+    """
+    if not iframe_url:
+        return []
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    if referer:
+        headers["Referer"] = referer
+
+    visited = set()
+    out: List[Dict[str, Any]] = []
+
+    def _walk(url: str, ref: str, depth: int) -> None:
+        if depth < 0 or not url or url in visited:
+            return
+        visited.add(url)
+        try:
+            getter = session.get if session else requests.get
+            resp = getter(
+                url,
+                headers={**headers, "Referer": ref or referer or url},
+                timeout=20,
+                allow_redirects=True,
+                verify=False,
+            )
+        except Exception as e:
+            logger.warning(f"[IFRAME_RESOLVER] fetch failed {url}: {e}")
+            return
+
+        final_url = str(resp.url)
+        content_type = resp.headers.get("Content-Type", "").lower()
+
+        # Direct media response (CDN redirected the embed straight to a file)
+        if any(t in content_type for t in ("video/", "application/vnd.apple.mpegurl",
+                                            "application/dash+xml", "application/octet-stream")):
+            out.append({
+                "url": final_url,
+                "type": classify_media_url(final_url),
+                "quality": "auto",
+                "headers": {"Referer": ref or referer or url},
+            })
+            return
+
+        if "text/html" not in content_type and not resp.text:
+            return
+
+        html = resp.text or ""
+        # Extract candidates from this embed page
+        candidates = extract_media_candidates(html, final_url, referer=ref)
+        valid, _ = validate_candidates(candidates)
+        for c in valid:
+            out.append({
+                "url": c.url,
+                "type": c.type if c.type in ("m3u8", "mpd", "mp4", "ism") else classify_media_url(c.url),
+                "quality": c.quality or "auto",
+                "headers": {"Referer": final_url},
+            })
+
+        # Look for nested iframes and follow them
+        if depth > 0:
+            try:
+                soup = BeautifulSoup(html, "lxml")
+                for nested in soup.find_all("iframe"):
+                    src = (nested.get("src") or "").strip()
+                    if not src:
+                        continue
+                    if src.startswith("//"):
+                        src = "https:" + src
+                    if src.startswith("/"):
+                        src = urljoin(final_url, src)
+                    if src.startswith(("http://", "https://")) and src not in visited:
+                        _walk(src, final_url, depth - 1)
+            except Exception as e:
+                logger.warning(f"[IFRAME_RESOLVER] nested-iframe parse failed: {e}")
+
+    if iframe_url.startswith("//"):
+        iframe_url = "https:" + iframe_url
+    _walk(iframe_url, referer, max_depth)
+
+    # Deduplicate by URL, keep first (highest priority) occurrence
+    seen = set()
+    deduped: List[Dict[str, Any]] = []
+    for c in out:
+        u = c.get("url", "")
+        if u and u not in seen:
+            seen.add(u)
+            deduped.append(c)
+
+    # Filter out anything that still looks like an HTML page
+    final: List[Dict[str, Any]] = []
+    for c in deduped:
+        ok, _reason = is_valid_media_url(c["url"])
+        if ok and c.get("type") not in (None, "", "html", "unknown"):
+            final.append(c)
+        elif ok and c.get("type") in (None, "", "unknown"):
+            # Last-resort: keep as unknown — downloader will probe content-type
+            final.append(c)
+    return final

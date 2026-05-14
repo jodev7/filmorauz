@@ -215,6 +215,14 @@ class UzmediaParser(BaseParser):
                 v_url = iframe.get("src", "")
                 if v_url.startswith("//"):
                     v_url = "https:" + v_url
+                try:
+                    from media_extractor import resolve_embed_to_candidates
+                    resolved = resolve_embed_to_candidates(v_url, referer=url, session=self.session)
+                    if resolved:
+                        video_urls.extend(resolved)
+                        logger.info(f"[UZMEDIA] Resolved iframe -> {len(resolved)} candidate(s)")
+                except Exception as e:
+                    logger.warning(f"[UZMEDIA] iframe resolver error: {e}")
                 video_urls.append({"url": v_url, "type": "iframe_embed", "quality": "unknown"})
                 
             return MovieDetails(

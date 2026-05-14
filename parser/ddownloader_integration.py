@@ -625,8 +625,30 @@ class DDownloaderIntegration:
 
             # Parse stderr for progress information
             import re
-            size_pattern = re.compile(r'(\d+(?:\.\d+)?)\s*(B|KB|MB|GB)', re.IGNORECASE)
-            percent_pattern = re.compile(r'(\d+(?:\.\d+)?)\s*%')
+            # Accept B, KB/KiB, MB/MiB, GB/GiB, TB/TiB and "bytes" word
+            size_pattern = re.compile(
+                r'(\d+(?:[\.,]\d+)?)\s*(TiB|GiB|MiB|KiB|TB|GB|MB|KB|bytes|B)\b',
+                re.IGNORECASE,
+            )
+            percent_pattern = re.compile(r'(\d+(?:[\.,]\d+)?)\s*%')
+
+            def _to_bytes(val_str: str, unit_str: str) -> float:
+                try:
+                    v = float(val_str.replace(',', '.'))
+                except ValueError:
+                    return 0.0
+                u = unit_str.upper().replace('I', '')  # MiB->MB
+                if u in ('B', 'BYTES'):
+                    return v
+                if u == 'KB':
+                    return v * 1024
+                if u == 'MB':
+                    return v * 1024 ** 2
+                if u == 'GB':
+                    return v * 1024 ** 3
+                if u == 'TB':
+                    return v * 1024 ** 4
+                return v
             
             # Read stderr line by line while process runs
             while True:
@@ -643,54 +665,42 @@ class DDownloaderIntegration:
                             startup_logs.append(line)
                         _debug(debug_callback, "stderr", {"line": line})
                     
-                    # Parse size information from N_m3u8DL-RE output
-                    # Example: "Downloading: 123.45 MB / 456.78 MB"
-                    size_match = size_pattern.search(line)
-                    if size_match:
-                        try:
-                            size_val = float(size_match.group(1))
-                            size_unit = size_match.group(2).upper()
-                            
-                            if size_unit == 'B':
-                                size_bytes = size_val
-                            elif size_unit == 'KB':
-                                size_bytes = size_val * 1024
-                            elif size_unit == 'MB':
-                                size_bytes = size_val * 1024 * 1024
-                            elif size_unit == 'GB':
-                                size_bytes = size_val * 1024 * 1024 * 1024
-                            
-                            # Try to extract both downloaded and total
-                            parts = line.split('/')
-                            if len(parts) == 2:
-                                # First part is downloaded, second is total
-                                dl_match = size_pattern.search(parts[0])
-                                if dl_match:
-                                    dl_val = float(dl_match.group(1))
-                                    dl_unit = dl_match.group(2).upper()
-                                    if dl_unit == 'KB':
-                                        dl_val *= 1024
-                                    elif dl_unit == 'MB':
-                                        dl_val *= 1024 * 1024
-                                    elif dl_unit == 'GB':
-                                        dl_val *= 1024 * 1024 * 1024
-                                    downloaded_bytes = int(dl_val)
-                                    total_bytes = int(size_bytes)
-                                    
-                                    # Calculate progress
-                                    if total_bytes > 0:
-                                        progress = int((downloaded_bytes / total_bytes) * 100)
-                                        if progress > last_progress_reported:
-                                            last_progress_reported = progress
-                                            elapsed = time.time() - start_time
-                                            speed = downloaded_bytes / elapsed if elapsed > 0 else 0
-                                            eta = int((total_bytes - downloaded_bytes) / speed) if speed > 0 else 0
-                                            
-                                            if progress_callback:
-                                                progress_callback(progress, downloaded_bytes, total_bytes, speed, eta)
-                                            logger.info(f"[DDOWNLOADER] Progress: {progress}%, {downloaded_bytes}/{total_bytes} bytes")
-                        except (ValueError, IndexError):
-                            pass
+                    # Parse size information from downloader stderr.
+                    # Accepts: "123.45 MiB / 456.78 MiB", "1.2GB/3.4GB",
+                    # "12345 bytes", or any line containing a "%" percent token.
+                    progress = -1
+                    try:
+                        all_sizes = size_pattern.findall(line)
+                        if len(all_sizes) >= 2:
+                            downloaded_bytes = int(_to_bytes(*all_sizes[0]))
+                            total_bytes = int(_to_bytes(*all_sizes[1]))
+                            if total_bytes > 0:
+                                progress = int((downloaded_bytes / total_bytes) * 100)
+                        elif len(all_sizes) == 1:
+                            downloaded_bytes = int(_to_bytes(*all_sizes[0]))
+
+                        pm = percent_pattern.search(line)
+                        if pm:
+                            try:
+                                p = int(float(pm.group(1).replace(',', '.')))
+                                if 0 <= p <= 100 and p > progress:
+                                    progress = p
+                            except ValueError:
+                                pass
+
+                        if progress > last_progress_reported:
+                            last_progress_reported = progress
+                            elapsed = time.time() - start_time
+                            speed = downloaded_bytes / elapsed if elapsed > 0 and downloaded_bytes else 0
+                            eta = int((total_bytes - downloaded_bytes) / speed) if speed > 0 and total_bytes > 0 else 0
+                            if progress_callback:
+                                progress_callback(progress, downloaded_bytes, total_bytes, speed, eta)
+                            logger.info(
+                                f"[DDOWNLOADER] Progress: {progress}%, "
+                                f"{downloaded_bytes}/{total_bytes} bytes"
+                            )
+                    except (ValueError, IndexError):
+                        pass
                 
                 # Rate limit progress updates
                 current_time = time.time()
@@ -1718,7 +1728,31 @@ class DDownloaderIntegration:
         # Detect stream type
         stream_type = self.detect_url_type(url)
         logger.info(f"[DDOWNLOADER] Detected stream type: {stream_type}")
-        
+
+        # If the URL looks like an embed/iframe (unknown type), try to resolve it
+        # to a real media URL before failing.
+        if stream_type == StreamType.UNKNOWN.value:
+            try:
+                from media_extractor import resolve_embed_to_candidates
+                logger.info(f"[DDOWNLOADER] Unknown type — attempting iframe resolve: {url[:120]}")
+                resolved = resolve_embed_to_candidates(url, referer=referer or url, max_depth=2)
+                # Prefer m3u8/mp4 explicitly over unknown
+                resolved.sort(key=lambda c: 0 if c.get("type") in ("m3u8", "mpd", "mp4", "ism") else 1)
+                for cand in resolved:
+                    new_url = cand.get("url")
+                    if not new_url:
+                        continue
+                    new_type = self.detect_url_type(new_url)
+                    if new_type != StreamType.UNKNOWN.value:
+                        logger.info(f"[DDOWNLOADER] Resolved embed -> {new_type}: {new_url[:120]}")
+                        url = new_url
+                        stream_type = new_type
+                        if not referer:
+                            referer = cand.get("headers", {}).get("Referer", "")
+                        break
+            except Exception as e:
+                logger.warning(f"[DDOWNLOADER] Embed resolve failed: {e}")
+
         # Fail fast for unknown types
         if stream_type == StreamType.UNKNOWN.value:
             return DownloadResult(
