@@ -2388,10 +2388,12 @@ class ParserHandler(BaseHTTPRequestHandler):
         
         # Source-specific listing URLs
         listing_urls = {
-            "uzmovi": f"https://uzmovi.tv/page/{page}/",
+            "uzmovi": f"https://uzmovi.net/page/{page}/",
             "freekino": f"https://freekino.net/page/{page}/",
             "asilmedia": f"http://asilmedia.org/page/{page}/",
-            "kinolar": f"https://kinolar.uz/page/{page}/",
+            "kinolar": f"https://kinolar.tv/load/0-{page}",
+            "kinochilar": f"https://kinochilar.com/page/{page}/",
+            "uzmedia": f"https://uzmedia.tv/load/0-{page}",
         }
         
         url = listing_urls.get(source)

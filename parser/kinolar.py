@@ -134,6 +134,67 @@ class KinolarParser(BaseParser):
         
         return results
 
+    def list_catalog(self, page: int = 1, limit: int = 20, type_filter: str = "", category_url: str = "") -> Dict[Any, Any]:
+        """List catalog items from kinolar.tv"""
+        results = []
+        # uCoz often uses /load/0-page or similar
+        url = category_url if category_url else f"{self.BASE_URL}/load/0-{page}"
+        if category_url and page > 1:
+             url = f"{category_url.rstrip('/')}/0-{page}"
+            
+        try:
+            logger.info(f"[KINOLAR] Catalog request: {url}")
+            response = self.session.get(url, timeout=30, verify=False)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, "lxml")
+                
+                all_links = soup.find_all("a", href=True)
+                seen_links = {}
+                
+                for a in all_links:
+                    href = a.get("href", "")
+                    if "/load/" in href and len(href.split("/")) > 4:
+                        link = normalize_url(href, self.BASE_URL)
+                        title = clean_text(a.get("title") or a.get_text())
+                        
+                        if not title or title.lower() in ("batafsil", "skachat", "davomi", "на страницу материала"):
+                            if link not in seen_links:
+                                seen_links[link] = ""
+                            continue
+                        
+                        if link not in seen_links or len(title) > len(seen_links[link]):
+                            seen_links[link] = title
+                
+                for link, title in seen_links.items():
+                    if not title: continue
+                    
+                    from helpers import detect_content_type
+                    ct, _ = detect_content_type(link, self.source_name)
+                    results.append(SearchResult(
+                        title=title,
+                        year=extract_year(title),
+                        poster="", 
+                        description="",
+                        source_id=self._extract_source_id(link),
+                        detail_url=link,
+                        source=self.source_name,
+                        content_type=ct
+                    ).to_dict())
+            
+            results = deduplicate_results(results, key="detail_url")
+            
+            return {
+                "items": results[:limit],
+                "page": page,
+                "limit": limit,
+                "total": 0,
+                "total_pages": page + 1 if len(results) >= 10 else page,
+                "has_more": len(results) >= 10
+            }
+        except Exception as e:
+            logger.error(f"[KINOLAR] Catalog error: {e}")
+            return {"items": [], "page": page, "limit": limit, "total": 0, "total_pages": 0, "has_more": False}
+
     def _extract_source_id(self, url: str) -> str:
         # uCoz URLs usually end with /id or id.html or have ids like /29-1-0-9031
         import re

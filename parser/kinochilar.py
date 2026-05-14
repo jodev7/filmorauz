@@ -131,6 +131,65 @@ class KinochilarParser(BaseParser):
             logger.error(f"[KINOCHILAR] Search error: {e}")
         
         return results
+
+    def list_catalog(self, page: int = 1, limit: int = 20, type_filter: str = "", category_url: str = "") -> Dict[Any, Any]:
+        """List catalog items from kinochilar.com"""
+        results = []
+        url = category_url if category_url else f"{self.BASE_URL}/page/{page}/"
+        if category_url and page > 1:
+            url = f"{category_url.rstrip('/')}/page/{page}/"
+            
+        try:
+            logger.info(f"[KINOCHILAR] Catalog request: {url}")
+            response = self.session.get(url, timeout=30, verify=False)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, "lxml")
+                cards = []
+                for selector in self.CARD_SELECTORS:
+                    found = soup.select(selector)
+                    if found:
+                        cards = found
+                        break
+                
+                if not cards:
+                    # Fallback card detection
+                    for a in soup.find_all("a", href=True):
+                        href = a.get("href", "")
+                        if "/film/" in href or "/multfilm/" in href:
+                            parent = a.find_parent("div")
+                            if parent and parent not in cards:
+                                cards.append(parent)
+                
+                for card in cards:
+                    res = self._extract_card(card)
+                    if res and res.get("title") and res.get("link"):
+                        from helpers import detect_content_type
+                        ct, _ = detect_content_type(res["link"], self.source_name)
+                        results.append(SearchResult(
+                            title=res["title"],
+                            year=res.get("year"),
+                            poster=res.get("poster"),
+                            description="",
+                            source_id=self._extract_source_id(res["link"]),
+                            detail_url=res["link"],
+                            source=self.source_name,
+                            content_type=ct
+                        ).to_dict())
+            
+            from helpers import deduplicate_results
+            results = deduplicate_results(results, key="detail_url")
+            
+            return {
+                "items": results[:limit],
+                "page": page,
+                "limit": limit,
+                "total": 0,
+                "total_pages": page + 1 if len(results) >= 10 else page,
+                "has_more": len(results) >= 10
+            }
+        except Exception as e:
+            logger.error(f"[KINOCHILAR] Catalog error: {e}")
+            return {"items": [], "page": page, "limit": limit, "total": 0, "total_pages": 0, "has_more": False}
     
     def _extract_card(self, card) -> Optional[Dict[str, Any]]:
         title = ""
