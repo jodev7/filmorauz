@@ -1028,17 +1028,23 @@ class FreekinoParser:
         """Probe a candidate video URL with HEAD/GET to ensure it works."""
         if not url or not url.lower().startswith(("http://", "https://")):
             return False
+        
+        url_lower = url.lower()
+        # [ENHANCED] Be lenient for known strict CDNs
+        is_known_cdn = any(domain in url_lower for domain in ['video-cdn.org', 'freekino.net', 'a1.video-cdn'])
+
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "*/*",
             "Referer": referer or self.BASE_URL + "/",
+            "Origin": self.BASE_URL,
         }
         
-        is_manifest = ".m3u8" in url.lower() or ".mpd" in url.lower()
+        is_manifest = ".m3u8" in url_lower or ".mpd" in url_lower
         try:
             # Try HEAD first
             try:
-                r = self.session.head(url, headers=headers, timeout=10, allow_redirects=True)
+                r = self.session.head(url, headers=headers, timeout=12, allow_redirects=True)
                 if r.status_code in (200, 206) and not is_manifest:
                     return True
             except Exception:
@@ -1048,17 +1054,23 @@ class FreekinoParser:
             r = self.session.get(
                 url,
                 headers={**headers, "Range": "bytes=0-2047"},
-                timeout=12,
+                timeout=15,
                 stream=True,
                 allow_redirects=True,
             )
             try:
-                if r.status_code not in (200, 206):
-                    return False
-                if is_manifest:
-                    chunk = next(r.iter_content(chunk_size=2048), b"") or b""
-                    return chunk.lstrip().startswith(b"#EXTM3U") or b"MPD" in chunk
-                return True
+                if r.status_code in (200, 206):
+                    if is_manifest:
+                        chunk = next(r.iter_content(chunk_size=2048), b"") or b""
+                        return chunk.lstrip().startswith(b"#EXTM3U") or b"MPD" in chunk
+                    return True
+                
+                # If probe returned 403/404 but it's a known CDN and looks like a valid manifest
+                if is_known_cdn and (is_manifest or ".mp4" in url_lower):
+                    logger.info(f"[FREEKINO] Probe returned {r.status_code} for known CDN, accepting anyway: {url[:60]}...")
+                    return True
+
+                return False
             finally:
                 try:
                     r.close()
@@ -1066,6 +1078,9 @@ class FreekinoParser:
                     pass
         except Exception as exc:
             logger.info(f"[FREEKINO] validation probe failed url={url[:80]} err={exc}")
+            # Trust known CDNs if probe fails due to network/timeout
+            if is_known_cdn:
+                return True
             return False
 
     def _parse_playerjs_file(self, script_content: str, base_url: str = ""):

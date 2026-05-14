@@ -78,6 +78,8 @@ from uzmovi import UzmoviParser
 from freekino import FreekinoParser
 from asilmedia import AsilmediaParser
 from kinolar import KinolarParser
+from kinochilar import KinochilarParser
+from uzmedia import UzmediaParser
 from asilmedia_serial import AsilmediaSerialParser
 from freekino_serial import FreekinoSerialParser
 from uzmovi_serial import UzmoviSerialParser
@@ -104,7 +106,7 @@ N_M3U8DL_BINARY = require_binary()
 logger.info(f"[SERVER] N_m3u8DL-RE binary confirmed: {N_M3U8DL_BINARY}")
 
 # Available sources (including manual which doesn't need a parser)
-AVAILABLE_SOURCES = ["uzmovi", "freekino", "asilmedia", "kinolar", "manual"]
+AVAILABLE_SOURCES = ["uzmovi", "freekino", "asilmedia", "kinolar", "kinochilar", "uzmedia", "manual"]
 
 # Initialize parsers (manual source doesn't have a parser - it receives direct URLs)
 PARSERS = {
@@ -112,6 +114,8 @@ PARSERS = {
     "freekino": FreekinoParser(),
     "asilmedia": AsilmediaParser(),
     "kinolar": KinolarParser(),
+    "kinochilar": KinochilarParser(),
+    "uzmedia": UzmediaParser(),
 }
 
 # Provider-specific serial parsers. Distinct from PARSERS because serial

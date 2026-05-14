@@ -20,6 +20,7 @@ function areSeriesCardPropsEqual(prev: SeriesCardProps, next: SeriesCardProps) {
     prev.series.year === next.series.year &&
     prev.series.rating_avg === next.series.rating_avg &&
     prev.series.is_premium === next.series.is_premium &&
+    prev.series.quality === next.series.quality &&
     (prev.series.genre?.[0] || "") === (next.series.genre?.[0] || "")
   );
 }
@@ -52,19 +53,30 @@ function SeriesCardImpl({ series }: SeriesCardProps) {
         </div>
 
         <div className="absolute top-2 left-2 right-2 flex justify-between items-start z-10">
-          <span className="bg-brand-red/80 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
-            <Tv className="w-3 h-3" />
-            Serial
-          </span>
-        </div>
-
-        {series.is_premium && (
-          <div className="absolute top-2 right-2">
-            <span className="bg-yellow-500/80 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
-              <Star className="w-3 h-3 fill-white" />
+          <div className="flex flex-col gap-1.5">
+            <span className="bg-brand-red/80 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded flex items-center gap-1 w-fit">
+              <Tv className="w-3 h-3" />
+              Serial
             </span>
           </div>
-        )}
+
+          <div className="flex flex-col gap-1.5 items-end">
+            {series.is_premium && (
+              <span className="bg-yellow-500/90 text-white text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1">
+                <Star className="w-3 h-3 fill-white" />
+              </span>
+            )}
+            {series.quality && (
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                series.is_premium 
+                  ? "bg-yellow-500/90 text-black" 
+                  : "bg-brand-red text-white"
+              }`}>
+                {series.quality}
+              </span>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="p-3">

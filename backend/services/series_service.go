@@ -125,6 +125,13 @@ func (s *SeriesService) GenerateSlug(title string) string {
 }
 
 // CreateSeries creates a new series
+func (s *SeriesService) SearchSeries(query string) ([]models.Series, error) {
+	if strings.TrimSpace(query) == "" {
+		return []models.Series{}, nil
+	}
+	return s.seriesRepo.Search(query)
+}
+
 func (s *SeriesService) CreateSeries(input *models.SeriesInput) (*models.Series, error) {
 	slug := strings.TrimSpace(input.Slug)
 	if slug == "" {
@@ -147,6 +154,13 @@ func (s *SeriesService) CreateSeries(input *models.SeriesInput) (*models.Series,
 		Country:     input.Country,
 		IsPremium:   input.IsPremium,
 		IsCompleted: input.IsCompleted,
+		Quality:     input.Quality,
+
+		// LOCALIZATION
+		TitleUz:       input.TitleUz,
+		DescriptionUz: input.DescriptionUz,
+		GenresUz:      input.GenresUz,
+		CountriesUz:   input.CountriesUz,
 
 		// Approval workflow: new series start hidden pending admin review
 		ApprovalStatus: "pending",
@@ -276,6 +290,14 @@ func (s *SeriesService) UpdateSeries(id primitive.ObjectID, input *models.Series
 	series.Country = input.Country
 	series.IsPremium = input.IsPremium
 	series.IsCompleted = input.IsCompleted
+	series.Quality = input.Quality
+
+	// LOCALIZATION
+	series.TitleUz = input.TitleUz
+	series.DescriptionUz = input.DescriptionUz
+	series.GenresUz = input.GenresUz
+	series.CountriesUz = input.CountriesUz
+
 	if err := s.ensureSeriesCode(series); err != nil {
 		return nil, err
 	}
@@ -756,7 +778,13 @@ func (s *SeriesService) CreateEpisode(seriesID, seasonID primitive.ObjectID, epi
 		EmbedURL:      input.EmbedURL,
 		SourceType:    inferEpisodeSourceType(input.SourceType, input.VideoURL, input.EmbedURL),
 		Duration:      input.Duration,
+		Quality:       input.Quality,
 		AirDate:       airDate,
+
+		// HLS
+		MasterPlaylistURL:  input.MasterPlaylistURL,
+		AvailableQualities: input.AvailableQualities,
+		GeneratedQualities: input.GeneratedQualities,
 	}
 
 	err := s.seriesRepo.CreateEpisode(episode)

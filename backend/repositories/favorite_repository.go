@@ -226,7 +226,11 @@ func (r *FavoriteRepository) GetUserFavorites(userID primitive.ObjectID) ([]mode
 				bson.M{"$ifNull": []interface{}{"$episode_series.year", 0}},
 				bson.M{"$ifNull": []interface{}{"$movie.year", 0}},
 			}},
-			"quality":     bson.M{"$ifNull": []interface{}{"$movie.quality", ""}},
+			"quality": bson.M{"$cond": []interface{}{
+				bson.M{"$eq": []interface{}{"$effective_target_type", "episode"}},
+				bson.M{"$ifNull": []interface{}{"$episode.quality", "$episode_series.quality", ""}},
+				bson.M{"$ifNull": []interface{}{"$movie.quality", ""}},
+			}},
 			"website_url": bson.M{"$ifNull": []interface{}{"$movie.website_url", ""}},
 			"type":        "$effective_target_type",
 			"series_title": bson.M{"$cond": []interface{}{

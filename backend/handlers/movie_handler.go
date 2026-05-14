@@ -206,7 +206,57 @@ func (h *MovieHandler) SearchMovies(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": movies})
+	series, err := h.seriesService.SearchSeries(query)
+	if err != nil {
+		log.Printf("Warning: series search failed: %v", err)
+		// Don't fail the whole request if series search fails
+	}
+
+	// Transform to a unified structure if needed, or just add a type field to movies
+	// For now, let's just return both in a single list or separate
+	// The frontend expects a flat list in "data"
+	
+	type UnifiedResult struct {
+		ID         string   `json:"id"`
+		Title      string   `json:"title"`
+		Slug       string   `json:"slug"`
+		PosterURL  string   `json:"poster_url"`
+		Year       int      `json:"year"`
+		Genre      []string `json:"genre"`
+		Quality    string   `json:"quality"`
+		TargetType string   `json:"target_type"` // "movie" or "series"
+		Code       string   `json:"code"`
+	}
+
+	results := make([]UnifiedResult, 0, len(movies)+len(series))
+	for _, m := range movies {
+		results = append(results, UnifiedResult{
+			ID:         m.ID.Hex(),
+			Title:      m.Title,
+			Slug:       m.Slug,
+			PosterURL:  m.PosterURL,
+			Year:       m.Year,
+			Genre:      m.Genre,
+			Quality:    m.Quality,
+			TargetType: "movie",
+			Code:       m.Code,
+		})
+	}
+	for _, s := range series {
+		results = append(results, UnifiedResult{
+			ID:         s.ID.Hex(),
+			Title:      s.Title,
+			Slug:       s.Slug,
+			PosterURL:  s.PosterURL,
+			Year:       s.Year,
+			Genre:      s.Genre,
+			Quality:    s.Quality,
+			TargetType: "series",
+			Code:       s.Code,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": results})
 }
 
 // MovieCodeResponse represents the response for movie code lookup
@@ -276,6 +326,7 @@ func (h *MovieHandler) GetMovieByCode(c *gin.Context) {
 					BackdropURL: series.BackdropURL,
 					Year:        series.Year,
 					Genre:       series.Genre,
+					Quality:     series.Quality,
 					Description: series.Description,
 				},
 			})

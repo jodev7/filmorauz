@@ -1,6 +1,6 @@
 """
-Kinolar (kinolar.tv) Parser
-uCoz based website - uses POST form submission to /load/ for search
+Uzmedia (uzmedia.tv) Parser
+uCoz based website - uses GET search /search/?q=query
 """
 import logging
 import os
@@ -20,24 +20,17 @@ logger = logging.getLogger(__name__)
 DEBUG = os.environ.get("PARSER_DEBUG", "false").lower() == "true"
 
 
-class KinolarParser(BaseParser):
-    """Parser for kinolar.tv - uses uCoz POST for search"""
+class UzmediaParser(BaseParser):
+    """Parser for uzmedia.tv - uses uCoz GET for search"""
     
-    BASE_URL = "https://kinolar.tv"
+    BASE_URL = "https://uzmedia.tv"
     
-    # POST search endpoint
-    SEARCH_ENDPOINT = "/load/"
-    
-    # Form field names for uCoz POST search
-    POST_PARAMS = {
-        "a": "2",
-        "subaction": "search",
-        "query": "",  # This will be filled with search query
-    }
+    # GET search endpoint
+    SEARCH_ENDPOINT = "/search/"
     
     @property
     def source_name(self) -> str:
-        return "kinolar"
+        return "uzmedia"
     
     @property
     def base_url(self) -> str:
@@ -51,24 +44,21 @@ class KinolarParser(BaseParser):
         })
     
     def search(self, query: str) -> List[SearchResult]:
-        """Search using uCoz POST request"""
+        """Search using GET request"""
         results = []
         
         try:
-            post_data = self.POST_PARAMS.copy()
-            post_data["query"] = query
-            
-            logger.info(f"[KINOLAR] POST search: {self.BASE_URL}{self.SEARCH_ENDPOINT}")
-            response = self.session.post(
+            logger.info(f"[UZMEDIA] GET search: {self.BASE_URL}{self.SEARCH_ENDPOINT}?q={query}")
+            response = self.session.get(
                 f"{self.BASE_URL}{self.SEARCH_ENDPOINT}",
-                data=post_data,
+                params={"q": query},
                 timeout=30,
                 allow_redirects=True,
                 verify=False
             )
             
             if response.status_code != 200:
-                logger.warning(f"[KINOLAR] Non-200 status: {response.status_code}")
+                logger.warning(f"[UZMEDIA] Non-200 status: {response.status_code}")
                 return []
             
             soup = BeautifulSoup(response.text, "lxml")
@@ -130,7 +120,7 @@ class KinolarParser(BaseParser):
                     ))
             
         except Exception as e:
-            logger.error(f"[KINOLAR] Search error: {e}")
+            logger.error(f"[UZMEDIA] Search error: {e}")
         
         return results
 
@@ -181,7 +171,7 @@ class KinolarParser(BaseParser):
                 source=self.source_name
             )
         except Exception as e:
-            logger.error(f"[KINOLAR] Details error: {e}")
+            logger.error(f"[UZMEDIA] Details error: {e}")
             return MovieDetails(
                 title="", description="", poster="", backdrop="", year=0, 
                 genres=[], country="", duration=0, source_id=source_id, source=self.source_name

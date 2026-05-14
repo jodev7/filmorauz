@@ -38,6 +38,7 @@ export default function NewSeriesPage() {
     genre: [],
     country: "",
     is_premium: false,
+    quality: "1080p",
   });
 
   const [genreInput, setGenreInput] = useState("");
@@ -352,6 +353,24 @@ export default function NewSeriesPage() {
               placeholder="USA, UK, etc."
             />
           </div>
+        </div>
+
+        {/* Quality */}
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-2">
+            Sifat (Quality)
+          </label>
+          <select
+            value={form.quality}
+            onChange={(e) => setForm({ ...form, quality: e.target.value })}
+            className="w-full px-4 py-3 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
+          >
+            <option value="480p">480p</option>
+            <option value="720p">720p</option>
+            <option value="1080p">1080p</option>
+            <option value="1080p Ultra">1080p Ultra</option>
+            <option value="4K">4K</option>
+          </select>
         </div>
 
         {/* Genres */}

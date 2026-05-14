@@ -245,6 +245,9 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		// Import from catalog
 		admin.POST("/ingestion/import", ingestionHandler.ImportFromCatalog)
 
+		// Bulk import from category
+		admin.POST("/ingestion/bulk-import", ingestionHandler.BulkImportFromCategory)
+
 		// User management
 		admin.GET("/dashboard/stats", adminUserHandler.DashboardStats)
 		admin.GET("/analytics/top-movies", adminUserHandler.GetTopMovies)

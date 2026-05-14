@@ -98,12 +98,16 @@ export default function Navbar() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  const handleMovieClick = (slug: string) => {
+  const handleMovieClick = (slug: string, targetType?: string) => {
     setResults([]);
     setSearchOpen(false);
     setQuery("");
     setMenuOpen(false);
-    router.push(`/movies/${slug}`);
+    if (targetType === "series") {
+      router.push(`/series/${slug}`);
+    } else {
+      router.push(`/movies/${slug}`);
+    }
   };
 
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -211,31 +215,38 @@ export default function Navbar() {
                     {t("common.loading")}
                   </div>
                 )}
-                {results.slice(0, 6).map((movie) => {
-                  const posterSrc = movie.poster_url;
+                {results.slice(0, 6).map((item: any) => {
+                  const posterSrc = item.poster_url;
                   return (
                   <button
-                    key={movie.id}
-                    onClick={() => handleMovieClick(movie.slug)}
+                    key={item.id}
+                    onClick={() => handleMovieClick(item.slug, item.target_type)}
                     className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#1e1e2e] transition-colors text-left"
                   >
                     <MediaImage
                       src={posterSrc}
-                      alt={getLocalizedTitle(movie)}
+                      alt={getLocalizedTitle(item)}
                       fallbackSrc={DEFAULT_POSTER_PLACEHOLDER}
                       className="w-8 h-12 object-cover rounded shrink-0"
                     />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-white truncate">
-                        {movie.code && (
-                          <span className="text-zinc-500 font-mono text-xs mr-1">
-                            #{movie.code}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-medium text-white truncate">
+                          {item.code && (
+                            <span className="text-zinc-500 font-mono text-[10px] mr-1">
+                              #{item.code}
+                            </span>
+                          )}
+                          {getLocalizedTitle(item)}
+                        </p>
+                        {item.quality && (
+                          <span className="shrink-0 text-[10px] font-bold px-1 rounded bg-brand-red/20 text-brand-red border border-brand-red/30">
+                            {item.quality}
                           </span>
                         )}
-                        {getLocalizedTitle(movie)}
-                      </p>
+                      </div>
                       <p className="text-xs text-zinc-500">
-                        {movie.year} · {getLocalizedGenres(movie)?.join(", ")}
+                        {item.year} · {item.target_type === "series" ? "Serial" : "Kino"}
                       </p>
                     </div>
                   </button>
@@ -339,23 +350,30 @@ export default function Navbar() {
           {/* Mobile search results */}
           {results.length > 0 && (
             <div className="bg-[#12121a] border border-[#1e1e2e] rounded-xl overflow-hidden mb-3">
-              {results.slice(0, 4).map((movie) => {
-                const posterSrc = movie.poster_url;
+              {results.slice(0, 4).map((item: any) => {
+                const posterSrc = item.poster_url;
                 return (
                 <button
-                  key={movie.id}
-                  onClick={() => handleMovieClick(movie.slug)}
+                  key={item.id}
+                  onClick={() => handleMovieClick(item.slug, item.target_type)}
                   className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#1e1e2e] transition-colors text-left border-b border-[#1e1e2e]/50 last:border-0"
                 >
                   <MediaImage
                     src={posterSrc}
-                    alt={getLocalizedTitle(movie)}
+                    alt={getLocalizedTitle(item)}
                     fallbackSrc={DEFAULT_POSTER_PLACEHOLDER}
                     className="w-8 h-12 object-cover rounded shrink-0"
                   />
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-white truncate">{getLocalizedTitle(movie)}</p>
-                    <p className="text-xs text-zinc-500">{movie.year}</p>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-medium text-white truncate">{getLocalizedTitle(item)}</p>
+                      {item.quality && (
+                        <span className="shrink-0 text-[10px] font-bold px-1 rounded bg-brand-red/20 text-brand-red border border-brand-red/30">
+                          {item.quality}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-zinc-500">{item.year} · {item.target_type === "series" ? "Serial" : "Kino"}</p>
                   </div>
                 </button>
                 );

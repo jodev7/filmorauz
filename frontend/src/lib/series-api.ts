@@ -18,6 +18,7 @@ export interface Series {
   rating_count: number;
   is_premium: boolean;
   is_completed: boolean;
+  quality?: string;
   created_at: string;
   updated_at: string;
 }
@@ -46,6 +47,7 @@ export interface Episode {
   embed_url: string;
   source_type?: VideoSourceType;
   duration: number;
+  quality?: string;
   views: number;
   air_date: string;
   created_at: string;

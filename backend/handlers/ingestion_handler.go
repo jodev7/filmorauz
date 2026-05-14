@@ -372,15 +372,17 @@ func (h *IngestionHandler) SearchSource(c *gin.Context) {
 
 	// Validate source
 	validSources := map[string]bool{
-		"uzmovi":    true,
-		"freekino":  true,
-		"asilmedia": true,
-		"kinolar":   true,
-		"manual":    true,
+		"uzmovi":     true,
+		"freekino":   true,
+		"asilmedia":  true,
+		"kinolar":    true,
+		"kinochilar": true,
+		"uzmedia":    true,
+		"manual":     true,
 	}
 	if !validSources[source] {
 		log.Printf("[INGESTION] SEARCH: invalid source=%s", source)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid source. valid: uzmovi, freekino, asilmedia, kinolar, manual"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid source. valid: uzmovi, freekino, asilmedia, kinolar, kinochilar, uzmedia, manual"})
 		return
 	}
 
@@ -528,11 +530,13 @@ func (h *IngestionHandler) GetMovieDetails(c *gin.Context) {
 
 	// Validate source
 	validSources := map[string]bool{
-		"uzmovi":    true,
-		"freekino":  true,
-		"asilmedia": true,
-		"kinolar":   true,
-		"manual":    true,
+		"uzmovi":     true,
+		"freekino":   true,
+		"asilmedia":  true,
+		"kinolar":    true,
+		"kinochilar": true,
+		"uzmedia":    true,
+		"manual":     true,
 	}
 	if !validSources[source] {
 		log.Printf("[INGESTION] DETAILS: invalid source=%s", source)
@@ -685,11 +689,13 @@ func (h *IngestionHandler) CreateIngestionJob(c *gin.Context) {
 
 	// Validate source
 	validSources := map[string]bool{
-		"uzmovi":    true,
-		"freekino":  true,
-		"asilmedia": true,
-		"kinolar":   true,
-		"manual":    true,
+		"uzmovi":     true,
+		"freekino":   true,
+		"asilmedia":  true,
+		"kinolar":    true,
+		"kinochilar": true,
+		"uzmedia":    true,
+		"manual":     true,
 	}
 	if !validSources[input.Source] {
 		log.Printf("[INGESTION] JOB: invalid source=%s", input.Source)
@@ -1739,6 +1745,7 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 		Type           string      `json:"type"` // "movie" or "serial"
 		Year           interface{} `json:"year"`
 		Poster         string      `json:"poster"`
+		Quality        string      `json:"quality"`
 		ForceConfirmed bool        `json:"force_confirmed"`
 	}
 
@@ -1892,14 +1899,17 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 
 	// Validate source
 	validSources := map[string]bool{
-		"uzmovi":    true,
-		"freekino":  true,
-		"asilmedia": true,
-		"manual":    true,
+		"uzmovi":     true,
+		"freekino":   true,
+		"asilmedia":  true,
+		"kinolar":    true,
+		"kinochilar": true,
+		"uzmedia":    true,
+		"manual":     true,
 	}
 	if !validSources[input.Source] {
 		log.Printf("[INGESTION] IMPORT: invalid source=%s", input.Source)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid source. valid: uzmovi, freekino, asilmedia, manual"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid source. valid: uzmovi, freekino, asilmedia, kinolar, kinochilar, uzmedia, manual"})
 		return
 	}
 
@@ -1926,6 +1936,7 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 		Steps:       models.JobSteps{},
 		Logs:        []models.IngestionLog{},
 		ContentType: input.Type,
+		Quality:     input.Quality,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

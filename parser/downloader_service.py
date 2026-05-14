@@ -1601,6 +1601,7 @@ class DownloaderService:
             max_retries=3,
             pid_callback=pid_callback,
             debug_callback=debug_callback,
+            inactivity_timeout=DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS,
         )
         
         if not result.success:

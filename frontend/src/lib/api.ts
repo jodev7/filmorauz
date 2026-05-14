@@ -2190,6 +2190,37 @@ export async function importFromCatalog(
   return { ...json, queued: res.status === 202 };
 }
 
+export interface BulkImportRequest {
+  source: string;
+  category_url: string;
+  page_start: number;
+  page_end: number;
+  type?: string;
+}
+
+export interface BulkImportResponse {
+  ok: boolean;
+  job_id: string;
+  message: string;
+}
+
+// Bulk import from category
+export async function bulkImport(
+  token: string,
+  input: BulkImportRequest
+): Promise<BulkImportResponse> {
+  const res = await fetch(`${API_URL}/admin/ingestion/bulk-import`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Failed to start bulk import" }));
+    throw new Error(err.error || "Failed to start bulk import");
+  }
+  return res.json();
+}
+
 // Admin User types
 export interface AdminUser {
   id: string;
@@ -2745,6 +2776,7 @@ export interface AdminSeries {
   rating_count: number;
   is_premium: boolean;
   is_completed: boolean;
+  quality?: string;
   created_at: string;
   updated_at: string;
   // Approval workflow
@@ -2770,6 +2802,7 @@ export interface CreateSeriesData {
   genre?: string[];
   country?: string;
   is_premium?: boolean;
+  quality?: string;
 }
 
 // Admin: Get all series (including pending/rejected — uses admin endpoint)

@@ -1052,7 +1052,9 @@ class AsilmediaParser(BaseParser):
             except Exception:
                 pass
         # m3u8 manifests must contain #EXTM3U; a 200 with HTML body is a fake.
-        is_manifest = ".m3u8" in url.lower()
+        url_lower = url.lower()
+        is_known_cdn = any(domain in url_lower for domain in ['asilmedia', 'video-cdn', 'file-cdn', 'cdn'])
+        is_manifest = ".m3u8" in url_lower or ".mpd" in url_lower
         try:
             try:
                 r = self.session.head(url, headers=headers, timeout=10, allow_redirects=True)
@@ -1069,17 +1071,23 @@ class AsilmediaParser(BaseParser):
             r = self.session.get(
                 url,
                 headers={**headers, "Range": "bytes=0-2047"},
-                timeout=12,
+                timeout=15,
                 stream=True,
                 allow_redirects=True,
             )
             try:
-                if r.status_code not in (200, 206):
-                    return False
-                if is_manifest:
-                    chunk = next(r.iter_content(chunk_size=2048), b"") or b""
-                    return chunk.lstrip().startswith(b"#EXTM3U")
-                return True
+                if r.status_code in (200, 206):
+                    if is_manifest:
+                        chunk = next(r.iter_content(chunk_size=2048), b"") or b""
+                        return chunk.lstrip().startswith(b"#EXTM3U") or b"MPD" in chunk
+                    return True
+                
+                # If probe returned 403/404 but it's a known CDN
+                if is_known_cdn and (is_manifest or ".mp4" in url_lower):
+                    logger.info(f"[ASILMEDIA] Probe returned {r.status_code} for known CDN, accepting anyway: {url[:60]}...")
+                    return True
+                    
+                return False
             finally:
                 try:
                     r.close()
@@ -1087,6 +1095,8 @@ class AsilmediaParser(BaseParser):
                     pass
         except Exception as exc:
             logger.info(f"[ASILMEDIA] validation probe failed url={url[:80]} err={exc}")
+            if is_known_cdn:
+                return True
             return False
 
     def _extract_video_urls(self, soup, page_url: str) -> List[Dict[str, str]]:

@@ -432,6 +432,13 @@ func (r *SeriesRepository) Update(series *models.Series) error {
 			"country":      series.Country,
 			"is_premium":   series.IsPremium,
 			"is_completed": series.IsCompleted,
+			"quality":      series.Quality,
+			"available_qualities": series.AvailableQualities,
+			"generated_qualities": series.GeneratedQualities,
+			"title_uz":       series.TitleUz,
+			"description_uz": series.DescriptionUz,
+			"genres_uz":      series.GenresUz,
+			"countries_uz":   series.CountriesUz,
 			"updated_at":   series.UpdatedAt,
 		},
 	}
@@ -751,7 +758,11 @@ func (r *SeriesRepository) UpdateEpisode(episode *models.Episode) error {
 			"embed_url":           episode.EmbedURL,
 			"source_type":         episode.SourceType,
 			"duration":            episode.Duration,
+			"quality":             episode.Quality,
 			"air_date":            episode.AirDate,
+			"master_playlist_url": episode.MasterPlaylistURL,
+			"available_qualities": episode.AvailableQualities,
+			"generated_qualities": episode.GeneratedQualities,
 			"updated_at":          episode.UpdatedAt,
 			"thumbnails_base_url": episode.ThumbnailsBaseURL,
 			"thumbnail_interval":  episode.ThumbnailInterval,
@@ -950,4 +961,55 @@ func (r *SeriesRepository) SetApprovalStatus(idHex, status, byUserID string) err
 		return fmt.Errorf("series not found")
 	}
 	return nil
+}
+
+// Search does a basic text search on title and description for series
+func (r *SeriesRepository) Search(query string) ([]models.Series, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Case-insensitive regex search on title; only published content
+	filter := bson.M{
+		"$and": []bson.M{
+			{
+				"$or": []bson.M{
+					{"is_published": true},
+					{"is_published": bson.M{"$exists": false}},
+				},
+			},
+			{
+				"$or": []bson.M{
+					{"title": bson.M{"$regex": query, "$options": "i"}},
+					{"description": bson.M{"$regex": query, "$options": "i"}},
+				},
+			},
+		},
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "created_at", Value: -1}}).
+		SetLimit(20)
+
+	cursor, err := r.seriesCol.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("search series: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var seriesList []models.Series
+	if err := cursor.All(ctx, &seriesList); err != nil {
+		return nil, fmt.Errorf("decode search results: %w", err)
+	}
+
+	if seriesList == nil {
+		seriesList = []models.Series{}
+	}
+	for i := range seriesList {
+		seriesList[i].Genre = normalizeSeriesGenres(seriesList[i].Genre)
+	}
+	if err := r.applyEpisodeRatingSummaries(ctx, seriesList); err != nil {
+		return nil, err
+	}
+
+	return seriesList, nil
 }

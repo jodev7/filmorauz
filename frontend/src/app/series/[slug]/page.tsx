@@ -188,8 +188,13 @@ export default async function SeriesDetailPage({ params }: Props) {
                 </div>
               )}
 
-              <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-white tracking-wide leading-none mb-3">
+              <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-white tracking-wide leading-none mb-3 flex flex-wrap items-center gap-3">
                 {series.title}
+                {series.is_premium && (
+                  <span className="inline-flex items-center gap-1 text-xs bg-gradient-to-r from-yellow-500 to-amber-600 text-black px-2 py-1 rounded-full font-bold shadow-[0_0_10px_rgba(234,179,8,0.3)]">
+                    PREMIUM
+                  </span>
+                )}
               </h1>
 
               <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-sm text-gray-400 mb-4">
@@ -201,6 +206,11 @@ export default async function SeriesDetailPage({ params }: Props) {
                   <span className="flex items-center gap-1">
                     <Globe size={14} />
                     {series.country}
+                  </span>
+                )}
+                {series.quality && (
+                  <span className="border border-brand-red text-brand-red text-xs font-bold px-2 py-0.5 rounded">
+                    {series.quality}
                   </span>
                 )}
               </div>

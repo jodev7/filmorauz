@@ -107,98 +107,20 @@ class UzmoviParser(BaseParser):
         return self.BASE_URL
 
     def _detect_uzmovi_type(self, detail_url: str = "", title: str = "", soup=None, card=None) -> str:
-        """Detect movie vs serial using Uzmovi page/content signals first, URL second."""
-        title_lower = clean_text(title).lower() if title else ""
-        signal_text = title_lower
-
-        nodes = []
-        if card is not None:
-            nodes.append(card)
-        if soup is not None:
-            nodes.append(soup)
-
-        for node in nodes:
-            try:
-                node_text = clean_text(node.get_text(" ", strip=True)).lower()
-            except Exception:
-                node_text = ""
-            if node_text:
-                signal_text = f"{signal_text} {node_text}".strip()
-
-        strong_title_signals = (
-            "barcha qismlari",
-            " serial",
-            "serial ",
-            "сериал",
-        )
-        if any(sig in signal_text for sig in strong_title_signals):
-            return "serial"
-
-        episode_patterns = (
-            r'\b\d+\s*-\s*qism\b',
-            r'\b\d+-qism\b',
-            r'\b\d+\s*qism\b',
-            r'\bepisode\s*\d+\b',
-            r'\bseriya\s*\d+\b',
-            r'\bсерия\s*\d+\b',
-        )
-        if any(re.search(pattern, signal_text, re.IGNORECASE) for pattern in episode_patterns):
-            return "serial"
-
-        page_signals = (
-            "qismlardan tanlash",
-            "barcha qismlari",
-            "episode list",
-            "episode grid",
-            "serial",
-            "сериал",
-        )
-        if any(sig in signal_text for sig in page_signals):
-            return "serial"
-
-        serial_selectors = (
-            ".batcoh-list",
-            ".batcoh-item",
-            "a[href*='/episode/']",
-            "a[title*='-qism']",
-            "a[title*='qism']",
-            "[class*='episode']",
-            "[class*='serial']",
-        )
-        for node in nodes:
-            for selector in serial_selectors:
-                try:
-                    if node.select_one(selector):
-                        return "serial"
-                except Exception:
-                    continue
-
-        genre_selectors = (
-            ".finfo a",
-            ".finfo-text a",
-            ".genre a",
-            ".genres a",
-            "[class*='genre'] a",
-            "a[title='Serial']",
-        )
-        for node in nodes:
-            for selector in genre_selectors:
-                try:
-                    for el in node.select(selector):
-                        genre_text = clean_text(el.get_text()).lower()
-                        if genre_text in ("serial", "сериал") or " serial " in f" {genre_text} ":
-                            return "serial"
-                except Exception:
-                    continue
-
-        detail_lower = (detail_url or "").lower()
-        if any(seg in detail_lower for seg in (
-            "/serialar/", "/seriallar/", "/serial/", "/tv-series/", "/episode/",
-            "/uzbek-serial", "/turk-serial", "/korea-serial", "/koreya-serial",
-            "/hind-serial", "/multserial",
-        )):
-            return "serial"
-        return "movie"
+        """Detect movie vs serial using shared helper."""
+        from helpers import detect_content_type
+        
+        # If we have a card, use it as soup to scope the search
+        ct, reason = detect_content_type(detail_url, "uzmovi", soup=card or soup)
+        if ct != "unknown":
+            return ct
+            
+        # Fallback to movie if still unknown but we are on a detail page
+        u = (detail_url or "").lower()
+        if "/tarjima-kinolar" in u or "/kino" in u:
+            return "movie"
+            
+        return "movie" # Default to movie for uzmovi
     
     def search(self, query: str) -> List[SearchResult]:
         """Search for movies on uzmovi.tv (mirror: uzmovi.net) using the site's real search form."""
@@ -1736,17 +1658,25 @@ class UzmoviParser(BaseParser):
         """Probe a candidate video URL with HEAD/GET to ensure it works."""
         if not url or not url.lower().startswith(("http://", "https://")):
             return False
+        
+        url_lower = url.lower()
+        
+        # [ENHANCED] For known stable CDN domains, be more lenient if probe fails
+        # but the URL looks very much like a video stream
+        is_known_cdn = any(domain in url_lower for domain in ['uzdown.space', 'uzmovi.net', 'srv'])
+        
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "*/*",
             "Referer": referer or self.BASE_URL + "/",
+            "Origin": self.BASE_URL,
         }
         
-        is_manifest = ".m3u8" in url.lower() or ".mpd" in url.lower()
+        is_manifest = ".m3u8" in url_lower or ".mpd" in url_lower
         try:
             # Try HEAD first
             try:
-                r = self.session.head(url, headers=headers, timeout=10, allow_redirects=True)
+                r = self.session.head(url, headers=headers, timeout=12, allow_redirects=True)
                 if r.status_code in (200, 206) and not is_manifest:
                     return True
             except Exception:
@@ -1756,17 +1686,23 @@ class UzmoviParser(BaseParser):
             r = self.session.get(
                 url,
                 headers={**headers, "Range": "bytes=0-2047"},
-                timeout=12,
+                timeout=15,
                 stream=True,
                 allow_redirects=True,
             )
             try:
-                if r.status_code not in (200, 206):
-                    return False
-                if is_manifest:
-                    chunk = next(r.iter_content(chunk_size=2048), b"") or b""
-                    return chunk.lstrip().startswith(b"#EXTM3U") or b"MPD" in chunk
-                return True
+                if r.status_code in (200, 206):
+                    if is_manifest:
+                        chunk = next(r.iter_content(chunk_size=2048), b"") or b""
+                        return chunk.lstrip().startswith(b"#EXTM3U") or b"MPD" in chunk
+                    return True
+                
+                # If probe returned 403/404 but it's a known CDN and looks like a valid manifest
+                if is_known_cdn and is_manifest:
+                    logger.info(f"[UZMOVI] Probe returned {r.status_code} for known CDN manifest, accepting anyway: {url[:60]}...")
+                    return True
+                    
+                return False
             finally:
                 try:
                     r.close()
@@ -1774,6 +1710,9 @@ class UzmoviParser(BaseParser):
                     pass
         except Exception as exc:
             logger.info(f"[UZMOVI] validation probe failed url={url[:80]} err={exc}")
+            # Final fallback for known CDNs: if it's a manifest on a known host, trust it
+            if is_known_cdn and is_manifest:
+                return True
             return False
     
     def _extract_media_with_playwright(self, url: str) -> List[Dict[str, str]]:

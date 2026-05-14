@@ -1672,6 +1672,7 @@ class DDownloaderIntegration:
         max_retries: int = 3,
         pid_callback=None,
         debug_callback=None,
+        inactivity_timeout: int = 300,
     ) -> DownloadResult:
         """
         Main download entry point with retry support and validation.

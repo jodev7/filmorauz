@@ -613,6 +613,33 @@ func (h *IngestionHandler) completeParent(
 	return err
 }
 
+func determineHighestQuality(episodes []parserSerialEpisode) string {
+	highest := 0
+	quality := ""
+	for _, ep := range episodes {
+		for q := range ep.QualityURLs {
+			var val int
+			if _, err := fmt.Sscanf(q, "%dp", &val); err == nil {
+				if val > highest {
+					highest = val
+					quality = q
+				}
+			} else if strings.EqualFold(q, "1080p ultra") || strings.EqualFold(q, "4k") {
+				// Special cases
+				val = 2160
+				if strings.Contains(strings.ToLower(q), "1080p") {
+					val = 1081 // Slightly higher than 1080
+				}
+				if val > highest {
+					highest = val
+					quality = q
+				}
+			}
+		}
+	}
+	return quality
+}
+
 // upsertSeries finds an existing series by slug or creates a new one (pending
 // approval). The slug is derived deterministically from the title so re-
 // importing the same serial targets the same row.
@@ -620,9 +647,16 @@ func (h *IngestionHandler) upsertSeries(ctx context.Context, title string, paylo
 	slug := slugifySerial(title)
 	col := h.seriesRepo.Collection()
 
+	quality := determineHighestQuality(payload.Episodes)
+
 	var existing models.Series
 	err := col.FindOne(ctx, bson.M{"slug": slug}).Decode(&existing)
 	if err == nil {
+		// Update quality if it's better or was empty
+		if existing.Quality == "" || (quality != "" && quality != existing.Quality) {
+			_, _ = col.UpdateOne(ctx, bson.M{"_id": existing.ID}, bson.M{"$set": bson.M{"quality": quality}})
+			existing.Quality = quality
+		}
 		return &existing, nil
 	}
 	if err != mongo.ErrNoDocuments {
@@ -637,6 +671,7 @@ func (h *IngestionHandler) upsertSeries(ctx context.Context, title string, paylo
 		PosterURL:      payload.Poster,
 		BackdropURL:    payload.Backdrop,
 		Year:           payload.Year,
+		Quality:        quality,
 		ApprovalStatus: "pending",
 		IsPublished:    false,
 		CreatedAt:      now,
@@ -703,6 +738,7 @@ func (h *IngestionHandler) upsertEpisode(ctx context.Context, seriesID, seasonID
 		EpisodeNumber: ep.Episode,
 		Title:         title,
 		ThumbnailURL:  thumb,
+		Quality:       determineHighestQuality([]parserSerialEpisode{ep}),
 	}
 	if err := h.seriesRepo.CreateEpisode(episode); err != nil {
 		return nil, err

@@ -385,237 +385,77 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
 
     Returns: (content_type, reason) where content_type is "movie" | "serial" | "unknown"
     and reason is a short string explaining the decision (used in logs).
-
-    Priority (soup signals beat URL — URLs lie, especially Asilmedia's generic
-    /films/<category>/ which buckets serials under a film-y looking path):
-      1) Strong soup signals — single hit on an explicit serial keyword
-         ("fasl", "mavsum", "barcha qismlar", "N-qism", "N-fasl", "season N",
-         "episode N", "сериал", ...) OR a season/episode DOM block.
-      2) URL pattern (only used when soup gave nothing).
-
-    Returning "unknown" is intentional — the caller (parser card extractor or
-    backend /import handler) can decide to show "Aniqlanmoqda" in the badge or
-    re-fetch /details before committing to a movie/serial pipeline.
     """
     import re as _re
 
     u = (url or "").lower()
     src = (source or "").lower()
 
-    def _scope_asilmedia_soup(node):
-        if node is None:
-            return None
-        try:
-            if getattr(node, "get", None):
-                itemtype = (node.get("itemtype") or "").lower()
-                classes = " ".join(node.get("class", []) if node.get("class") else []).lower()
-                if "schema.org/movie" in itemtype or "schema.org/tvseries" in itemtype or "fullstory" in classes:
-                    return node
-            scoped = node.select_one("article.fullstory, .fullstory, article[itemtype*='schema.org/Movie'], article[itemtype*='schema.org/TVSeries']")
-            return scoped or node
-        except Exception:
-            return node
+    # 1. Check URL first for obvious indicators
+    if any(p in u for p in ["/serial/", "/seriya/", "/qism/", "/fasl/", "/mavsum/", "/serie/", "/episode/"]):
+        return ("serial", "URL pattern match")
 
-    def _is_asilmedia_detail_root(node):
-        if node is None or not getattr(node, "get", None):
-            return False
-        try:
-            itemtype = (node.get("itemtype") or "").lower()
-            classes = " ".join(node.get("class", []) if node.get("class") else []).lower()
-            return (
-                "schema.org/movie" in itemtype or
-                "schema.org/tvseries" in itemtype or
-                "fullstory" in classes
-            )
-        except Exception:
-            return False
-
-    def _find_asilmedia_episode_section(node):
-        if node is None:
-            return None
-        try:
-            for sel in (".fs-episodes", "#episodes-section", "#episodes-raw-data"):
-                for candidate in node.select(sel):
-                    text = clean_text(candidate.get_text(" ", strip=True)).lower()
-                    if "qismlar" in text:
-                        return candidate
-            for candidate in node.find_all(["section", "div", "article"]):
-                text = clean_text(candidate.get_text(" ", strip=True)).lower()
-                if "qismlar" in text:
-                    return candidate
-        except Exception:
-            return None
-        return None
-
-    def _asilmedia_has_real_episode_controls(section):
-        if section is None:
-            return (False, "no Qismlar section found")
-        ignore_words = ("360p", "480p", "720p", "1080p", "yuklab olish", "onlayn ko'rish", "skrinshotlar")
-        episode_re = _re.compile(r"^\d+\s*-\s*qism$", _re.IGNORECASE)
-        season_re = _re.compile(r"^\d+\s*-\s*fasl$", _re.IGNORECASE)
-        try:
-            for node in section.find_all(["a", "button"]):
-                label_parts = [
-                    node.get_text(" ", strip=True),
-                    node.get("title", ""),
-                    node.get("data-label", ""),
-                    node.get("onclick", ""),
-                ]
-                for raw_label in label_parts:
-                    if not raw_label:
-                        continue
-                    label = clean_text(raw_label).lower()
-                    if not label or any(word in label for word in ignore_words):
-                        continue
-                    if episode_re.fullmatch(label):
-                        return (True, f"Qismlar section has episode button {label!r}")
-                    if season_re.fullmatch(label):
-                        return (True, f"Qismlar section has season button {label!r}")
-        except Exception:
-            return (False, "failed to inspect Qismlar section")
-        return (False, "Qismlar section has no real episode controls")
-
-    def _iter_asilmedia_control_labels(node):
-        if node is None:
-            return
-        for item in node.find_all(["a", "button"]):
-            for raw_label in (
-                item.get_text(" ", strip=True),
-                item.get("title", ""),
-                item.get("data-label", ""),
-                item.get("onclick", ""),
-            ):
-                if raw_label:
-                    yield clean_text(raw_label).lower()
-
-    # ── Soup signals first ────────────────────────────────────────────────
+    # ── Soup signals ────────────────────────────────────────────────
     if soup is not None:
-        analysis_root = _scope_asilmedia_soup(soup) if src == "asilmedia" else soup
+        # Try to find the main content area to avoid menu/footer noise
+        main_content = None
+        for sel in [
+            "article", ".full-story", ".fullstory", ".movie-detail", 
+            ".serial-detail", "#dle-content", ".content-main", "main",
+            ".w-full.flex-col", # freekino specific
+        ]:
+            main_content = soup.select_one(sel)
+            if main_content:
+                break
+        
+        analysis_root = main_content or soup
+        
         try:
             text_lower = analysis_root.get_text(" ", strip=True).lower() if analysis_root else ""
         except Exception:
             text_lower = ""
 
-        if src == "asilmedia" and analysis_root is not None:
-            episode_section = _find_asilmedia_episode_section(analysis_root)
-            has_controls, reason = _asilmedia_has_real_episode_controls(episode_section)
-            evidence = []
-            if has_controls:
-                evidence.append(reason)
+        # Check for serial-specific metadata/badges
+        serial_badges = analysis_root.select(".badge--series, .serial-badge, .fasl-badge, .qism-badge")
+        if serial_badges:
+            return ("serial", "Found serial-specific badge")
 
-            ignore_words = ("360p", "480p", "720p", "1080p", "yuklab olish", "onlayn ko'rish", "skrinshotlar")
-            season_re = _re.compile(r"^\d+\s*-\s*fasl$", _re.IGNORECASE)
-            episode_re = _re.compile(r"^\d+\s*-\s*qism$", _re.IGNORECASE)
-            season_text_re = _re.compile(
-                r"\b(birinchi mavsum|ikkinchi fasl|uchinchi fasl|to'rtinchi fasl|beshinchi fasl|"
-                r"birinchi fasl|ikkinchi mavsum|uchinchi mavsum)\b",
-                _re.IGNORECASE,
-            )
-            multi_season_badge_re = _re.compile(r"\b\d+\s*-\s*\d+\s*fasllar\b", _re.IGNORECASE)
-
-            for label in _iter_asilmedia_control_labels(analysis_root):
-                if any(word in label for word in ignore_words):
-                    continue
-                if season_re.fullmatch(label):
-                    evidence.append(f"season button {label!r}")
-                    break
-
-            for label in _iter_asilmedia_control_labels(analysis_root):
-                if any(word in label for word in ignore_words):
-                    continue
-                if episode_re.fullmatch(label):
-                    evidence.append(f"episode button {label!r}")
-                    break
-
-            try:
-                poster_badge = analysis_root.select_one(".fs-poster__serial-badge, .badge--series")
-            except Exception:
-                poster_badge = None
-            if poster_badge is not None:
-                badge_text = clean_text(poster_badge.get_text(" ", strip=True)).lower()
-                if "fasl" in badge_text or "qism" in badge_text or multi_season_badge_re.search(badge_text):
-                    evidence.append("badge fasllar/qism")
-
-            metadata_parts = []
-            for sel in (".fs-meta", ".card__meta", "[itemprop='genre']", ".breadcrumbs"):
-                try:
-                    metadata_parts.extend(
-                        clean_text(el.get_text(" ", strip=True)).lower()
-                        for el in analysis_root.select(sel)
-                        if el.get_text(" ", strip=True)
-                    )
-                except Exception:
-                    pass
-            metadata_text = " ".join(metadata_parts)
-            if _re.search(r"\bserial\b|\bseriali\b|\bseriallar\b", metadata_text, _re.IGNORECASE):
-                evidence.append("metadata serial")
-
-            description_parts = []
-            for sel in (".fs-description", ".full-story", ".short-story", ".description", "[itemprop='description']"):
-                try:
-                    description_parts.extend(
-                        clean_text(el.get_text(" ", strip=True)).lower()
-                        for el in analysis_root.select(sel)
-                        if el.get_text(" ", strip=True)
-                    )
-                except Exception:
-                    pass
-            description_text = " ".join(description_parts)
-            if season_text_re.search(description_text):
-                evidence.append("season text")
-
-            title_text = ""
-            try:
-                title_node = analysis_root.select_one("h1, .fs-title")
-                title_text = clean_text(title_node.get_text(" ", strip=True)).lower() if title_node else ""
-            except Exception:
-                title_text = ""
-            has_barcha_qismlar = "barcha qismlar" in title_text or "barcha qismlar" in description_text
-            if has_barcha_qismlar:
-                evidence.append("barcha qismlar")
-
-            if has_barcha_qismlar and "season text" in evidence:
-                return ("serial", ", ".join(evidence))
-            if evidence:
-                return ("serial", ", ".join(evidence))
-
-            if _is_asilmedia_detail_root(analysis_root):
-                return ("movie", reason)
+        # Check for season/episode controls (tabs, dropdowns)
+        serial_controls = analysis_root.select(".episodes-tabs, .season-select, .episode-list, #episodes-section")
+        if serial_controls:
+            return ("serial", "Found episode/season controls")
 
         if text_lower:
-            # Strong single-hit serial keywords. Hitting any of these means
-            # the page is talking about episodes/seasons explicitly.
-            strong_keywords = (
-                "barcha qismlar", "barcha qismlari",
-                "qismlardan tanlash", "qismlar to'liq", "qismlar to`liq",
-                "fasl", "mavsum",            # uz "season"
-                "сезон", "сериал", "серии",  # ru
-                "seriallar",
-                "season ", "episode ", "episodes ",
-            )
-            hit = next((kw for kw in strong_keywords if kw in text_lower), None)
-            if hit:
-                return ("serial", f"page text strong serial keyword: {hit!r}")
-
-            # "1-qism", "2-qism", "1-fasl", "1-mavsum", "season 2", "episode 7"
-            episode_patterns = (
+            # More specific serial patterns
+            serial_patterns = [
                 r'\b\d+\s*-\s*qism\b',
                 r'\b\d+\s*-\s*fasl\b',
                 r'\b\d+\s*-\s*mavsum\b',
-                r'\bseason\s+\d+\b',
-                r'\bepisode\s+\d+\b',
-                r'\bseriya\s+\d+\b',
-                r'\bсерия\s+\d+\b',
-            )
-            for pat in episode_patterns:
-                if _re.search(pat, text_lower):
-                    return ("serial", f"page text matches episode pattern: {pat}")
+                r'barcha qismlari',
+                r'barcha qismlar',
+            ]
+            
+            # Check title specifically
+            title_node = analysis_root.select_one("h1, .title, .film-title")
+            title_text = title_node.get_text().lower() if title_node else ""
+            
+            if any(kw in title_text for kw in ["serial", "сериал", "barcha qismlari"]):
+                return ("serial", f"Title contains serial keyword")
 
-            # Weak keyword — needs at least 2 distinct hits to count.
-            weak_keywords = ("qism", "qismi", "qisim", "epizod")
-            weak_hits = [k for k in weak_keywords if k in text_lower]
-            if len(weak_hits) >= 2:
-                return ("serial", f"page text weak serial signals: {weak_hits[:3]}")
+            # Check for episode/season patterns in text
+            for pattern in serial_patterns:
+                if _re.search(pattern, text_lower):
+                    return ("serial", f"Found serial pattern in content: {pattern}")
+
+            # Fallback to general keywords but with cautious list
+            strong_keywords = (
+                "qismlardan tanlash", "qismlar to'liq", "qismlar to`liq",
+                "mavsum", "сезон", "серии",
+                "season ", "episode ", "episodes ",
+            )
+            for kw in strong_keywords:
+                if kw in text_lower:
+                    return ("serial", f"Found serial keyword in content: {kw}")
 
         # DOM blocks that almost certainly mean season/episode UI.
         dom_selectors = (
@@ -635,6 +475,26 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
             except Exception:
                 pass
 
+        # Asilmedia specific: check for "Qismlar" section but verify it has real controls
+        if src == "asilmedia":
+            qismlar_found = False
+            for sel in [".fs-episodes", "#episodes-section", "#episodes-raw-data"]:
+                if analysis_root.select_one(sel):
+                    qismlar_found = True
+                    break
+            if not qismlar_found:
+                # If we are on a detail page but no episodes section, it's a movie
+                if _re.search(r'/\d+-', u) or _re.search(r'/\d+\.html', u):
+                    return ("movie", "no Qismlar section found")
+
+        # Check for Movie indicators
+        if analysis_root:
+            if getattr(analysis_root, "get", None):
+                itemtype = (analysis_root.get("itemtype") or "").lower()
+                classes = " ".join(analysis_root.get("class", []) if analysis_root.get("class") else []).lower()
+                if "schema.org/movie" in itemtype or "fullstory" in classes:
+                    return ("movie", "Found movie-specific indicator (itemtype or class)")
+
     # ── URL fallback ──────────────────────────────────────────────────────
     if src == "uzmovi":
         if any(seg in u for seg in (
@@ -643,19 +503,12 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
             "/yapon-serial", "/multserial",
         )):
             return ("serial", "uzmovi url path matches serial segment")
-        if any(seg in u for seg in (
-            "/tarjima-kinolar/", "/tarjima-kino", "/kinolar/", "/film/",
-            "/uzbek-kino", "/hind-kino", "/turk-kino", "/multfilm",
-        )):
-            return ("movie", "uzmovi url path matches movie segment")
-        return ("unknown", "uzmovi url path did not match")
-
+    
     if src == "freekino":
         if "/serial/" in u or "/seriallar" in u:
             return ("serial", "freekino url contains /serial/")
         if "/movie/" in u or "/film/" in u:
             return ("movie", "freekino url contains /movie/ or /film/")
-        return ("unknown", "freekino url path did not match")
 
     if src == "asilmedia":
         if any(seg in u for seg in (
@@ -663,18 +516,16 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
             "/turk-seriallar", "/korea-seriallar", "/multseriallar",
         )):
             return ("serial", "asilmedia url path contains serial category")
-        # Asilmedia bundles serials under /films/<sub>/ too — never trust the
-        # film-y URL when soup gave us no signal. Force "unknown" so callers
-        # re-check via /details rather than mis-importing as a movie.
-        if any(seg in u for seg in (
-            "/kinolar/", "/film/", "/films/", "/multfilmlar/",
-            "/uzbek-kinolari", "/hind-kinolari", "/turk-kinolari",
-        )):
-            if soup is None:
-                return ("unknown", "asilmedia film-category url, no soup to confirm — defer to detail")
-            return ("movie", "asilmedia url film-category and no serial signal in soup")
 
-    return ("unknown", "no url or page signal matched")
+    if "/movie" in u or "/film" in u or "/kino" in u or "/tarjima-kinolar" in u:
+        return ("movie", "URL fallback")
+
+    # If we are on a detail page (numeric ID in URL) and no serial indicators were found, it's likely a movie
+    if _re.search(r'/\d+-', u) or _re.search(r'/\d+\.html', u):
+        return ("movie", "Detail page without serial indicators")
+
+    return ("unknown", "Could not confidently detect type")
+
 
 
 def is_youtube_url(url: str) -> bool:
@@ -781,6 +632,7 @@ def isValidStreamUrl(url: str) -> bool:
         ("freekino", ["mp4", "m3u8", "mpd", "video", "file", "index"]),
         ("asilmedia", ["mp4", "m3u8", "mpd", "video", "file", "index"]),
         ("kinolar", ["mp4", "m3u8", "mpd", "video", "file", "index"]),
+        ("video-cdn.org", ["mp4", "m3u8", "mpd", "video", "file"]),
     ]
     
     for domain, indicators in video_cdn_patterns:

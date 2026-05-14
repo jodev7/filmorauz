@@ -23,14 +23,28 @@ type Series struct {
 	RatingCount int64              `bson:"rating_count" json:"rating_count"` // Number of ratings
 	IsPremium   bool               `bson:"is_premium" json:"is_premium"`     // Premium content flag
 	IsCompleted bool               `bson:"is_completed" json:"is_completed"` // Series completed flag
+	Quality     string             `bson:"quality" json:"quality"`           // "720p", "1080p", etc.
 	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt   time.Time          `bson:"updated_at" json:"updated_at"`
+
+	// HLS Streaming Support (Series-wide defaults or latest episode info)
+	AvailableQualities []string `bson:"available_qualities,omitempty" json:"available_qualities,omitempty"`
+	GeneratedQualities []string `bson:"generated_qualities,omitempty" json:"generated_qualities,omitempty"`
+
+	// LOCALIZATION: Uzbek display fields
+	TitleUz       string   `bson:"title_uz,omitempty" json:"title_uz,omitempty"`
+	DescriptionUz string   `bson:"description_uz,omitempty" json:"description_uz,omitempty"`
+	GenresUz      []string `bson:"genres_uz,omitempty" json:"genres_uz,omitempty"`
+	CountriesUz   []string `bson:"countries_uz,omitempty" json:"countries_uz,omitempty"`
 
 	// Approval workflow — new series start as pending/unpublished
 	ApprovalStatus string     `bson:"approval_status,omitempty" json:"approval_status,omitempty"` // "pending" | "approved" | "rejected"
 	IsPublished    bool       `bson:"is_published" json:"is_published"`
 	ApprovedAt     *time.Time `bson:"approved_at,omitempty" json:"approved_at,omitempty"`
 	ApprovedBy     string     `bson:"approved_by,omitempty" json:"approved_by,omitempty"`
+
+	// Telegram
+	TelegramPostedOnApproval bool `bson:"telegram_posted_on_approval,omitempty" json:"telegram_posted_on_approval,omitempty"`
 }
 
 // Season represents a season in a series
@@ -59,10 +73,16 @@ type Episode struct {
 	EmbedURL      string             `bson:"embed_url" json:"embed_url"`
 	SourceType    VideoSourceType    `bson:"source_type,omitempty" json:"source_type,omitempty"`
 	Duration      int                `bson:"duration" json:"duration"` // minutes
+	Quality       string             `bson:"quality" json:"quality"`   // "720p", "1080p", etc.
 	Views         int64              `bson:"views" json:"views"`       // View counter
 	AirDate       time.Time          `bson:"air_date" json:"air_date"`
 	CreatedAt     time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt     time.Time          `bson:"updated_at" json:"updated_at"`
+
+	// HLS Streaming Support
+	MasterPlaylistURL  string   `bson:"master_playlist_url,omitempty" json:"master_playlist_url,omitempty"`
+	AvailableQualities []string `bson:"available_qualities,omitempty" json:"available_qualities,omitempty"`
+	GeneratedQualities []string `bson:"generated_qualities,omitempty" json:"generated_qualities,omitempty"`
 
 	// Hover-preview thumbnails — see Movie.ThumbnailsBaseURL.
 	ThumbnailsBaseURL   string `bson:"thumbnails_base_url,omitempty" json:"thumbnails_base_url,omitempty"`
@@ -97,7 +117,14 @@ type SeriesInput struct {
 	Country     string   `json:"country"`
 	IsPremium   bool     `json:"is_premium"`
 	IsCompleted bool     `json:"is_completed"`
+	Quality     string   `json:"quality"`
 	Slug        string   `json:"slug"`
+
+	// LOCALIZATION: Uzbek display fields
+	TitleUz       string   `json:"title_uz"`
+	DescriptionUz string   `json:"description_uz"`
+	GenresUz      []string `json:"genres_uz"`
+	CountriesUz   []string `json:"countries_uz"`
 }
 
 // SeasonInput is used for create/update requests
@@ -117,5 +144,11 @@ type EpisodeInput struct {
 	EmbedURL     string          `json:"embed_url"`
 	SourceType   VideoSourceType `json:"source_type"`
 	Duration     int             `json:"duration"`
+	Quality      string          `json:"quality"`
 	AirDate      string          `json:"air_date"`
+
+	// HLS
+	MasterPlaylistURL  string   `json:"master_playlist_url"`
+	AvailableQualities []string `json:"available_qualities"`
+	GeneratedQualities []string `json:"generated_qualities"`
 }

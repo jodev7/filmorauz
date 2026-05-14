@@ -6,13 +6,14 @@ import {
   Search, Play, RefreshCw, CheckCircle, XCircle,
   Clock, Download, Upload, Settings, AlertTriangle, Loader2,
   ChevronLeft, ChevronRight, Film, Tv, Link, Plus, Youtube, RotateCcw,
-  Power, ChevronDown, ChevronRight as ChevronRightIcon
+  Power, ChevronDown, ChevronRight as ChevronRightIcon, Database
 } from "lucide-react";
 import {
   searchSource, createIngestionJob, getIngestionJobs,
   retryIngestionJob, IngestionJob, SearchResult, IngestionStatus,
   listCatalog, listCatalogCategories, CatalogItem, CatalogResponse, CatalogCategory,
-  createManualImport, importFromCatalog, ImportConfirmationError, ImportConfirmationResponse
+  createManualImport, importFromCatalog, ImportConfirmationError, ImportConfirmationResponse,
+  bulkImport
 } from "@/lib/api";
 import MediaImage from "@/components/ui/MediaImage";
 
@@ -672,6 +673,258 @@ function getFilteredAndSortedJobs(jobs: IngestionJob[], filter: JobFilter, now: 
   return jobs
     .filter((job) => job.id && matchesJobFilter(job, filter, now))
     .sort(compareJobsStable);
+}
+
+// Bulk Import Tab Component
+function BulkTab({
+  token,
+  onImportSuccess
+}: {
+  token: string;
+  onImportSuccess: () => void;
+}) {
+  const [sourceId, setSourceId] = useState<string>("uzmovi");
+  const [categories, setCategories] = useState<CatalogCategory[]>([]);
+  const [loadingCategories, setLoadingCategories] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<string>("");
+  const [pageStart, setPageStart] = useState(1);
+  const [pageEnd, setPageEnd] = useState(1);
+  const [typeFilter, setTypeFilter] = useState<string>("");
+  const [importing, setImporting] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const currentSource = SOURCES.find(s => s.id === sourceId) || SOURCES[0];
+
+  useEffect(() => {
+    const fetchCategories = async () => {
+      setLoadingCategories(true);
+      setError("");
+      try {
+        const res = await listCatalogCategories(sourceId);
+        setCategories(res.categories || []);
+        if (res.categories && res.categories.length > 0) {
+          setSelectedCategory(res.categories[0].url);
+        } else {
+          setSelectedCategory("");
+        }
+      } catch (err) {
+        console.error("Failed to fetch categories:", err);
+        setError("Kategoriyalarni yuklashda xatolik yuz berdi");
+        setCategories([]);
+      } finally {
+        setLoadingCategories(false);
+      }
+    };
+
+    fetchCategories();
+  }, [sourceId]);
+
+  const handleStartBulkImport = async () => {
+    if (!selectedCategory) {
+      setError("Kategoriyani tanlang");
+      return;
+    }
+
+    setImporting(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const res = await bulkImport(token, {
+        source: sourceId,
+        category_url: selectedCategory,
+        page_start: pageStart,
+        page_end: pageEnd,
+        type: typeFilter || undefined
+      });
+
+      setSuccess(res.message || "Bulk import boshlandi");
+      setTimeout(() => {
+        onImportSuccess();
+      }, 2000);
+    } catch (err: any) {
+      console.error("Bulk import failed:", err);
+      setError(err.message || "Bulk importni boshlashda xatolik");
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  return (
+    <div className="bg-brand-card rounded-xl border border-brand-border p-6">
+      <div className="flex items-center gap-3 mb-6">
+        <Database className="w-6 h-6 text-brand-red" />
+        <h2 className="text-xl font-display">Bulk Import</h2>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        {/* Configuration Form */}
+        <div className="space-y-6">
+          {/* Source Selection */}
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-2">Manba</label>
+            <div className="flex gap-2 flex-wrap">
+              {SOURCES.filter(s => s.id !== "manual").map((source) => {
+                const Icon = source.icon;
+                return (
+                  <button
+                    key={source.id}
+                    onClick={() => setSourceId(source.id)}
+                    className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 border ${
+                      sourceId === source.id 
+                        ? "bg-brand-red text-white border-brand-red" 
+                        : "bg-brand-dark text-gray-400 hover:text-white border-brand-border"
+                    }`}
+                  >
+                    <Icon className="w-4 h-4" />
+                    {source.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Category Selection */}
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-2">Kategoriya</label>
+            {loadingCategories ? (
+              <div className="flex items-center gap-2 text-gray-500 py-2">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Yuklanmoqda...</span>
+              </div>
+            ) : (
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white focus:outline-none focus:border-brand-red"
+              >
+                {categories.length === 0 ? (
+                  <option value="">Kategoriyalar topilmadi</option>
+                ) : (
+                  categories.map((cat) => (
+                    <option key={cat.url} value={cat.url}>
+                      {cat.name}
+                    </option>
+                  ))
+                )}
+              </select>
+            )}
+          </div>
+
+          {/* Type Filter */}
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-2">Kontent turi</label>
+            <div className="flex gap-2">
+              {[
+                { id: "", name: "Hammasi" },
+                { id: "movies", name: "Faqat kinolar" },
+                { id: "serials", name: "Faqat seriallar" },
+              ].map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setTypeFilter(t.id)}
+                  className={`px-4 py-2 rounded-lg transition-colors border ${
+                    typeFilter === t.id 
+                      ? "bg-brand-red text-white border-brand-red" 
+                      : "bg-brand-dark text-gray-400 hover:text-white border-brand-border"
+                  }`}
+                >
+                  {t.name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Page Range */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-400 mb-2">Boshlang'ich sahifa</label>
+              <input
+                type="number"
+                min="1"
+                value={pageStart}
+                onChange={(e) => setPageStart(parseInt(e.target.value) || 1)}
+                className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white focus:outline-none focus:border-brand-red"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-400 mb-2">Oxirgi sahifa</label>
+              <input
+                type="number"
+                min={pageStart}
+                value={pageEnd}
+                onChange={(e) => setPageEnd(parseInt(e.target.value) || pageStart)}
+                className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white focus:outline-none focus:border-brand-red"
+              />
+            </div>
+          </div>
+
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/50 text-red-500 p-4 rounded-lg flex items-center gap-3">
+              <AlertTriangle className="w-5 h-5 shrink-0" />
+              <p className="text-sm">{error}</p>
+            </div>
+          )}
+
+          {success && (
+            <div className="bg-green-500/10 border border-green-500/50 text-green-500 p-4 rounded-lg flex items-center gap-3">
+              <CheckCircle className="w-5 h-5 shrink-0" />
+              <p className="text-sm">{success}</p>
+            </div>
+          )}
+
+          <button
+            onClick={handleStartBulkImport}
+            disabled={importing || !selectedCategory}
+            className="w-full bg-brand-red hover:bg-brand-red/90 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors"
+          >
+            {importing ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Boshlanmoqda...
+              </>
+            ) : (
+              <>
+                <Play className="w-5 h-5" />
+                Bulk Importni boshlash
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Info Box */}
+        <div className="bg-brand-dark/50 rounded-xl p-6 border border-brand-border h-fit">
+          <h3 className="font-bold mb-4 flex items-center gap-2">
+            <Settings className="w-4 h-4 text-brand-red" />
+            Bulk Import haqida
+          </h3>
+          <ul className="space-y-3 text-sm text-gray-400">
+            <li className="flex gap-2">
+              <span className="text-brand-red">•</span>
+              Tanlangan kategoriya bo'yicha barcha video va seriallar avtomatik ravishda import qilinadi.
+            </li>
+            <li className="flex gap-2">
+              <span className="text-brand-red">•</span>
+              Pagination avtomatik tarzda amalga oshiriladi (siz tanlagan sahifa oralig'ida).
+            </li>
+            <li className="flex gap-2">
+              <span className="text-brand-red">•</span>
+              Tizimda allaqachon mavjud bo'lgan videolar qayta import qilinmaydi (skip qilinadi).
+            </li>
+            <li className="flex gap-2">
+              <span className="text-brand-red">•</span>
+              Import jarayonini "Jobs" bo'limida kuzatib borishingiz mumkin.
+            </li>
+            <li className="flex gap-2">
+              <span className="text-brand-red">•</span>
+              Eslatma: Juda ko'p sahifalarni bir marta import qilish server yuklamasini oshirishi mumkin. (Maksimal 50 sahifa).
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // Catalog Tab Component
@@ -2331,6 +2584,19 @@ export default function IngestionPage() {
             )}
           </button>
           
+          {/* Bulk tab */}
+          <button
+            onClick={() => setActiveTab("bulk")}
+            className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
+              activeTab === "bulk" 
+                ? "bg-brand-red text-white" 
+                : "bg-brand-card text-gray-400 hover:text-white border border-brand-border"
+            }`}
+          >
+            <Database className="w-4 h-4" />
+            Bulk Import
+          </button>
+          
           {/* Sync toggle button (only show on jobs tab) */}
           {activeTab === "jobs" && (
             <button
@@ -2393,6 +2659,12 @@ export default function IngestionPage() {
             totalJobs={totalJobs}
             handlePageChange={handlePageChange}
             statusCounts={statusCounts}
+          />
+        )}
+        {activeTab === "bulk" && (
+          <BulkTab 
+            token={token} 
+            onImportSuccess={handleImportSuccess}
           />
         )}
       </div>
