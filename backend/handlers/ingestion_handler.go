@@ -1593,12 +1593,15 @@ func (h *IngestionHandler) GetCatalogCategories(c *gin.Context) {
 	source := c.Query("source")
 
 	validSources := map[string]bool{
-		"uzmovi":    true,
-		"freekino":  true,
-		"asilmedia": true,
+		"uzmovi":     true,
+		"freekino":   true,
+		"asilmedia":  true,
+		"kinochilar": true,
+		"uzmedia":    true,
+		"kinolar":    true,
 	}
 	if !validSources[source] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid source. valid: uzmovi, freekino, asilmedia"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid source. valid: uzmovi, freekino, asilmedia, kinochilar, uzmedia, kinolar"})
 		return
 	}
 
