@@ -103,7 +103,7 @@ worker:
 	cd $(ROOT_DIR)worker && go mod download && go mod tidy && go build && go run .
 
 yusuf:
-	cd $(ROOT_DIR)backend && go mod tidy && go mod download && cd $(ROOT_DIR)worker && go mod tidy && go mod download && cd $(ROOT_DIR)bot && go mod tidy && go mod download && cd $(ROOT_DIR) parser && pip install -r $(ROOT_DIR)parser/requirements.txt && cd $(ROOT_DIR)frontend && npm install
+	cd $(ROOT_DIR)backend && go mod tidy && go mod download && cd $(ROOT_DIR)worker && go mod tidy && go mod download && cd $(ROOT_DIR)bot && go mod tidy && go mod download && cd $(ROOT_DIR)parser && pip install -r $(ROOT_DIR)parser/requirements.txt && cd $(ROOT_DIR)frontend && npm install
 
 # ── Backblaze B2 CORS ─────────────────────────────────────────
 # Inspect current CORS rules on the bucket (dry-run).
@@ -156,7 +156,16 @@ tidy-worker:
 	cd $(ROOT_DIR)worker && go mod tidy
 
 vps-pull-worker:
-	cd /opt/filmorauz/worker/ && git pull && go mod download && go mod tidy && go build . && systemctl restart filmorauz-worker && systemctl restart filmorauz-parser
+	git pull
+	cd $(ROOT_DIR)worker && go mod download && go mod tidy && go build -o filmorauz-worker .
+	systemctl restart filmorauz-worker
+	systemctl restart filmorauz-parser
 
 vps-pull-web:
-	cd /opt/filmorauz/backend && git pull && go mod download && go mod tidy && go build . && cd /opt/filmorauz/bot/ && go mod download && go mod tidy && go build . && systemctl restart filmorauz-backend && systemctl restart filmorauz-bot && cd /opt/filmorauz/frontend && npm run build && pm2 restart all
+	git pull
+	cd $(ROOT_DIR)backend && go mod download && go mod tidy && go build -o filmorauz-backend .
+	cd $(ROOT_DIR)bot && go mod download && go mod tidy && go build -o filmorauz-bot .
+	systemctl restart filmorauz-backend
+	systemctl restart filmorauz-bot
+	cd $(ROOT_DIR)frontend && npm install && npm run build
+	pm2 restart all
