@@ -2643,6 +2643,27 @@ export default function IngestionPage() {
             onImportSuccess={handleImportSuccess}
           />
         )}
+        {activeTab === "kinochilar" && (
+          <CatalogTab 
+            source={SOURCES[3]} 
+            token={token} 
+            onImportSuccess={handleImportSuccess}
+          />
+        )}
+        {activeTab === "uzmedia" && (
+          <CatalogTab 
+            source={SOURCES[4]} 
+            token={token} 
+            onImportSuccess={handleImportSuccess}
+          />
+        )}
+        {activeTab === "kinolar" && (
+          <CatalogTab 
+            source={SOURCES[5]} 
+            token={token} 
+            onImportSuccess={handleImportSuccess}
+          />
+        )}
         {activeTab === "manual" && (
           <ManualTab 
             token={token} 
