@@ -1455,13 +1455,16 @@ func (h *IngestionHandler) ListCatalog(c *gin.Context) {
 
 	// Validate source (manual doesn't have catalog)
 	validSources := map[string]bool{
-		"uzmovi":    true,
-		"freekino":  true,
-		"asilmedia": true,
+		"uzmovi":     true,
+		"freekino":   true,
+		"asilmedia":  true,
+		"kinochilar": true,
+		"uzmedia":    true,
+		"kinolar":    true,
 	}
 	if !validSources[source] {
 		log.Printf("[INGESTION] CATALOG: invalid source=%s", source)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid source for catalog. valid: uzmovi, freekino, asilmedia"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid source for catalog. valid: uzmovi, freekino, asilmedia, kinochilar, uzmedia, kinolar"})
 		return
 	}
 
