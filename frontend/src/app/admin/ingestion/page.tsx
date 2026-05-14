@@ -456,6 +456,9 @@ const SOURCES = [
   { id: "uzmovi", name: "Uzmovi", url: "uzmovi.tv", icon: Film },
   { id: "freekino", name: "Freekino", url: "freekino.net", icon: Film },
   { id: "asilmedia", name: "Asilmedia", url: "asilmedia.org", icon: Film },
+  { id: "kinochilar", name: "Kinochilar", url: "kinochilar.com", icon: Film },
+  { id: "uzmedia", name: "Uzmedia", url: "uzmedia.tv", icon: Film },
+  { id: "kinolar", name: "Kinolar", url: "kinolar.tv", icon: Film },
   { id: "manual", name: "Manual", url: "", icon: Link },
 ];
 
