@@ -22,7 +22,7 @@ import sys
 
 try:
     git_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode("utf-8").strip()
-except:
+except Exception:
     git_hash = "unknown"
 
 logger = logging.getLogger(__name__)
@@ -87,6 +87,15 @@ from downloader_service import DownloaderService, _validate_download_target
 from metadata_normalizer import normalize_metadata, validate_metadata, create_worker_payload
 from helpers import sort_video_candidates, normalize_quality_label, quality_height, detect_content_type
 from source_config import get_source_config
+import recovery
+from telemetry import (
+    TELEMETRY,
+    record_outcome,
+    OUTCOME_SUCCESS,
+    OUTCOME_FAIL,
+    ERR_NO_VIDEO_URL,
+    ERR_UNKNOWN,
+)
 
 # Enable debug logging in development
 DEBUG = os.environ.get("PARSER_DEBUG", "false").lower() == "true"
@@ -1393,7 +1402,7 @@ class ParserHandler(BaseHTTPRequestHandler):
                 body = ""
                 try:
                     body = e.read().decode("utf-8", errors="replace")
-                except:
+                except Exception:
                     pass
                 if attempt < max_retries - 1:
                     logger.warning(f"[SERVER] HTTP {e.code} attempt {attempt+1}, retrying: {e.reason}")
@@ -1433,6 +1442,18 @@ class ParserHandler(BaseHTTPRequestHandler):
         # Routes
         if path == "/health":
             self._send_json({"ok": True, "status": "ok", "service": "parser"})
+            return
+
+        # Parser-wide health metrics: per-source success/fail counts + last N jobs.
+        # Used by ops to see which sources are flaky without grepping logs.
+        elif path == "/parser/health":
+            recent_n = 20
+            try:
+                recent_n = int(query.get("recent", ["20"])[0])
+                recent_n = max(1, min(recent_n, 200))
+            except (TypeError, ValueError):
+                recent_n = 20
+            self._send_json(TELEMETRY.health_snapshot(recent_n=recent_n))
             return
 
         # Instagram publish status sidecar lookup.
@@ -2745,24 +2766,101 @@ class ParserHandler(BaseHTTPRequestHandler):
                     output_name += ".mp4"
                 
                 logger.info(f"[SERVER] Download request: source={source}, id={source_id}, url={detail_url[:50] if detail_url else 'none'}...")
-                
-                # Get parser and fetch details
+
+                # Job-scoped state for the auto-fix wrapper. These are read in
+                # both success and failure paths below.
+                _autofix_job_started_at = time.time()
+                _autofix_recovery_attempts = 0
+                _autofix_used_fallback_source = None
+                _autofix_seen_urls: set = set()
+
+                # Get parser and fetch details. If the parser fails (network reset,
+                # site down, parsing exception), the auto-fix path below will try
+                # iframe extraction / alternate sources rather than 500'ing.
                 parser = PARSERS[source]
-                details = self._get_details_from_parser(parser, source, source_id, detail_url)
-                
-                # Get details as dict for response
-                if hasattr(details, 'to_dict'):
-                    details_dict = details.to_dict()
-                elif isinstance(details, dict):
-                    details_dict = details
-                else:
-                    details_dict = {}
-                
+                details = None
+                details_dict: dict = {}
+                _get_details_err = None
+                try:
+                    details = self._get_details_from_parser(parser, source, source_id, detail_url)
+                    if hasattr(details, 'to_dict'):
+                        details_dict = details.to_dict()
+                    elif isinstance(details, dict):
+                        details_dict = details
+                    else:
+                        details_dict = {}
+                except Exception as _gd_err:
+                    _get_details_err = _gd_err
+                    logger.warning(
+                        f"[SERVER] AUTO-FIX: get_details failed on source={source} — "
+                        f"falling through to recovery: {_gd_err}"
+                    )
+                    _autofix_recovery_attempts += 1
+
                 # Extract best video URL
                 video_url, url_type = self._extract_best_video_url(details, source)
-                
+
+                # === AUTO-FIX (URL topilmadi): iframe / playwright fallback ===
+                if not video_url and detail_url:
+                    logger.warning(
+                        f"[SERVER] AUTO-FIX: primary extraction returned no playable URL — "
+                        f"running iframe/playwright recovery"
+                    )
+                    _autofix_recovery_attempts += 1
+                    recovered = recovery.find_iframe_candidates(parser, detail_url)
+                    if not recovered:
+                        recovered = recovery.try_playwright_extraction(parser, detail_url)
+                    if recovered:
+                        merged = list(details_dict.get("video_urls") or []) + recovered
+                        details_dict["video_urls"] = merged
+                        details = details_dict
+                        video_url, url_type = self._extract_best_video_url(details, source)
+                        if video_url:
+                            logger.info(
+                                f"[SERVER] AUTO-FIX: recovery produced playable URL "
+                                f"type={url_type} url={video_url[:80]}"
+                            )
+
+                # === AUTO-FIX (URL topilmadi): try alternate source ===
                 if not video_url:
-                    logger.error(f"[SERVER] No playable video URL found for source '{source}'")
+                    title_for_search = (
+                        details_dict.get("title_original")
+                        or details_dict.get("title")
+                        or details_dict.get("title_uz")
+                        or ""
+                    )
+                    year_for_search = details_dict.get("year")
+                    alt = recovery.try_alternate_sources(
+                        title_for_search, year_for_search, source, PARSERS,
+                    )
+                    if alt:
+                        alt_source, alt_details, _alt_vurls = alt
+                        _autofix_used_fallback_source = alt_source
+                        _autofix_recovery_attempts += 1
+                        source = alt_source
+                        parser = PARSERS[alt_source]
+                        details_dict = alt_details
+                        details = alt_details
+                        video_url, url_type = self._extract_best_video_url(details, source)
+                        if video_url:
+                            logger.info(
+                                f"[SERVER] AUTO-FIX: switched to alternate source={alt_source} "
+                                f"url={video_url[:80]}"
+                            )
+
+                if not video_url:
+                    logger.error(f"[SERVER] No playable video URL found for source '{source}' (after recovery)")
+                    record_outcome(
+                        job_id=body.get("job_id", "") or "-",
+                        source=source,
+                        outcome=OUTCOME_FAIL,
+                        error_category=ERR_NO_VIDEO_URL,
+                        error_message="no playable video URL found after recovery cascade",
+                        detail_url=detail_url,
+                        duration_seconds=time.time() - _autofix_job_started_at,
+                        recovery_attempts=_autofix_recovery_attempts,
+                        used_fallback_source=_autofix_used_fallback_source,
+                    )
                     self._send_json({
                         "success": False,
                         "error": "No playable video URL found",
@@ -2770,6 +2868,8 @@ class ParserHandler(BaseHTTPRequestHandler):
                         "details": details_dict,
                     }, 400)
                     return
+
+                _autofix_seen_urls.add(video_url)
                 
                 logger.info(f"[SERVER] Parser selected media URL: type={url_type}, url={video_url[:80]}...")
                 
@@ -2806,15 +2906,119 @@ class ParserHandler(BaseHTTPRequestHandler):
                     else:
                         logger.warning(f"[SERVER] No backend_job_id provided, progress will not be reported!")
                     
-                    # Now start the actual download (this is blocking)
-                    logger.info(f"[SERVER] Starting download: {output_name}")
-                    result = downloader_service.smart_download(
-                        url=video_url,
-                        output_name=output_name,
-                        job_id=internal_job_id,
-                        backend_job_id=backend_job_id,
-                        referer=referer if referer else None,
-                    )
+                    # Now start the actual download (this is blocking).
+                    # === AUTO-FIX WRAPPER ===
+                    # smart_download already retries internal strategies, but it
+                    # always retries the SAME URL. Many "stuck at 0%" and 403
+                    # failures come from CDN URLs that expire between resolve
+                    # and download. On those classes of errors we re-fetch
+                    # details (or fall back to an alternate source) to grab a
+                    # fresh URL, then call smart_download again.
+                    MAX_RERESOLVES = 2
+                    _reresolves_used = 0
+                    _alt_source_used = bool(_autofix_used_fallback_source)
+                    _last_download_err = None
+                    result = None
+
+                    while True:
+                        logger.info(
+                            f"[SERVER] Starting download: {output_name} "
+                            f"(reresolves_used={_reresolves_used}, source={source})"
+                        )
+                        try:
+                            result = downloader_service.smart_download(
+                                url=video_url,
+                                output_name=output_name,
+                                job_id=internal_job_id,
+                                backend_job_id=backend_job_id,
+                                referer=referer if referer else None,
+                            )
+                            break  # success
+                        except Exception as _dl_err:
+                            _last_download_err = _dl_err
+                            _err_msg = str(_dl_err)
+                            _err_category = recovery.classify_download_error(_err_msg)
+                            logger.warning(
+                                f"[SERVER] AUTO-FIX: smart_download failed "
+                                f"category={_err_category} err={_err_msg[:200]}"
+                            )
+
+                            # Option 1: re-resolve embed with the SAME source.
+                            if (
+                                _reresolves_used < MAX_RERESOLVES
+                                and recovery.is_recoverable_via_reresolve(_err_category)
+                            ):
+                                _reresolves_used += 1
+                                _autofix_recovery_attempts += 1
+                                logger.info(
+                                    f"[SERVER] AUTO-FIX: re-resolving embed on {source} "
+                                    f"(attempt {_reresolves_used}/{MAX_RERESOLVES})"
+                                )
+                                fresh_cands = []
+                                try:
+                                    fresh = self._get_details_from_parser(parser, source, source_id, detail_url)
+                                    fresh_d = (
+                                        fresh.to_dict() if hasattr(fresh, "to_dict")
+                                        else (fresh if isinstance(fresh, dict) else {})
+                                    )
+                                    fresh_cands = list(fresh_d.get("video_urls") or [])
+                                except Exception as _re:
+                                    logger.warning(f"[SERVER] AUTO-FIX: re-fetch details failed: {_re}")
+                                if not fresh_cands:
+                                    fresh_cands = recovery.find_iframe_candidates(parser, detail_url)
+                                picked = recovery.next_unseen_candidate(fresh_cands, _autofix_seen_urls)
+                                if picked:
+                                    new_url, new_type, new_ref = picked
+                                    video_url = new_url
+                                    url_type = new_type
+                                    if new_ref:
+                                        referer = new_ref
+                                    _autofix_seen_urls.add(video_url)
+                                    logger.info(
+                                        f"[SERVER] AUTO-FIX: switching to fresh URL "
+                                        f"type={url_type} url={video_url[:80]}"
+                                    )
+                                    continue
+                                logger.info("[SERVER] AUTO-FIX: no unseen candidate from re-resolve")
+
+                            # Option 2: try an alternate source for the same title.
+                            if (
+                                not _alt_source_used
+                                and recovery.is_recoverable_via_alternate_source(_err_category)
+                            ):
+                                title_for_search = (
+                                    details_dict.get("title_original")
+                                    or details_dict.get("title")
+                                    or details_dict.get("title_uz")
+                                    or ""
+                                )
+                                year_for_search = details_dict.get("year")
+                                alt = recovery.try_alternate_sources(
+                                    title_for_search, year_for_search, source, PARSERS,
+                                )
+                                if alt:
+                                    alt_source, alt_details, _alt_vurls = alt
+                                    _alt_source_used = True
+                                    _autofix_recovery_attempts += 1
+                                    _autofix_used_fallback_source = alt_source
+                                    source = alt_source
+                                    parser = PARSERS[alt_source]
+                                    details_dict = alt_details
+                                    details = alt_details
+                                    new_vurl, new_vtype = self._extract_best_video_url(details, source)
+                                    if new_vurl:
+                                        video_url = new_vurl
+                                        url_type = new_vtype
+                                        referer = alt_details.get("video_page_url", "") or referer
+                                        _autofix_seen_urls.add(video_url)
+                                        logger.info(
+                                            f"[SERVER] AUTO-FIX: switched to alternate source={alt_source} "
+                                            f"url={video_url[:80]}"
+                                        )
+                                        continue
+
+                            # No more recovery options left — propagate.
+                            raise
                     
                     logger.info(f"[PARSER] Parallel download completed")
                     logger.info(f"[PARSER] Merged parts into {result['file_path']}")
@@ -2939,10 +3143,36 @@ class ParserHandler(BaseHTTPRequestHandler):
                             if progress_thread:
                                 progress_thread.join(timeout=1)
                     
+                    record_outcome(
+                        job_id=backend_job_id or internal_job_id or "-",
+                        source=source,
+                        outcome=OUTCOME_SUCCESS,
+                        detail_url=detail_url,
+                        duration_seconds=time.time() - _autofix_job_started_at,
+                        recovery_attempts=_autofix_recovery_attempts,
+                        used_fallback_source=_autofix_used_fallback_source,
+                    )
+                    if _autofix_used_fallback_source or _autofix_recovery_attempts:
+                        response_data["auto_fix"] = {
+                            "recovery_attempts": _autofix_recovery_attempts,
+                            "used_fallback_source": _autofix_used_fallback_source,
+                        }
                     self._send_json(response_data)
-                    
+
                 except Exception as download_error:
                     logger.error(f"[SERVER] Download failed: {download_error}")
+                    _err_cat = recovery.classify_download_error(str(download_error))
+                    record_outcome(
+                        job_id=backend_job_id or internal_job_id or "-",
+                        source=source,
+                        outcome=OUTCOME_FAIL,
+                        error_category=_err_cat,
+                        error_message=str(download_error),
+                        detail_url=detail_url,
+                        duration_seconds=time.time() - _autofix_job_started_at,
+                        recovery_attempts=_autofix_recovery_attempts,
+                        used_fallback_source=_autofix_used_fallback_source,
+                    )
                     self._send_json({
                         "success": False,
                         "error": f"Download failed: {str(download_error)}",
@@ -2952,6 +3182,11 @@ class ParserHandler(BaseHTTPRequestHandler):
                             "url": video_url,
                             "type": url_type,
                         },
+                        "auto_fix": {
+                            "recovery_attempts": _autofix_recovery_attempts,
+                            "used_fallback_source": _autofix_used_fallback_source,
+                            "error_category": _err_cat,
+                        },
                     }, 500)
                 
             except json.JSONDecodeError as e:
@@ -2959,9 +3194,25 @@ class ParserHandler(BaseHTTPRequestHandler):
                 self._send_error(f"Invalid JSON in request body: {str(e)}", 400)
             except Exception as e:
                 logger.error(f"[SERVER] Download endpoint error: {e}", exc_info=True)
+                # Best-effort telemetry capture — these locals may not be bound
+                # if the error fired before they were assigned.
+                try:
+                    record_outcome(
+                        job_id=locals().get("backend_job_id", "") or locals().get("internal_job_id", "") or "-",
+                        source=locals().get("source", "unknown") or "unknown",
+                        outcome=OUTCOME_FAIL,
+                        error_category=recovery.classify_download_error(str(e)),
+                        error_message=str(e),
+                        detail_url=locals().get("detail_url"),
+                        duration_seconds=time.time() - locals().get("_autofix_job_started_at", time.time()),
+                        recovery_attempts=locals().get("_autofix_recovery_attempts", 0),
+                        used_fallback_source=locals().get("_autofix_used_fallback_source"),
+                    )
+                except Exception as _tel_err:
+                    logger.warning(f"[SERVER] telemetry record_outcome failed: {_tel_err}")
                 self._send_error(f"Download failed: {str(e)}", 500)
             return
-        
+
         # /instagram/upload — upload a video clip as an Instagram Reel
         elif path == "/instagram/upload":
             try:

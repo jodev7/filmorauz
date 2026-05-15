@@ -92,7 +92,7 @@ class UzmoviParser(BaseParser):
     
     def __init__(self):
         super().__init__()
-        self.session.headers.update({
+        self._default_headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.5",
@@ -1660,11 +1660,7 @@ class UzmoviParser(BaseParser):
             return False
         
         url_lower = url.lower()
-        
-        # [ENHANCED] For known stable CDN domains, be more lenient if probe fails
-        # but the URL looks very much like a video stream
-        is_known_cdn = any(domain in url_lower for domain in ['uzdown.space', 'uzmovi.net', 'srv'])
-        
+
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "*/*",
@@ -1694,14 +1690,13 @@ class UzmoviParser(BaseParser):
                 if r.status_code in (200, 206):
                     if is_manifest:
                         chunk = next(r.iter_content(chunk_size=2048), b"") or b""
-                        return chunk.lstrip().startswith(b"#EXTM3U") or b"MPD" in chunk
+                        if chunk.lstrip().startswith(b"#EXTM3U") or b"<MPD" in chunk or b"MPD" in chunk:
+                            return True
+                        logger.info(f"[UZMOVI] Probe 200 but no manifest signature in body: {url[:60]}...")
+                        return False
                     return True
-                
-                # If probe returned 403/404 but it's a known CDN and looks like a valid manifest
-                if is_known_cdn and is_manifest:
-                    logger.info(f"[UZMOVI] Probe returned {r.status_code} for known CDN manifest, accepting anyway: {url[:60]}...")
-                    return True
-                    
+
+                logger.info(f"[UZMOVI] Probe rejected status={r.status_code} url={url[:80]}")
                 return False
             finally:
                 try:
@@ -1710,9 +1705,6 @@ class UzmoviParser(BaseParser):
                     pass
         except Exception as exc:
             logger.info(f"[UZMOVI] validation probe failed url={url[:80]} err={exc}")
-            # Final fallback for known CDNs: if it's a manifest on a known host, trust it
-            if is_known_cdn and is_manifest:
-                return True
             return False
     
     def _extract_media_with_playwright(self, url: str) -> List[Dict[str, str]]:

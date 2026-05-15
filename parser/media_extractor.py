@@ -1436,13 +1436,25 @@ def resolve_embed_to_candidates(
     if not iframe_url:
         return []
 
-    headers = {
+    base_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
     }
-    if referer:
-        headers["Referer"] = referer
+
+    # Some CDNs require Origin + Referer together. Always reuse a session inside
+    # the walk so cookies set by an outer iframe carry into nested fetches.
+    walk_session = session if session is not None else requests.Session()
+
+    def _origin_of(u: str) -> str:
+        try:
+            p = urlparse(u)
+            if p.scheme and p.netloc:
+                return f"{p.scheme}://{p.netloc}"
+        except Exception:
+            pass
+        return ""
 
     visited = set()
     out: List[Dict[str, Any]] = []
@@ -1451,11 +1463,18 @@ def resolve_embed_to_candidates(
         if depth < 0 or not url or url in visited:
             return
         visited.add(url)
+        effective_ref = ref or referer or url
+        req_headers = {
+            **base_headers,
+            "Referer": effective_ref,
+        }
+        origin = _origin_of(effective_ref)
+        if origin:
+            req_headers["Origin"] = origin
         try:
-            getter = session.get if session else requests.get
-            resp = getter(
+            resp = walk_session.get(
                 url,
-                headers={**headers, "Referer": ref or referer or url},
+                headers=req_headers,
                 timeout=20,
                 allow_redirects=True,
                 verify=False,
@@ -1470,11 +1489,14 @@ def resolve_embed_to_candidates(
         # Direct media response (CDN redirected the embed straight to a file)
         if any(t in content_type for t in ("video/", "application/vnd.apple.mpegurl",
                                             "application/dash+xml", "application/octet-stream")):
+            media_headers = {"Referer": effective_ref}
+            if origin:
+                media_headers["Origin"] = origin
             out.append({
                 "url": final_url,
                 "type": classify_media_url(final_url),
                 "quality": "auto",
-                "headers": {"Referer": ref or referer or url},
+                "headers": media_headers,
             })
             return
 
@@ -1485,12 +1507,16 @@ def resolve_embed_to_candidates(
         # Extract candidates from this embed page
         candidates = extract_media_candidates(html, final_url, referer=ref)
         valid, _ = validate_candidates(candidates)
+        final_origin = _origin_of(final_url)
         for c in valid:
+            cand_headers = {"Referer": final_url}
+            if final_origin:
+                cand_headers["Origin"] = final_origin
             out.append({
                 "url": c.url,
                 "type": c.type if c.type in ("m3u8", "mpd", "mp4", "ism") else classify_media_url(c.url),
                 "quality": c.quality or "auto",
-                "headers": {"Referer": final_url},
+                "headers": cand_headers,
             })
 
         # Look for nested iframes and follow them

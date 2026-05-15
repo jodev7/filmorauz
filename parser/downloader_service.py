@@ -1226,6 +1226,30 @@ class DownloaderService:
             f"origin={stream_headers.get('Origin', '<none>')} ua={ua[:40]}..."
         )
 
+        # Try to determine total duration up front via ffprobe so we can report
+        # real progress instead of guessing from elapsed time.
+        total_duration_us = 0
+        try:
+            probe_cmd = [
+                "ffprobe", "-v", "error",
+                "-user_agent", ua,
+            ]
+            if headers_str:
+                probe_cmd.extend(["-headers", headers_str])
+            probe_cmd.extend([
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                url,
+            ])
+            probe = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=20)
+            if probe.returncode == 0:
+                dur_s = float((probe.stdout or "0").strip() or "0")
+                if dur_s > 0:
+                    total_duration_us = int(dur_s * 1_000_000)
+                    logger.info(f"[DOWNLOAD] ffprobe duration={dur_s:.2f}s")
+        except Exception as e:
+            logger.info(f"[DOWNLOAD] ffprobe failed (using elapsed-time fallback): {e}")
+
         cmd = ["ffmpeg", "-y"]
         cmd.extend(["-user_agent", ua])
         if headers_str:
@@ -1332,50 +1356,63 @@ class DownloaderService:
             min_time_for_update = 1.0  # Update progress every second
             
             # Parse ffmpeg progress output from stdout (-progress pipe:1)
-            progress_pattern = re.compile(r'out_time_ms=(\d+)')
-            
+            # ffmpeg emits out_time_us (microseconds) and total_size lines.
+            out_time_pattern = re.compile(r'out_time_us=(\d+)')
+            total_size_pattern = re.compile(r'total_size=(\d+)')
+            current_out_time_us = 0
+            current_total_size = 0
+
             for line in process.stdout:
                 line = line.strip()
                 if line:
                     if debug_callback:
                         debug_callback("stdout", {"line": line})
                     last_activity_at = time.time()
-                
-                # Parse progress
-                if "out_time_ms=" in line:
+
+                m = out_time_pattern.search(line)
+                if m:
                     try:
-                        match = progress_pattern.search(line)
-                        if match:
-                            time_ms = int(match.group(1))
-                            # Estimate bytes from time (rough estimate based on duration)
-                            # FFmpeg doesn't give us total_bytes for HLS, so we estimate
-                            if time_ms > 0:
-                                # Use a placeholder until we get actual duration
-                                pass
-                    except:
+                        current_out_time_us = int(m.group(1))
+                    except Exception:
                         pass
-                
-                # Calculate elapsed time and progress
+                m = total_size_pattern.search(line)
+                if m:
+                    try:
+                        current_total_size = int(m.group(1))
+                    except Exception:
+                        pass
+
                 elapsed = time.time() - download_start_time
                 current_time = time.time()
-                
+
                 if current_time - last_update_time >= min_time_for_update:
-                    # Estimate progress (we don't know total bytes for HLS)
-                    # Report based on time elapsed
-                    progress_percent = min(95, int(elapsed * 2))  # Estimate based on time
-                    
+                    if total_duration_us > 0 and current_out_time_us > 0:
+                        progress_percent = min(95, int(current_out_time_us * 100 / total_duration_us))
+                        eta_seconds = 0
+                        if current_out_time_us > 0 and elapsed > 0:
+                            speed_ratio = current_out_time_us / (elapsed * 1_000_000)
+                            if speed_ratio > 0:
+                                remaining_media_s = max(0, (total_duration_us - current_out_time_us) / 1_000_000)
+                                eta_seconds = int(remaining_media_s / speed_ratio)
+                    else:
+                        # Fallback: no duration known, estimate from elapsed.
+                        progress_percent = min(95, int(elapsed * 2))
+                        eta_seconds = max(0, int(60 - elapsed))
+
+                    speed_bps = int(current_total_size / elapsed) if elapsed > 0 and current_total_size > 0 else 0
+
                     if job_id:
                         self.progress.update(job_id, {
                             "status": "downloading",
                             "stage": "download",
                             "progress_percent": progress_percent,
-                            "downloaded_bytes": int(elapsed * 1024 * 1024),  # Rough estimate
+                            "downloaded_bytes": current_total_size,
                             "total_bytes": 0,  # Unknown for HLS
-                            "downloaded_mb": round(elapsed * 1, 1),
+                            "downloaded_mb": round(current_total_size / (1024 * 1024), 1),
                             "total_mb": 0.0,
-                            "speed_bytes_per_sec": int(1024 * 1024),  # Estimate
-                            "speed_mb_per_sec": 1.0,
-                            "eta_seconds": max(0, int(60 - elapsed)),  # Estimate
+                            "speed_bytes_per_sec": speed_bps,
+                            "speed_mb_per_sec": round(speed_bps / (1024 * 1024), 2),
+                            "eta_seconds": eta_seconds,
                             "message": f"Downloading HLS... {progress_percent}%",
                         })
                     

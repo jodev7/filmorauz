@@ -59,6 +59,31 @@ SOURCES = {
         },
         "search_param_key": "story",
     },
+    "kinochilar": {
+        "base_url": "https://kinochilar.com",
+        "search_paths": [
+            "/index.php",
+            "/search",
+            "/",
+        ],
+        "search_method": "POST",
+        "search_params": {
+            "do": "search",
+            "subaction": "search",
+        },
+        "search_param_key": "story",
+    },
+    "uzmedia": {
+        "base_url": "https://uzmedia.tv",
+        "search_paths": [
+            "/search/",
+            "/search",
+            "/",
+        ],
+        "search_method": "GET",
+        "search_params": {},
+        "search_param_key": "q",
+    },
     "manual": {
         "base_url": "",
         "search_paths": [],

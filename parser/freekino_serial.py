@@ -46,7 +46,12 @@ class FreekinoSerialParser:
 
     def __init__(self) -> None:
         self._movie = FreekinoParser()  # reuse session + cookies
-        self.session = self._movie.session
+
+    @property
+    def session(self):
+        # Delegate to the movie parser so we always pick up the per-thread
+        # session (FreekinoParser.session is thread-local).
+        return self._movie.session
 
     def parse(self, url: str) -> Dict:
         logger.info(f"[FREEKINO SERIAL] parse start url={url}")

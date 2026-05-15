@@ -1747,8 +1747,9 @@ class DDownloaderIntegration:
                         logger.info(f"[DDOWNLOADER] Resolved embed -> {new_type}: {new_url[:120]}")
                         url = new_url
                         stream_type = new_type
-                        if not referer:
-                            referer = cand.get("headers", {}).get("Referer", "")
+                        cand_referer = cand.get("headers", {}).get("Referer", "")
+                        if cand_referer:
+                            referer = cand_referer
                         break
             except Exception as e:
                 logger.warning(f"[DDOWNLOADER] Embed resolve failed: {e}")

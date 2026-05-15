@@ -3,6 +3,7 @@ Base Parser Class
 All parsers must inherit from this class and implement required methods.
 """
 import requests
+import threading
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from bs4 import BeautifulSoup
@@ -116,12 +117,25 @@ class BaseParser(ABC):
     """Abstract base class for all source parsers"""
     
     def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
+        # Per-thread session storage. ThreadedHTTPServer spawns a thread per request,
+        # and requests.Session is not safe to share across threads (cookie jar +
+        # connection pool races). Each thread gets its own Session lazily, seeded
+        # from the shared _default_headers dict that subclasses can mutate.
+        self._thread_local = threading.local()
+        self._default_headers: Dict[str, str] = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.5",
-        })
+        }
+
+    @property
+    def session(self) -> requests.Session:
+        sess = getattr(self._thread_local, "session", None)
+        if sess is None:
+            sess = requests.Session()
+            sess.headers.update(self._default_headers)
+            self._thread_local.session = sess
+        return sess
     
     @abstractmethod
     def search(self, query: str) -> List[SearchResult]:

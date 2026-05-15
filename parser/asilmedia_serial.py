@@ -102,8 +102,12 @@ def _extract_meta_content(soup: BeautifulSoup, selector: str) -> str:
 class AsilmediaSerialParser:
     def __init__(self) -> None:
         self._movie = AsilmediaParser()
-        self.session = self._movie.session
         self.base_url = getattr(self._movie, "BASE_URL", None) or "https://asilmedia.org"
+
+    @property
+    def session(self):
+        # Delegate to the movie parser for per-thread session lookup.
+        return self._movie.session
 
     def parse(self, url: str) -> Dict:
         logger.info(f"[ASILMEDIA SERIAL] parse start url={url}")

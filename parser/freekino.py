@@ -2,13 +2,14 @@
 Freekino Parser - With strict stage-by-stage diagnosis
 """
 import requests
+import threading
 import re
 import logging
 import os
 import html
 import base64
 from typing import List, Dict, Any, Optional
-from urllib.parse import urljoin, quote, unquote
+from urllib.parse import urljoin, quote, unquote, urlparse
 from bs4 import BeautifulSoup
 
 from helpers import (
@@ -213,8 +214,19 @@ class FreekinoParser:
     }
 
     def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update(self.BROWSER_HEADERS)
+        # FreekinoParser doesn't inherit BaseParser; use per-thread session
+        # directly to stay thread-safe with the threaded HTTP server.
+        self._thread_local = threading.local()
+        self._default_headers = dict(self.BROWSER_HEADERS)
+
+    @property
+    def session(self) -> requests.Session:
+        sess = getattr(self._thread_local, "session", None)
+        if sess is None:
+            sess = requests.Session()
+            sess.headers.update(self._default_headers)
+            self._thread_local.session = sess
+        return sess
 
     def _fetch_browserlike(self, url: str, timeout: int = 30, retries: int = 3):
         """Fetch a URL with browser-like headers and bounded retries.
@@ -956,8 +968,17 @@ class FreekinoParser:
             payload += "=" * ((4 - len(payload) % 4) % 4)
             decoded = base64.b64decode(payload).decode("utf-8", errors="ignore")
             decoded = re.sub(r'[\x00-\x1f]', '', decoded).strip()
-            if decoded and ("http" in decoded or "//" in decoded):
-                return decoded
+            if decoded:
+                candidate = decoded
+                if candidate.startswith("//"):
+                    candidate = "https:" + candidate
+                try:
+                    parsed = urlparse(candidate)
+                except Exception:
+                    parsed = None
+                if parsed and parsed.scheme in ("http", "https") and parsed.netloc:
+                    return decoded
+                logger.info(f"[FREEKINO] hash2 plain fallback rejected (not a URL): {decoded[:80]}")
         except Exception as e:
             logger.info(f"[FREEKINO] hash2 decode (plain) failed: {e}")
 

@@ -73,8 +73,12 @@ def _parse_season_number(text: str) -> int:
 class UzmoviSerialParser:
     def __init__(self) -> None:
         self._movie = UzmoviParser()
-        self.session = self._movie.session
         self.base_url = getattr(self._movie, "BASE_URL", None) or "https://uzmovi.tv"
+
+    @property
+    def session(self):
+        # Delegate to the movie parser for per-thread session lookup.
+        return self._movie.session
 
     def parse(self, url: str, progress_callback: Optional[Callable[[Dict], None]] = None) -> Dict:
         m_sid = re.search(r"/(\d+)-[^/]+\.html", url) or re.search(r"id=(\d+)", url)

@@ -55,7 +55,7 @@ class KinochilarParser(BaseParser):
     
     def __init__(self):
         super().__init__()
-        self.session.headers.update({
+        self._default_headers.update({
             "Referer": self.BASE_URL + "/",
             "Origin": self.BASE_URL,
         })

@@ -321,7 +321,7 @@ class AsilmediaParser(BaseParser):
     
     def __init__(self):
         super().__init__()
-        self.session.headers.update({
+        self._default_headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.5",
@@ -1122,13 +1122,17 @@ class AsilmediaParser(BaseParser):
             video_urls.extend(quality_entries)
         
         # SECOND: Try direct video links (including onclick handlers and data-* attrs)
-        direct_links = []
-        for sel in ("a[href*='.mp4']", "a[href*='.m3u8']",
-                    "a[onclick*='.mp4']", "a[onclick*='.m3u8']",
-                    "[data-url*='.mp4']", "[data-url*='.m3u8']",
-                    "[data-src*='.mp4']", "[data-src*='.m3u8']"):
-            direct_links.extend(soup.select(sel))
+        direct_links = soup.select(
+            "a[href*='.mp4'], a[href*='.m3u8'], "
+            "a[onclick*='.mp4'], a[onclick*='.m3u8'], "
+            "[data-url*='.mp4'], [data-url*='.m3u8'], "
+            "[data-src*='.mp4'], [data-src*='.m3u8']"
+        )
+        seen_direct = set()
         for link in direct_links:
+            if id(link) in seen_direct:
+                continue
+            seen_direct.add(id(link))
             href = link.get("href") or link.get("data-url") or link.get("data-src") or ""
             if not href:
                 onclick = link.get("onclick", "")
