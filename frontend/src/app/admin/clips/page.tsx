@@ -659,6 +659,7 @@ export default function AdminClipsPage() {
 
   const [allAccounts, setAllAccounts] = useState<AllAccounts>({ instagram: [], youtube: [], tiktok: [] });
   const [publishJobs, setPublishJobs] = useState<PublishJob[]>([]);
+  const [allPendingJobs, setAllPendingJobs] = useState<PublishJob[]>([]);
   const [jobsPage, setJobsPage] = useState(1);
   const [jobsTotal, setJobsTotal] = useState(0);
 
@@ -805,11 +806,28 @@ export default function AdminClipsPage() {
     }
   }, [token, jobsPage]);
 
+  const fetchAllPendingJobs = useCallback(async () => {
+    if (!token) return;
+    try {
+      // Fetch a larger number of active jobs (non-paginated for badge logic)
+      const res = await fetch(`${API}/admin/publish/jobs?status=pending,scheduled,processing&limit=200`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAllPendingJobs(data.items || data.data || []);
+      }
+    } catch {
+      // silently ignore
+    }
+  }, [token]);
+
   useEffect(() => {
     fetchGroups();
     fetchAccounts();
     fetchJobs();
-  }, [fetchGroups, fetchAccounts, fetchJobs]);
+    fetchAllPendingJobs();
+  }, [fetchGroups, fetchAccounts, fetchJobs, fetchAllPendingJobs]);
 
   // ── Group / episode expand/collapse + lazy load ─────────────────────
 
@@ -978,6 +996,8 @@ export default function AdminClipsPage() {
       const data = await res.json();
       setModal((prev) => (prev ? { ...prev, results: data.results || [] } : prev));
       refreshAfterPublish(clip);
+      await fetchJobs();
+      await fetchAllPendingJobs();
     } catch {
       // silently ignore
     } finally {
@@ -1002,6 +1022,7 @@ export default function AdminClipsPage() {
       if (res.ok && data.count > 0) {
         setModal((prev) => (prev ? { ...prev, scheduledCreated: true } : prev));
         await fetchJobs();
+        await fetchAllPendingJobs();
       } else {
         setModal((prev) =>
           prev
@@ -1035,6 +1056,7 @@ export default function AdminClipsPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
       await fetchJobs();
+      await fetchAllPendingJobs();
     } finally {
       setCancellingId(null);
     }
@@ -1051,6 +1073,7 @@ export default function AdminClipsPage() {
       if (res.ok) {
         setEditingJob(null);
         await fetchJobs();
+        await fetchAllPendingJobs();
       }
     } catch {
       // silently ignore
@@ -1105,8 +1128,18 @@ export default function AdminClipsPage() {
     if (groupsPage > groupsTotalPages) setGroupsPage(groupsTotalPages);
   }, [groupsPage, groupsTotalPages]);
 
-  const pendingJobs = publishJobs.filter((j) => j.status === "pending" || j.status === "scheduled" || j.status === "processing");
+  const pagedPendingJobs = publishJobs.filter((j) => j.status === "pending" || j.status === "scheduled" || j.status === "processing");
   const doneJobs = publishJobs.filter((j) => j.status === "success" || j.status === "failed");
+  
+  const allRelevantJobsForBadges = useMemo(() => {
+    const map = new Map<string, PublishJob>();
+    // publishJobs are the current page, good for detail but might miss some
+    publishJobs.forEach(j => map.set(j.id, j));
+    // allPendingJobs ensure all scheduled ones are caught even if not on page 1
+    allPendingJobs.forEach(j => map.set(j.id, j));
+    return Array.from(map.values());
+  }, [publishJobs, allPendingJobs]);
+
   const jobsTotalPages = Math.max(1, Math.ceil(jobsTotal / jobsPageLimit));
 
   // ── Render ───────────────────────────────────────────────────────────
@@ -1172,8 +1205,8 @@ export default function AdminClipsPage() {
               const page = scopeClips[key];
               const totalPages = page ? Math.max(1, Math.ceil(page.total / CLIPS_PAGE_LIMIT)) : 1;
               const pageNum = page ? Math.floor(page.offset / CLIPS_PAGE_LIMIT) + 1 : 1;
-              const scheduledCount = pendingJobs.filter(
-                (j) => (m.code && j.movie_code === m.code) || (m.slug && j.movie_slug === m.slug)
+              const scheduledCount = allPendingJobs.filter(
+                (j: PublishJob) => (m.code && j.movie_code === m.code) || (m.slug && j.movie_slug === m.slug)
               ).length;
               return (
                 <div
@@ -1236,7 +1269,7 @@ export default function AdminClipsPage() {
                   {isExpanded && (
                     <ClipTable
                       page={page ?? { clips: [], total: m.clip_count, offset: 0, loading: true }}
-                      publishJobs={publishJobs}
+                      publishJobs={allRelevantJobsForBadges}
                       downloading={downloading}
                       uploading={uploading}
                       token={token}
@@ -1281,8 +1314,8 @@ export default function AdminClipsPage() {
             const s = entry.group;
             const key = `series:${s.group_key}`;
             const isExpanded = expandedGroups.has(key);
-            const scheduledCount = pendingJobs.filter(
-              (j) => (s.slug && j.movie_slug === s.slug) || (j.movie_title === s.title)
+            const scheduledCount = allPendingJobs.filter(
+              (j: PublishJob) => (s.slug && j.movie_slug === s.slug) || (j.movie_title === s.title)
             ).length;
             return (
               <div
@@ -1411,7 +1444,7 @@ export default function AdminClipsPage() {
                                 {epExpanded && (
                                   <ClipTable
                                     page={page ?? { clips: [], total: ep.clip_count, offset: 0, loading: true }}
-                                    publishJobs={publishJobs}
+                                    publishJobs={allRelevantJobsForBadges}
                                     downloading={downloading}
                                     uploading={uploading}
                                     token={token}
@@ -1482,13 +1515,13 @@ export default function AdminClipsPage() {
             />
           </div>
 
-          {pendingJobs.length > 0 && (
+          {pagedPendingJobs.length > 0 && (
             <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden mb-4">
               <div className="px-4 py-3 border-b border-brand-border bg-brand-dark/50">
                 <span className="text-sm text-gray-400">Kutilayotgan</span>
               </div>
               <div className="divide-y divide-brand-border/50">
-                {pendingJobs.map((j) => (
+                {pagedPendingJobs.map((j) => (
                   <div
                     key={j.id}
                     className="px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4"
