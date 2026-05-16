@@ -122,14 +122,15 @@ class UzmediaParser(BaseParser):
                 
                 for r in dict_results:
                     from helpers import detect_content_type
-                    ct, _ = detect_content_type(r["link"], self.source_name)
-                    if ct == "unknown":
-                        if any(x in r["link"].lower() or x in r["title"].lower() for x in ["serial", "dorama", "qismlar"]):
+                    ct, _ = detect_content_type(link, self.source_name)
+                    if ct == "unknown" or ct == "movie":
+                        # Heuristic for serials in uCoz sites
+                        if any(x in link.lower() or x in title.lower() for x in ["serial", "dorama", "qismlar", "/serialy/"]):
                             ct = "serial"
                         else:
                             ct = "movie"
-                    results.append(SearchResult(
-                        title=r["title"],
+
+                    results.append(SearchResult(                        title=r["title"],
                         year=r.get("year"),
                         poster=r.get("poster"),
                         description="",

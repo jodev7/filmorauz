@@ -87,24 +87,27 @@ class KinolarParser(BaseParser):
                     link = normalize_url(href, self.BASE_URL)
                     title = clean_text(a.get("title") or a.get_text())
                     
-                    if not title or title.lower() in ("batafsil", "skachat", "davomi", "на страницу материала"):
-                        if link not in seen_links:
-                            seen_links[link] = {"title": "", "poster": ""}
-                        continue
-                        
                     # Try to find poster
                     poster = ""
                     img = a.find("img")
                     if not img:
-                        parent = a.find_parent(class_=re.compile(r"card|item|post|short|ml-item"))
+                        # Broaden parent search to catch uCoz specific classes like card__cover
+                        parent = a.find_parent(class_=re.compile(r"card|item|post|short|ml-item|cover|thumb"))
                         if not parent:
-                            parent = a.find_parent(["div", "td", "article", "li"])
+                            parent = a.find_parent(["div", "td", "article", "li", "span"])
                         if parent:
                             img = parent.find("img")
                     if img:
                         poster_url = img.get("data-original") or img.get("data-src") or img.get("src", "")
                         if poster_url:
                             poster = normalize_url(poster_url, self.BASE_URL)
+                    
+                    if not title or title.lower() in ("batafsil", "skachat", "davomi", "на страницу материала"):
+                        if link not in seen_links:
+                            seen_links[link] = {"title": "", "poster": poster}
+                        elif poster and not seen_links[link].get("poster"):
+                            seen_links[link]["poster"] = poster
+                        continue
                     
                     if link not in seen_links or len(title) > len(seen_links[link].get("title", "")):
                         if not poster and link in seen_links and seen_links[link].get("poster"):
@@ -133,8 +136,8 @@ class KinolarParser(BaseParser):
                 for r in dict_results:
                     from helpers import detect_content_type
                     ct, _ = detect_content_type(r["link"], self.source_name)
-                    if ct == "unknown":
-                        if any(x in r["link"].lower() or x in r["title"].lower() for x in ["serial", "dorama", "qismlar"]):
+                    if ct == "unknown" or ct == "movie":
+                        if any(x in r["link"].lower() or x in r["title"].lower() for x in ["serial", "dorama", "qismlar", "/tarjima_seriallar/"]):
                             ct = "serial"
                         else:
                             ct = "movie"

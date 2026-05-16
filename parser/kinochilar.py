@@ -118,8 +118,11 @@ class KinochilarParser(BaseParser):
                 for r in dict_results:
                     from helpers import detect_content_type
                     ct, _ = detect_content_type(r["link"], self.source_name)
-                    if ct == "unknown":
-                        ct = r.get("type", "movie")
+                    if ct == "unknown" or ct == "movie":
+                        if any(x in r["link"].lower() or x in r["title"].lower() for x in ["serial", "dorama", "qismlar", "/tarjima-seriallar/"]):
+                            ct = "serial"
+                        else:
+                            ct = "movie"
                     results.append(SearchResult(
                         title=r["title"],
                         year=r.get("year"),
