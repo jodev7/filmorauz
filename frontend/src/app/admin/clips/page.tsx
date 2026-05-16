@@ -553,7 +553,15 @@ function ClipTable({
               >
                 <td className="px-4 py-3 text-gray-500">{getClipSequence(clip)}</td>
                 <td className="px-4 py-3">
-                  <span className="text-gray-300 font-mono text-xs">{clip.filename}</span>
+                  <div className="flex flex-col gap-1.5 items-start">
+                    <span className="text-gray-300 font-mono text-xs break-all">{clip.filename}</span>
+                    {clipJobs.some((j) => j.status === "scheduled" || j.status === "pending") && (
+                      <span className="flex items-center gap-1 text-[10px] bg-amber-500/10 text-amber-400 px-1.5 py-0.5 rounded border border-amber-500/20 font-medium">
+                        <CalendarClock size={12} />
+                        Rejalashtirilgan
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-1.5 text-gray-400">
