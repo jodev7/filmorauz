@@ -120,7 +120,7 @@ interface PublishJob {
   platform: Platform;
   account_name: string;
   scheduled_for: string;
-  status: "pending" | "processing" | "success" | "failed";
+  status: "pending" | "scheduled" | "processing" | "success" | "failed";
   created_at: string;
   executed_at?: string;
   error?: string;
@@ -1100,7 +1100,7 @@ export default function AdminClipsPage() {
     if (groupsPage > groupsTotalPages) setGroupsPage(groupsTotalPages);
   }, [groupsPage, groupsTotalPages]);
 
-  const pendingJobs = publishJobs.filter((j) => j.status === "pending" || j.status === "processing");
+  const pendingJobs = publishJobs.filter((j) => j.status === "pending" || j.status === "scheduled" || j.status === "processing");
   const doneJobs = publishJobs.filter((j) => j.status === "success" || j.status === "failed");
   const jobsTotalPages = Math.max(1, Math.ceil(jobsTotal / jobsPageLimit));
 
