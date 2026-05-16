@@ -386,7 +386,8 @@ func (p *Pipeline) getApplicableRenditions(inputWidth, inputHeight int) []Rendit
 
 	applicable := make([]RenditionConfig, 0, len(descending))
 	for _, targetHeight := range descending {
-		if inputHeight < targetHeight {
+		// Allow a margin of 16 pixels for aspect ratio differences
+		if inputHeight+16 < targetHeight {
 			continue
 		}
 		base := templates[targetHeight]
@@ -394,7 +395,13 @@ func (p *Pipeline) getApplicableRenditions(inputWidth, inputHeight int) []Rendit
 		applicable = append(applicable, base)
 	}
 
-	if len(applicable) == 0 {
+	if len(applicable) == 0 && len(descending) > 0 {
+		log.Printf("[HLS] WARNING: source height %d is below lowest standard rendition; forcing lowest quality fallback", inputHeight)
+		targetHeight := descending[len(descending)-1]
+		base := templates[targetHeight]
+		base.Width = scaledWidthForHeight(inputWidth, inputHeight, targetHeight)
+		applicable = append(applicable, base)
+	} else if len(applicable) == 0 {
 		log.Printf("[HLS] WARNING: source height %d is below lowest standard rendition; no standard qualities are eligible", inputHeight)
 		return nil
 	}

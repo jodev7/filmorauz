@@ -360,6 +360,9 @@ func (h *IngestionHandler) SearchSource(c *gin.Context) {
 	}()
 
 	source := c.Query("source")
+	if strings.Contains(source, ".") {
+		source = strings.Split(source, ".")[0]
+	}
 	query := c.Query("q")
 
 	log.Printf("[INGESTION] SEARCH: request received - source=%s, query=%s", source, query)
@@ -517,6 +520,9 @@ func (h *IngestionHandler) GetMovieDetails(c *gin.Context) {
 	}()
 
 	source := c.Query("source")
+	if strings.Contains(source, ".") {
+		source = strings.Split(source, ".")[0]
+	}
 	sourceID := c.Query("id")
 	detailURL := c.Query("url")
 
@@ -966,6 +972,9 @@ func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
 
 	status := c.Query("status")
 	source := c.Query("source")
+	if strings.Contains(source, ".") {
+		source = strings.Split(source, ".")[0]
+	}
 	limit := 30
 	page := 1
 	skip := 0
@@ -1440,6 +1449,9 @@ func (h *IngestionHandler) ListCatalog(c *gin.Context) {
 	}()
 
 	source := c.Query("source")
+	if strings.Contains(source, ".") {
+		source = strings.Split(source, ".")[0]
+	}
 	page := 1
 	limit := 20
 	typeFilter := c.Query("type") // "movies", "serials", or empty for both
@@ -1591,6 +1603,9 @@ type CatalogCategory struct {
 // GET /api/ingestion/catalog/categories?source=uzmovi
 func (h *IngestionHandler) GetCatalogCategories(c *gin.Context) {
 	source := c.Query("source")
+	if strings.Contains(source, ".") {
+		source = strings.Split(source, ".")[0]
+	}
 
 	validSources := map[string]bool{
 		"uzmovi":     true,
