@@ -549,7 +549,7 @@ function ClipTable({
             return (
               <tr
                 key={clip.id}
-                className="border-b border-brand-border/50 last:border-0 hover:bg-brand-border/20 transition-colors"
+                className="border-b border-brand-border/50 last:border-0 hover:bg-orange-500/10 transition-colors"
               >
                 <td className="px-4 py-3 text-gray-500">{getClipSequence(clip)}</td>
                 <td className="px-4 py-3">

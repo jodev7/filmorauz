@@ -141,29 +141,56 @@ class UzmediaParser(BaseParser):
                 all_links = soup.find_all("a", href=True)
                 seen_links = {}
                 
+                import re
                 for a in all_links:
                     href = a.get("href", "")
-                    if "/load/" in href and len(href.split("/")) > 4:
+                    # Match valid detail URLs that end with ID pattern e.g. /1-1-0-1234
+                    if "/load/" in href and re.search(r'/\d+-\d+-\d+-\d+$', href):
                         link = normalize_url(href, self.BASE_URL)
                         title = clean_text(a.get("title") or a.get_text())
                         
+                        poster = ""
+                        img = a.find("img")
+                        if not img:
+                            parent = a.find_parent(class_=re.compile(r"card|item|post|short|ml-item"))
+                            if not parent:
+                                parent = a.find_parent(["div", "td", "article", "li"])
+                            if parent:
+                                img = parent.find("img")
+                        if img:
+                            poster_url = img.get("data-original") or img.get("data-src") or img.get("src", "")
+                            if poster_url:
+                                poster = normalize_url(poster_url, self.BASE_URL)
+                                
                         if not title or title.lower() in ("batafsil", "skachat", "davomi", "на страницу материала"):
                             if link not in seen_links:
-                                seen_links[link] = ""
+                                seen_links[link] = {"title": "", "poster": poster}
+                            elif poster and not seen_links[link].get("poster"):
+                                seen_links[link]["poster"] = poster
                             continue
                         
-                        if link not in seen_links or len(title) > len(seen_links[link]):
-                            seen_links[link] = title
+                        if link not in seen_links or len(title) > len(seen_links[link].get("title", "")):
+                            if not poster and link in seen_links and seen_links[link].get("poster"):
+                                poster = seen_links[link].get("poster")
+                            seen_links[link] = {"title": title, "poster": poster}
                 
-                for link, title in seen_links.items():
+                for link, data in seen_links.items():
+                    title = data.get("title", "")
                     if not title: continue
+                    poster = data.get("poster", "")
                     
                     from helpers import detect_content_type
                     ct, _ = detect_content_type(link, self.source_name)
+                    if ct == "unknown":
+                        if "serial" in link.lower() or "serial" in title.lower():
+                            ct = "serial"
+                        else:
+                            ct = "movie"
+                            
                     results.append(SearchResult(
                         title=title,
                         year=extract_year(title),
-                        poster="", 
+                        poster=poster, 
                         description="",
                         source_id=self._extract_source_id(link),
                         detail_url=link,

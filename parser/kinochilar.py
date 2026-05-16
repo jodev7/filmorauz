@@ -37,6 +37,8 @@ class KinochilarParser(BaseParser):
     
     # Card selectors
     CARD_SELECTORS = [
+        ".movie-card-premium",
+        ".poster-collection",
         ".search-card-premium",
         ".shortstory",
         ".film-item",
@@ -200,12 +202,23 @@ class KinochilarParser(BaseParser):
         a_tag = card.select_one("a[href]")
         if a_tag:
             link = normalize_url(a_tag.get("href", ""), self.BASE_URL)
+            
+        title_elem = card.select_one(".movie-card-title, .title, .kino-title, .name")
+        if title_elem:
+            title = clean_text(title_elem.get_text())
+        elif a_tag:
             title = clean_text(a_tag.get("title") or a_tag.get_text())
             
-        img = card.select_one("img[src]")
+        img = card.select_one("img")
         if img:
-            poster = normalize_url(img.get("src", ""), self.BASE_URL)
+            poster_url = img.get("data-src") or img.get("data-lazy-src") or img.get("src", "")
+            poster = normalize_url(poster_url, self.BASE_URL)
             
+        if not title or title.lower() in ("fhd tomosha qilish", "tomosha qilish"):
+            # Fallback to finding title from image alt
+            if img and img.get("alt"):
+                title = clean_text(img.get("alt"))
+                
         if not title:
             return None
             
