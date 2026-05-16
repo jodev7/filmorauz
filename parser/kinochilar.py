@@ -118,6 +118,8 @@ class KinochilarParser(BaseParser):
                 for r in dict_results:
                     from helpers import detect_content_type
                     ct, _ = detect_content_type(r["link"], self.source_name)
+                    if ct == "unknown":
+                        ct = r.get("type", "movie")
                     results.append(SearchResult(
                         title=r["title"],
                         year=r.get("year"),
@@ -222,6 +224,14 @@ class KinochilarParser(BaseParser):
         if not title:
             return None
             
+        from helpers import detect_content_type
+        ct, _ = detect_content_type(link, self.source_name)
+        if ct == "unknown":
+            if any(x in link.lower() or x in title.lower() for x in ["serial", "dorama", "qismlar"]):
+                ct = "serial"
+            else:
+                ct = "movie"
+            
         year_elem = card.select_one(".year, .date")
         if year_elem:
             year = extract_year(year_elem.get_text())
@@ -233,7 +243,8 @@ class KinochilarParser(BaseParser):
             "title": title,
             "link": link,
             "poster": poster,
-            "year": year
+            "year": year,
+            "type": ct
         }
 
     def _extract_source_id(self, url: str) -> str:
