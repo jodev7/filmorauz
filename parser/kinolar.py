@@ -157,6 +157,33 @@ class KinolarParser(BaseParser):
         
         return results
 
+    def list_categories(self):
+        """Scrape categories from kinolar.tv navigation/sidebar"""
+        try:
+            response = self.session.get(self.BASE_URL + "/", timeout=20, verify=False)
+            soup = BeautifulSoup(response.text, "lxml")
+        except Exception as e:
+            logger.warning(f"[KINOLAR] list_categories: fetch failed: {e}")
+            return []
+
+        categories = []
+        seen_urls = set()
+
+        def _add(href, name):
+            if not href or not name or len(name) < 2: return
+            if href in ("#", ""): return
+            full_url = normalize_url(href, self.BASE_URL)
+            if full_url in seen_urls: return
+            seen_urls.add(full_url)
+            slug = full_url.rstrip("/").split("/")[-1]
+            categories.append({"name": name, "url": full_url, "slug": slug})
+
+        # Search for categories in navigation or sidebar links
+        for a in soup.select("a[href*='/load/']"):
+            _add(a.get("href"), clean_text(a.get_text()))
+
+        return categories
+
     def list_catalog(self, page: int = 1, limit: int = 20, type_filter: str = "", category_url: str = "") -> Dict[Any, Any]:
         """List catalog items from kinolar.tv"""
         results = []
@@ -211,11 +238,13 @@ class KinolarParser(BaseParser):
                     title = data.get("title", "")
                     if not title: continue
                     poster = data.get("poster", "")
+                    if poster and not poster.startswith("http"):
+                        poster = normalize_url(poster, self.BASE_URL)
                     
                     from helpers import detect_content_type
                     ct, _ = detect_content_type(link, self.source_name)
                     if ct == "unknown" or ct == "movie": # Force re-evaluation since kinolar sometimes misdetects
-                        if "serial" in link.lower() or "serial" in title.lower():
+                        if "serial" in link.lower() or "serial" in title.lower() or "/tarjima_seriallar/" in link.lower():
                             ct = "serial"
                         else:
                             ct = "movie"

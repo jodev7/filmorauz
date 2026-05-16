@@ -145,6 +145,33 @@ class UzmediaParser(BaseParser):
         
         return results
 
+    def list_categories(self):
+        """Scrape categories from uzmedia.tv sidebar/nav"""
+        try:
+            response = self.session.get(self.BASE_URL + "/", timeout=20, verify=False)
+            soup = BeautifulSoup(response.text, "lxml")
+        except Exception as e:
+            logger.warning(f"[UZMEDIA] list_categories: fetch failed: {e}")
+            return []
+
+        categories = []
+        seen_urls = set()
+
+        def _add(href, name):
+            if not href or not name or len(name) < 2: return
+            if href in ("#", ""): return
+            full_url = normalize_url(href, self.BASE_URL)
+            if full_url in seen_urls: return
+            seen_urls.add(full_url)
+            slug = full_url.rstrip("/").split("/")[-1]
+            categories.append({"name": name, "url": full_url, "slug": slug})
+
+        # Sidebar links usually contain categories in uCoz
+        for a in soup.select("a[href*='/load/']"):
+            _add(a.get("href"), clean_text(a.get_text()))
+
+        return categories
+
     def list_catalog(self, page: int = 1, limit: int = 20, type_filter: str = "", category_url: str = "") -> Dict[Any, Any]:
         """List catalog items from uzmedia.tv"""
         results = []
@@ -152,16 +179,16 @@ class UzmediaParser(BaseParser):
         url = category_url if category_url else f"{self.BASE_URL}/load/0-{page}"
         if category_url and page > 1:
              url = f"{category_url.rstrip('/')}/0-{page}"
-            
+
         try:
             logger.info(f"[UZMEDIA] Catalog request: {url}")
             response = self.session.get(url, timeout=30, verify=False)
             if response.status_code == 200:
                 soup = BeautifulSoup(response.text, "lxml")
-                
+
                 all_links = soup.find_all("a", href=True)
                 seen_links = {}
-                
+
                 import re
                 for a in all_links:
                     href = a.get("href", "")
@@ -169,7 +196,8 @@ class UzmediaParser(BaseParser):
                     if "/load/" in href and re.search(r'/\d+-\d+-\d+-\d+$', href):
                         link = normalize_url(href, self.BASE_URL)
                         title = clean_text(a.get("title") or a.get_text())
-                        
+
+                        # Try to find poster
                         poster = ""
                         img = a.find("img")
                         if not img:
@@ -181,25 +209,28 @@ class UzmediaParser(BaseParser):
                         if img:
                             poster_url = img.get("data-original") or img.get("data-src") or img.get("src", "")
                             if poster_url:
+                                # ENSURE ABSOLUTE URL
                                 poster = normalize_url(poster_url, self.BASE_URL)
-                                
+
                         if not title or title.lower() in ("batafsil", "skachat", "davomi", "на страницу материала"):
                             if link not in seen_links:
                                 seen_links[link] = {"title": "", "poster": poster}
                             elif poster and not seen_links[link].get("poster"):
                                 seen_links[link]["poster"] = poster
                             continue
-                        
+
                         if link not in seen_links or len(title) > len(seen_links[link].get("title", "")):
                             if not poster and link in seen_links and seen_links[link].get("poster"):
                                 poster = seen_links[link].get("poster")
                             seen_links[link] = {"title": title, "poster": poster}
-                
+
                 for link, data in seen_links.items():
                     title = data.get("title", "")
                     if not title: continue
                     poster = data.get("poster", "")
-                    
+                    if poster and not poster.startswith("http"):
+                        poster = normalize_url(poster, self.BASE_URL)
+
                     from helpers import detect_content_type
                     ct, _ = detect_content_type(link, self.source_name)
                     if ct == "unknown":
@@ -207,7 +238,7 @@ class UzmediaParser(BaseParser):
                             ct = "serial"
                         else:
                             ct = "movie"
-                            
+
                     results.append(SearchResult(
                         title=title,
                         year=extract_year(title),
@@ -217,8 +248,7 @@ class UzmediaParser(BaseParser):
                         detail_url=link,
                         source=self.source_name,
                         content_type=ct
-                    ).to_dict())
-            
+                    ).to_dict())            
             results = deduplicate_results(results, key="detail_url")
             
             return {

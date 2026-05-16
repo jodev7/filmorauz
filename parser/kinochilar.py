@@ -139,6 +139,60 @@ class KinochilarParser(BaseParser):
         
         return results
 
+    def list_categories(self):
+        """Scrape categories from kinochilar.com navigation"""
+        try:
+            response = self.session.get(self.BASE_URL + "/", timeout=20, verify=False)
+            soup = BeautifulSoup(response.text, "lxml")
+        except Exception as e:
+            logger.warning(f"[KINOCHILAR] list_categories: fetch failed: {e}")
+            return []
+
+        categories = []
+        seen_urls = set()
+
+        def _add(href, name):
+            if not href or not name or len(name) < 2: return
+            if href in ("#", ""): return
+            full_url = normalize_url(href, self.BASE_URL)
+            if full_url in seen_urls: return
+            seen_urls.add(full_url)
+            slug = full_url.rstrip("/").split("/")[-1]
+            categories.append({"name": name, "url": full_url, "slug": slug})
+
+        # Search for categories in navigation or sidebar links
+        for a in soup.select("a[href*='/film/'], a[href*='/serial/'], a[href*='/multfilm/']"):
+            _add(a.get("href"), clean_text(a.get_text()))
+
+        return categories
+
+    def list_categories(self):
+        """Scrape categories from kinochilar.com navigation"""
+        try:
+            response = self.session.get(self.BASE_URL + "/", timeout=20, verify=False)
+            soup = BeautifulSoup(response.text, "lxml")
+        except Exception as e:
+            logger.warning(f"[KINOCHILAR] list_categories: fetch failed: {e}")
+            return []
+
+        categories = []
+        seen_urls = set()
+
+        def _add(href, name):
+            if not href or not name or len(name) < 2: return
+            if href in ("#", ""): return
+            full_url = normalize_url(href, self.BASE_URL)
+            if full_url in seen_urls: return
+            seen_urls.add(full_url)
+            slug = full_url.rstrip("/").split("/")[-1]
+            categories.append({"name": name, "url": full_url, "slug": slug})
+
+        # Search for categories in navigation (tarjima-kinolar, tarjima-seriallar, etc.)
+        for a in soup.select("a[href*='tarjima-']"):
+            _add(a.get("href"), clean_text(a.get_text()))
+
+        return categories
+
     def list_catalog(self, page: int = 1, limit: int = 20, type_filter: str = "", category_url: str = "") -> Dict[Any, Any]:
         """List catalog items from kinochilar.com"""
         results = []
@@ -170,12 +224,16 @@ class KinochilarParser(BaseParser):
                 for card in cards:
                     res = self._extract_card(card)
                     if res and res.get("title") and res.get("link"):
+                        poster = res.get("poster", "")
+                        if poster and not poster.startswith("http"):
+                             poster = normalize_url(poster, self.BASE_URL)
+
                         from helpers import detect_content_type
                         ct, _ = detect_content_type(res["link"], self.source_name)
                         results.append(SearchResult(
                             title=res["title"],
                             year=res.get("year"),
-                            poster=res.get("poster"),
+                            poster=poster,
                             description="",
                             source_id=self._extract_source_id(res["link"]),
                             detail_url=res["link"],
