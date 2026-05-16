@@ -259,43 +259,48 @@ function PlatformUploadStatuses({
 }) {
   const rows: React.ReactNode[] = [];
 
-  if (clip.instagram_upload_count > 0 || clip.last_instagram_upload_status) {
-    const meta = PLATFORM_META.instagram;
-    const { Icon } = meta;
-    const ok = clip.last_instagram_upload_status === "success";
-    const failed = clip.last_instagram_upload_status === "failed";
-    rows.push(
-      <div key="instagram" className="flex items-center gap-1.5">
-        <Icon size={11} className={meta.color} />
-        {ok ? (
-          <span className="inline-flex items-center gap-1 text-[11px] text-green-400">
-            <CheckCircle size={10} />
-            {clip.instagram_upload_count}× yuklandi
-            {clip.last_instagram_upload_at && (
-              <span className="text-gray-600 text-[10px]">
-                · {formatTashkent(clip.last_instagram_upload_at)}
-              </span>
-            )}
-          </span>
-        ) : failed ? (
-          <span className="inline-flex items-center gap-1 text-[11px] text-red-400">
-            <XCircle size={10} />
-            Xato
-          </span>
-        ) : (
-          <span className="text-[11px] text-gray-500">—</span>
-        )}
-      </div>
-    );
-  }
-
-  for (const platform of ["youtube", "tiktok"] as const) {
+  for (const platform of ALL_PLATFORMS) {
     const jobs = clipJobs.filter((j) => j.platform === platform);
+    
+    // Legacy fallback for instagram if no modern jobs are present
+    if (platform === "instagram" && jobs.length === 0) {
+      if (clip.instagram_upload_count > 0 || clip.last_instagram_upload_status) {
+        const meta = PLATFORM_META.instagram;
+        const { Icon } = meta;
+        const ok = clip.last_instagram_upload_status === "success";
+        const failed = clip.last_instagram_upload_status === "failed";
+        rows.push(
+          <div key="instagram_legacy" className="flex items-center gap-1.5">
+            <Icon size={11} className={meta.color} />
+            {ok ? (
+              <span className="inline-flex items-center gap-1 text-[11px] text-green-400">
+                <CheckCircle size={10} />
+                {clip.instagram_upload_count}× yuklandi
+                {clip.last_instagram_upload_at && (
+                  <span className="text-gray-600 text-[10px]">
+                    · {formatTashkent(clip.last_instagram_upload_at)}
+                  </span>
+                )}
+              </span>
+            ) : failed ? (
+              <span className="inline-flex items-center gap-1 text-[11px] text-red-400">
+                <XCircle size={10} />
+                Xato
+              </span>
+            ) : (
+              <span className="text-[11px] text-gray-500">—</span>
+            )}
+          </div>
+        );
+      }
+      continue;
+    }
+
     if (jobs.length === 0) continue;
     const meta = PLATFORM_META[platform];
     const { Icon } = meta;
     const successJobs = jobs.filter((j) => j.status === "success");
-    const pendingJobs = jobs.filter((j) => j.status === "pending" || j.status === "processing");
+    const pendingJobs = jobs.filter((j) => j.status === "pending" || j.status === "scheduled" || j.status === "processing");
     const failedJobs = jobs.filter((j) => j.status === "failed");
     const lastSuccess = successJobs.sort((a, b) =>
       (b.executed_at ?? b.created_at).localeCompare(a.executed_at ?? a.created_at)
@@ -314,9 +319,9 @@ function PlatformUploadStatuses({
             )}
           </span>
         ) : pendingJobs.length > 0 ? (
-          <span className="inline-flex items-center gap-1 text-[11px] text-blue-400">
+          <span className="inline-flex items-center gap-1 text-[11px] text-amber-400">
             <CalendarClock size={10} />
-            {formatTashkent(pendingJobs[0].scheduled_for)}
+            Rejalashtirilgan ({formatTashkent(pendingJobs[0].scheduled_for)})
           </span>
         ) : failedJobs.length > 0 ? (
           <span className="inline-flex items-center gap-1 text-[11px] text-red-400">
@@ -1167,6 +1172,9 @@ export default function AdminClipsPage() {
               const page = scopeClips[key];
               const totalPages = page ? Math.max(1, Math.ceil(page.total / CLIPS_PAGE_LIMIT)) : 1;
               const pageNum = page ? Math.floor(page.offset / CLIPS_PAGE_LIMIT) + 1 : 1;
+              const scheduledCount = pendingJobs.filter(
+                (j) => (m.code && j.movie_code === m.code) || (m.slug && j.movie_slug === m.slug)
+              ).length;
               return (
                 <div
                   key={key}
@@ -1201,6 +1209,12 @@ export default function AdminClipsPage() {
                           {m.last_ig_upload_at && (
                             <span className="text-[11px] text-gray-600">
                               · {formatTashkent(m.last_ig_upload_at)}
+                            </span>
+                          )}
+                          {scheduledCount > 0 && (
+                            <span className="inline-flex items-center gap-1 text-[11px] text-amber-400 ml-2">
+                              <CalendarClock size={10} />
+                              Rejalashtirilgan ({scheduledCount})
                             </span>
                           )}
                         </div>
@@ -1267,6 +1281,9 @@ export default function AdminClipsPage() {
             const s = entry.group;
             const key = `series:${s.group_key}`;
             const isExpanded = expandedGroups.has(key);
+            const scheduledCount = pendingJobs.filter(
+              (j) => (s.code && j.movie_code === s.code) || (s.slug && j.movie_slug === s.slug)
+            ).length;
             return (
               <div
                 key={key}
@@ -1298,6 +1315,12 @@ export default function AdminClipsPage() {
                         {s.last_ig_upload_at && (
                           <span className="text-[11px] text-gray-600">
                             · {formatTashkent(s.last_ig_upload_at)}
+                          </span>
+                        )}
+                        {scheduledCount > 0 && (
+                          <span className="inline-flex items-center gap-1 text-[11px] text-amber-400 ml-2">
+                            <CalendarClock size={10} />
+                            Rejalashtirilgan ({scheduledCount})
                           </span>
                         )}
                       </div>
