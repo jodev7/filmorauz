@@ -1282,7 +1282,7 @@ export default function AdminClipsPage() {
             const key = `series:${s.group_key}`;
             const isExpanded = expandedGroups.has(key);
             const scheduledCount = pendingJobs.filter(
-              (j) => (s.code && j.movie_code === s.code) || (s.slug && j.movie_slug === s.slug)
+              (j) => (s.slug && j.movie_slug === s.slug) || (j.movie_title === s.title)
             ).length;
             return (
               <div
