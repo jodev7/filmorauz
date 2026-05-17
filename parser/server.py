@@ -83,6 +83,9 @@ from uzmedia import UzmediaParser
 from asilmedia_serial import AsilmediaSerialParser
 from freekino_serial import FreekinoSerialParser
 from uzmovi_serial import UzmoviSerialParser
+from kinochilar_serial import KinochilarSerialParser
+from kinolar_serial import KinolarSerialParser
+from uzmedia_serial import UzmediaSerialParser
 from downloader_service import DownloaderService, _validate_download_target
 from metadata_normalizer import normalize_metadata, validate_metadata, create_worker_payload
 from helpers import sort_video_candidates, normalize_quality_label, quality_height, detect_content_type
@@ -133,6 +136,9 @@ SERIAL_PARSERS = {
     "asilmedia": AsilmediaSerialParser(),
     "freekino": FreekinoSerialParser(),
     "uzmovi": UzmoviSerialParser(),
+    "kinochilar": KinochilarSerialParser(),
+    "kinolar": KinolarSerialParser(),
+    "uzmedia": UzmediaSerialParser(),
 }
 
 
@@ -145,6 +151,12 @@ def _detect_serial_provider(url: str) -> str:
         return "freekino"
     if "uzmovi." in u:
         return "uzmovi"
+    if "kinochilar." in u:
+        return "kinochilar"
+    if "kinolar." in u:
+        return "kinolar"
+    if "uzmedia." in u:
+        return "uzmedia"
     return ""
 
 # Initialize downloader service
@@ -2132,13 +2144,57 @@ class ParserHandler(BaseHTTPRequestHandler):
                     if not download_result.get("success"):
                         error_msg = download_result.get("error", "Download failed")
                         logger.error(f"[PARSER] background download failed — job_id={job_id}, error={error_msg}")
-                        state = get_active_download(job_id)
-                        if state:
-                            state.status = "failed"
-                            state.error = error_msg
-                            state.done = True
-                            state.exit_code = state.exit_code if state.exit_code is not None else -1
-                        return
+                        
+                        # Auto-refresh expired URLs logic
+                        if source and source in PARSERS and referer:
+                            logger.info(f"[PARSER] Attempting to auto-refresh URL for failed download — job_id={job_id}, source={source}")
+                            try:
+                                fresh_details = PARSERS[source].get_details(referer)
+                                fresh_url = ""
+                                target_quality = selected_quality or quality or ""
+                                if fresh_details.video_urls:
+                                    if target_quality:
+                                        for v in fresh_details.video_urls:
+                                            if target_quality.lower() in v.get("quality", "").lower():
+                                                fresh_url = v.get("url")
+                                                break
+                                    if not fresh_url:
+                                        fresh_url = fresh_details.video_urls[0].get("url")
+                                
+                                if fresh_url and fresh_url != video_url:
+                                    logger.info(f"[PARSER] Successfully fetched fresh URL for job_id={job_id}, retrying download...")
+                                    state = get_active_download(job_id)
+                                    if state:
+                                        state.video_url = fresh_url
+                                        state.download_url = fresh_url
+                                        state.status = "starting"
+                                    
+                                    download_result = downloader_service.smart_download(
+                                        url=fresh_url,
+                                        output_name=output_name,
+                                        job_id=output_name,
+                                        backend_job_id=backend_job_id,
+                                        referer=referer,
+                                        progress_callback=progress_callback,
+                                        pid_callback=pid_callback,
+                                        debug_callback=debug_callback,
+                                    )
+                                    if not download_result.get("success"):
+                                        error_msg = download_result.get("error", "Download failed after URL refresh")
+                                        logger.error(f"[PARSER] background download failed again after refresh — job_id={job_id}, error={error_msg}")
+                                else:
+                                    logger.warning(f"[PARSER] No fresh URL found during auto-refresh for job_id={job_id}")
+                            except Exception as e:
+                                logger.error(f"[PARSER] Auto-refresh failed for job_id={job_id}: {e}")
+                        
+                        if not download_result.get("success"):
+                            state = get_active_download(job_id)
+                            if state:
+                                state.status = "failed"
+                                state.error = error_msg
+                                state.done = True
+                                state.exit_code = state.exit_code if state.exit_code is not None else -1
+                            return
                     
                     local_path = resolve_downloaded_artifact(job_id, download_result.get("file_path", ""))
                     if not local_path:

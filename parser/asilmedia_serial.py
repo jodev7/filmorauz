@@ -23,7 +23,7 @@ from urllib.parse import unquote, urlsplit
 from bs4 import BeautifulSoup
 
 from asilmedia import AsilmediaParser
-from helpers import canonical_episode_id, extract_source_id
+from helpers import canonical_episode_id, extract_source_id, clean_text
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +187,61 @@ class AsilmediaSerialParser:
                 if not current or _rank_quality(href) > _rank_quality(current):
                     item["video_url"] = href
 
-        # Fallback for older layouts or inline raw HTML references.
+        # Fallback 1: Collect episode subpage links
+        if not grouped:
+            episode_re = re.compile(r"^(\d+)\s*-\s*qism$", re.IGNORECASE)
+            season_ep_re = re.compile(r"^(?:(\d+)\s*-\s*fasl\s+)?(\d+)\s*-\s*qism$", re.IGNORECASE)
+            seen_hrefs = set()
+            ep_links = []
+            
+            # Check all links for episode labels
+            for a in soup.find_all("a", href=True):
+                href = a["href"].strip()
+                if not href or href in seen_hrefs or href.startswith("#") or href.startswith("javascript:"):
+                    continue
+                
+                label = clean_text(a.get_text(" ", strip=True) or a.get("title", ""))
+                m = season_ep_re.search(label) or episode_re.search(label)
+                if m:
+                    seen_hrefs.add(href)
+                    season = int(m.group(1)) if len(m.groups()) > 1 and m.group(1) else 1
+                    episode_no = int(m.groups()[-1])
+                    full_href = href if href.startswith("http") else f"{self.base_url.rstrip('/')}/{href.lstrip('/')}"
+                    if not full_href.startswith("http"): continue
+                    ep_links.append((full_href, season, episode_no, label))
+            
+            for full_href, season, episode_no, label in ep_links:
+                key = (season, episode_no)
+                if key in grouped:
+                    continue
+                try:
+                    logger.info(f"[ASILMEDIA SERIAL] fetching subpage S{season}E{episode_no} url={full_href}")
+                    ep_resp = self.session.get(full_href, timeout=15)
+                    ep_soup = BeautifulSoup(ep_resp.text, "lxml")
+                    entries = self._movie._extract_video_urls(ep_soup, full_href)
+                    video_url = entries[0]["url"] if entries else ""
+                    
+                    grouped.setdefault(
+                        key,
+                        {
+                            "season": season,
+                            "episode": episode_no,
+                            "season_number": season,
+                            "episode_number": episode_no,
+                            "title": _parse_episode_title(label, episode_no) or f"{episode_no}-qism",
+                            "episode_url": full_href,
+                            "detail_url": full_href,
+                            "source_episode_url": full_href,
+                            "source_id": canonical_episode_id(parent_id, season, episode_no),
+                            "video_url": video_url,
+                            "poster": poster,
+                            "quality_urls": {},
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(f"[ASILMEDIA SERIAL] failed to fetch subpage S{season}E{episode_no}: {e}")
+
+        # Fallback 2 for older layouts or inline raw HTML references.
         if not grouped:
             raw_urls: set[str] = set()
             for el in soup.find_all(True):
