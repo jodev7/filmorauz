@@ -12,7 +12,7 @@ from urllib.parse import urljoin, urlparse, parse_qs
 from bs4 import BeautifulSoup
 
 from base_parser import BaseParser, SearchResult, MovieDetails
-from source_config import get_source_config
+from source_config import get_source_config, get_base_url
 from helpers import (
     normalize_url, 
     clean_text, 

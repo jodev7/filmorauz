@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 from bs4 import BeautifulSoup
 
 from base_parser import BaseParser, SearchResult, MovieDetails
+from source_config import get_base_url
 from helpers import (
     normalize_url, 
     clean_text, 
