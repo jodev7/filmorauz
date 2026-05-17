@@ -7,15 +7,18 @@ from typing import List, Dict, Any
 # Source-specific search configuration
 SOURCES = {
     "uzmovi": {
-        "base_url": "https://uzmovi.tv",
+        "base_url": "http://uzmovi.me",
         "search_paths": [
-            "/search",  # GET /search?q=query (primary)
-            "/index.php?do=search",  # POST fallback
+            "/index.php?do=search",
+            "/search",
             "/",
         ],
-        "search_method": "GET",  # POST or GET
-        "search_params": {},  # Additional params for GET
-        "search_param_key": "q",  # query param name
+        "search_method": "POST",  # DLE sites often use POST
+        "search_params": {
+            "do": "search",
+            "subaction": "search",
+        },
+        "search_param_key": "story",  # DLE uses 'story' for search query
     },
     "freekino": {
         "base_url": "https://freekino.net",
@@ -32,7 +35,7 @@ SOURCES = {
         "search_param_key": "story",
     },
     "asilmedia": {
-        "base_url": "https://asilmedia.org",
+        "base_url": "http://asilmedia.org",
         "search_paths": [
             "/index.php?do=search",
             "/search",
@@ -46,7 +49,7 @@ SOURCES = {
         "search_param_key": "story",
     },
     "kinolar": {
-        "base_url": "https://kinolar.uz",
+        "base_url": "https://kinolar.tv",
         "search_paths": [
             "/index.php",
             "/search",

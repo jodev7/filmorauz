@@ -57,7 +57,7 @@ class UzmediaSerialParser:
         grouped: Dict[tuple[int, int], Dict] = {}
 
         episode_re = re.compile(r"^(\d+)\s*-\s*qism$", re.IGNORECASE)
-        season_ep_re = re.compile(r"^(?:(\d+)\s*-\s*fasl\s+)?(\d+)\s*-\s*qism$", re.IGNORECASE)
+        season_ep_re = re.compile(r"^(?:(\d+)\s*-\s*(?:fasl|mavsum|sezon)\s+)?(\d+)\s*-\s*qism$", re.IGNORECASE)
         seen_hrefs = set()
         ep_links = []
         

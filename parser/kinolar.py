@@ -21,9 +21,10 @@ DEBUG = os.environ.get("PARSER_DEBUG", "false").lower() == "true"
 
 
 class KinolarParser(BaseParser):
-    """Parser for kinolar.tv - uses uCoz POST for search"""
+    """Parser for kinolar.tv (dynamic mirror via source_config)"""
     
-    BASE_URL = "https://kinolar.tv"
+    # Mirror is resolved from source_config.py
+    BASE_URL = get_base_url("kinolar") or "https://kinolar.tv"
     
     # POST search endpoint
     SEARCH_ENDPOINT = "/load/"

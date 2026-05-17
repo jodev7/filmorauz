@@ -1615,6 +1615,13 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 				if noPIDSince.IsZero() {
 					noPIDSince = time.Now()
 				}
+				
+				// Reset noPID timer if we see recent activity from the parser thread
+				// (e.g. it updated last_progress_at while resolving or initializing)
+				if !lastProgressAt.IsZero() && time.Since(lastProgressAt) < 30*time.Second {
+					noPIDSince = time.Now()
+				}
+
 				if time.Since(noPIDSince) >= 90*time.Second {
 					reason := strings.TrimSpace(progress.Error)
 					if reason == "" {

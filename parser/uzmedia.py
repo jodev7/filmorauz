@@ -21,9 +21,10 @@ DEBUG = os.environ.get("PARSER_DEBUG", "false").lower() == "true"
 
 
 class UzmediaParser(BaseParser):
-    """Parser for uzmedia.tv - uses uCoz GET for search"""
+    """Parser for uzmedia.tv (dynamic mirror via source_config)"""
     
-    BASE_URL = "https://uzmedia.tv"
+    # Mirror is resolved from source_config.py
+    BASE_URL = get_base_url("uzmedia") or "https://uzmedia.tv"
     
     # GET search endpoint
     SEARCH_ENDPOINT = "/search/"

@@ -25,11 +25,12 @@ logger = logging.getLogger(__name__)
 
 
 _EP_HREF_RE = re.compile(
-    r"https?://[^\"'<> ]+/episode/(\d+)/(\d+)\.html|/episode/(\d+)/(\d+)\.html",
+    r"/episode/(\d+)/(\d+)(?:\.html)?|/video/(\d+)-.*?-(\d+)-qism(?:\.html)?|/serie/(\d+)-.*?(\d+)-qism(?:\.html)?",
     re.IGNORECASE,
 )
 _FILE_RE = re.compile(r'file\s*:\s*["\']([^"\']+)["\']', re.IGNORECASE)
-_EP_LABEL_RE = re.compile(r"(\d{1,3})\s*-\s*qism", re.IGNORECASE)
+_EP_LABEL_RE = re.compile(r"(\d{1,4})(?:\s*-\s*|\s+)?qism", re.IGNORECASE)
+_EP_LABEL_RE_ALT = re.compile(r"qism(?:\s*-\s*|\s+)?(\d{1,4})", re.IGNORECASE)
 _SEASON_LABEL_RE = re.compile(r"(\d{1,2})\s*-\s*(?:fasl|mavsum|sezon)", re.IGNORECASE)
 _SEASON_TITLE_RE = re.compile(r"(\d{1,2})\s*(?:fasl|mavsum|sezon)", re.IGNORECASE)
 
@@ -56,8 +57,11 @@ def _parse_episode_href(href: str) -> Optional[tuple[str, int]]:
     m = _EP_HREF_RE.search(href or "")
     if not m:
         return None
-    group_id = m.group(1) or m.group(3)
-    episode_no = m.group(2) or m.group(4)
+    
+    # Try different groups from the regex
+    group_id = m.group(1) or m.group(3) or m.group(5)
+    episode_no = m.group(2) or m.group(4) or m.group(6)
+    
     if not group_id or not episode_no:
         return None
     return group_id, int(episode_no)
@@ -694,6 +698,44 @@ class UzmoviSerialParser:
                 label=a.get_text(" ", strip=True),
                 season_hint=_parse_season_number(a.get("title", "") or a.get_text(" ", strip=True)),
             )
+
+        # 1.1) Parsed DOM options (dropdowns)
+        for opt in soup.find_all("option", value=True):
+            val = opt.get("value", "")
+            # Option values often look like "//uzmovi.me/player/playerjs.html?file=https://..."
+            if "file=" in val:
+                try:
+                    file_url = val.split("file=", 1)[1]
+                    if "&" in file_url:
+                        file_url = file_url.split("&", 1)[0]
+                    
+                    label = opt.get_text(" ", strip=True)
+                    ep_match = _EP_LABEL_RE.search(label) or _EP_LABEL_RE_ALT.search(label)
+                    if ep_match:
+                        ep_no = int(ep_match.group(1))
+                        # For options, we might not have a group_id from href, 
+                        # so use a dummy one if needed, but try to parse label
+                        full_url = file_url if file_url.startswith("http") else f"https:{file_url}" if file_url.startswith("//") else file_url
+                        
+                        season_no = _parse_season_number(label) or 1
+                        identity = EpisodeIdentity(parent_source_id=source_id, season=season_no, episode=ep_no)
+                        
+                        key = (season_no, ep_no)
+                        group_map = per_group.setdefault("dropdown", {})
+                        if key not in group_map:
+                            group_map[key] = {
+                                "season": season_no,
+                                "episode": ep_no,
+                                "identity": identity.canonical_id,
+                                "title": label.strip(),
+                                "episode_url": full_url,
+                                "_group_id": "dropdown",
+                            }
+                            counts["visible"] = counts.get("visible", 0) + 1
+                except:
+                    continue
+            elif "/episode/" in val:
+                 add_candidate(val, label=opt.get_text(" ", strip=True))
 
         # 2) Data attributes
         for el in soup.find_all(attrs=True):

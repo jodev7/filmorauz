@@ -2091,8 +2091,8 @@ class ParserHandler(BaseHTTPRequestHandler):
                             state.speed_mbps = speed / (1024 * 1024) if speed > 0 else 0.0
                             state.eta_seconds = eta
                             state.file_size = downloaded
-                            if downloaded > 0:
-                                state.last_progress_at = time.time()
+                            # Always update timestamp to indicate activity
+                            state.last_progress_at = time.time()
                             state.status = "downloading"
                     
                     # PID callback to update state

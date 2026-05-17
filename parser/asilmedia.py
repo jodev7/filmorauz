@@ -244,11 +244,10 @@ def _detect_asilmedia_main_content_type(main_content: BeautifulSoup, title: str 
 
 
 class AsilmediaParser(BaseParser):
-    """Parser for asilmedia.org - DLE-based website"""
+    """Parser for asilmedia.org (dynamic mirror via source_config)"""
     
-    # IMPORTANT: Use HTTP (not HTTPS) - the site returns different results
-    # HTTP returns proper search results, HTTPS returns empty/invalid results
-    BASE_URL = "http://asilmedia.org"
+    # Mirror is resolved from source_config.py
+    BASE_URL = get_base_url("asilmedia") or "http://asilmedia.org"
     
     # DLE search endpoint - use /?do=search (GET method now)
     SEARCH_URL = BASE_URL + "/?do=search"
@@ -270,6 +269,8 @@ class AsilmediaParser(BaseParser):
         ".xfr",                   # DLE template class
         "article.dle-search",     # DLE article
         "#searchresult",          # DLE search result ID
+        "#dle-content",           # Default DLE content ID
+        ".content-main",          # Generic content area
     ]
     
     # DLE card/item selectors (priority order)
@@ -279,8 +280,10 @@ class AsilmediaParser(BaseParser):
         "article.shortstory",             # DLE article shortstory
         ".moviebox",                      # Movie box on this site
         "article:not(.carousel-card)",    # Non-carousel articles (category listing pages)
-        "article",                        # Generic article (fallback)
-        ".film-item",                     # Film items
+        "div[id*='entry']",               # Entry ID based
+        "article",                        # Any article
+        ".film-item",                     # Generic film item
+        ".shortstory",                    # General DLE class
     ]
     
     # DLE title selectors (priority order)

@@ -34,7 +34,7 @@ _VIDEO_URL_RE = re.compile(
 )
 _QUALITY_RE = re.compile(r"(\d{3,4})p", re.IGNORECASE)
 _LABEL_SEASON_EP_RE = re.compile(
-    r"(?:(\d{1,2})\s*-\s*fasl\s+)?(\d{1,4})\s*-\s*qism",
+    r"(?:(\d{1,2})\s*-\s*(?:fasl|mavsum|sezon)\s+)?(\d{1,4})\s*-\s*qism",
     re.IGNORECASE,
 )
 _FILENAME_SEASON_EP_RE = re.compile(

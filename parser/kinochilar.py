@@ -21,9 +21,10 @@ DEBUG = os.environ.get("PARSER_DEBUG", "false").lower() == "true"
 
 
 class KinochilarParser(BaseParser):
-    """Parser for kinochilar.com - uses POST for search"""
+    """Parser for kinochilar.com (dynamic mirror via source_config)"""
     
-    BASE_URL = "https://kinochilar.com"
+    # Mirror is resolved from source_config.py
+    BASE_URL = get_base_url("kinochilar") or "https://kinochilar.com"
     
     # POST search endpoint
     SEARCH_ENDPOINT = "/index.php"

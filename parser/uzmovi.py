@@ -42,9 +42,10 @@ DEBUG = os.environ.get("PARSER_DEBUG", "false").lower() == "true"
 
 
 class UzmoviParser(BaseParser):
-    """Parser for uzmovi.tv (current mirror: uzmovi.net)"""
+    """Parser for uzmovi.tv (dynamic mirror via source_config)"""
     
-    BASE_URL = "https://uzmovi.net"
+    # Mirror is resolved from source_config.py
+    BASE_URL = get_base_url("uzmovi") or "https://uzmovi.tv"
     
     # Specific card selectors (order matters - most specific first)
     CARD_SELECTORS = [
@@ -60,6 +61,7 @@ class UzmoviParser(BaseParser):
         ".search-result",
         ".item",
         "article[class]",
+        "div[class*='item']",  # Broader match
     ]
     
     # Title selectors - prioritize heading elements
@@ -68,6 +70,7 @@ class UzmoviParser(BaseParser):
         ".title a", ".film-title a",
         ".short-title a",
         ".card-title a",
+        "a[href*='/video/']", # Fallback for listing links
     ]
     
     # Image selectors
@@ -123,24 +126,39 @@ class UzmoviParser(BaseParser):
         return "movie" # Default to movie for uzmovi
     
     def search(self, query: str) -> List[SearchResult]:
-        """Search for movies on uzmovi.tv (mirror: uzmovi.net) using the site's real search form."""
+        """Search for movies on uzmovi dynamic mirror."""
         results: List[SearchResult] = []
-        # Modern Uzmovi mirror uses /search?q=...
-        search_url = f"{self.BASE_URL}/search"
-        params = {
-            "q": query,
-        }
-        try:
-            # Establish session cookies first (required by uzmovi.net)
-            self.session.get(self.BASE_URL, timeout=30)
+        
+        config = get_source_config("uzmovi")
+        search_paths = config.get("search_paths", ["/search"])
+        search_method = config.get("search_method", "GET")
+        param_key = config.get("search_param_key", "q")
+        extra_params = config.get("search_params", {})
+        
+        # Try each search path until one works
+        for path in search_paths:
+            search_url = urljoin(self.BASE_URL, path)
+            params = {param_key: query}
+            params.update(extra_params)
             
-            response = self.session.get(search_url, params=params, timeout=30, allow_redirects=True)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.content, "lxml")
-            results = self._extract_search_results(soup, query)
-        except Exception as e:
-            logger.warning(f"[UZMOVI] search failed query={query!r}: {e}")
-            results = []
+            try:
+                # Establish session cookies first
+                self.session.get(self.BASE_URL, timeout=15)
+                
+                if search_method == "POST":
+                    response = self.session.post(search_url, data=params, timeout=20, allow_redirects=True)
+                else:
+                    response = self.session.get(search_url, params=params, timeout=20, allow_redirects=True)
+                
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.content, "lxml")
+                    results = self._extract_search_results(soup, query)
+                    if results:
+                        break # Found something
+            except Exception as e:
+                logger.debug(f"[UZMOVI] search attempt failed url={search_url}: {e}")
+                continue
+                
         logger.info(f"[SEARCH] source=uzmovi query={query} items_found={len(results)}")
         return results
     

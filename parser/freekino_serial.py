@@ -23,11 +23,11 @@ logger = logging.getLogger(__name__)
 
 # -(\d+)-fasl-(\d+)-qism  OR  -(\d+)-qism  (season defaults to 1 if omitted)
 _EP_URL_RE = re.compile(
-    r"/serie/\d+-[a-z0-9\-]*?(?:-(\d+)-fasl)?-(\d+)-qism",
+    r"/serie/\d+-[a-z0-9\-]*?(?:-(\d+)-(?:fasl|mavsum|sezon))?-(\d+)-qism",
     re.IGNORECASE,
 )
 _EP_URL_ANY_RE = re.compile(
-    r"https?://[^\"'<> ]+/serie/\d+-[a-z0-9\-]*?(?:-(\d+)-fasl)?-(\d+)-qism|/serie/\d+-[a-z0-9\-]*?(?:-(\d+)-fasl)?-(\d+)-qism",
+    r"https?://[^\"'<> ]+/serie/\d+-[a-z0-9\-]*?(?:-(\d+)-(?:fasl|mavsum|sezon))?-(\d+)-qism|/serie/\d+-[a-z0-9\-]*?(?:-(\d+)-(?:fasl|mavsum|sezon))?-(\d+)-qism",
     re.IGNORECASE,
 )
 

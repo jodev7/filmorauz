@@ -181,18 +181,18 @@ def _validate_m3u8_url(url: str, referer: str | None = None,
 
 
 def _resolve_stream_url(url: str, stream_type: str,
-                        referer: str | None = None) -> tuple[str, str]:
+                         referer: str | None = None, progress_callback=None) -> tuple[str, str]:
     """Validate the stream URL and, if needed, fall back to its http:// variant.
-
-    Returns (working_url, validation_note). For non-HLS streams we don't
-    parse the body — just probe the original URL and accept any 2xx.
-    Raises DownloadError if neither variant is reachable so the strategy
-    loop sees a concrete failure ("m3u8 fetch failed: <reason>") instead of
-    silently sitting at 0%.
     """
     if not url:
         raise DownloadError("empty stream URL")
 
+    logger.info(f"[RESOLVE] Resolving {stream_type} stream: {url[:60]}...")
+    if progress_callback:
+        try:
+            progress_callback(0, 0, 0, 0, 0)
+        except:
+            pass
     if stream_type == "hls":
         ok, status, err = _validate_m3u8_url(url, referer=referer)
         if ok:
@@ -1848,7 +1848,7 @@ class DownloaderService:
         # working URL — we only re-probe once.
         original_url = url
         try:
-            url, resolve_note = _resolve_stream_url(url, stream_type, referer=referer)
+            url, resolve_note = _resolve_stream_url(url, stream_type, referer=referer, progress_callback=progress_callback)
             if url != original_url:
                 logger.info(f"[DOWNLOADER] URL rewritten by resolver: {original_url[:60]} -> {url[:60]} ({resolve_note})")
             else:
@@ -1954,6 +1954,11 @@ class DownloaderService:
                 for strategy_name, strategy in strategy_builders:
                     try:
                         logger.info(f"[DOWNLOADER] Attempt {attempt}/{max_retries} using strategy={strategy_name}")
+                        
+                        # Report progress at start of strategy
+                        if progress_callback:
+                            progress_callback(0, 0, 0, 0, 0)
+                            
                         # Single, easy-to-grep marker that always carries the
                         # actual stream URL the downloader will hit. If we ever
                         # see "stuck at 0%" again, this line answers

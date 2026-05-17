@@ -234,6 +234,9 @@ def classify_media_url(url: str, headers: Dict[str, str] = None) -> str:
     uzmovi_video_domains = [
         "srv",  # srv*.uzdown.space - uzmovi's main video CDN
         "uzdown",  # Fallback for any uzdown URLs
+        "uzmovi.me",
+        "uzmovi.net",
+        "uzmovi.com",
     ]
     
     for domain in uzmovi_video_domains:
@@ -394,6 +397,10 @@ def is_valid_media_url(url: str, headers: Dict[str, str] = None) -> Tuple[bool, 
         "srv",  # srv*.uzdown.space - uzmovi's main video CDN
         "uzdown",  # Fallback for any uzdown URLs
         "uzmovi",  # uzmovi.tv video URLs
+        "uzmovi.me",
+        "uzmovi.com",
+        "qnbuz",
+        "tezkor",
     ]
     
     for domain in uzmovi_domains:
@@ -480,16 +487,20 @@ def is_valid_media_url(url: str, headers: Dict[str, str] = None) -> Tuple[bool, 
     # Check for common video hosting domains
     video_hosting_domains = [
         "uzmovi", "uzmov", "freekino", "asilmedia", "kinolar",
-        "sukit", "uzbek", "tork", "kino",
-        "cdn", "video", "stream", "media", "asset"
+        "kinochilar", "uzmedia", "sukit", "uzbek", "tork", "kino",
+        "cdn", "video", "stream", "media", "asset", "uzdown",
+        "qnbuz", "tezkor", "kinobaza"
     ]
     
     if any(domain in url_lower for domain in video_hosting_domains):
         # If it has a proper URL structure with path, it might be valid
+        # For uzmovi/uzdown, be even more lenient as they often use paths without extensions
+        is_uzmovi_related = "uzmovi" in url_lower or "uzdown" in url_lower or "srv" in url_lower
+        
         if url_lower.startswith("http") and "/" in url:
             # Check if it looks like a media URL (has path segments)
             path_segments = url_lower.split("/")
-            if len(path_segments) > 3:  # Has subdirectory, likely not homepage
+            if len(path_segments) > 3 or is_uzmovi_related:  # Has subdirectory or is uzmovi-related
                 return True, "Valid video hosting URL"
     
     # === REJECT: Unknown URLs without video indicators ===
