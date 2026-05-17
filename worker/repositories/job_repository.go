@@ -835,17 +835,17 @@ var activeIngestionStatuses = []interface{}{
 
 func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 	// Downloads have two watchdog windows:
-	//   - zero-byte starts fail/retry after 30 seconds so "Downloading 0%" does
+	//   - zero-byte starts fail/retry after 90 seconds so "Downloading 0%" does
 	//     not sit silently until the broad stale sweep.
 	//   - downloads that have moved bytes keep the older 5 minute stall window.
-	zeroByteStartThreshold := 30 * time.Second
+	zeroByteStartThreshold := 90 * time.Second
 	downloadStaleThreshold := 5 * time.Minute
 	zeroByteStartCutoff := time.Now().Add(-zeroByteStartThreshold)
 	downloadStaleCutoff := time.Now().Add(-downloadStaleThreshold)
 	now := time.Now()
 	totalRecovered := int64(0)
 
-	// Match downloading jobs that either never moved bytes in the first 30s, or
+	// Match downloading jobs that either never moved bytes in the first 90s, or
 	// stopped moving bytes for the broader stale window.
 	cursor, err := r.collection.Find(ctx, bson.M{
 		"status": models.IngestionStatusDownloading,
@@ -899,7 +899,7 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 	for _, job := range staleDownloadJobs {
 		reason := "Recovered stale download job after no progress for 5 minutes; returned to queue automatically"
 		if job.Progress <= 1 && job.DownloadedBytes <= 0 {
-			reason = "Download watchdog: progress stayed at 0 with no active downloader PID for 30 seconds; returned to queue automatically"
+			reason = "Download watchdog: progress stayed at 0 with no active downloader PID for 90 seconds; returned to queue automatically"
 		}
 		newRetry := job.RetryCount + 1
 		updateSet := bson.M{

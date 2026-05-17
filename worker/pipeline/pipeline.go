@@ -1615,7 +1615,7 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 				if noPIDSince.IsZero() {
 					noPIDSince = time.Now()
 				}
-				if time.Since(noPIDSince) >= 30*time.Second {
+				if time.Since(noPIDSince) >= 90*time.Second {
 					reason := strings.TrimSpace(progress.Error)
 					if reason == "" {
 						reason = strings.TrimSpace(progress.StderrTail)

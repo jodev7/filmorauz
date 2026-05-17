@@ -570,6 +570,7 @@ class DDownloaderIntegration:
             downloaded_bytes = 0
             total_bytes = 0
             last_progress_reported = -1
+            last_bytes_reported = -1
 
             _stop_watchdog = threading.Event()
             _killed_for_stuck = threading.Event()
@@ -688,8 +689,9 @@ class DDownloaderIntegration:
                             except ValueError:
                                 pass
 
-                        if progress > last_progress_reported:
+                        if progress > last_progress_reported or downloaded_bytes > last_bytes_reported:
                             last_progress_reported = progress
+                            last_bytes_reported = downloaded_bytes
                             elapsed = time.time() - start_time
                             speed = downloaded_bytes / elapsed if elapsed > 0 and downloaded_bytes else 0
                             eta = int((total_bytes - downloaded_bytes) / speed) if speed > 0 and total_bytes > 0 else 0
@@ -845,6 +847,7 @@ class DDownloaderIntegration:
         downloaded_bytes = 0
         total_bytes = 0
         last_progress_reported = -1
+        last_bytes_reported = -1
         total_duration_ms = 0
         
         # Parse patterns for ffmpeg output
@@ -925,15 +928,15 @@ class DDownloaderIntegration:
                         # Estimate progress based on time (ffmpeg downloads at ~1x speed for remux)
                         progress = min(int((current_time_ms / total_duration_ms) * 100), 99)
                         
-                        if progress > last_progress_reported:
+                        if progress > last_progress_reported or estimated_downloaded > last_bytes_reported:
                             last_progress_reported = progress
+                            last_bytes_reported = estimated_downloaded
                             elapsed = time.time() - start_time
                             speed = (current_time_ms / 1000) / elapsed if elapsed > 0 else 0  # bytes per second estimate
                             eta = int((total_duration_ms - current_time_ms) / 1000 / speed) if speed > 0 else 0
                             
                             # Estimate bytes based on speed and duration
                             estimated_total = int(speed * (total_duration_ms / 1000)) if speed > 0 else 0
-                            estimated_downloaded = int(speed * elapsed) if speed > 0 else 0
                             
                             if progress_callback:
                                 progress_callback(progress, estimated_downloaded, estimated_total, speed, eta)
@@ -1470,6 +1473,7 @@ class DDownloaderIntegration:
         backend_job_id: Optional[str] = None,
         progress_callback=None,
         pid_callback=None,
+        debug_callback=None,
     ) -> str:
         """
         Download a direct MP4 URL using ffmpeg (primary tool for signed CDN URLs).
@@ -1680,6 +1684,7 @@ class DDownloaderIntegration:
         backend_job_id: Optional[str] = None,
         referer: Optional[str] = None,
         max_retries: int = 3,
+        progress_callback=None,
         pid_callback=None,
         debug_callback=None,
         inactivity_timeout: int = 300,

@@ -86,23 +86,29 @@ func runFFmpegWithProgressTimeout(cmd *exec.Cmd, stderrBuf *bytes.Buffer, inacti
 		scanDone <- scanner.Err()
 	}()
 
+	done := make(chan struct{})
 	watchdogDone := make(chan struct{})
 	go func() {
 		defer close(watchdogDone)
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
-			last := time.Unix(0, lastActivity.Load())
-			if time.Since(last) < inactivityTimeout {
-				continue
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				last := time.Unix(0, lastActivity.Load())
+				if time.Since(last) >= inactivityTimeout {
+					log.Printf("[ffmpeg] inactivity timeout after %s, killing process pid=%d", inactivityTimeout, cmd.Process.Pid)
+					_ = cmd.Process.Kill()
+					return
+				}
 			}
-			log.Printf("[ffmpeg] inactivity timeout after %s, killing process pid=%d", inactivityTimeout, cmd.Process.Pid)
-			_ = cmd.Process.Kill()
-			return
 		}
 	}()
 
 	waitErr := cmd.Wait()
+	close(done)
 	<-watchdogDone
 	scanErr := <-scanDone
 	if scanErr != nil {
@@ -441,9 +447,18 @@ func fileExists(path string) bool {
 
 // createBaseVideo creates an intermediate base video with logo overlay applied
 func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int)) error {
-	log.Printf("[HLS] Creating base video: cut=%ds, logo overlay, input=%s", cutSeconds, inputPath)
+	log.Printf("[HLS] Creating base video: requested_cut=%ds, logo overlay, input=%s", cutSeconds, inputPath)
 	log.Printf("[CHECKPOINT] raw_downloaded_input_path: %s", inputPath)
 	log.Printf("[HLS] NOTE: No watermark removal - using source video directly")
+
+	// Get total output duration (input minus cut) for progress mapping
+	inputDurationMs, err := p.getVideoDurationMs(inputPath)
+	if err != nil {
+		log.Printf("[HLS] WARNING: Failed to get input duration: %v", err)
+	} else if inputDurationMs > 0 && int64(cutSeconds)*1000 >= inputDurationMs {
+		log.Printf("[HLS] WARNING: Input duration (%d ms) is less than cut seconds (%d s), skipping cut", inputDurationMs, cutSeconds)
+		cutSeconds = 0
+	}
 
 	// Video chain: ensure even dimensions for H.264 (required by libx264).
 	videoChain := "scale=trunc(iw/2)*2:trunc(ih/2)*2"
@@ -539,8 +554,6 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 	cmd := exec.Command("ffmpeg", ffmpegArgs...)
 	var stderrBuf bytes.Buffer
 
-	// Get total output duration (input minus cut) for progress mapping
-	inputDurationMs, _ := p.getVideoDurationMs(inputPath)
 	cutMs := int64(cutSeconds) * 1000
 	totalMs := inputDurationMs - cutMs
 	if totalMs <= 0 {

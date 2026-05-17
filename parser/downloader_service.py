@@ -766,7 +766,7 @@ class DownloaderService:
                 return f"{ref_match.group(1)}p"
         return "auto"
 
-    def _download_mp4(self, url: str, output_path: str, job_id: str | None = None, backend_job_id: str | None = None, referer: str | None = None) -> str:
+    def _download_mp4(self, url: str, output_path: str, job_id: str | None = None, backend_job_id: str | None = None, referer: str | None = None, progress_callback=None) -> str:
         """
         Download mp4 with parallel streaming support.
         Uses 8-thread parallel download if server supports range requests,
@@ -788,14 +788,14 @@ class DownloaderService:
         
         if supports_range and total_size > 10 * 1024 * 1024:  # Use parallel for files > 10MB
             logger.info(f"[DOWNLOAD] Using PARALLEL download ({PARALLEL_THREADS} threads) for {total_size} bytes")
-            return self._parallel_download_mp4(url, output_path, total_size, headers, job_id, backend_job_id)
+            return self._parallel_download_mp4(url, output_path, total_size, headers, job_id, backend_job_id, progress_callback=progress_callback)
         else:
             logger.info(f"[DOWNLOAD] Using SINGLE-THREAD download (range not supported or file too small)")
-            return self._single_download_mp4(url, output_path, headers, job_id, backend_job_id)
+            return self._single_download_mp4(url, output_path, headers, job_id, backend_job_id, progress_callback=progress_callback)
     
     
     def _parallel_download_mp4(self, url: str, output_path: str, total_size: int, headers: dict, 
-                                 job_id: str | None, backend_job_id: str | None) -> str:
+                                 job_id: str | None, backend_job_id: str | None, progress_callback=None) -> str:
         """Download using parallel threads with HTTP Range requests."""
         global g_downloaded_bytes, g_total_bytes, g_start_time
         
@@ -847,6 +847,8 @@ class DownloaderService:
         
         # Progress callback
         def on_progress(progress: int, downloaded: int, total: int, speed: float, eta: int):
+            if progress_callback:
+                progress_callback(progress, downloaded, total, speed, eta)
             if job_id:
                 self.progress.update(job_id, {
                     "status": "downloading",
@@ -941,7 +943,7 @@ class DownloaderService:
     
     
     def _single_download_mp4(self, url: str, output_path: str, headers: dict, 
-                              job_id: str | None, backend_job_id: str | None) -> str:
+                              job_id: str | None, backend_job_id: str | None, progress_callback=None) -> str:
         """Single-thread fallback download (original implementation)."""
         
         logger.info(f"[DOWNLOAD] Starting streaming download: url={url[:50]}..., job_id={job_id}, backend_job_id={backend_job_id}")
@@ -1062,6 +1064,9 @@ class DownloaderService:
                         )
                         
                         if should_update:
+                            if progress_callback:
+                                progress_callback(progress_percent, downloaded_bytes, total_bytes, speed_bytes_per_sec, eta_seconds)
+                                
                             # Log only occasionally to reduce overhead
                             if progress_percent % 10 == 0 or progress_percent == 1:
                                 logger.info(f"[PROGRESS] job_id={backend_job_id}, downloaded={downloaded_bytes}, progress={progress_percent}%")
@@ -1148,7 +1153,7 @@ class DownloaderService:
                 })
             raise DownloadError(f"Download failed: {str(e)}")
 
-    def _download_manifest(self, url: str, output_path: str, job_id: str | None = None, backend_job_id: str | None = None, referer: str | None = None, pid_callback=None, debug_callback=None) -> str:
+    def _download_manifest(self, url: str, output_path: str, job_id: str | None = None, backend_job_id: str | None = None, referer: str | None = None, progress_callback=None, pid_callback=None, debug_callback=None) -> str:
         """
         Download HLS/DASH manifest using ffmpeg.
         This is a robust, reliable method for downloading streaming content.
@@ -1164,6 +1169,9 @@ class DownloaderService:
             job_id: Internal job ID for progress tracking
             backend_job_id: Backend job ID for progress reporting
             referer: Optional referer header
+            progress_callback: Optional callback for progress updates
+            pid_callback: Optional callback for PID
+            debug_callback: Optional callback for debug info
             
         Returns:
             Path to downloaded file
@@ -1401,6 +1409,9 @@ class DownloaderService:
 
                     speed_bps = int(current_total_size / elapsed) if elapsed > 0 and current_total_size > 0 else 0
 
+                    if progress_callback:
+                        progress_callback(progress_percent, current_total_size, 0, speed_bps, eta_seconds)
+
                     if job_id:
                         self.progress.update(job_id, {
                             "status": "downloading",
@@ -1547,6 +1558,7 @@ class DownloaderService:
         job_id: str | None = None,
         backend_job_id: str | None = None,
         referer: str | None = None,
+        progress_callback=None,
         pid_callback=None,
         debug_callback=None,
     ) -> str:
@@ -1555,12 +1567,12 @@ class DownloaderService:
         """
         if DDdownloaderIntegration is None:
             raise DownloadError("DDownloader integration not available for aria2c")
-        
+
         logger.info(f"[ARIA2C] _download_mp4_with_aria2c: url={url[:60]}...")
-        
+
         # Create DDownloader integration instance
         dd = DDdownloaderIntegration(download_dir=self.download_dir)
-        
+
         # Use the DDownloader integration's aria2c for MP4
         result = dd.smart_download(
             url=url,
@@ -1569,10 +1581,10 @@ class DownloaderService:
             backend_job_id=backend_job_id,
             referer=referer,
             max_retries=3,
+            progress_callback=progress_callback,
             pid_callback=pid_callback,
             debug_callback=debug_callback,
-        )
-        
+        )        
         if not result.success:
             raise DownloadError(f"aria2c download failed: {result.error}")
 
@@ -1589,6 +1601,7 @@ class DownloaderService:
         job_id: str | None = None,
         backend_job_id: str | None = None,
         referer: str | None = None,
+        progress_callback=None,
         pid_callback=None,
         debug_callback=None,
     ) -> str:
@@ -1627,7 +1640,6 @@ class DownloaderService:
         
         # Create DDownloader integration instance
         dd = DDdownloaderIntegration(download_dir=self.download_dir)
-        
         # Use the DDownloader integration
         result = dd.smart_download(
             url=url,
@@ -1636,6 +1648,7 @@ class DownloaderService:
             backend_job_id=backend_job_id,
             referer=referer,
             max_retries=3,
+            progress_callback=progress_callback,
             pid_callback=pid_callback,
             debug_callback=debug_callback,
             inactivity_timeout=DOWNLOAD_INACTIVITY_TIMEOUT_SECONDS,
@@ -1892,6 +1905,7 @@ class DownloaderService:
             strategy_builders.append(("alternative_manifest", lambda attempt_job_id: self._download_manifest(
                 url, output_path,
                 job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
+                progress_callback=progress_callback,
                 pid_callback=pid_callback, debug_callback=debug_callback,
             )))
         elif stream_type in ("hls", "dash", "ism"):
@@ -1904,6 +1918,7 @@ class DownloaderService:
             strategy_builders.append(("m3u8_ffmpeg", lambda attempt_job_id: self._download_manifest(
                 url, output_path,
                 job_id=attempt_job_id, backend_job_id=backend_job_id, referer=referer,
+                progress_callback=progress_callback,
                 pid_callback=pid_callback, debug_callback=debug_callback,
             )))
             strategy_builders.append(("alternative_direct", lambda attempt_job_id: self._download_mp4(
