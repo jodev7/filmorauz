@@ -922,31 +922,49 @@ def choose_best_media_candidate(
         "unknown": 50,
     }
     
-    # Quality priority map
+    # Quality priority map. Includes the labels normalize_quality_label can
+    # emit plus a few aliases sources use directly ("2k", "fhd", "hd", "sd").
     quality_priority = {
-        "4k": 400,
-        "2160p": 400,
+        "4k": 500,
+        "2160p": 500,
+        "2k": 400,
+        "1440p": 400,
         "1080p": 300,
+        "fhd": 300,
         "720p": 200,
+        "hd": 200,
         "480p": 100,
+        "sd": 100,
         "360p": 50,
         "240p": 25,
+        "original": 350,  # treat as "best the source offers"
+        "source": 350,
         "auto": 10,
         "unknown": 0,
     }
     
     def score_candidate(candidate: MediaCandidate) -> Tuple[int, int, float]:
-        """Calculate score for a candidate. Higher is better."""
+        """Calculate score for a candidate. Higher is better.
+
+        Quality is the primary axis: a 1080p mp4 must outrank a 720p m3u8.
+        Type is the tie-breaker — useful when two candidates have the same
+        resolution (manifests preferred over single-file mp4 for resume).
+        prefer_quality still takes precedence when the caller explicitly
+        asked for a specific tier.
+        """
         type_score = type_priority.get(candidate.type, 0)
-        quality_score = quality_priority.get(candidate.quality.lower() if isinstance(candidate.quality, str) else "auto", 0)
+        raw_quality = candidate.quality.lower() if isinstance(candidate.quality, str) else "auto"
+        quality_score = quality_priority.get(raw_quality, 0)
         confidence = candidate.confidence
-        
-        # Prefer quality if specified
+
+        # Honor explicit caller-requested quality with a hard boost (still wins).
         if prefer_quality:
-            if candidate.quality.lower() == prefer_quality.lower():
-                quality_score += 500
-        
-        return (type_score, quality_score, confidence)
+            if raw_quality == prefer_quality.lower():
+                quality_score += 1000
+
+        # Quality first, then type, then confidence. Returning the tuple in
+        # this order makes Python's lexicographic compare do the right thing.
+        return (quality_score, type_score, confidence)
     
     # Sort by score (descending)
     candidates.sort(key=score_candidate, reverse=True)
