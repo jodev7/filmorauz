@@ -1005,6 +1005,7 @@ class DDownloaderIntegration:
         referer: Optional[str] = None,
         progress_callback=None,
         pid_callback=None,
+        debug_callback=None,
     ) -> str:
         """
         Download MP4 files using aria2c with parallel connections.
