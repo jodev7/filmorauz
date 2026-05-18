@@ -905,14 +905,18 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 		updateSet := bson.M{
 			"updated_at": now,
 		}
-		updateUnset := unset(
-			"completed_at",
+		// Build the $unset list per-branch. The failed branch SETS completed_at,
+		// so it must NOT also appear in $unset — MongoDB rejects the whole
+		// update with "Updating the path 'completed_at' would create a conflict
+		// at 'completed_at'", which left stuck jobs at retry=2 status=downloading
+		// forever (the recovery couldn't progress them to failed or back to queued).
+		unsetFields := []string{
 			"worker_id",
 			"locked_until",
 			"download_started_at",
 			"last_progress_at",
 			"processing_started_at",
-		)
+		}
 		logLevel := "warning"
 		logMessage := reason
 
@@ -926,6 +930,8 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 			logMessage = finalReason
 			logLevel = "error"
 		} else {
+			// Re-queued jobs have no completion timestamp; clear any leftover.
+			unsetFields = append(unsetFields, "completed_at")
 			updateSet["status"] = models.IngestionStatusQueued
 			updateSet["stage"] = "download"
 			updateSet["progress"] = 0
@@ -941,7 +947,7 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 		_, updateErr := r.collection.UpdateByID(ctx, job.ID, bson.M{
 			"$inc":   bson.M{"retry_count": 1},
 			"$set":   updateSet,
-			"$unset": updateUnset,
+			"$unset": unset(unsetFields...),
 			"$push": bson.M{"logs": models.IngestionLog{
 				Timestamp: now,
 				Message:   logMessage,
@@ -986,13 +992,14 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 			updateSet := bson.M{
 				"updated_at": now,
 			}
-			updateUnset := unset(
-				"completed_at",
+			// Same conflict guard as the download branch: don't $unset
+			// completed_at when we're $set-ing it.
+			unsetFields := []string{
 				"worker_id",
 				"locked_until",
 				"processing_started_at",
 				"last_progress_at",
-			)
+			}
 			logLevel := "warning"
 			logMessage := stage.message
 
@@ -1011,12 +1018,13 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 				updateSet["progress"] = 100
 				updateSet["error"] = stage.message
 				updateSet["message"] = "Waiting for processing retry"
+				unsetFields = append(unsetFields, "completed_at")
 			}
 
 			_, updateErr := r.collection.UpdateByID(ctx, job.ID, bson.M{
 				"$inc":   bson.M{"retry_count": 1},
 				"$set":   updateSet,
-				"$unset": updateUnset,
+				"$unset": unset(unsetFields...),
 				"$push": bson.M{"logs": models.IngestionLog{
 					Timestamp: now,
 					Message:   logMessage,
