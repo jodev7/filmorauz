@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import Hls from "hls.js";
+import RoomPlayer from "@/components/watch-room/RoomPlayer";
 import {
   getWatchRoom,
   listRoomMessages,
@@ -187,8 +187,39 @@ export default function WatchRoomPage() {
         for (const m of e.members) map[m.userID] = m;
         setMembers(map);
       } else if (e.type === "member_joined") {
+        // System chat entry — "{name} room'ga qo'shildi".
+        if (e.member.userID !== user?.id) {
+          setChat((prev) => [
+            ...prev,
+            {
+              userID: "system",
+              userName: "system",
+              kind: "text",
+              text: `${e.member.userName || "Foydalanuvchi"} room'ga qo'shildi`,
+              createdAt: new Date().toISOString(),
+            },
+          ]);
+        }
         setMembers((prev) => ({ ...prev, [e.member.userID]: e.member }));
       } else if (e.type === "member_left") {
+        const leavingMember = members[e.userID];
+        const leaverName = leavingMember?.userName || "Foydalanuvchi";
+        const wasHost = !!leavingMember?.isHost;
+        // System chat entry — host gets a special "60s grace" notice.
+        setChat((prev) => [
+          ...prev,
+          {
+            userID: "system",
+            userName: "system",
+            kind: "text",
+            text: wasHost
+              ? `${leaverName} (host) chiqib ketdi. 60 soniya ichida qaytmasa room yopiladi.`
+              : e.kicked
+                ? `${leaverName} room'dan chiqarildi`
+                : `${leaverName} chiqib ketdi`,
+            createdAt: new Date().toISOString(),
+          },
+        ]);
         setMembers((prev) => {
           const next = { ...prev };
           delete next[e.userID];
@@ -219,66 +250,34 @@ export default function WatchRoomPage() {
     }
   }, [events, user?.id]);
 
-  // ── Attach HLS.js for .m3u8 sources. Native <video> can't play HLS on
-  // Chrome/Firefox/Edge; without this the player just shows black.
+  // ── Sync guest player to host state via the RoomPlayer's sync API ───
+  const syncApiRef = useRef<{ setPosition: (s: number) => void; setPlaying: (p: boolean) => void } | null>(null);
   useEffect(() => {
-    const v = videoRef.current;
-    if (!v || !videoSrc) return;
-    const isHls = /\.m3u8(\?|$)/i.test(videoSrc) || videoSrc.includes("/master.m3u8");
-    if (!isHls) {
-      v.src = videoSrc;
-      return;
-    }
-    // Safari plays HLS natively.
-    if (v.canPlayType("application/vnd.apple.mpegurl")) {
-      v.src = videoSrc;
-      return;
-    }
-    if (!Hls.isSupported()) {
-      v.src = videoSrc;
-      return;
-    }
-    const hls = new Hls({ enableWorker: true });
-    hls.loadSource(videoSrc);
-    hls.attachMedia(v);
-    return () => {
-      hls.destroy();
-    };
-  }, [videoSrc]);
-
-  // ── Sync video element to host state (guests only) ───────────────────
-  useEffect(() => {
-    if (isHost) return;
-    const v = videoRef.current;
-    if (!v || !state) return;
+    if (isHost || !state || !syncApiRef.current) return;
     const target = effectivePosition(state);
-    const drift = Math.abs(v.currentTime - target);
-    if (drift > 1.5) v.currentTime = target;
-    if (state.isPlaying && v.paused) v.play().catch(() => undefined);
-    else if (!state.isPlaying && !v.paused) v.pause();
+    syncApiRef.current.setPosition(target);
+    syncApiRef.current.setPlaying(state.isPlaying);
   }, [state, isHost]);
 
-  // ── Host: broadcast player events ────────────────────────────────────
-  const onHostPlay = useCallback(() => {
-    if (!isHost) return;
-    const v = videoRef.current;
-    if (!v) return;
-    sendHostAction("play", v.currentTime);
-  }, [isHost, sendHostAction]);
-
-  const onHostPause = useCallback(() => {
-    if (!isHost) return;
-    const v = videoRef.current;
-    if (!v) return;
-    sendHostAction("pause", v.currentTime);
-  }, [isHost, sendHostAction]);
-
-  const onHostSeeked = useCallback(() => {
-    if (!isHost) return;
-    const v = videoRef.current;
-    if (!v) return;
-    sendHostAction("seek", v.currentTime);
-  }, [isHost, sendHostAction]);
+  // ── Host broadcasts player events to the hub ────────────────────────
+  const onHostPlay = useCallback(
+    (pos: number) => {
+      if (isHost) sendHostAction("play", pos);
+    },
+    [isHost, sendHostAction],
+  );
+  const onHostPause = useCallback(
+    (pos: number) => {
+      if (isHost) sendHostAction("pause", pos);
+    },
+    [isHost, sendHostAction],
+  );
+  const onHostSeek = useCallback(
+    (pos: number) => {
+      if (isHost) sendHostAction("seek", pos);
+    },
+    [isHost, sendHostAction],
+  );
 
   // Chat auto-scroll
   useEffect(() => {
@@ -429,15 +428,20 @@ export default function WatchRoomPage() {
         <div className="space-y-3">
           <div className="bg-black rounded-xl overflow-hidden aspect-video relative">
             {videoSrc ? (
-              <video
-                ref={videoRef}
+              <RoomPlayer
                 src={videoSrc}
-                controls={isHost}
-                playsInline
-                className="w-full h-full"
-                onPlay={onHostPlay}
-                onPause={onHostPause}
-                onSeeked={onHostSeeked}
+                title={room.content_title || ""}
+                posterUrl={room.content_poster}
+                isHost={isHost}
+                onHostPlay={onHostPlay}
+                onHostPause={onHostPause}
+                onHostSeek={onHostSeek}
+                registerSync={(api) => {
+                  syncApiRef.current = api;
+                }}
+                fullscreenOverlay={
+                  <FullscreenChatOverlay reactions={floatingReactions} chat={chat} />
+                }
               />
             ) : (
               <div className="flex items-center justify-center h-full">
@@ -445,20 +449,14 @@ export default function WatchRoomPage() {
               </div>
             )}
 
-            {/* Floating reactions overlay */}
+            {/* Floating reactions overlay — visible outside fullscreen too. */}
             <div className="pointer-events-none absolute inset-0 overflow-hidden">
               {floatingReactions.map((r, idx) => (
                 <FloatingReactionBubble key={r.id} reaction={r} index={idx} />
               ))}
             </div>
 
-            {!isHost && (
-              <div className="absolute top-2 left-2 bg-black/60 text-[10px] sm:text-xs px-2 py-1 rounded">
-                Mehmon — host boshqaradi
-              </div>
-            )}
-            {!isHost && <GuestVolumeControl videoRef={videoRef} />}
-            <div className="absolute top-2 right-2 flex items-center gap-2">
+            <div className="absolute top-2 right-2 flex items-center gap-2 z-20 pointer-events-none">
               <span
                 className={`text-[10px] sm:text-xs px-2 py-1 rounded ${
                   connected ? "bg-green-500/80" : "bg-yellow-500/80"
@@ -574,11 +572,17 @@ export default function WatchRoomPage() {
               {chat.length === 0 && <p className="text-xs text-gray-500">Hozircha xabar yo&apos;q.</p>}
               {chat.map((c, idx) => (
                 <div key={idx} className="text-sm">
-                  <span className="text-gray-400 text-xs">{c.userName || "Foydalanuvchi"}: </span>
-                  {c.kind === "emoji" ? (
-                    <span className="text-2xl">{c.emoji}</span>
+                  {c.userID === "system" ? (
+                    <span className="text-[11px] text-gray-500 italic">• {c.text}</span>
                   ) : (
-                    <span className="break-words">{c.text}</span>
+                    <>
+                      <span className="text-gray-400 text-xs">{c.userName || "Foydalanuvchi"}: </span>
+                      {c.kind === "emoji" ? (
+                        <span className="text-2xl">{c.emoji}</span>
+                      ) : (
+                        <span className="break-words">{c.text}</span>
+                      )}
+                    </>
                   )}
                 </div>
               ))}
@@ -702,12 +706,96 @@ export default function WatchRoomPage() {
           80% { opacity: 1; }
           100% { transform: translateY(-180px); opacity: 0; }
         }
+        @keyframes twitchSlide {
+          0% { transform: translateX(20px); opacity: 0; }
+          100% { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes twitchFade {
+          0% { opacity: 1; }
+          100% { opacity: 0; }
+        }
       `}</style>
 
       {/* Inert imports kept for tree-shaking sanity */}
       <span className="hidden">
         <Smile className="w-0 h-0" />
       </span>
+    </div>
+  );
+}
+
+// FullscreenChatOverlay shows the most recent chat / reaction entries
+// floating over the video in fullscreen mode — Twitch-style. Each entry
+// auto-fades after ~10s. The list keeps re-bottom-aligned and never
+// captures pointer events so the user can still click the video.
+function FullscreenChatOverlay({
+  chat,
+  reactions,
+}: {
+  chat: RoomChatEntry[];
+  reactions: FloatingReaction[];
+}) {
+  const [visible, setVisible] = useState<Array<{ key: string; node: React.ReactNode; until: number }>>(
+    [],
+  );
+  const lastChatLen = useRef(0);
+  const lastReactionLen = useRef(0);
+
+  useEffect(() => {
+    const now = Date.now();
+    const additions: Array<{ key: string; node: React.ReactNode; until: number }> = [];
+    if (chat.length > lastChatLen.current) {
+      for (let i = lastChatLen.current; i < chat.length; i++) {
+        const c = chat[i];
+        additions.push({
+          key: `c-${i}-${c.createdAt}`,
+          until: now + 10_000,
+          node:
+            c.userID === "system" ? (
+              <span className="italic text-gray-300">• {c.text}</span>
+            ) : c.kind === "emoji" ? (
+              <span>
+                <span className="text-gray-300 text-xs mr-1">{c.userName}:</span>
+                <span className="text-xl">{c.emoji}</span>
+              </span>
+            ) : (
+              <span>
+                <span className="text-gray-300 text-xs mr-1">{c.userName}:</span>
+                <span>{c.text}</span>
+              </span>
+            ),
+        });
+      }
+      lastChatLen.current = chat.length;
+    }
+    if (reactions.length > lastReactionLen.current) {
+      lastReactionLen.current = reactions.length;
+    }
+    if (additions.length === 0) return;
+    setVisible((prev) => [...prev, ...additions].slice(-8));
+  }, [chat, reactions]);
+
+  // Sweep expired entries every 500ms.
+  useEffect(() => {
+    const t = setInterval(() => {
+      const now = Date.now();
+      setVisible((prev) => prev.filter((e) => e.until > now));
+    }, 500);
+    return () => clearInterval(t);
+  }, []);
+
+  if (visible.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1.5 text-white text-sm">
+      {visible.map((e) => (
+        <div
+          key={e.key}
+          className="bg-black/60 backdrop-blur-sm rounded px-2 py-1.5 max-w-full"
+          style={{ animation: "twitchSlide 0.3s ease-out, twitchFade 1.5s ease-out 8.5s forwards" }}
+        >
+          {e.node}
+        </div>
+      ))}
     </div>
   );
 }

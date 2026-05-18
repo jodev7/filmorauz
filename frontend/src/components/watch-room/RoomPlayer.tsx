@@ -1,0 +1,420 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import Hls from "hls.js";
+import {
+  Play,
+  Pause,
+  Volume2,
+  VolumeX,
+  Maximize,
+  Minimize,
+  Settings,
+  Loader2,
+  Crown,
+  RotateCcw,
+} from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
+
+type QualityLevel = { index: number; label: string; height: number };
+
+type Props = {
+  src: string;
+  title?: string;
+  posterUrl?: string;
+  isHost: boolean;
+  isMoviePremium?: boolean;
+  // Host events — forwarded to the room hub by the parent.
+  onHostPlay?: (positionSeconds: number) => void;
+  onHostPause?: (positionSeconds: number) => void;
+  onHostSeek?: (positionSeconds: number) => void;
+  // Programmatic state sync — parent calls these on guest clients when the
+  // hub broadcasts host actions. We accept it via a setter ref instead of a
+  // useImperativeHandle so the parent stays declarative.
+  registerSync?: (api: { setPosition: (sec: number) => void; setPlaying: (p: boolean) => void }) => void;
+  // Slot for the Twitch-style chat overlay rendered inside fullscreen.
+  fullscreenOverlay?: React.ReactNode;
+};
+
+export default function RoomPlayer({
+  src,
+  title,
+  posterUrl,
+  isHost,
+  isMoviePremium,
+  onHostPlay,
+  onHostPause,
+  onHostSeek,
+  registerSync,
+  fullscreenOverlay,
+}: Props) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const hlsRef = useRef<Hls | null>(null);
+  const { user } = useAuth();
+
+  const [playing, setPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [volume, setVolume] = useState(1);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [buffering, setBuffering] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [qualities, setQualities] = useState<QualityLevel[]>([]);
+  const [selectedLevel, setSelectedLevel] = useState<number>(-1); // -1 = auto
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Attach HLS / set src ─────────────────────────────────────────────
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !src) return;
+    const isHls = /\.m3u8(\?|$)/i.test(src) || src.includes("/master.m3u8");
+
+    // Safari native HLS path.
+    if (!isHls || v.canPlayType("application/vnd.apple.mpegurl")) {
+      v.src = src;
+      return;
+    }
+    if (!Hls.isSupported()) {
+      v.src = src;
+      return;
+    }
+    const hls = new Hls({ enableWorker: true, startLevel: -1 });
+    hlsRef.current = hls;
+    hls.loadSource(src);
+    hls.attachMedia(v);
+    hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
+      const seen = new Set<number>();
+      const levels: QualityLevel[] = [{ index: -1, label: "Auto", height: -1 }];
+      data.levels
+        .map((l, i) => ({ index: i, height: l.height }))
+        .sort((a, b) => b.height - a.height)
+        .forEach(({ index, height }) => {
+          if (!seen.has(height)) {
+            seen.add(height);
+            levels.push({ index, label: `${height}p`, height });
+          }
+        });
+      setQualities(levels);
+    });
+    return () => {
+      hls.destroy();
+      hlsRef.current = null;
+    };
+  }, [src]);
+
+  // ── Register sync API for the parent so it can drive guests ──────────
+  useEffect(() => {
+    if (!registerSync) return;
+    registerSync({
+      setPosition: (sec: number) => {
+        const v = videoRef.current;
+        if (!v) return;
+        if (Math.abs(v.currentTime - sec) > 1.5) v.currentTime = sec;
+      },
+      setPlaying: (p: boolean) => {
+        const v = videoRef.current;
+        if (!v) return;
+        if (p && v.paused) v.play().catch(() => undefined);
+        else if (!p && !v.paused) v.pause();
+      },
+    });
+  }, [registerSync]);
+
+  // ── Local video element listeners (always wired; host broadcasts) ───
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const onPlay = () => {
+      setPlaying(true);
+      setBuffering(false);
+      if (isHost) onHostPlay?.(v.currentTime);
+    };
+    const onPause = () => {
+      setPlaying(false);
+      if (isHost) onHostPause?.(v.currentTime);
+    };
+    const onSeeked = () => {
+      if (isHost) onHostSeek?.(v.currentTime);
+    };
+    const onTime = () => setCurrentTime(v.currentTime);
+    const onDur = () => setDuration(v.duration || 0);
+    const onWaiting = () => setBuffering(true);
+    const onPlaying = () => setBuffering(false);
+    v.addEventListener("play", onPlay);
+    v.addEventListener("pause", onPause);
+    v.addEventListener("seeked", onSeeked);
+    v.addEventListener("timeupdate", onTime);
+    v.addEventListener("durationchange", onDur);
+    v.addEventListener("waiting", onWaiting);
+    v.addEventListener("playing", onPlaying);
+    return () => {
+      v.removeEventListener("play", onPlay);
+      v.removeEventListener("pause", onPause);
+      v.removeEventListener("seeked", onSeeked);
+      v.removeEventListener("timeupdate", onTime);
+      v.removeEventListener("durationchange", onDur);
+      v.removeEventListener("waiting", onWaiting);
+      v.removeEventListener("playing", onPlaying);
+    };
+  }, [isHost, onHostPlay, onHostPause, onHostSeek]);
+
+  // ── Fullscreen listener ─────────────────────────────────────────────
+  useEffect(() => {
+    const onFs = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
+
+  // ── Auto-hide controls after 2.5s of mouse idleness ─────────────────
+  useEffect(() => {
+    if (controlsTimer.current) clearTimeout(controlsTimer.current);
+    if (!controlsVisible) return;
+    controlsTimer.current = setTimeout(() => {
+      if (playing) setControlsVisible(false);
+    }, 2500);
+    return () => {
+      if (controlsTimer.current) clearTimeout(controlsTimer.current);
+    };
+  }, [controlsVisible, playing]);
+
+  const showControls = () => setControlsVisible(true);
+
+  // ── Actions ─────────────────────────────────────────────────────────
+  const togglePlay = () => {
+    if (!isHost) return; // guests can't drive playback
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) v.play().catch(() => undefined);
+    else v.pause();
+  };
+
+  const onScrubChange = (frac: number) => {
+    if (!isHost) return;
+    const v = videoRef.current;
+    if (!v || !duration) return;
+    v.currentTime = duration * frac;
+  };
+
+  const toggleMute = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.muted = !v.muted;
+    setMuted(v.muted);
+  };
+
+  const onVolumeChange = (val: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.volume = val;
+    setVolume(val);
+    if (val > 0 && v.muted) {
+      v.muted = false;
+      setMuted(false);
+    }
+  };
+
+  const toggleFullscreen = async () => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => undefined);
+    } else {
+      await el.requestFullscreen().catch(() => undefined);
+    }
+  };
+
+  const setQuality = (idx: number) => {
+    const hls = hlsRef.current;
+    if (hls) {
+      hls.currentLevel = idx;
+    }
+    setSelectedLevel(idx);
+    setShowSettings(false);
+  };
+
+  const qualityLabel = useMemo(
+    () => qualities.find((q) => q.index === selectedLevel)?.label ?? "Auto",
+    [qualities, selectedLevel],
+  );
+
+  const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+  const formatTime = (t: number) => {
+    if (!isFinite(t) || t < 0) return "0:00";
+    const h = Math.floor(t / 3600);
+    const m = Math.floor((t % 3600) / 60);
+    const s = Math.floor(t % 60);
+    return h > 0
+      ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+      : `${m}:${String(s).padStart(2, "0")}`;
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative w-full h-full bg-black select-none group"
+      onMouseMove={showControls}
+      onMouseLeave={() => playing && setControlsVisible(false)}
+      onClick={togglePlay}
+    >
+      <video
+        ref={videoRef}
+        poster={posterUrl}
+        playsInline
+        className="w-full h-full"
+      />
+
+      {/* Buffering spinner */}
+      {buffering && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <Loader2 className="w-10 h-10 animate-spin text-white/80" />
+        </div>
+      )}
+
+      {/* Title + premium badge (top) */}
+      <div
+        className={`absolute top-0 left-0 right-0 p-3 bg-gradient-to-b from-black/70 to-transparent transition-opacity ${
+          controlsVisible ? "opacity-100" : "opacity-0"
+        }`}
+      >
+        <div className="flex items-center gap-2 text-white">
+          {isMoviePremium && (
+            <span className="flex items-center gap-1 text-[10px] bg-yellow-500/30 text-yellow-200 px-1.5 py-0.5 rounded">
+              <Crown className="w-3 h-3" /> PREMIUM
+            </span>
+          )}
+          {user && (user as { isPremium?: boolean }).isPremium && (
+            <span className="text-[10px] bg-yellow-500/30 text-yellow-200 px-1.5 py-0.5 rounded flex items-center gap-1">
+              <Crown className="w-3 h-3" /> PRO
+            </span>
+          )}
+          <span className="text-sm font-medium truncate flex-1">{title}</span>
+          {!isHost && (
+            <span className="text-[10px] bg-black/40 px-2 py-0.5 rounded">Mehmon</span>
+          )}
+        </div>
+      </div>
+
+      {/* Floating big-play overlay when paused (host only) */}
+      {!playing && isHost && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="bg-black/50 rounded-full p-4">
+            <Play className="w-10 h-10 text-white" />
+          </div>
+        </div>
+      )}
+
+      {/* Bottom controls */}
+      <div
+        className={`absolute bottom-0 left-0 right-0 p-2 sm:p-3 bg-gradient-to-t from-black/80 to-transparent transition-opacity ${
+          controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"
+        }`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Progress bar */}
+        <div
+          className={`relative h-1.5 bg-white/20 rounded-full mb-2 ${isHost ? "cursor-pointer" : "cursor-not-allowed"}`}
+          onClick={(e) => {
+            if (!isHost) return;
+            const rect = e.currentTarget.getBoundingClientRect();
+            const frac = (e.clientX - rect.left) / rect.width;
+            onScrubChange(Math.max(0, Math.min(1, frac)));
+          }}
+        >
+          <div
+            className="absolute inset-y-0 left-0 bg-brand-red rounded-full"
+            style={{ width: `${progressPct}%` }}
+          />
+        </div>
+
+        <div className="flex items-center gap-2 sm:gap-3 text-white">
+          {/* Play/Pause (host only) */}
+          {isHost ? (
+            <button onClick={togglePlay} className="hover:text-brand-red transition-colors">
+              {playing ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
+            </button>
+          ) : (
+            <span className="text-xs opacity-70 px-1">
+              {playing ? <Pause className="w-4 h-4 inline" /> : <Play className="w-4 h-4 inline" />}
+            </span>
+          )}
+
+          {/* Volume */}
+          <button onClick={toggleMute} className="hover:text-brand-red transition-colors">
+            {muted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+          </button>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={muted ? 0 : volume}
+            onChange={(e) => onVolumeChange(Number(e.target.value))}
+            className="w-14 sm:w-24 accent-brand-red"
+          />
+
+          {/* Time */}
+          <span className="text-xs tabular-nums">
+            {formatTime(currentTime)} / {formatTime(duration)}
+          </span>
+
+          <div className="flex-1" />
+
+          {/* Quality */}
+          <div className="relative">
+            <button
+              onClick={() => setShowSettings((v) => !v)}
+              className="flex items-center gap-1 text-xs hover:text-brand-red transition-colors"
+            >
+              <Settings className="w-4 h-4" /> {qualityLabel}
+            </button>
+            {showSettings && qualities.length > 0 && (
+              <div className="absolute right-0 bottom-7 bg-black/90 border border-white/10 rounded-lg overflow-hidden min-w-[100px]">
+                {qualities.map((q) => (
+                  <button
+                    key={q.index}
+                    onClick={() => setQuality(q.index)}
+                    className={`block w-full px-3 py-1.5 text-left text-xs hover:bg-white/10 ${
+                      q.index === selectedLevel ? "text-brand-red font-semibold" : "text-white"
+                    }`}
+                  >
+                    {q.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Restart (host) */}
+          {isHost && (
+            <button
+              onClick={() => {
+                const v = videoRef.current;
+                if (v) v.currentTime = 0;
+              }}
+              className="hover:text-brand-red transition-colors"
+              title="Boshidan"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
+          )}
+
+          {/* Fullscreen */}
+          <button onClick={toggleFullscreen} className="hover:text-brand-red transition-colors">
+            {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
+          </button>
+        </div>
+      </div>
+
+      {/* Fullscreen-only chat overlay slot */}
+      {isFullscreen && fullscreenOverlay && (
+        <div className="absolute top-12 right-3 z-10 pointer-events-none w-72 max-w-[50%]">
+          {fullscreenOverlay}
+        </div>
+      )}
+    </div>
+  );
+}
