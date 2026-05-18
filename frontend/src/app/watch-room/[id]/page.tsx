@@ -441,23 +441,23 @@ export default function WatchRoomPage() {
   return (
     <div className="min-h-screen bg-brand-dark text-white">
       <Navbar />
-      <div className="max-w-7xl mx-auto px-2 sm:px-4 pt-2">
-        <div className="flex items-center gap-3">
+      <div className="max-w-7xl mx-auto px-2 sm:px-4 pt-4 sm:pt-6">
+        <div className="flex items-center gap-2 mb-3">
           <button
             onClick={() => router.back()}
-            className="flex items-center gap-1.5 px-2 py-1.5 text-xs sm:text-sm text-gray-400 hover:text-white transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm text-gray-300 bg-brand-card hover:bg-brand-card/70 border border-brand-border rounded-lg transition-colors"
           >
             <ArrowLeft className="w-4 h-4" /> Orqaga
           </button>
           <Link
             href="/"
-            className="flex items-center gap-1.5 px-2 py-1.5 text-xs sm:text-sm text-gray-400 hover:text-white transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm text-gray-300 bg-brand-card hover:bg-brand-card/70 border border-brand-border rounded-lg transition-colors"
           >
             <Home className="w-4 h-4" /> Bosh sahifa
           </Link>
         </div>
       </div>
-      <div className="max-w-7xl mx-auto p-2 sm:p-4 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-3 lg:gap-4">
+      <div className="max-w-7xl mx-auto px-2 sm:px-4 pb-4 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-3 lg:gap-4">
         {/* ── Player + info ── */}
         <div className="space-y-3">
           <div className="bg-black rounded-xl overflow-hidden aspect-video relative">

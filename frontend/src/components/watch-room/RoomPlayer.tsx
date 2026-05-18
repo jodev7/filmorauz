@@ -90,38 +90,52 @@ export default function RoomPlayer({
     hlsRef.current = hls;
     hls.loadSource(src);
     hls.attachMedia(v);
-    hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
-      // Build the level list. Prefer dedup-by-height, but if the manifest
-      // omits height (some encoders do — Backblaze HLS), fall back to
-      // labeling by bitrate so the picker isn't useless. The level index
-      // is the ORIGINAL hls index so setQuality → hls.currentLevel maps
-      // cleanly.
-      const levels: QualityLevel[] = [{ index: -1, label: "Auto", height: -1 }];
+    const buildLevels = (raw: Array<{ height: number; bitrate: number }>) => {
+      const out: QualityLevel[] = [{ index: -1, label: "Auto", height: -1 }];
       const seenHeights = new Set<number>();
-      const sortedByHeight = [...data.levels]
+      const sorted = raw
         .map((l, idx) => ({ idx, height: l.height || 0, bitrate: l.bitrate || 0 }))
         .sort((a, b) => (b.height || b.bitrate) - (a.height || a.bitrate));
-      sortedByHeight.forEach(({ idx, height, bitrate }) => {
+      sorted.forEach(({ idx, height, bitrate }) => {
         if (height > 0 && !seenHeights.has(height)) {
           seenHeights.add(height);
-          levels.push({ index: idx, label: `${height}p`, height });
+          out.push({ index: idx, label: `${height}p`, height });
         } else if (height <= 0 && bitrate > 0) {
-          levels.push({
+          out.push({
             index: idx,
             label: `${Math.round(bitrate / 1000)} kbps`,
             height: bitrate,
           });
         }
       });
-      // Diagnostic so we can tell from devtools whether the manifest
-      // really only has one variant or our parsing is dropping them.
+      return out;
+    };
+    hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
       // eslint-disable-next-line no-console
-      console.log(
-        "[room player] manifest levels =",
-        data.levels.map((l) => ({ h: l.height, b: l.bitrate })),
-      );
-      setQualities(levels);
+      console.log("[room player] MANIFEST_PARSED levels =", data.levels.map((l) => ({ h: l.height, b: l.bitrate })));
+      setQualities(buildLevels(data.levels));
     });
+    // LEVEL_LOADED fires for each variant as it parses — refresh the
+    // picker in case MANIFEST_PARSED came in with stub levels and the
+    // real heights/bitrates land after sub-playlist parsing.
+    hls.on(Hls.Events.LEVEL_LOADED, () => {
+      if (hls.levels && hls.levels.length > 0) {
+        setQualities(buildLevels(hls.levels));
+      }
+    });
+    // Last-resort poll: some streams populate hls.levels after a delay
+    // that doesn't line up with either of the events above. Re-read after
+    // 1.5s to make sure the picker isn't stuck on "Auto".
+    const lateCheck = setTimeout(() => {
+      if (hls.levels && hls.levels.length > 0) {
+        // eslint-disable-next-line no-console
+        console.log(
+          "[room player] late-check hls.levels =",
+          hls.levels.map((l) => ({ h: l.height, b: l.bitrate })),
+        );
+        setQualities((curr) => (curr.length > 1 ? curr : buildLevels(hls.levels)));
+      }
+    }, 1500);
     hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
       // Keep the picker label in sync when auto-bitrate switches.
       if (selectedLevel === -1) {
@@ -131,6 +145,7 @@ export default function RoomPlayer({
       setSelectedLevel(data.level);
     });
     return () => {
+      clearTimeout(lateCheck);
       hls.destroy();
       hlsRef.current = null;
     };
