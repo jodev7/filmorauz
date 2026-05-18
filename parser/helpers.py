@@ -391,8 +391,17 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
     u = (url or "").lower()
     src = (source or "").lower()
 
-    # 1. Check URL first for obvious indicators
-    if any(p in u for p in ["/serial/", "/seriya/", "/qism/", "/fasl/", "/mavsum/", "/serie/", "/episode/"]):
+    # 1. Check URL first for obvious indicators.
+    # Includes both singular ("/serial/") and plural ("seriallar",
+    # "tarjima-seriallar", "tarjima_seriallar") forms used by DLE/uCoz sites
+    # (kinochilar.com, uzmedia.tv, asilmedia, kinolar) where the catalog
+    # section is named with the plural.
+    if any(p in u for p in [
+        "/serial/", "/seriya/", "/qism/", "/fasl/", "/mavsum/",
+        "/serie/", "/episode/",
+        "seriallar", "tarjima-seriallar", "tarjima_seriallar",
+        "/dorama", "/serialy/",
+    ]):
         return ("serial", "URL pattern match")
 
     # ── Soup signals ────────────────────────────────────────────────
