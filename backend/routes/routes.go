@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler) {
+func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler) {
 	r.GET("/sitemap.xml", sitemapHandler.GetSitemap)
 
 	api := r.Group("/api")
@@ -20,6 +20,34 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	// Image proxy for upstream hosts with broken TLS / HTTP-only delivery
 	// (e.g. uzmedia.tv self-signed cert). Whitelisted hosts only.
 	api.GET("/proxy-image", handlers.ProxyImage)
+
+	// ── Watch rooms (synchronized co-viewing) ─────────────────────────
+	// Public read endpoints (no auth required for public room browse).
+	api.GET("/rooms", watchRoomHandler.ListPublicRooms)
+	api.GET("/rooms/:id", watchRoomHandler.GetRoom)
+	api.GET("/rooms/:id/messages", watchRoomHandler.ListMessages)
+	// WebSocket — token comes via ?token=... since browsers can't set headers
+	// on the upgrade request reliably.
+	r.GET("/ws/rooms/:id", func(c *gin.Context) {
+		watchRoomHandler.WebSocket(c, func(tok string) (string, bool) {
+			claims, err := authService.ValidateToken(tok)
+			if err != nil {
+				return "", false
+			}
+			uid, ok := claims["userID"].(string)
+			if !ok || uid == "" {
+				return "", false
+			}
+			return uid, true
+		})
+	})
+	// Auth-required mutations.
+	roomAuth := api.Group("/rooms")
+	roomAuth.Use(middleware.RequireAuth(authService))
+	{
+		roomAuth.POST("", watchRoomHandler.CreateRoom)
+		roomAuth.POST("/:id/invites", watchRoomHandler.CreateInvite)
+	}
 
 	// Telegram Auth routes (public)
 	api.POST("/auth/telegram/register", authHandler.RegisterBotUser)

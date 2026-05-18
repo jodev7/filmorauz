@@ -20,6 +20,7 @@ const (
 	NotificationAppealRejected      NotificationType = "APPEAL_REJECTED"
 	NotificationCommentReply        NotificationType = "COMMENT_REPLY"
 	NotificationCommentLike         NotificationType = "COMMENT_LIKE"
+	NotificationRoomInvite          NotificationType = "ROOM_INVITE"
 )
 
 // Notification represents a user notification

@@ -1,0 +1,71 @@
+package models
+
+import (
+	"time"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
+
+// WatchRoom is a synchronized-playback room (Phase 1 + 2).
+// The host (owner) drives the timeline; guests can only adjust their own
+// audio volume. Chat + emoji live in room_messages.
+type WatchRoom struct {
+	ID              primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	OwnerID         primitive.ObjectID `bson:"owner_id" json:"owner_id"`
+	OwnerName       string             `bson:"owner_name,omitempty" json:"owner_name,omitempty"`
+	OwnerAvatar     string             `bson:"owner_avatar,omitempty" json:"owner_avatar,omitempty"`
+	OwnerIsPremium  bool               `bson:"owner_is_premium,omitempty" json:"owner_is_premium,omitempty"`
+	ContentType     string             `bson:"content_type" json:"content_type"` // "movie" | "episode"
+	ContentID       primitive.ObjectID `bson:"content_id" json:"content_id"`
+	ContentTitle    string             `bson:"content_title,omitempty" json:"content_title,omitempty"`
+	ContentPoster   string             `bson:"content_poster,omitempty" json:"content_poster,omitempty"`
+	ContentSlug     string             `bson:"content_slug,omitempty" json:"content_slug,omitempty"`
+	// SeriesID + SeasonID for episode rooms — lets the frontend build the
+	// /watch URL without an extra round-trip.
+	SeriesID  primitive.ObjectID `bson:"series_id,omitempty" json:"series_id,omitempty"`
+	SeasonID  primitive.ObjectID `bson:"season_id,omitempty" json:"season_id,omitempty"`
+	Visibility string            `bson:"visibility" json:"visibility"` // "public" | "private"
+	MaxMembers int               `bson:"max_members" json:"max_members"`
+
+	// Playback state — broadcast verbatim to guests over WS.
+	PositionSeconds  float64   `bson:"position_seconds" json:"position_seconds"`
+	IsPlaying        bool      `bson:"is_playing" json:"is_playing"`
+	LastStateUpdate  time.Time `bson:"last_state_update" json:"last_state_update"`
+
+	Status    string    `bson:"status" json:"status"` // "active" | "closed"
+	CreatedAt time.Time `bson:"created_at" json:"created_at"`
+	UpdatedAt time.Time `bson:"updated_at" json:"updated_at"`
+	ClosedAt  *time.Time `bson:"closed_at,omitempty" json:"closed_at,omitempty"`
+	ExpiresAt time.Time `bson:"expires_at" json:"expires_at"` // automatic cleanup at this point
+}
+
+// WatchRoomInvite is a single shareable invite link for a room. One row per
+// invite code so the same room can have multiple, each with its own TTL or
+// max-uses budget.
+type WatchRoomInvite struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	RoomID    primitive.ObjectID `bson:"room_id" json:"room_id"`
+	Code      string             `bson:"code" json:"code"` // random short code
+	CreatedBy primitive.ObjectID `bson:"created_by" json:"created_by"`
+	// TargetUserID is set when an invite is addressed to a specific account
+	// (the in-app "invite by user ID" flow). Zero for shareable-link invites.
+	TargetUserID primitive.ObjectID `bson:"target_user_id,omitempty" json:"target_user_id,omitempty"`
+	MaxUses   int                `bson:"max_uses" json:"max_uses"` // 0 = unlimited (within ExpiresAt)
+	Uses      int                `bson:"uses" json:"uses"`
+	ExpiresAt time.Time          `bson:"expires_at" json:"expires_at"`
+	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+}
+
+// WatchRoomMessage is one chat/emoji entry inside a room. Persisted only for
+// premium-host rooms (free hosts get session-only chat).
+type WatchRoomMessage struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	RoomID    primitive.ObjectID `bson:"room_id" json:"room_id"`
+	UserID    primitive.ObjectID `bson:"user_id" json:"user_id"`
+	UserName  string             `bson:"user_name,omitempty" json:"user_name,omitempty"`
+	UserAvatar string            `bson:"user_avatar,omitempty" json:"user_avatar,omitempty"`
+	Kind      string             `bson:"kind" json:"kind"` // "text" | "emoji"
+	Text      string             `bson:"text,omitempty" json:"text,omitempty"`
+	Emoji     string             `bson:"emoji,omitempty" json:"emoji,omitempty"`
+	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+}

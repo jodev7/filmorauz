@@ -205,6 +205,12 @@ func main() {
 	banAppealRepo := repositories.NewBanAppealRepository(db)
 	banAppealHandler := handlers.NewBanAppealHandler(banAppealRepo, banHistoryRepo, userRepo, notificationService)
 
+	// Watch-room repository, hub, handler
+	watchRoomRepo := repositories.NewWatchRoomRepository(db)
+	watchRoomHub := services.NewWatchRoomHub(watchRoomRepo)
+	watchRoomHub.StartHeartbeat()
+	watchRoomHandler := handlers.NewWatchRoomHandler(watchRoomRepo, userRepo, movieRepo, seriesRepo, notificationService, watchRoomHub)
+
 	// Ad repository and handler (Phase 2: telegramService wired after it's initialized below)
 	adRepo := repositories.NewAdRepository(db)
 	telegramPostRepo := repositories.NewTelegramPostRepository(db)
@@ -326,7 +332,7 @@ func main() {
 	}
 
 	// Register routes
-	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler)
+	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler)
 
 	// Start premium cleanup background job (runs every 10 minutes)
 	go startPremiumCleanupJob(userRepo, notificationService)
