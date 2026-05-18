@@ -77,7 +77,7 @@ def _parse_season_number(text: str) -> int:
 class UzmoviSerialParser:
     def __init__(self) -> None:
         self._movie = UzmoviParser()
-        self.base_url = getattr(self._movie, "BASE_URL", None) or "https://uzmovi.tv"
+        self.base_url = getattr(self._movie, "BASE_URL", None) or "https://uzmovi.com"
 
     @property
     def session(self):

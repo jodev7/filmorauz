@@ -77,7 +77,7 @@ SOURCES = {
         "search_param_key": "story",
     },
     "uzmedia": {
-        "base_url": "https://uzmedia.tv",
+        "base_url": "http://uzmedia.tv",
         "search_paths": [
             "/search/",
             "/search",
