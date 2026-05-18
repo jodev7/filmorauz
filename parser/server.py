@@ -867,16 +867,27 @@ def _report_backend_failure(job_id: str, message: str):
 
 
 def _resolve_claimed_job_video(job: dict, parser_base_url: str) -> tuple[str, str]:
-    video_url = (job.get("video_url") or "").strip()
+    stored_video_url = (job.get("video_url") or "").strip()
     referer = ""
     metadata = job.get("metadata") or {}
     if isinstance(metadata, dict):
         referer = (metadata.get("video_page_url") or "").strip()
 
-    if video_url:
+    source = (job.get("source") or "").lower()
+    detail_url = (job.get("detail_url") or "").strip()
+
+    # Sources that hand out short-lived signed CDN URLs (e.g. freekino's
+    # a*.video-cdn.org with ?md5=&expires=, asilmedia's fayllar*.ru). The
+    # stored video_url is captured at /details time and frequently expires
+    # before the worker claims the job — re-resolve so we hand a fresh URL
+    # to the downloader. Other sources can keep using the stored value.
+    sources_with_signed_urls = {"freekino", "asilmedia"}
+    needs_refresh = source in sources_with_signed_urls and detail_url
+
+    if stored_video_url and not needs_refresh:
         if not referer:
-            referer = (job.get("detail_url") or "").strip()
-        return video_url, referer
+            referer = detail_url
+        return stored_video_url, referer
 
     params = {
         "source": job.get("source", ""),
