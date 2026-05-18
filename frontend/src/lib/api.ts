@@ -1798,6 +1798,7 @@ export interface ParsedMetadata {
 export interface IngestionJob {
   id: string;
   movie_id?: string;
+  title?: string;
   source: string;
   source_id: string;
   detail_url: string;

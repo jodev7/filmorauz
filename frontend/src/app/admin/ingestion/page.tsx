@@ -1868,6 +1868,7 @@ function JobsTab({
       progress: getJobProgress(job),
       source: job.source || "unknown",
       source_id: job.source_id || "",
+      title: job.title || "",
       metadata: job.metadata,
       downloaded_bytes: typeof job.downloaded_bytes === "number" ? job.downloaded_bytes : 0,
       total_bytes: typeof job.total_bytes === "number" ? job.total_bytes : 0,
@@ -1931,8 +1932,11 @@ function JobsTab({
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <h4 className="font-medium text-white text-sm truncate">
-                  {safeJob.metadata?.title || safeJob.source_id}{episodeInfo}
+                  {safeJob.title || safeJob.metadata?.title || safeJob.source_id}{episodeInfo}
                 </h4>
+                {safeJob.source_id && (
+                  <span className="text-[10px] text-gray-500 shrink-0 font-mono">#{safeJob.source_id}</span>
+                )}
                 <span className={`px-1.5 py-0.5 rounded text-xs ${statusConfig.color} text-white shrink-0`}>
                   {statusConfig.label}
                 </span>
@@ -2007,10 +2011,13 @@ function JobsTab({
             <StatusIcon className={`w-5 h-5 ${activeStage === "parsing" || activeStage === "downloading" || activeStage === "download" ? "animate-spin" : ""}`} />
           </div>
           <div className="flex-1">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h3 className="font-semibold text-white">
-                {safeJob.metadata?.title || safeJob.source_id}
+                {safeJob.title || safeJob.metadata?.title || safeJob.source_id}
               </h3>
+              {safeJob.source_id && (
+                <span className="text-xs text-gray-500 font-mono">#{safeJob.source_id}</span>
+              )}
               <span className={`px-2 py-0.5 rounded text-xs ${statusConfig.color} text-white`}>
                 {statusConfig.label}
               </span>
