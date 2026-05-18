@@ -3963,3 +3963,111 @@ export async function adminGetSuggestionStats(
   if (!res.ok) throw new Error("Statistikani olishda xatolik");
   return res.json();
 }
+
+// ── Watch rooms (synchronized co-viewing) ─────────────────────────
+
+export type RoomVisibility = "public" | "private";
+
+export interface WatchRoom {
+  id: string;
+  owner_id: string;
+  owner_name?: string;
+  owner_avatar?: string;
+  owner_is_premium?: boolean;
+  content_type: "movie" | "episode";
+  content_id: string;
+  content_title?: string;
+  content_poster?: string;
+  content_slug?: string;
+  series_id?: string;
+  season_id?: string;
+  visibility: RoomVisibility;
+  max_members: number;
+  position_seconds: number;
+  is_playing: boolean;
+  last_state_update: string;
+  status: "active" | "closed";
+  created_at: string;
+  expires_at: string;
+}
+
+export interface WatchRoomInvite {
+  id: string;
+  room_id: string;
+  code: string;
+  target_user_id?: string;
+  max_uses: number;
+  uses: number;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface WatchRoomMessage {
+  id: string;
+  room_id: string;
+  user_id: string;
+  user_name?: string;
+  user_avatar?: string;
+  kind: "text" | "emoji";
+  text?: string;
+  emoji?: string;
+  created_at: string;
+}
+
+export async function createWatchRoom(
+  token: string,
+  input: { content_type: "movie" | "episode"; content_id: string; visibility?: RoomVisibility },
+): Promise<WatchRoom> {
+  const res = await fetch(`${API_URL}/rooms`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Failed to create room");
+  }
+  return res.json();
+}
+
+export async function getWatchRoom(id: string): Promise<WatchRoom> {
+  const res = await fetch(`${API_URL}/rooms/${id}`);
+  if (!res.ok) throw new Error("Room not found");
+  return res.json();
+}
+
+export async function listPublicRooms(): Promise<{ items: WatchRoom[] }> {
+  const res = await fetch(`${API_URL}/rooms`);
+  if (!res.ok) throw new Error("Failed to list rooms");
+  return res.json();
+}
+
+export async function createRoomInvite(
+  token: string,
+  roomID: string,
+  opts: { target_user_id?: string; max_uses?: number } = {},
+): Promise<WatchRoomInvite> {
+  const res = await fetch(`${API_URL}/rooms/${roomID}/invites`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(opts),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Failed to create invite");
+  }
+  return res.json();
+}
+
+export async function listRoomMessages(roomID: string): Promise<{ items: WatchRoomMessage[] }> {
+  const res = await fetch(`${API_URL}/rooms/${roomID}/messages`);
+  if (!res.ok) throw new Error("Failed to list messages");
+  return res.json();
+}
+
+export function getRoomWebSocketURL(roomID: string, token: string, inviteCode?: string): string {
+  const base = (API_URL || "").replace(/\/api\/?$/, "").replace(/^http/, "ws");
+  const params = new URLSearchParams({ token });
+  if (inviteCode) params.set("invite", inviteCode);
+  return `${base}/ws/rooms/${roomID}?${params.toString()}`;
+}

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Clock, Calendar, Heart, Eye, Crown } from "lucide-react";
 import VideoPlayer from "@/components/VideoPlayer";
+import WatchTogetherButton from "@/components/WatchTogetherButton";
 import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveUnifiedWatchProgress, getWatchProgress, resetWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, getProtectedMediaAccess, Ad, Movie } from "@/lib/api";
 import { pickWeightedRandomAd } from "@/lib/ads-utils";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
@@ -655,6 +656,17 @@ export default function WatchPageClient({
           {movie.quality && (
             <span className="text-brand-red font-bold">{movie.quality}</span>
           )}
+          {movie && (() => {
+            const isEp = (movie as unknown as { type?: string }).type === "episode";
+            const cid = isEp ? (progressTargetIdProp || movie.id) : movie.id;
+            return (
+              <WatchTogetherButton
+                contentType={isEp ? "episode" : "movie"}
+                contentID={cid}
+                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-brand-card border border-brand-border hover:border-brand-red rounded-md text-xs text-white transition-colors"
+              />
+            );
+          })()}
         </div>
       </div>
 
