@@ -2025,6 +2025,23 @@ export async function retryIngestionJob(
   }
 }
 
+export async function deleteIngestionJob(token: string, jobId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/ingestion/jobs/${jobId}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    let msg = "Failed to delete job";
+    try {
+      const err = await res.json();
+      msg = err.error || msg;
+    } catch {
+      /* keep default */
+    }
+    throw new Error(msg);
+  }
+}
+
 // ── Catalog & Source Import Types ───────────────────────────────────────
 
 export interface CatalogItem {

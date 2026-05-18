@@ -1393,14 +1393,33 @@ func (h *IngestionHandler) ParserClaimJob(c *gin.Context) {
 	})
 }
 
-// DeleteIngestionJob deletes a job
-// DELETE /api/ingestion/jobs/:id
+// DeleteIngestionJob removes an ingestion job from MongoDB.
+// DELETE /api/admin/ingestion/jobs/:id
 func (h *IngestionHandler) DeleteIngestionJob(c *gin.Context) {
-	_ = c.Param("id")
+	id := c.Param("id")
 
-	// For now, we don't actually delete - just mark as cancelled
-	// In production, you'd implement actual deletion
-	c.JSON(http.StatusOK, gin.H{"message": "Job deletion not implemented"})
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid job id"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	res, err := h.jobRepo.GetCollection().DeleteOne(ctx, bson.M{"_id": objID})
+	if err != nil {
+		log.Printf("[INGESTION] DELETE: mongo error id=%s err=%v", id, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete job"})
+		return
+	}
+	if res.DeletedCount == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		return
+	}
+
+	log.Printf("[INGESTION] DELETE: removed job id=%s", id)
+	c.JSON(http.StatusOK, gin.H{"message": "job deleted", "id": id})
 }
 
 // Ensure types are used

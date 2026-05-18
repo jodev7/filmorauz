@@ -6,11 +6,11 @@ import {
   Search, Play, RefreshCw, CheckCircle, XCircle,
   Clock, Download, Upload, Settings, AlertTriangle, Loader2,
   ChevronLeft, ChevronRight, Film, Tv, Link, Plus, Youtube, RotateCcw,
-  Power, ChevronDown, ChevronRight as ChevronRightIcon, Database
+  Power, ChevronDown, ChevronRight as ChevronRightIcon, Database, Trash2
 } from "lucide-react";
 import {
   searchSource, createIngestionJob, getIngestionJobs,
-  retryIngestionJob, IngestionJob, SearchResult, IngestionStatus,
+  retryIngestionJob, deleteIngestionJob, IngestionJob, SearchResult, IngestionStatus,
   listCatalog, listCatalogCategories, CatalogItem, CatalogResponse, CatalogCategory,
   createManualImport, importFromCatalog, ImportConfirmationError, ImportConfirmationResponse,
   bulkImport
@@ -1781,6 +1781,7 @@ function JobsTab({
   loadingJobs,
   retryingStage,
   handleRetry,
+  handleDelete,
   currentFilter,
   handleFilterChange,
   currentPage,
@@ -1793,6 +1794,7 @@ function JobsTab({
   loadingJobs: boolean;
   retryingStage: {jobId: string; stage: string} | null;
   handleRetry: (jobId: string, stage: "download" | "process" | "upload") => void;
+  handleDelete: (jobId: string) => void;
   currentFilter: JobFilter;
   handleFilterChange: (filter: JobFilter) => void;
   currentPage: number;
@@ -1972,6 +1974,13 @@ function JobsTab({
                 ) : (
                   <Settings className="w-3 h-3 text-purple-400" />
                 )}
+              </button>
+              <button
+                onClick={() => handleDelete(safeJob.id)}
+                className="p-1.5 bg-brand-dark hover:bg-red-900/40 rounded transition-colors"
+                title="Delete job from MongoDB"
+              >
+                <Trash2 className="w-3 h-3 text-red-400" />
               </button>
             </div>
           </div>
@@ -2167,6 +2176,13 @@ function JobsTab({
                 <Upload className="w-4 h-4 text-indigo-400" />
               )}
             </button>
+            <button
+              onClick={() => handleDelete(safeJob.id)}
+              className="p-2 bg-brand-card hover:bg-red-900/40 rounded-lg transition-colors"
+              title="Delete job from MongoDB"
+            >
+              <Trash2 className="w-4 h-4 text-red-400" />
+            </button>
           </div>
         </div>
         {safeJob.error && safeJob.status !== "downloading" && activeStage !== "downloading" && (
@@ -2200,7 +2216,7 @@ function JobsTab({
         )}
       </div>
     );
-  }, [expandedLogs, handleRetry, now, retryingStage, toggleLogs]);
+  }, [expandedLogs, handleRetry, handleDelete, now, retryingStage, toggleLogs]);
 
   const paginationControls = totalPages > 1 ? (
     <div className="flex items-center justify-between gap-2 rounded-lg border border-brand-border bg-brand-card/50 px-3 py-2">
@@ -2513,7 +2529,7 @@ export default function IngestionPage() {
 
   const handleRetry = async (jobId: string, stage: "download" | "process" | "upload" = "download") => {
     if (!token) return;
-    
+
     setRetryingStage({ jobId, stage });
     try {
       await retryIngestionJob(token, jobId, stage);
@@ -2521,6 +2537,22 @@ export default function IngestionPage() {
       console.error("Retry failed:", err);
     } finally {
       setRetryingStage(null);
+    }
+  };
+
+  const handleDelete = async (jobId: string) => {
+    if (!token) return;
+    if (!window.confirm("Bu ingestion job'ni MongoDB'dan o'chirishni tasdiqlaysizmi? Bu amalni qaytarib bo'lmaydi.")) {
+      return;
+    }
+    try {
+      await deleteIngestionJob(token, jobId);
+      if (fetchJobsRef.current) {
+        fetchJobsRef.current(currentPage, currentFilter);
+      }
+    } catch (err) {
+      console.error("Delete failed:", err);
+      window.alert(err instanceof Error ? err.message : "Failed to delete job");
     }
   };
 
@@ -2676,6 +2708,7 @@ export default function IngestionPage() {
             loadingJobs={loadingJobs}
             retryingStage={retryingStage}
             handleRetry={handleRetry}
+            handleDelete={handleDelete}
             currentFilter={currentFilter}
             handleFilterChange={handleFilterChange}
             currentPage={currentPage}
