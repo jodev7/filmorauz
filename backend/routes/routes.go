@@ -17,6 +17,10 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
+	// Image proxy for upstream hosts with broken TLS / HTTP-only delivery
+	// (e.g. uzmedia.tv self-signed cert). Whitelisted hosts only.
+	api.GET("/proxy-image", handlers.ProxyImage)
+
 	// Telegram Auth routes (public)
 	api.POST("/auth/telegram/register", authHandler.RegisterBotUser)
 	api.POST("/auth/telegram/start", authHandler.TelegramAuthStart)

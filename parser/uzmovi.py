@@ -45,7 +45,7 @@ class UzmoviParser(BaseParser):
     """Parser for uzmovi.tv (dynamic mirror via source_config)"""
     
     # Mirror is resolved from source_config.py
-    BASE_URL = get_base_url("uzmovi") or "https://uzmovi.com"
+    BASE_URL = get_base_url("uzmovi") or "https://uzmovi.net"
 
     # Specific card selectors (order matters - most specific first)
     CARD_SELECTORS = [

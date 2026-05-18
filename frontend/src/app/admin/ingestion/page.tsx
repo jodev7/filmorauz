@@ -453,7 +453,7 @@ function formatLogTime(timestamp: string | undefined, now: number): string {
 }
 
 const SOURCES = [
-  { id: "uzmovi", name: "Uzmovi", url: "uzmovi.com", icon: Film },
+  { id: "uzmovi", name: "Uzmovi", url: "uzmovi.net", icon: Film },
   { id: "freekino", name: "Freekino", url: "freekino.net", icon: Film },
   { id: "asilmedia", name: "Asilmedia", url: "asilmedia.org", icon: Film },
   { id: "kinochilar", name: "Kinochilar", url: "kinochilar.com", icon: Film },

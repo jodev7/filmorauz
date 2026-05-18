@@ -7,7 +7,7 @@ from typing import List, Dict, Any
 # Source-specific search configuration
 SOURCES = {
     "uzmovi": {
-        "base_url": "https://uzmovi.com",
+        "base_url": "https://uzmovi.net",
         "search_paths": [
             "/index.php",
             "/search",
@@ -77,7 +77,7 @@ SOURCES = {
         "search_param_key": "story",
     },
     "uzmedia": {
-        "base_url": "http://uzmedia.tv",
+        "base_url": "https://uzmedia.tv",
         "search_paths": [
             "/search/",
             "/search",

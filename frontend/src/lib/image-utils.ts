@@ -131,6 +131,32 @@ function maybeUseCDNMediaHost(path: string): string {
   return `${CDN_MEDIA_BASE}${path}`;
 }
 
+// Hosts whose images can't be loaded directly by the browser (self-signed TLS
+// like uzmedia.tv's CN=nohttps cert, or HTTP-only origins blocked as mixed
+// content from an HTTPS page). Routed through the backend /api/proxy-image
+// endpoint, which fetches them server-side and re-serves over HTTPS.
+const PROXY_HOSTS = new Set([
+  "uzmedia.tv",
+  "www.uzmedia.tv",
+]);
+
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/+$/, "");
+
+function maybeProxyExternalImage(value: string): string {
+  if (!value.startsWith("http://") && !value.startsWith("https://")) return value;
+  try {
+    const u = new URL(value);
+    const host = u.host.toLowerCase().split(":")[0];
+    if (PROXY_HOSTS.has(host)) {
+      const prefix = API_BASE || "";
+      return `${prefix}/api/proxy-image?url=${encodeURIComponent(value)}`;
+    }
+  } catch {
+    /* not a parseable URL — leave it alone */
+  }
+  return value;
+}
+
 // Bare-path shortcut table: catches DB values stored without a leading slash
 // (e.g. "posters/x.jpg", "avatars/x.jpg", "images/posters/x.jpg").
 const BARE_PATH_REWRITES: Array<[string, string]> = [
@@ -210,7 +236,7 @@ export function normalizeMediaUrl(
     value.startsWith("data:") ||
     value.startsWith("blob:")
   ) {
-    return value;
+    return maybeProxyExternalImage(value);
   }
 
   return fallback;
