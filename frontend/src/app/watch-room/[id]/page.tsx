@@ -81,8 +81,11 @@ export default function WatchRoomPage() {
         }
         const msgs = await listRoomMessages(roomID).catch(() => ({ items: [] as WatchRoomMessage[] }));
         if (!cancelled) {
+          // Backend returns {items: null} when there are no messages yet —
+          // guard against the null before calling .map().
+          const items = msgs.items || [];
           setChat(
-            msgs.items.map((m) => ({
+            items.map((m) => ({
               userID: m.user_id,
               userName: m.user_name || "",
               userAvatar: m.user_avatar,

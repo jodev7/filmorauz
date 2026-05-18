@@ -21,7 +21,12 @@ export default function AdminRoomsPage() {
     setError("");
     try {
       const res = await adminListWatchRooms(token);
-      setRooms(res.items || []);
+      // Guard against null members on a room not currently held by the hub.
+      const items = (res.items || []).map((it) => ({
+        ...it,
+        members: it.members || [],
+      }));
+      setRooms(items);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Yuklashda xato");
     } finally {
