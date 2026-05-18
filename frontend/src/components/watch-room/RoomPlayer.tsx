@@ -24,6 +24,9 @@ type Props = {
   posterUrl?: string;
   isHost: boolean;
   isMoviePremium?: boolean;
+  // Stable key used to persist the host's playback position to localStorage
+  // (so a re-entry resumes where they left off). Typically `${roomID}-host`.
+  persistKey?: string;
   // Host events — forwarded to the room hub by the parent.
   onHostPlay?: (positionSeconds: number) => void;
   onHostPause?: (positionSeconds: number) => void;
@@ -42,6 +45,7 @@ export default function RoomPlayer({
   posterUrl,
   isHost,
   isMoviePremium,
+  persistKey,
   onHostPlay,
   onHostPause,
   onHostSeek,
@@ -65,6 +69,7 @@ export default function RoomPlayer({
   const [selectedLevel, setSelectedLevel] = useState<number>(-1); // -1 = auto
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Attach HLS / set src ─────────────────────────────────────────────
   useEffect(() => {
@@ -81,22 +86,22 @@ export default function RoomPlayer({
       v.src = src;
       return;
     }
-    const hls = new Hls({ enableWorker: true, startLevel: -1 });
+    const hls = new Hls({ enableWorker: true, startLevel: -1, capLevelToPlayerSize: false });
     hlsRef.current = hls;
     hls.loadSource(src);
     hls.attachMedia(v);
     hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
-      const seen = new Set<number>();
+      // Build the level list, dedup'd by height and sorted high → low.
+      // We keep the ORIGINAL hls index (not the post-sort index) so
+      // setQuality maps cleanly to hls.currentLevel.
+      const byHeight = new Map<number, number>();
+      data.levels.forEach((l, idx) => {
+        const h = l.height || 0;
+        if (h > 0 && !byHeight.has(h)) byHeight.set(h, idx);
+      });
+      const sorted = Array.from(byHeight.entries()).sort((a, b) => b[0] - a[0]);
       const levels: QualityLevel[] = [{ index: -1, label: "Auto", height: -1 }];
-      data.levels
-        .map((l, i) => ({ index: i, height: l.height }))
-        .sort((a, b) => b.height - a.height)
-        .forEach(({ index, height }) => {
-          if (!seen.has(height)) {
-            seen.add(height);
-            levels.push({ index, label: `${height}p`, height });
-          }
-        });
+      sorted.forEach(([h, idx]) => levels.push({ index: idx, label: `${h}p`, height: h }));
       setQualities(levels);
     });
     return () => {
@@ -105,23 +110,97 @@ export default function RoomPlayer({
     };
   }, [src]);
 
+  // ── Host position persistence: resume on re-entry ──────────────────
+  // Wait for metadata before applying the saved position so the seek
+  // actually lands (currentTime set before duration is known is dropped
+  // by some browsers). Only the host benefits — guests follow host state.
+  const positionLoadedRef = useRef(false);
+  useEffect(() => {
+    if (!isHost || !persistKey) return;
+    const v = videoRef.current;
+    if (!v) return;
+    const apply = () => {
+      if (positionLoadedRef.current) return;
+      positionLoadedRef.current = true;
+      try {
+        const raw = window.localStorage.getItem(`watchroom:pos:${persistKey}`);
+        const saved = raw ? Number(raw) : 0;
+        if (saved > 5 && (!v.duration || saved < v.duration - 5)) {
+          v.currentTime = saved;
+        }
+      } catch {
+        /* localStorage unavailable */
+      }
+    };
+    if (v.readyState >= 1 /* HAVE_METADATA */) apply();
+    else v.addEventListener("loadedmetadata", apply, { once: true });
+    return () => {
+      v.removeEventListener("loadedmetadata", apply);
+    };
+  }, [isHost, persistKey, src]);
+
+  // Persist host position every 5s while playing.
+  useEffect(() => {
+    if (!isHost || !persistKey) return;
+    const v = videoRef.current;
+    if (!v) return;
+    const t = setInterval(() => {
+      try {
+        if (v.currentTime > 5) {
+          window.localStorage.setItem(`watchroom:pos:${persistKey}`, String(v.currentTime));
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 5000);
+    return () => clearInterval(t);
+  }, [isHost, persistKey]);
+
   // ── Register sync API for the parent so it can drive guests ──────────
+  // Queues the latest target while the video is still loading metadata;
+  // applies it the moment readyState says we have at least HAVE_METADATA.
+  // Without this, guests on a slow connection got stuck in "Buffering…"
+  // because every host action tried to seek before the manifest was ready.
+  const pendingSyncRef = useRef<{ position: number | null; playing: boolean | null }>({
+    position: null,
+    playing: null,
+  });
   useEffect(() => {
     if (!registerSync) return;
+    const apply = () => {
+      const v = videoRef.current;
+      if (!v || v.readyState < 1) return;
+      const { position, playing } = pendingSyncRef.current;
+      if (position !== null && Math.abs(v.currentTime - position) > 1.5) {
+        v.currentTime = position;
+      }
+      if (playing !== null) {
+        if (playing && v.paused) v.play().catch(() => undefined);
+        else if (!playing && !v.paused) v.pause();
+      }
+    };
+    const v = videoRef.current;
+    if (v) {
+      v.addEventListener("loadedmetadata", apply);
+      v.addEventListener("canplay", apply);
+    }
     registerSync({
       setPosition: (sec: number) => {
-        const v = videoRef.current;
-        if (!v) return;
-        if (Math.abs(v.currentTime - sec) > 1.5) v.currentTime = sec;
+        pendingSyncRef.current.position = sec;
+        apply();
       },
       setPlaying: (p: boolean) => {
-        const v = videoRef.current;
-        if (!v) return;
-        if (p && v.paused) v.play().catch(() => undefined);
-        else if (!p && !v.paused) v.pause();
+        pendingSyncRef.current.playing = p;
+        apply();
       },
     });
-  }, [registerSync]);
+    return () => {
+      if (v) {
+        v.removeEventListener("loadedmetadata", apply);
+        v.removeEventListener("canplay", apply);
+      }
+    };
+  }, [registerSync, src]);
 
   // ── Local video element listeners (always wired; host broadcasts) ───
   useEffect(() => {
@@ -255,10 +334,28 @@ export default function RoomPlayer({
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full bg-black select-none group"
+      className={`relative w-full h-full bg-black select-none group ${
+        isMoviePremium ? "ring-2 ring-yellow-500/40" : ""
+      }`}
       onMouseMove={showControls}
       onMouseLeave={() => playing && setControlsVisible(false)}
-      onClick={togglePlay}
+      onClick={() => {
+        // Wait 220ms — if a 2nd click comes in (dblclick) we cancel the
+        // play-toggle and let onDoubleClick fire instead.
+        if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = setTimeout(() => {
+          togglePlay();
+          clickTimerRef.current = null;
+        }, 220);
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        if (clickTimerRef.current) {
+          clearTimeout(clickTimerRef.current);
+          clickTimerRef.current = null;
+        }
+        toggleFullscreen();
+      }}
     >
       <video
         ref={videoRef}

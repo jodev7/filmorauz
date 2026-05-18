@@ -246,6 +246,19 @@ export default function WatchRoomPage() {
         setTimeout(() => {
           setFloatingReactions((prev) => prev.filter((r) => r.id !== id));
         }, 3000);
+        // Also mirror the reaction into the side-chat log so users who
+        // looked away can scroll back and see who reacted with what.
+        setChat((prev) => [
+          ...prev,
+          {
+            userID: e.reaction.userID,
+            userName: e.reaction.userName,
+            userAvatar: undefined,
+            kind: "emoji",
+            emoji: e.reaction.emoji,
+            createdAt: new Date(e.reaction.ts).toISOString(),
+          },
+        ]);
       }
     }
   }, [events, user?.id]);
@@ -433,6 +446,8 @@ export default function WatchRoomPage() {
                 title={room.content_title || ""}
                 posterUrl={room.content_poster}
                 isHost={isHost}
+                isMoviePremium={!!room.owner_is_premium}
+                persistKey={isHost ? `${room.id}-${user.id}` : undefined}
                 onHostPlay={onHostPlay}
                 onHostPause={onHostPause}
                 onHostSeek={onHostSeek}
@@ -768,7 +783,24 @@ function FullscreenChatOverlay({
       }
       lastChatLen.current = chat.length;
     }
+    // Reactions are ALSO mirrored into chat (see page.tsx event handler),
+    // so we don't double-add them here — but the floating reactions
+    // payload is also bridged so the fullscreen viewer sees emoji even on
+    // a buggy chat path.
     if (reactions.length > lastReactionLen.current) {
+      for (let i = lastReactionLen.current; i < reactions.length; i++) {
+        const r = reactions[i];
+        additions.push({
+          key: `r-${r.id}`,
+          until: now + 10_000,
+          node: (
+            <span>
+              <span className="text-gray-300 text-xs mr-1">{r.userName}:</span>
+              <span className="text-xl">{r.emoji}</span>
+            </span>
+          ),
+        });
+      }
       lastReactionLen.current = reactions.length;
     }
     if (additions.length === 0) return;

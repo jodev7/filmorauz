@@ -26,8 +26,11 @@ const (
 	freeMaxMembers   = 2
 	premiumMaxMembers = 20
 	roomTTL          = 12 * time.Hour
-	inviteTTLFree    = 6 * time.Hour
-	inviteTTLPremium = 24 * time.Hour
+	// Invite links expire fast on purpose — every "Taklif yuborish" click
+	// generates a fresh one, so a stale notification card can't be reused
+	// after 10 minutes. Same TTL for free and premium hosts.
+	inviteTTLFree    = 10 * time.Minute
+	inviteTTLPremium = 10 * time.Minute
 )
 
 type WatchRoomHandler struct {

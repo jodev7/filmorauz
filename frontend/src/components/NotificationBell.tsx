@@ -63,17 +63,27 @@ export default function NotificationBell() {
   }, []);
 
   const handleNotificationClick = async (notification: Notification) => {
+    const isRoomInvite = notification.type === "ROOM_INVITE";
     // Mark as read if not already
     if (!notification.is_read && token) {
       try {
         await markNotificationAsRead(token, notification.id);
         setUnreadNotificationCount(Math.max(0, unreadNotificationCount - 1));
-        setNotifications(notifications.map(n => 
-          n.id === notification.id ? { ...n, is_read: true } : n
-        ));
+        // For room-invite notifications, remove the entry entirely once the
+        // user clicks it — the invite code embedded in action_url is single-
+        // use / short-lived so re-clicking the same card just lands on an
+        // expired link. Other notification types stay around as a read log.
+        setNotifications((prev) =>
+          isRoomInvite
+            ? prev.filter((n) => n.id !== notification.id)
+            : prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n)),
+        );
       } catch (error) {
         console.error("Failed to mark as read:", error);
       }
+    } else if (isRoomInvite) {
+      // Even a "read" room-invite shouldn't be re-clickable.
+      setNotifications((prev) => prev.filter((n) => n.id !== notification.id));
     }
 
     // Navigate to action URL
