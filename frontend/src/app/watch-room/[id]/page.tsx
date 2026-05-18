@@ -3,12 +3,15 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+import Hls from "hls.js";
 import {
   getWatchRoom,
   listRoomMessages,
   createRoomInvite,
+  searchRoomUsers,
   WatchRoom,
   WatchRoomMessage,
+  RoomUserResult,
 } from "@/lib/api";
 import {
   useRoomSocket,
@@ -55,6 +58,7 @@ export default function WatchRoomPage() {
   const [showMembers, setShowMembers] = useState(false); // mobile drawer
   const [typingUsers, setTypingUsers] = useState<Record<string, string>>({}); // userID → name
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
+  const [inviteOpen, setInviteOpen] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
@@ -125,6 +129,10 @@ export default function WatchRoomPage() {
     for (const e of newOnes) {
       if (e.type === "chat") {
         setChat((prev) => [...prev, e.chat]);
+      } else if (e.type === "member_snapshot") {
+        const map: Record<string, RoomMember> = {};
+        for (const m of e.members) map[m.userID] = m;
+        setMembers(map);
       } else if (e.type === "member_joined") {
         setMembers((prev) => ({ ...prev, [e.member.userID]: e.member }));
       } else if (e.type === "member_left") {
@@ -157,6 +165,33 @@ export default function WatchRoomPage() {
       }
     }
   }, [events, user?.id]);
+
+  // ── Attach HLS.js for .m3u8 sources. Native <video> can't play HLS on
+  // Chrome/Firefox/Edge; without this the player just shows black.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !videoSrc) return;
+    const isHls = /\.m3u8(\?|$)/i.test(videoSrc) || videoSrc.includes("/master.m3u8");
+    if (!isHls) {
+      v.src = videoSrc;
+      return;
+    }
+    // Safari plays HLS natively.
+    if (v.canPlayType("application/vnd.apple.mpegurl")) {
+      v.src = videoSrc;
+      return;
+    }
+    if (!Hls.isSupported()) {
+      v.src = videoSrc;
+      return;
+    }
+    const hls = new Hls({ enableWorker: true });
+    hls.loadSource(videoSrc);
+    hls.attachMedia(v);
+    return () => {
+      hls.destroy();
+    };
+  }, [videoSrc]);
 
   // ── Sync video element to host state (guests only) ───────────────────
   useEffect(() => {
@@ -386,7 +421,7 @@ export default function WatchRoomPage() {
             </button>
             {isHost && (
               <button
-                onClick={handleCopyInviteLink}
+                onClick={() => setInviteOpen(true)}
                 className="flex-1 px-3 py-2 bg-brand-red rounded-lg text-sm flex items-center justify-center gap-2"
               >
                 <Copy className="w-4 h-4" /> Taklif havolasi
@@ -415,7 +450,7 @@ export default function WatchRoomPage() {
               </div>
               {isHost && (
                 <button
-                  onClick={handleCopyInviteLink}
+                  onClick={() => setInviteOpen(true)}
                   className="hidden sm:flex px-3 py-2 bg-brand-red rounded-lg text-sm items-center gap-2"
                 >
                   <Copy className="w-4 h-4" /> Taklif
@@ -434,7 +469,7 @@ export default function WatchRoomPage() {
             </div>
             <ul className="mt-2 space-y-1 max-h-40 overflow-y-auto">
               {memberList.length === 0 && (
-                <li className="text-xs text-gray-500">Mehmonlar kutilmoqda…</li>
+                <li className="text-xs text-gray-500">Hozircha sizdan boshqa hech kim yo&apos;q</li>
               )}
               {memberList.map((m) => (
                 <li key={m.userID} className="flex items-center gap-2 text-sm">
@@ -449,7 +484,7 @@ export default function WatchRoomPage() {
                       {m.userName.slice(0, 1)}
                     </div>
                   )}
-                  <span className="truncate flex-1">{m.userName || "Mehmon"}</span>
+                  <span className="truncate flex-1">{m.userName || "Foydalanuvchi"}</span>
                   {m.isHost && <Crown className="w-3 h-3 text-yellow-400 shrink-0" />}
                   {isHost && !m.isHost && (
                     <button
@@ -480,7 +515,7 @@ export default function WatchRoomPage() {
               {chat.length === 0 && <p className="text-xs text-gray-500">Hozircha xabar yo&apos;q.</p>}
               {chat.map((c, idx) => (
                 <div key={idx} className="text-sm">
-                  <span className="text-gray-400 text-xs">{c.userName || "Mehmon"}: </span>
+                  <span className="text-gray-400 text-xs">{c.userName || "Foydalanuvchi"}: </span>
                   {c.kind === "emoji" ? (
                     <span className="text-2xl">{c.emoji}</span>
                   ) : (
@@ -535,6 +570,17 @@ export default function WatchRoomPage() {
         </div>
       </div>
 
+      {/* Invite modal */}
+      {inviteOpen && room && token && (
+        <InviteModal
+          token={token}
+          roomID={room.id}
+          contentTitle={room.content_title || ""}
+          onClose={() => setInviteOpen(false)}
+          onLinkReady={handleCopyInviteLink}
+        />
+      )}
+
       {/* Animation styles for floating reactions */}
       <style jsx global>{`
         @keyframes floatUp {
@@ -583,6 +629,145 @@ function GuestVolumeControl({ videoRef }: { videoRef: React.RefObject<HTMLVideoE
         }}
         className="w-16 sm:w-24"
       />
+    </div>
+  );
+}
+
+function InviteModal({
+  token,
+  roomID,
+  contentTitle,
+  onClose,
+  onLinkReady,
+}: {
+  token: string;
+  roomID: string;
+  contentTitle: string;
+  onClose: () => void;
+  onLinkReady: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<RoomUserResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [sentTo, setSentTo] = useState<Record<string, boolean>>({});
+  const [error, setError] = useState("");
+
+  // Debounced search.
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setResults([]);
+      return;
+    }
+    setSearching(true);
+    setError("");
+    const t = setTimeout(async () => {
+      try {
+        const r = await searchRoomUsers(token, q);
+        setResults(r.items || []);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Qidirishda xato");
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [query, token]);
+
+  const handleInviteUser = async (userID: string) => {
+    setError("");
+    try {
+      await createRoomInvite(token, roomID, { target_user_id: userID, max_uses: 1 });
+      setSentTo((prev) => ({ ...prev, [userID]: true }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Yuborib bo'lmadi");
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-brand-card border border-brand-border rounded-xl w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-4 py-3 border-b border-brand-border flex items-center justify-between">
+          <h3 className="font-semibold">Taklif yuborish</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-white">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-4 space-y-3">
+          <p className="text-xs text-gray-400">
+            <span className="text-white">{contentTitle}</span> uchun room
+          </p>
+          <div>
+            <p className="text-xs text-gray-400 mb-1">Foydalanuvchi ID yoki ismi:</p>
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="qidirish..."
+              className="w-full bg-brand-dark border border-brand-border rounded px-3 py-2 text-sm focus:outline-none focus:border-brand-red"
+            />
+          </div>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          <div className="max-h-60 overflow-y-auto -mx-1">
+            {searching && <p className="text-xs text-gray-500 px-1">Qidirilmoqda…</p>}
+            {!searching && query && results.length === 0 && (
+              <p className="text-xs text-gray-500 px-1">Hech kim topilmadi</p>
+            )}
+            <ul className="space-y-1">
+              {results.map((u) => (
+                <li
+                  key={u.id}
+                  className="flex items-center gap-2 px-1 py-1.5 hover:bg-brand-dark rounded"
+                >
+                  {u.avatar ? (
+                    <MediaImage
+                      src={u.avatar}
+                      alt={u.display_name}
+                      className="w-8 h-8 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-8 h-8 rounded-full bg-brand-dark flex items-center justify-center text-xs">
+                      {(u.display_name || "?").slice(0, 1)}
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm truncate">{u.display_name || "Foydalanuvchi"}</p>
+                    <p className="text-[10px] text-gray-500 font-mono truncate">{u.id}</p>
+                  </div>
+                  <button
+                    disabled={!!sentTo[u.id]}
+                    onClick={() => handleInviteUser(u.id)}
+                    className={`px-2 py-1 text-xs rounded ${
+                      sentTo[u.id]
+                        ? "bg-green-600/40 text-green-200"
+                        : "bg-brand-red text-white hover:bg-red-700"
+                    }`}
+                  >
+                    {sentTo[u.id] ? "Yuborildi" : "Taklif"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="border-t border-brand-border pt-3">
+            <button
+              onClick={() => {
+                onLinkReady();
+                onClose();
+              }}
+              className="w-full px-3 py-2 bg-brand-dark border border-brand-border hover:border-brand-red rounded-lg text-sm flex items-center justify-center gap-2"
+            >
+              <Copy className="w-4 h-4" /> Yoki taklif havolasini nusxa olish
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

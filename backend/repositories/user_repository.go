@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -129,6 +130,39 @@ type PublicUserProfile struct {
 }
 
 // GetPublicProfile returns public user profile (without sensitive data)
+// SearchByDisplayName finds users whose display_name OR username contains
+// the query (case-insensitive). Banned users are skipped. Used by the
+// watch-room invite-by-user-search UI.
+func (r *UserRepository) SearchByDisplayName(ctx context.Context, query string, limit int) ([]models.User, error) {
+	if limit <= 0 || limit > 25 {
+		limit = 10
+	}
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return nil, nil
+	}
+	pattern := primitive.Regex{Pattern: regexp.QuoteMeta(q), Options: "i"}
+	filter := bson.M{
+		"$or": bson.A{
+			bson.M{"display_name": pattern},
+			bson.M{"telegram_user": pattern},
+			bson.M{"first_name": pattern},
+		},
+		"is_banned": bson.M{"$ne": true},
+	}
+	opts := options.Find().SetLimit(int64(limit)).SetSort(bson.D{{Key: "display_name", Value: 1}})
+	cursor, err := r.col.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var users []models.User
+	if err := cursor.All(ctx, &users); err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
 func (r *UserRepository) GetPublicProfile(userID primitive.ObjectID) (*PublicUserProfile, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

@@ -122,6 +122,24 @@ func (h *WatchRoomHub) AddClient(rm *HubRoom, c *HubClient) error {
 
 	go h.writePump(c)
 	h.sendState(rm, c)
+
+	// Send a snapshot of every current member (including the just-joined
+	// client themselves) so the client UI has the full roster on entry,
+	// without waiting for someone else to (re)join.
+	rm.mu.Lock()
+	snapshot := make([]map[string]any, 0, len(rm.clients))
+	for cc := range rm.clients {
+		snapshot = append(snapshot, map[string]any{
+			"user_id":     cc.UserID.Hex(),
+			"user_name":   cc.UserName,
+			"user_avatar": cc.UserAvatar,
+			"is_host":     cc.IsHost,
+		})
+	}
+	rm.mu.Unlock()
+	h.sendTo(c, hubMessage{Type: "member_snapshot", Payload: map[string]any{"members": snapshot}})
+
+	// Then announce the new client to everyone else.
 	h.broadcast(rm, hubMessage{
 		Type: "member_joined",
 		Payload: map[string]any{

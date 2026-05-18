@@ -4049,6 +4049,19 @@ export async function adminListWatchRooms(token: string): Promise<{ items: Admin
   return res.json();
 }
 
+export interface RoomUserResult {
+  id: string;
+  display_name: string;
+  avatar: string;
+}
+export async function searchRoomUsers(token: string, q: string): Promise<{ items: RoomUserResult[] }> {
+  const res = await fetch(`${API_URL}/rooms/users/search?q=${encodeURIComponent(q)}`, {
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error("Qidirishda xato");
+  return res.json();
+}
+
 export async function kickRoomMember(token: string, roomID: string, userID: string): Promise<void> {
   const res = await fetch(`${API_URL}/rooms/${roomID}/kick`, {
     method: "POST",

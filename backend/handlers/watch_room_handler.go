@@ -509,6 +509,48 @@ func (h *WatchRoomHandler) WebSocket(c *gin.Context, validateToken func(string) 
 	}
 }
 
+// SearchUsersForInvite finds users by query (display name / username
+// substring, or an exact 24-hex ObjectID). Used by the in-room invite UI to
+// let the host pick a registered user before sending the invite.
+// GET /api/rooms/users/search?q=...
+func (h *WatchRoomHandler) SearchUsersForInvite(c *gin.Context) {
+	q := strings.TrimSpace(c.Query("q"))
+	if q == "" {
+		c.JSON(http.StatusOK, gin.H{"items": []any{}})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	type item struct {
+		ID          string `json:"id"`
+		DisplayName string `json:"display_name"`
+		Avatar      string `json:"avatar"`
+	}
+	out := make([]item, 0)
+
+	// Exact ID lookup first — admins often paste an ObjectID.
+	if oid, err := primitive.ObjectIDFromHex(q); err == nil {
+		u, _ := h.userRepo.FindByID(oid.Hex())
+		if u != nil && !u.IsBannedActive() {
+			out = append(out, item{ID: u.ID.Hex(), DisplayName: u.DisplayName, Avatar: u.PhotoURL})
+			c.JSON(http.StatusOK, gin.H{"items": out})
+			return
+		}
+	}
+
+	users, err := h.userRepo.SearchByDisplayName(ctx, q, 10)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "search failed"})
+		return
+	}
+	for i := range users {
+		u := users[i]
+		out = append(out, item{ID: u.ID.Hex(), DisplayName: u.DisplayName, Avatar: u.PhotoURL})
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out})
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────
 
 func randomCode(n int) string {

@@ -24,6 +24,11 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	// ── Watch rooms (private-invite only) ────────────────────────────
 	api.GET("/rooms/:id", watchRoomHandler.GetRoom)
 	api.GET("/rooms/:id/messages", watchRoomHandler.ListMessages)
+	// User search used by the in-room invite UI — auth-required.
+	api.GET("/rooms/users/search",
+		middleware.RequireAuth(authService),
+		watchRoomHandler.SearchUsersForInvite,
+	)
 	// WebSocket — token comes via ?token=... since browsers can't set headers
 	// on the upgrade request reliably.
 	r.GET("/ws/rooms/:id", func(c *gin.Context) {
