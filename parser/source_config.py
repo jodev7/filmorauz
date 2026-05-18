@@ -7,18 +7,18 @@ from typing import List, Dict, Any
 # Source-specific search configuration
 SOURCES = {
     "uzmovi": {
-        "base_url": "http://uzmovi.me",
+        "base_url": "https://uzmovi.com",
         "search_paths": [
-            "/index.php?do=search",
+            "/index.php",
             "/search",
             "/",
         ],
-        "search_method": "POST",  # DLE sites often use POST
+        "search_method": "GET",  # uzmovi.com → uzmovi.net 404s on POST; GET with query string works
         "search_params": {
             "do": "search",
             "subaction": "search",
         },
-        "search_param_key": "story",  # DLE uses 'story' for search query
+        "search_param_key": "story",
     },
     "freekino": {
         "base_url": "https://freekino.net",

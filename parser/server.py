@@ -963,15 +963,86 @@ def _run_claimed_download(job: dict, parser_base_url: str):
     logger.info(f"[download] job={job_id} source={source} selected_quality={selected_quality or 'auto'}")
     logger.info(f"[download] url={video_url}")
     logger.info(f"[QUEUE] download start job_id={job_id} source={source} output={output_name}")
-    result = downloader_service.smart_download(
-        url=video_url,
-        output_name=output_name,
-        job_id=job_id,
-        backend_job_id=job_id,
-        referer=referer or None,
+
+    # Register DownloadState so /progress?job_id= can report status to the
+    # worker watchdog. Without this, /progress returns 404 and the watchdog
+    # fails the job after 90s as "no active downloader PID".
+    state = DownloadState(
+        job_id,
+        video_url,
+        output_name,
+        source=source,
+        detail_url=referer,
+        selected_quality=selected_quality,
     )
+    set_active_download(job_id, state)
+
+    def progress_callback(percent, downloaded, total, speed, eta):
+        st = get_active_download(job_id)
+        if st and st.status != "failed":
+            st.progress_percent = percent
+            st.downloaded_bytes = downloaded
+            st.total_bytes = total
+            st.speed_mbps = speed / (1024 * 1024) if speed > 0 else 0.0
+            st.eta_seconds = eta
+            st.file_size = downloaded
+            st.last_progress_at = time.time()
+            st.status = "downloading"
+
+    def pid_callback(pid):
+        st = get_active_download(job_id)
+        if st:
+            st.pid = pid
+
+    def debug_callback(event, payload):
+        st = get_active_download(job_id)
+        if st:
+            st.apply_debug_event(event, payload or {})
+
+    try:
+        result = downloader_service.smart_download(
+            url=video_url,
+            output_name=output_name,
+            job_id=job_id,
+            backend_job_id=job_id,
+            referer=referer or None,
+            progress_callback=progress_callback,
+            pid_callback=pid_callback,
+            debug_callback=debug_callback,
+        )
+    except Exception:
+        st = get_active_download(job_id)
+        if st:
+            st.status = "failed"
+            st.done = True
+        raise
+
     if not result.get("success"):
+        st = get_active_download(job_id)
+        if st:
+            st.status = "failed"
+            st.error = result.get("error") or "download failed"
+            st.done = True
+            st.exit_code = st.exit_code if st.exit_code is not None else -1
         raise RuntimeError(result.get("error") or "download failed")
+
+    local_path = resolve_downloaded_artifact(job_id, result.get("file_path", ""))
+    st = get_active_download(job_id)
+    if st:
+        st.status = "completed"
+        st.done = True
+        st.progress_percent = 100
+        st.local_path = local_path or result.get("file_path", "")
+        if st.local_path and os.path.exists(st.local_path):
+            try:
+                size = os.path.getsize(st.local_path)
+                st.file_size = size
+                st.downloaded_bytes = size
+                st.total_bytes = size
+            except OSError:
+                pass
+        st.last_progress_at = time.time()
+        st.media_type = result.get("type", st.media_type)
 
 
 def _download_queue_worker(slot: int, parser_base_url: str):
