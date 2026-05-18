@@ -123,6 +123,17 @@ export default function RoomPlayer({
         setQualities(buildLevels(hls.levels));
       }
     });
+    // LEVELS_UPDATED fires whenever hls.js mutates its internal levels
+    // array — newer hls versions populate variants through this path
+    // rather than MANIFEST_PARSED.
+    hls.on(Hls.Events.LEVELS_UPDATED, (_, data) => {
+      // eslint-disable-next-line no-console
+      console.log(
+        "[room player] LEVELS_UPDATED =",
+        data.levels.map((l) => ({ h: l.height, b: l.bitrate })),
+      );
+      if (data.levels.length > 0) setQualities(buildLevels(data.levels));
+    });
     // Last-resort poll: some streams populate hls.levels after a delay
     // that doesn't line up with either of the events above. Re-read after
     // 1.5s to make sure the picker isn't stuck on "Auto".
@@ -207,21 +218,34 @@ export default function RoomPlayer({
     };
   }, [isHost, persistKey, src]);
 
-  // Persist host position every 5s while playing.
+  // Persist host position aggressively: every 3s, on every pause, and on
+  // page unload. Without these the timer-only path could miss the most
+  // recent position when a host clicked away mid-scene.
   useEffect(() => {
     if (!isHost || !persistKey) return;
     const v = videoRef.current;
     if (!v) return;
-    const t = setInterval(() => {
+    const key = `watchroom:pos:${persistKey}`;
+    const save = () => {
       try {
         if (v.currentTime > 5) {
-          window.localStorage.setItem(`watchroom:pos:${persistKey}`, String(v.currentTime));
+          window.localStorage.setItem(key, String(v.currentTime));
         }
       } catch {
         /* ignore */
       }
-    }, 5000);
-    return () => clearInterval(t);
+    };
+    const t = setInterval(save, 3000);
+    v.addEventListener("pause", save);
+    v.addEventListener("seeked", save);
+    window.addEventListener("beforeunload", save);
+    return () => {
+      clearInterval(t);
+      v.removeEventListener("pause", save);
+      v.removeEventListener("seeked", save);
+      window.removeEventListener("beforeunload", save);
+      save(); // one last write on component unmount (route change)
+    };
   }, [isHost, persistKey]);
 
   // ── Register sync API for the parent so it can drive guests ──────────
