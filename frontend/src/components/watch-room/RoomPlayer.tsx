@@ -528,27 +528,48 @@ export default function RoomPlayer({
 
           <div className="flex-1" />
 
-          {/* Quality */}
+          {/* Quality — onPointerDown also stops propagation so the
+              container-level click timer doesn't fire and the dropdown
+              isn't immediately closed by a phantom outside-click. */}
           <div className="relative">
             <button
-              onClick={() => setShowSettings((v) => !v)}
-              className="flex items-center gap-1 text-xs hover:text-brand-red transition-colors"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowSettings((v) => !v);
+              }}
+              className="flex items-center gap-1 text-xs hover:text-brand-red transition-colors px-1 py-0.5"
+              type="button"
             >
               <Settings className="w-4 h-4" /> {qualityLabel}
             </button>
-            {showSettings && qualities.length > 0 && (
-              <div className="absolute right-0 bottom-7 bg-black/90 border border-white/10 rounded-lg overflow-hidden min-w-[100px]">
+            {showSettings && (
+              <div
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                className="absolute right-0 bottom-8 bg-black/95 border border-white/10 rounded-lg overflow-hidden min-w-[120px] z-50 shadow-xl"
+              >
                 {qualities.map((q) => (
                   <button
                     key={q.index}
-                    onClick={() => setQuality(q.index)}
-                    className={`block w-full px-3 py-1.5 text-left text-xs hover:bg-white/10 ${
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setQuality(q.index);
+                    }}
+                    className={`block w-full px-3 py-2 text-left text-xs hover:bg-white/10 ${
                       q.index === selectedLevel ? "text-brand-red font-semibold" : "text-white"
                     }`}
                   >
                     {q.label}
                   </button>
                 ))}
+                {qualities.length <= 1 && (
+                  <div className="px-3 py-2 text-[10px] text-gray-500 border-t border-white/10">
+                    Bu video uchun boshqa sifat mavjud emas
+                  </div>
+                )}
               </div>
             )}
           </div>
