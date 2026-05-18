@@ -148,8 +148,11 @@ function maybeProxyExternalImage(value: string): string {
     const u = new URL(value);
     const host = u.host.toLowerCase().split(":")[0];
     if (PROXY_HOSTS.has(host)) {
-      const prefix = API_BASE || "";
-      return `${prefix}/api/proxy-image?url=${encodeURIComponent(value)}`;
+      // NEXT_PUBLIC_API_URL already includes the /api suffix in this project
+      // (e.g. "https://api.filmorauz.net/api"). Fall back to a same-origin
+      // /api path when the env var is absent (local dev with proxying).
+      const base = API_BASE || "/api";
+      return `${base}/proxy-image?url=${encodeURIComponent(value)}`;
     }
   } catch {
     /* not a parseable URL — leave it alone */
