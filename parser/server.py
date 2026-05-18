@@ -86,7 +86,7 @@ from uzmovi_serial import UzmoviSerialParser
 from kinochilar_serial import KinochilarSerialParser
 from kinolar_serial import KinolarSerialParser
 from uzmedia_serial import UzmediaSerialParser
-from downloader_service import DownloaderService, _validate_download_target
+from downloader_service import DownloaderService, _validate_download_target, report_progress_to_backend
 from metadata_normalizer import normalize_metadata, validate_metadata, create_worker_payload
 from helpers import sort_video_candidates, normalize_quality_label, quality_height, detect_content_type
 from source_config import get_source_config
@@ -953,8 +953,12 @@ def _run_claimed_download(job: dict, parser_base_url: str):
     metadata = job.get("metadata") or {}
     if not selected_quality and isinstance(metadata, dict):
         selected_quality = (metadata.get("quality") or "").strip()
+    # Note: previously this raised when asilmedia jobs lacked source_quality,
+    # but serial-episode jobs are queued without a preselected quality and
+    # were being failed at claim time. Let the downloader auto-pick when
+    # quality is unset — movies typically have it set by the catalog import.
     if source == "asilmedia" and not selected_quality:
-        raise RuntimeError("selected_quality is empty for asilmedia job")
+        logger.info(f"[QUEUE] asilmedia job {job_id} has no source_quality; downloader will auto-select")
     ok, validation_error = _validate_download_target(video_url, referer=referer or None)
     if not ok:
         raise RuntimeError(f"selected_url={video_url} validation_failed={validation_error}")
