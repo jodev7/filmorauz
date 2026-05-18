@@ -964,6 +964,18 @@ def _run_claimed_download(job: dict, parser_base_url: str):
     logger.info(f"[download] url={video_url}")
     logger.info(f"[QUEUE] download start job_id={job_id} source={source} output={output_name}")
 
+    # De-dup: if another queue slot (or a stale claim) already has this job
+    # in flight, do NOT start a parallel downloader. Multiple ffmpeg processes
+    # writing to the same output file corrupt the file and produce thrashing
+    # progress (2% → 21% → 9% → 2% as each reports independently).
+    existing = get_active_download(job_id)
+    if existing and existing.status in ("starting", "downloading"):
+        logger.warning(
+            f"[QUEUE] duplicate claim — job_id={job_id} already {existing.status} "
+            f"(pid={existing.pid}); skipping to avoid concurrent ffmpeg on same output"
+        )
+        return
+
     # Register DownloadState so /progress?job_id= can report status to the
     # worker watchdog. Without this, /progress returns 404 and the watchdog
     # fails the job after 90s as "no active downloader PID".

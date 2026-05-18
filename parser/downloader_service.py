@@ -1551,6 +1551,28 @@ class DownloaderService:
                 })
                 raise DownloadError(f"HLS download failed: {e}") from e
 
+        finally:
+            # Guarantee the ffmpeg subprocess is dead before this function
+            # returns. If we leak it, the strategy loop in smart_download
+            # spawns ANOTHER ffmpeg writing to the same output_path, producing
+            # thrashing progress (2%/9%/21% in parallel) and a corrupt file.
+            try:
+                proc = locals().get("process")
+                if proc is not None and proc.poll() is None:
+                    logger.warning(
+                        f"[DOWNLOAD] leaked ffmpeg pid={proc.pid} on function exit; killing"
+                    )
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    try:
+                        proc.wait(timeout=5)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
     def _download_mp4_with_aria2c(
         self,
         url: str,
