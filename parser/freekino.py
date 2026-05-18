@@ -861,6 +861,25 @@ class FreekinoParser:
                 logger.info(f"[FREEKINO] extracted url - selector=iframe, count={len(entries)}, url={entries[0]['url'][:120]}")
                 return entries, quality_urls
 
+        # === FALLBACK: JSON-LD/schema embedUrl — some movies (e.g. Oppengeymer
+        # /movie/2331) don't render an <iframe> in the detail page HTML and only
+        # expose the player via "embedUrl":"https://freekino.net/movie/embed/<id>"
+        # inside a schema.org block. Treat that exactly like an iframe.
+        embed_url = ""
+        try:
+            m = re.search(r'"embedUrl"\s*:\s*"([^"]+)"', str(soup))
+            if m:
+                embed_url = m.group(1).replace("\\/", "/").strip()
+        except Exception:
+            embed_url = ""
+        if embed_url:
+            embed_url = normalize_url(page_url or self.BASE_URL, embed_url)
+            logger.info(f"[FREEKINO] embedUrl found in JSON-LD - src={embed_url}")
+            entries, quality_urls = self._extract_from_iframe(embed_url)
+            if entries:
+                logger.info(f"[FREEKINO] extracted url - selector=embedUrl, count={len(entries)}, url={entries[0]['url'][:120]}")
+                return entries, quality_urls
+
         # === FALLBACK: generic regex for absolute mp4/m3u8 URLs in scripts ===
         entries, quality_urls = self._extract_script_fallback(soup, page_url or self.BASE_URL)
         if entries:
