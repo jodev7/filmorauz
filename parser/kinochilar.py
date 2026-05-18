@@ -179,6 +179,12 @@ class KinochilarParser(BaseParser):
                 "/tarjima-kinolar", "/tarjima-seriallar", "/tarjima-multfilm",
             )):
                 return
+            # Detail pages also live under these prefixes (e.g.
+            # /tarjima-kinolar/16078-qora-jodu-5-uzbek-tilida.html). Exclude
+            # anything that ends with .html — categories are always directory
+            # URLs.
+            if after_host.endswith(".html"):
+                return
             seen_urls.add(full_url)
             slug = full_url.rstrip("/").split("/")[-1]
             categories.append({"name": name, "url": full_url, "slug": slug})
