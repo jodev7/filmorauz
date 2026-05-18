@@ -64,11 +64,15 @@ func NewWatchRoomHandler(
 
 // POST /api/rooms — create a new watch-room.
 func (h *WatchRoomHandler) CreateRoom(c *gin.Context) {
-	userIDStr, _ := c.Get("userID")
-	userIDHex, _ := userIDStr.(string)
+	userIDRaw, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "auth required"})
+		return
+	}
+	userIDHex, _ := userIDRaw.(string)
 	userID, err := primitive.ObjectIDFromHex(userIDHex)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "auth required"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user id"})
 		return
 	}
 
@@ -244,11 +248,15 @@ func (h *WatchRoomHandler) AdminListRooms(c *gin.Context) {
 
 // POST /api/rooms/:id/kick — host kicks a member.
 func (h *WatchRoomHandler) KickMember(c *gin.Context) {
-	userIDStr, _ := c.Get("userID")
-	userIDHex, _ := userIDStr.(string)
+	userIDRaw, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "auth required"})
+		return
+	}
+	userIDHex, _ := userIDRaw.(string)
 	userID, err := primitive.ObjectIDFromHex(userIDHex)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "auth required"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user id"})
 		return
 	}
 	id, err := primitive.ObjectIDFromHex(c.Param("id"))
@@ -290,11 +298,15 @@ func (h *WatchRoomHandler) KickMember(c *gin.Context) {
 
 // POST /api/rooms/:id/invites — generate a shareable invite code (or address one to a user).
 func (h *WatchRoomHandler) CreateInvite(c *gin.Context) {
-	userIDStr, _ := c.Get("userID")
-	userIDHex, _ := userIDStr.(string)
+	userIDRaw, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "auth required"})
+		return
+	}
+	userIDHex, _ := userIDRaw.(string)
 	userID, err := primitive.ObjectIDFromHex(userIDHex)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "auth required"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user id"})
 		return
 	}
 	id, err := primitive.ObjectIDFromHex(c.Param("id"))

@@ -32,7 +32,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 			if err != nil {
 				return "", false
 			}
-			uid, ok := claims["userID"].(string)
+			uid, ok := claims["user_id"].(string)
 			if !ok || uid == "" {
 				return "", false
 			}

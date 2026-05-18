@@ -245,9 +245,36 @@ export default function WatchRoomPage() {
     );
   }
   if (!user || !token) {
+    const callbackUrl =
+      typeof window !== "undefined"
+        ? `${window.location.pathname}${window.location.search}`
+        : `/watch-room/${roomID}`;
     return (
-      <div className="min-h-screen flex items-center justify-center bg-brand-dark text-white">
-        <p>Iltimos tizimga kiring</p>
+      <div className="min-h-screen flex items-center justify-center bg-brand-dark text-white px-4">
+        <div className="max-w-md w-full bg-brand-card border border-brand-border rounded-xl p-6 text-center space-y-4">
+          <Users className="w-12 h-12 text-brand-red mx-auto" />
+          <h2 className="text-xl font-semibold">Birga ko&apos;rish room&apos;iga kirish</h2>
+          <p className="text-sm text-gray-400">
+            Bu room maxfiy. Qo&apos;shilish uchun avval ro&apos;yxatdan o&apos;tib, Telegram orqali
+            tizimga kirishingiz kerak.
+          </p>
+          <p className="text-xs text-gray-500">
+            Taklif havolasi sizning hisobingizga bog&apos;langan bo&apos;ladi.
+          </p>
+          <button
+            onClick={() => {
+              try {
+                window.localStorage.setItem("post_login_redirect", callbackUrl);
+              } catch {
+                /* ignore */
+              }
+              router.push("/?login=1");
+            }}
+            className="w-full px-4 py-2 bg-brand-red rounded-lg font-medium"
+          >
+            Ro&apos;yxatdan o&apos;tish / Kirish
+          </button>
+        </div>
       </div>
     );
   }

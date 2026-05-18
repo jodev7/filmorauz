@@ -22,7 +22,8 @@ export default function WatchTogetherButton({ contentType, contentID, className 
 
   const handleClick = async () => {
     if (!user || !token) {
-      router.push("/");
+      alert("Birga ko'rish uchun avval ro'yxatdan o'ting va tizimga kiring.");
+      router.push("/?login=1");
       return;
     }
     if (busy) return;
@@ -35,7 +36,14 @@ export default function WatchTogetherButton({ contentType, contentID, className 
       });
       router.push(`/watch-room/${room.id}`);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to start room");
+      const msg = e instanceof Error ? e.message : "Room yaratishda xato";
+      // 401 keladigan eski token holatida foydalanuvchini qayta loginga qaytarish.
+      if (msg.toLowerCase().includes("auth")) {
+        alert("Sessiyangiz tugagan. Iltimos qaytadan tizimga kiring.");
+        router.push("/?login=1");
+      } else {
+        alert(msg);
+      }
       setBusy(false);
     }
   };
