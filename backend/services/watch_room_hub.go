@@ -13,6 +13,8 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
+var _ = primitive.NilObjectID // keep primitive imported even if every direct use is via models
+
 // HostDisconnectGrace is how long we wait for the host to reconnect after
 // their websocket drops before tearing down the room.
 const HostDisconnectGrace = 60 * time.Second
@@ -262,9 +264,123 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 			},
 		}, nil)
 
+	case "typing":
+		// Lightweight ephemeral broadcast — never persisted.
+		var p struct {
+			IsTyping bool `json:"is_typing"`
+		}
+		_ = decodePayload(msg.Payload, &p)
+		h.broadcast(rm, hubMessage{
+			Type: "typing",
+			Payload: map[string]any{
+				"user_id":   c.UserID.Hex(),
+				"user_name": c.UserName,
+				"is_typing": p.IsTyping,
+			},
+		}, c)
+
+	case "reaction":
+		// Floats over the video for all members. Persisted as a single
+		// chat row with kind=emoji so the timeline survives reloads.
+		var p struct {
+			Emoji string `json:"emoji"`
+		}
+		_ = decodePayload(msg.Payload, &p)
+		if p.Emoji == "" {
+			return
+		}
+		entry := &models.WatchRoomMessage{
+			RoomID:     rm.ID,
+			UserID:     c.UserID,
+			UserName:   c.UserName,
+			UserAvatar: c.UserAvatar,
+			Kind:       "emoji",
+			Emoji:      p.Emoji,
+			CreatedAt:  time.Now(),
+		}
+		go func(m *models.WatchRoomMessage) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = h.repo.CreateMessage(ctx, m)
+		}(entry)
+		h.broadcast(rm, hubMessage{
+			Type: "reaction",
+			Payload: map[string]any{
+				"user_id":   c.UserID.Hex(),
+				"user_name": c.UserName,
+				"emoji":     p.Emoji,
+				"ts":        time.Now().UnixMilli(),
+			},
+		}, nil)
+
+	case "host_kick":
+		if !c.IsHost {
+			return
+		}
+		var p struct {
+			UserID string `json:"user_id"`
+		}
+		if err := decodePayload(msg.Payload, &p); err != nil {
+			return
+		}
+		target, _ := primitive.ObjectIDFromHex(p.UserID)
+		if target.IsZero() || target == c.UserID {
+			return
+		}
+		h.KickUser(rm, target)
+
 	case "ping":
 		h.sendTo(c, hubMessage{Type: "pong", Payload: map[string]any{"ts": time.Now().UnixMilli()}})
 	}
+}
+
+// KickUser disconnects every connection owned by `userID` from the room and
+// notifies the rest of the members. The kicked side sees a "kicked" event
+// and the WS closes immediately after.
+func (h *WatchRoomHub) KickUser(rm *HubRoom, userID primitive.ObjectID) {
+	rm.mu.Lock()
+	targets := make([]*HubClient, 0)
+	for c := range rm.clients {
+		if c.UserID == userID && !c.IsHost {
+			targets = append(targets, c)
+		}
+	}
+	rm.mu.Unlock()
+	if len(targets) == 0 {
+		return
+	}
+	payload, _ := json.Marshal(hubMessage{Type: "kicked", Payload: map[string]any{"reason": "host kicked"}})
+	for _, c := range targets {
+		_ = c.Conn.WriteMessage(websocket.TextMessage, payload)
+		_ = c.Conn.Close()
+	}
+	h.broadcast(rm, hubMessage{
+		Type: "member_left",
+		Payload: map[string]any{"user_id": userID.Hex(), "kicked": true},
+	}, nil)
+}
+
+// SnapshotMembers returns the current member list — used by the admin REST
+// endpoint that shows who's in each room.
+func (h *WatchRoomHub) SnapshotMembers(roomID primitive.ObjectID) []map[string]any {
+	h.mu.RLock()
+	rm, ok := h.rooms[roomID]
+	h.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	out := make([]map[string]any, 0, len(rm.clients))
+	for c := range rm.clients {
+		out = append(out, map[string]any{
+			"user_id":     c.UserID.Hex(),
+			"user_name":   c.UserName,
+			"user_avatar": c.UserAvatar,
+			"is_host":     c.IsHost,
+		})
+	}
+	return out
 }
 
 // CloseRoom kicks every client and marks the room closed in Mongo.

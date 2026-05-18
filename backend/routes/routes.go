@@ -21,9 +21,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	// (e.g. uzmedia.tv self-signed cert). Whitelisted hosts only.
 	api.GET("/proxy-image", handlers.ProxyImage)
 
-	// ── Watch rooms (synchronized co-viewing) ─────────────────────────
-	// Public read endpoints (no auth required for public room browse).
-	api.GET("/rooms", watchRoomHandler.ListPublicRooms)
+	// ── Watch rooms (private-invite only) ────────────────────────────
 	api.GET("/rooms/:id", watchRoomHandler.GetRoom)
 	api.GET("/rooms/:id/messages", watchRoomHandler.ListMessages)
 	// WebSocket — token comes via ?token=... since browsers can't set headers
@@ -47,6 +45,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	{
 		roomAuth.POST("", watchRoomHandler.CreateRoom)
 		roomAuth.POST("/:id/invites", watchRoomHandler.CreateInvite)
+		roomAuth.POST("/:id/kick", watchRoomHandler.KickMember)
 	}
 
 	// Telegram Auth routes (public)
@@ -280,6 +279,9 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 
 		// Bulk import from category
 		admin.POST("/ingestion/bulk-import", ingestionHandler.BulkImportFromCategory)
+
+		// Watch rooms (admin overview)
+		admin.GET("/rooms", watchRoomHandler.AdminListRooms)
 
 		// User management
 		admin.GET("/dashboard/stats", adminUserHandler.DashboardStats)

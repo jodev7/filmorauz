@@ -26,12 +26,28 @@ export type RoomChatEntry = {
   createdAt: string;
 };
 
+export type RoomReaction = {
+  userID: string;
+  userName: string;
+  emoji: string;
+  ts: number;
+};
+
+export type RoomTyping = {
+  userID: string;
+  userName: string;
+  isTyping: boolean;
+};
+
 export type RoomEvent =
   | { type: "state"; state: RoomSyncState }
   | { type: "chat"; chat: RoomChatEntry }
   | { type: "member_joined"; member: RoomMember }
-  | { type: "member_left"; userID: string }
+  | { type: "member_left"; userID: string; kicked?: boolean }
   | { type: "closed"; reason: string }
+  | { type: "kicked"; reason: string }
+  | { type: "typing"; typing: RoomTyping }
+  | { type: "reaction"; reaction: RoomReaction }
   | { type: "error"; message: string };
 
 export type UseRoomSocketResult = {
@@ -40,6 +56,9 @@ export type UseRoomSocketResult = {
   events: RoomEvent[];
   sendHostAction: (action: "play" | "pause" | "seek", position: number) => void;
   sendChat: (kind: "text" | "emoji", payload: string) => void;
+  sendTyping: (isTyping: boolean) => void;
+  sendReaction: (emoji: string) => void;
+  sendKick: (userID: string) => void;
   close: () => void;
 };
 
@@ -134,12 +153,42 @@ export function useRoomSocket(
           });
           break;
         case "member_left":
-          pushEvent({ type: "member_left", userID: String(p.user_id || "") });
+          pushEvent({
+            type: "member_left",
+            userID: String(p.user_id || ""),
+            kicked: Boolean(p.kicked),
+          });
           break;
         case "room_closed":
           pushEvent({ type: "closed", reason: String(p.reason || "closed") });
           closedByUserRef.current = true;
           ws.close();
+          break;
+        case "kicked":
+          pushEvent({ type: "kicked", reason: String(p.reason || "kicked") });
+          closedByUserRef.current = true;
+          ws.close();
+          break;
+        case "typing":
+          pushEvent({
+            type: "typing",
+            typing: {
+              userID: String(p.user_id || ""),
+              userName: String(p.user_name || ""),
+              isTyping: Boolean(p.is_typing),
+            },
+          });
+          break;
+        case "reaction":
+          pushEvent({
+            type: "reaction",
+            reaction: {
+              userID: String(p.user_id || ""),
+              userName: String(p.user_name || ""),
+              emoji: String(p.emoji || ""),
+              ts: Number(p.ts) || Date.now(),
+            },
+          });
           break;
         case "error":
           pushEvent({ type: "error", message: String(p.error || "") });
@@ -172,6 +221,9 @@ export function useRoomSocket(
       if (kind === "emoji") send("chat_send", { kind: "emoji", emoji: payload });
       else send("chat_send", { kind: "text", text: payload });
     },
+    sendTyping: (isTyping: boolean) => send("typing", { is_typing: isTyping }),
+    sendReaction: (emoji: string) => send("reaction", { emoji }),
+    sendKick: (userID: string) => send("host_kick", { user_id: userID }),
     close: () => {
       closedByUserRef.current = true;
       wsRef.current?.close();

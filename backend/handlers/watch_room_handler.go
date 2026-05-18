@@ -214,16 +214,78 @@ func (h *WatchRoomHandler) GetRoom(c *gin.Context) {
 	c.JSON(http.StatusOK, room)
 }
 
-// GET /api/rooms?visibility=public
-func (h *WatchRoomHandler) ListPublicRooms(c *gin.Context) {
+// AdminListRooms returns every active room with its in-hub members.
+// Used by the admin dashboard "Rooms" tab.
+// GET /api/admin/rooms
+func (h *WatchRoomHandler) AdminListRooms(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	rooms, err := h.repo.ListPublicRooms(ctx, 30)
+	cursor, err := h.repo.RoomsCollection().Find(ctx, bson.M{"status": "active"})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "list failed"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": rooms})
+	defer cursor.Close(ctx)
+	var rooms []models.WatchRoom
+	if err := cursor.All(ctx, &rooms); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "decode failed"})
+		return
+	}
+	out := make([]map[string]interface{}, 0, len(rooms))
+	for i := range rooms {
+		r := rooms[i]
+		out = append(out, map[string]interface{}{
+			"room":    r,
+			"members": h.hub.SnapshotMembers(r.ID),
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out})
+}
+
+// POST /api/rooms/:id/kick — host kicks a member.
+func (h *WatchRoomHandler) KickMember(c *gin.Context) {
+	userIDStr, _ := c.Get("userID")
+	userIDHex, _ := userIDStr.(string)
+	userID, err := primitive.ObjectIDFromHex(userIDHex)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "auth required"})
+		return
+	}
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var body struct {
+		UserID string `json:"user_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	target, err := primitive.ObjectIDFromHex(body.UserID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user_id"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	room, err := h.repo.GetRoomByID(ctx, id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "room not found"})
+		return
+	}
+	if room.OwnerID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only host can kick"})
+		return
+	}
+	hubRoom, err := h.hub.GetOrLoadRoom(ctx, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "hub error"})
+		return
+	}
+	h.hub.KickUser(hubRoom, target)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // POST /api/rooms/:id/invites — generate a shareable invite code (or address one to a user).

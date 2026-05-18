@@ -112,6 +112,8 @@ export default function NotificationBell() {
         return <MessageCircle className="w-5 h-5 text-blue-400" />;
       case "COMMENT_LIKE":
         return <MessageCircle className="w-5 h-5 text-pink-400" />;
+      case "ROOM_INVITE":
+        return <Bell className="w-5 h-5 text-purple-400" />;
       default:
         return <Bell className="w-5 h-5 text-gray-400" />;
     }
@@ -171,34 +173,64 @@ export default function NotificationBell() {
             <p className="text-gray-400 text-center">Hozircha bildirishnomalar yo'q</p>
           </div>
         ) : (
-          notifications.map((notification) => (
-            <div
-              key={notification.id}
-              onClick={() => handleNotificationClick(notification)}
-              className={`flex items-start gap-3 px-1 py-3 hover:bg-brand-dark/50 cursor-pointer transition-colors ${
-                !notification.is_read ? "bg-brand-dark/30" : ""
-              }`}
-            >
-              <div className="flex-shrink-0 mt-1">
-                {getNotificationIcon(notification.type)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className={`text-sm truncate ${!notification.is_read ? "text-white font-medium" : "text-gray-300"}`}>
-                    {notification.title}
-                  </p>
-                  {!notification.is_read && (
-                    <span className="w-2 h-2 bg-brand-red rounded-full flex-shrink-0" />
+          notifications.map((notification) => {
+            const isRoomInvite = notification.type === "ROOM_INVITE";
+            const data = (notification.data || {}) as Record<string, unknown>;
+            const poster = typeof data.poster === "string" ? data.poster : "";
+            const movieTitle = typeof data.title === "string" ? data.title : "";
+            return (
+              <div
+                key={notification.id}
+                onClick={() => handleNotificationClick(notification)}
+                className={`flex items-start gap-3 px-1 py-3 hover:bg-brand-dark/50 cursor-pointer transition-colors ${
+                  !notification.is_read ? "bg-brand-dark/30" : ""
+                }`}
+              >
+                {isRoomInvite && poster ? (
+                  <div className="w-12 h-16 shrink-0 rounded-md overflow-hidden bg-brand-dark border border-brand-border">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={poster} alt={movieTitle} className="w-full h-full object-cover" />
+                  </div>
+                ) : (
+                  <div className="flex-shrink-0 mt-1">
+                    {getNotificationIcon(notification.type)}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    {isRoomInvite && (
+                      <span className="text-[10px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded font-medium">
+                        🎬 ROOM
+                      </span>
+                    )}
+                    <p
+                      className={`text-sm truncate ${
+                        !notification.is_read ? "text-white font-medium" : "text-gray-300"
+                      }`}
+                    >
+                      {notification.title}
+                    </p>
+                    {!notification.is_read && (
+                      <span className="w-2 h-2 bg-brand-red rounded-full flex-shrink-0" />
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{notification.message}</p>
+                  {isRoomInvite && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <span className="text-xs px-2 py-1 bg-brand-red text-white rounded-md font-medium">
+                        Qo&apos;shilish
+                      </span>
+                      <span className="text-xs text-gray-500">Bosing</span>
+                    </div>
                   )}
-                </div>
-                <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{notification.message}</p>
-                <div className="flex items-center gap-1 mt-1">
-                  <Clock className="w-3 h-3 text-gray-500" />
-                  <span className="text-xs text-gray-500">{formatTime(notification.created_at)}</span>
+                  <div className="flex items-center gap-1 mt-1">
+                    <Clock className="w-3 h-3 text-gray-500" />
+                    <span className="text-xs text-gray-500">{formatTime(notification.created_at)}</span>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 

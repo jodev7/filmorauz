@@ -152,9 +152,6 @@ export default function Navbar() {
           <Link href="/series" className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors">
             Seriallar
           </Link>
-          <Link href="/rooms" className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors">
-            Rooms
-          </Link>
           {GENRE_NAV_LINKS.map((item) => (
             <Link
               key={item.href}

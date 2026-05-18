@@ -50,7 +50,7 @@ export default function WatchTogetherButton({ contentType, contentID, className 
       }
     >
       {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Users className="w-4 h-4" />}
-      Watch together
+      Birga ko&apos;rish
     </button>
   );
 }

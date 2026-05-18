@@ -70,6 +70,7 @@ export default function AdminLayout({
     { href: "/admin/series/new", icon: PlusCircle, label: "Add Series" },
     { href: "/admin/collections", icon: FolderHeart, label: "Collections" },
     { href: "/admin/ingestion", icon: Download, label: "Import Movies" },
+    { href: "/admin/rooms", icon: Users, label: "Watch Rooms" },
     { href: "/admin/clips", icon: Video, label: "Clips" },
     { href: "/admin/users", icon: Users, label: "Users" },
     { href: "/admin/users/banned", icon: Ban, label: "Ban olganlar" },

@@ -663,7 +663,7 @@ export default function WatchPageClient({
               <WatchTogetherButton
                 contentType={isEp ? "episode" : "movie"}
                 contentID={cid}
-                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-brand-card border border-brand-border hover:border-brand-red rounded-md text-xs text-white transition-colors"
+                className="flex items-center gap-1.5 px-2 py-1.5 sm:px-3 bg-brand-card border border-brand-border hover:border-brand-red rounded-md text-[11px] sm:text-xs text-white transition-colors whitespace-nowrap"
               />
             );
           })()}

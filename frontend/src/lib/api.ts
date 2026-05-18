@@ -3352,7 +3352,7 @@ export async function getPendingAppealCount(token: string): Promise<{ count: num
 export interface Notification {
   id: string;
   user_id: string;
-  type: "PREMIUM_ACTIVATED" | "PREMIUM_EXPIRING_SOON" | "PREMIUM_EXPIRED" | "BAN_APPLIED" | "BAN_REMOVED" | "APPEAL_SUBMITTED" | "APPEAL_APPROVED" | "APPEAL_REJECTED" | "COMMENT_REPLY";
+  type: "PREMIUM_ACTIVATED" | "PREMIUM_EXPIRING_SOON" | "PREMIUM_EXPIRED" | "BAN_APPLIED" | "BAN_REMOVED" | "APPEAL_SUBMITTED" | "APPEAL_APPROVED" | "APPEAL_REJECTED" | "COMMENT_REPLY" | "COMMENT_LIKE" | "ROOM_INVITE";
   title: string;
   message: string;
   is_read: boolean;
@@ -4036,10 +4036,29 @@ export async function getWatchRoom(id: string): Promise<WatchRoom> {
   return res.json();
 }
 
-export async function listPublicRooms(): Promise<{ items: WatchRoom[] }> {
-  const res = await fetch(`${API_URL}/rooms`);
+// Admin-only — every active room with its in-hub member snapshot.
+export interface AdminRoomSnapshot {
+  room: WatchRoom;
+  members: Array<{ user_id: string; user_name: string; user_avatar?: string; is_host: boolean }>;
+}
+export async function adminListWatchRooms(token: string): Promise<{ items: AdminRoomSnapshot[] }> {
+  const res = await fetch(`${API_URL}/admin/rooms`, {
+    headers: authHeaders(token),
+  });
   if (!res.ok) throw new Error("Failed to list rooms");
   return res.json();
+}
+
+export async function kickRoomMember(token: string, roomID: string, userID: string): Promise<void> {
+  const res = await fetch(`${API_URL}/rooms/${roomID}/kick`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id: userID }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Failed to kick");
+  }
 }
 
 export async function createRoomInvite(
