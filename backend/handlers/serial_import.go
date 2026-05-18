@@ -230,9 +230,47 @@ func (h *IngestionHandler) runSerialExtractionAsync(
 		h.failParent(ctx, parentID, "parser returned no episodes")
 		return
 	}
-	if err := h.completeParent(ctx, parentID, seasonsCount, len(payload.Episodes), createdCount, series.ID, series.Slug, payload.MissingNumbers); err != nil {
-		log.Printf("[series extractor] complete parent failed parent_job=%s err=%v", parentID, err)
+	// Deferred-DB mode: don't mark the parent completed yet. The extraction
+	// phase only queued the child IngestionJobs. finalizeSerialParent() runs
+	// once every child job is terminal — that's when we insert Series,
+	// Seasons, Episodes and mark this parent completed.
+	if err := h.markExtractionFinished(ctx, parentID, seasonsCount, len(payload.Episodes), createdCount, series.Slug, payload.MissingNumbers); err != nil {
+		log.Printf("[series extractor] mark extraction finished failed parent_job=%s err=%v", parentID, err)
 	}
+}
+
+// markExtractionFinished records that the parser has produced all episode
+// jobs. The parent stays in "processing" — finalizeSerialParent moves it to
+// "completed" once every child is terminal.
+func (h *IngestionHandler) markExtractionFinished(
+	ctx context.Context, id string, seasons, episodes, childJobs int,
+	seriesSlug string, missing []int,
+) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	message := fmt.Sprintf("Extraction finished: %d episodes queued. Waiting for downloads to complete.", childJobs)
+	if len(missing) > 0 {
+		message = fmt.Sprintf("%s Missing: %v", message, missing)
+	}
+	update := bson.M{
+		"status":             models.IngestionStatusProcessing,
+		"stage":              "waiting_for_episodes",
+		"progress":           50,
+		"seasons_count":      seasons,
+		"episode_count":      episodes,
+		"child_jobs_created": childJobs,
+		"series_slug":        seriesSlug,
+		"updated_at":         now,
+		"message":            message,
+	}
+	if len(missing) > 0 {
+		update["missing_episodes"] = missing
+	}
+	_, err = h.jobRepo.GetCollection().UpdateByID(ctx, objID, bson.M{"$set": update})
+	return err
 }
 
 func (h *IngestionHandler) startAsyncSerialParserJob(parserBaseURL, source, detailURL string) (string, error) {
@@ -334,13 +372,11 @@ func (h *IngestionHandler) pollSerialParserJob(
 			resolvedTitle = fallbackTitle
 		}
 		if series == nil && resolvedTitle != "" {
-			series, err = h.upsertSeries(ctx, resolvedTitle, &payload)
-			if err != nil {
-				return parserSerialResponse{}, createdCount, nil, 0, fmt.Errorf("failed to upsert series: %w", err)
-			}
+			series = h.buildSeriesStub(resolvedTitle, &payload)
 		}
+		parentObjID, _ := primitive.ObjectIDFromHex(parentID)
 		if series != nil {
-			createdCount, err = h.createIncrementalEpisodeJobs(ctx, series, seasonCache, seenSeasons, source, sourceID, payload.Episodes, createdCount)
+			createdCount, err = h.createIncrementalEpisodeJobs(ctx, series, seasonCache, seenSeasons, source, sourceID, parentObjID, payload.Episodes, createdCount)
 			if err != nil {
 				return parserSerialResponse{}, createdCount, series, len(seenSeasons), err
 			}
@@ -371,10 +407,7 @@ func (h *IngestionHandler) pollSerialParserJob(
 				return payload, createdCount, series, len(seenSeasons), fmt.Errorf("parser returned no episodes")
 			}
 			if series == nil {
-				series, err = h.upsertSeries(ctx, resolvedTitle, &payload)
-				if err != nil {
-					return parserSerialResponse{}, createdCount, nil, len(seenSeasons), fmt.Errorf("failed to upsert series: %w", err)
-				}
+				series = h.buildSeriesStub(resolvedTitle, &payload)
 			}
 			return payload, createdCount, series, len(seenSeasons), nil
 		case "failed":
@@ -427,9 +460,14 @@ func (h *IngestionHandler) createIncrementalEpisodeJobs(
 	seasonCache map[int]*models.Season,
 	seenSeasons map[int]struct{},
 	source, sourceID string,
+	parentID primitive.ObjectID,
 	episodes []parserSerialEpisode,
 	createdCount int,
 ) (int, error) {
+	// Deferred-DB mode: do NOT create Series/Season/Episode rows yet. Only
+	// queue episode IngestionJobs with all the metadata the finalization step
+	// will need. Series/Seasons/Episodes are inserted in one batch by
+	// finalizeSerialParent() once every child job is terminal.
 	for _, ep := range episodes {
 		if ep.VideoURL == "" {
 			continue
@@ -440,21 +478,7 @@ func (h *IngestionHandler) createIncrementalEpisodeJobs(
 		}
 		seenSeasons[seasonNum] = struct{}{}
 
-		season, ok := seasonCache[seasonNum]
-		if !ok {
-			s, err := h.upsertSeason(ctx, series.ID, seasonNum)
-			if err != nil {
-				return createdCount, fmt.Errorf("failed to upsert season %d: %w", seasonNum, err)
-			}
-			season = s
-			seasonCache[seasonNum] = season
-		}
-
-		episode, err := h.upsertEpisode(ctx, series.ID, season.ID, ep, series.PosterURL)
-		if err != nil {
-			return createdCount, fmt.Errorf("failed to upsert episode S%02dE%02d: %w", seasonNum, ep.Episode, err)
-		}
-		_, created, err := h.createEpisodeJob(ctx, series, season, episode, source, sourceID, ep, seasonNum)
+		_, created, err := h.createEpisodeJob(ctx, series, source, sourceID, parentID, ep, seasonNum)
 		if err != nil {
 			return createdCount, fmt.Errorf("failed to create episode job S%02dE%02d: %w", seasonNum, ep.Episode, err)
 		}
@@ -640,6 +664,21 @@ func determineHighestQuality(episodes []parserSerialEpisode) string {
 	return quality
 }
 
+// buildSeriesStub returns an in-memory Series with slug/title/etc populated
+// for use during extraction, WITHOUT persisting it. The real DB insert
+// happens in finalizeSerialParent() once every child job is terminal.
+func (h *IngestionHandler) buildSeriesStub(title string, payload *parserSerialResponse) *models.Series {
+	return &models.Series{
+		Slug:        slugifySerial(title),
+		Title:       title,
+		Description: payload.Description,
+		PosterURL:   payload.Poster,
+		BackdropURL: payload.Backdrop,
+		Year:        payload.Year,
+		Quality:     determineHighestQuality(payload.Episodes),
+	}
+}
+
 // upsertSeries finds an existing series by slug or creates a new one (pending
 // approval). The slug is derived deterministically from the title so re-
 // importing the same serial targets the same row.
@@ -752,9 +791,8 @@ func (h *IngestionHandler) upsertEpisode(ctx context.Context, seriesID, seasonID
 func (h *IngestionHandler) createEpisodeJob(
 	ctx context.Context,
 	series *models.Series,
-	season *models.Season,
-	episode *models.Episode,
 	source, sourceID string,
+	parentID primitive.ObjectID,
 	ep parserSerialEpisode,
 	seasonNum int,
 ) (*models.IngestionJob, bool, error) {
@@ -764,6 +802,11 @@ func (h *IngestionHandler) createEpisodeJob(
 	existing, err := h.jobRepo.GetBySourceAndID(ctx, source, episodeSourceID)
 	if err == nil && existing != nil {
 		return existing, false, nil
+	}
+
+	episodePoster := ep.Poster
+	if episodePoster == "" {
+		episodePoster = series.PosterURL
 	}
 
 	job := &models.IngestionJob{
@@ -778,12 +821,15 @@ func (h *IngestionHandler) createEpisodeJob(
 		Steps:         models.JobSteps{},
 		Logs:          []models.IngestionLog{},
 		ContentType:   "episode",
-		SeriesID:      series.ID,
-		SeasonID:      season.ID,
-		EpisodeID:     episode.ID,
-		SeriesSlug:    series.Slug,
-		SeasonNumber:  seasonNum,
-		EpisodeNumber: ep.Episode,
+		// Deferred-DB mode: SeriesID/SeasonID/EpisodeID are left zero. They
+		// will be filled in by finalizeSerialParent() when it creates the
+		// actual Series/Seasons/Episodes after every child job is terminal.
+		SeriesSlug:       series.Slug,
+		SeasonNumber:     seasonNum,
+		EpisodeNumber:    ep.Episode,
+		ParentJobID:      parentID,
+		EpisodeTitle:     strings.TrimSpace(ep.Title),
+		EpisodePosterURL: episodePoster,
 		Metadata: &models.ParsedMovieMetadata{
 			Title:        fmt.Sprintf("%s S%02dE%02d", series.Title, seasonNum, ep.Episode),
 			Poster:       series.PosterURL,

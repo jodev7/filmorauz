@@ -33,9 +33,12 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	if job.Metadata == nil {
 		return fmt.Errorf("episode job %s has no metadata", jobID)
 	}
-	// Sanity: required linkage fields.
-	if job.EpisodeID.IsZero() || job.SeriesSlug == "" {
-		return fmt.Errorf("episode job %s missing series/episode linkage", jobID)
+	// Series-slug is still required (drives the B2 folder layout). EpisodeID
+	// is OPTIONAL in deferred-DB mode: the backend's serial finalizer creates
+	// the Episode row only after every child completes, so the worker can
+	// finish ingestion before an Episode row exists.
+	if job.SeriesSlug == "" {
+		return fmt.Errorf("episode job %s missing series_slug", jobID)
 	}
 	localPath := job.LocalPath
 	if localPath == "" {
@@ -109,10 +112,18 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	}
 
 	// === Notify backend so the Episode row gets the playback URL ===
+	// In deferred-DB mode the Episode row does not exist yet — the backend's
+	// serial finalizer creates it later using job.MasterPlaylistURL (already
+	// stored by UpdateFinalOutputPath above). Only notify the legacy
+	// per-episode endpoint when we DO have an EpisodeID linkage.
 	thumbBase := thumbnailsBaseURLFromMaster(streamingURL)
-	if err := p.notifyEpisodeComplete(ctx, job, streamingURL, thumbBase, ThumbnailIntervalSeconds); err != nil {
-		log.Printf("[EPISODE] WARNING: notifyEpisodeComplete failed: %v", err)
-		// Non-fatal: the HLS exists, admin can re-run or patch the row.
+	if !job.EpisodeID.IsZero() {
+		if err := p.notifyEpisodeComplete(ctx, job, streamingURL, thumbBase, ThumbnailIntervalSeconds); err != nil {
+			log.Printf("[EPISODE] WARNING: notifyEpisodeComplete failed: %v", err)
+			// Non-fatal: the HLS exists, admin can re-run or patch the row.
+		}
+	} else {
+		log.Printf("[EPISODE] deferred-DB mode: EpisodeID is zero — backend finalizer will create the row")
 	}
 
 	// === Clip generation ===

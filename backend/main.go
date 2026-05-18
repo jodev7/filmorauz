@@ -331,6 +331,23 @@ func main() {
 	// Start premium cleanup background job (runs every 10 minutes)
 	go startPremiumCleanupJob(userRepo, notificationService)
 
+	// Start serial-parent finalizer (runs every 30s). Materializes Series /
+	// Seasons / Episodes rows for serial-parent jobs whose child episode
+	// jobs have all reached a terminal state — see serial_finalize.go.
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			if n, err := ingestionHandler.FinalizeSerialReadyParents(ctx); err != nil {
+				log.Printf("[serial finalize] sweep error: %v", err)
+			} else if n > 0 {
+				log.Printf("[serial finalize] finalized %d parent(s)", n)
+			}
+			cancel()
+		}
+	}()
+
 	// Start Instagram schedule executor (runs every 60 seconds)
 	go startInstagramScheduler(igScheduleRepo, clipRepo, seriesRepo, parserURL)
 

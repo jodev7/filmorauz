@@ -124,6 +124,16 @@ type IngestionJob struct {
 	SeriesSlug    string             `bson:"series_slug,omitempty" json:"series_slug,omitempty"`
 	SeasonNumber  int                `bson:"season_number,omitempty" json:"season_number,omitempty"`
 	EpisodeNumber int                `bson:"episode_number,omitempty" json:"episode_number,omitempty"`
+	// ParentJobID points to the serial-parent ingestion_job that spawned this
+	// episode. Used by the finalization step to find all sibling episodes once
+	// the parent's children finish, so that Series/Seasons/Episodes rows are
+	// created in one batch *after* every download+process+upload completes.
+	ParentJobID   primitive.ObjectID `bson:"parent_job_id,omitempty" json:"parent_job_id,omitempty"`
+	// EpisodeTitle/EpisodePosterURL are captured from the parser at extraction
+	// time so the finalization step has the data it needs to insert real
+	// Episode rows without re-fetching the source.
+	EpisodeTitle     string `bson:"episode_title,omitempty" json:"episode_title,omitempty"`
+	EpisodePosterURL string `bson:"episode_poster_url,omitempty" json:"episode_poster_url,omitempty"`
 
 	// Serial-parent specific summary fields. ContentType == "serial_parent" rows
 	// are created immediately by the import endpoint, then populated by the
