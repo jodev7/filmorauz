@@ -91,18 +91,44 @@ export default function RoomPlayer({
     hls.loadSource(src);
     hls.attachMedia(v);
     hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
-      // Build the level list, dedup'd by height and sorted high → low.
-      // We keep the ORIGINAL hls index (not the post-sort index) so
-      // setQuality maps cleanly to hls.currentLevel.
-      const byHeight = new Map<number, number>();
-      data.levels.forEach((l, idx) => {
-        const h = l.height || 0;
-        if (h > 0 && !byHeight.has(h)) byHeight.set(h, idx);
-      });
-      const sorted = Array.from(byHeight.entries()).sort((a, b) => b[0] - a[0]);
+      // Build the level list. Prefer dedup-by-height, but if the manifest
+      // omits height (some encoders do — Backblaze HLS), fall back to
+      // labeling by bitrate so the picker isn't useless. The level index
+      // is the ORIGINAL hls index so setQuality → hls.currentLevel maps
+      // cleanly.
       const levels: QualityLevel[] = [{ index: -1, label: "Auto", height: -1 }];
-      sorted.forEach(([h, idx]) => levels.push({ index: idx, label: `${h}p`, height: h }));
+      const seenHeights = new Set<number>();
+      const sortedByHeight = [...data.levels]
+        .map((l, idx) => ({ idx, height: l.height || 0, bitrate: l.bitrate || 0 }))
+        .sort((a, b) => (b.height || b.bitrate) - (a.height || a.bitrate));
+      sortedByHeight.forEach(({ idx, height, bitrate }) => {
+        if (height > 0 && !seenHeights.has(height)) {
+          seenHeights.add(height);
+          levels.push({ index: idx, label: `${height}p`, height });
+        } else if (height <= 0 && bitrate > 0) {
+          levels.push({
+            index: idx,
+            label: `${Math.round(bitrate / 1000)} kbps`,
+            height: bitrate,
+          });
+        }
+      });
+      // Diagnostic so we can tell from devtools whether the manifest
+      // really only has one variant or our parsing is dropping them.
+      // eslint-disable-next-line no-console
+      console.log(
+        "[room player] manifest levels =",
+        data.levels.map((l) => ({ h: l.height, b: l.bitrate })),
+      );
       setQualities(levels);
+    });
+    hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
+      // Keep the picker label in sync when auto-bitrate switches.
+      if (selectedLevel === -1) {
+        // Auto mode — don't override the user's selection.
+        return;
+      }
+      setSelectedLevel(data.level);
     });
     return () => {
       hls.destroy();
