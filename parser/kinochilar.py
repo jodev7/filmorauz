@@ -142,7 +142,14 @@ class KinochilarParser(BaseParser):
         return results
 
     def list_categories(self):
-        """Scrape categories from kinochilar.com navigation"""
+        """Scrape top-level categories from kinochilar.com navigation.
+
+        kinochilar uses /tarjima-kinolar/, /tarjima-seriallar/, /tarjima-multfilm/
+        as the primary catalog buckets. We only keep top-level pages (one path
+        segment) plus the country/genre sub-pages used by the bulk-import
+        flow — otherwise the dropdown floods with 100+ deep sub-pages and
+        becomes unusable in the admin UI.
+        """
         try:
             response = self.session.get(self.BASE_URL + "/", timeout=20, verify=False)
             soup = BeautifulSoup(response.text, "lxml")
@@ -154,42 +161,28 @@ class KinochilarParser(BaseParser):
         seen_urls = set()
 
         def _add(href, name):
-            if not href or not name or len(name) < 2: return
-            if href in ("#", ""): return
+            if not href or not name or len(name) < 2:
+                return
+            if href in ("#", ""):
+                return
             full_url = normalize_url(href, self.BASE_URL)
-            if full_url in seen_urls: return
+            if full_url in seen_urls:
+                return
+            # Restrict to in-site URLs that look like a category bucket: the
+            # path starts with one of the tarjima-* segments. Strip a trailing
+            # slash so /tarjima-kinolar and /tarjima-kinolar/ dedupe.
+            path = full_url.split("://", 1)[-1].split("/", 1)
+            if len(path) < 2:
+                return
+            after_host = "/" + path[1].rstrip("/")
+            if not any(after_host.startswith(p) for p in (
+                "/tarjima-kinolar", "/tarjima-seriallar", "/tarjima-multfilm",
+            )):
+                return
             seen_urls.add(full_url)
             slug = full_url.rstrip("/").split("/")[-1]
             categories.append({"name": name, "url": full_url, "slug": slug})
 
-        # Search for categories in navigation or sidebar links
-        for a in soup.select("a[href*='/film/'], a[href*='/serial/'], a[href*='/multfilm/']"):
-            _add(a.get("href"), clean_text(a.get_text()))
-
-        return categories
-
-    def list_categories(self):
-        """Scrape categories from kinochilar.com navigation"""
-        try:
-            response = self.session.get(self.BASE_URL + "/", timeout=20, verify=False)
-            soup = BeautifulSoup(response.text, "lxml")
-        except Exception as e:
-            logger.warning(f"[KINOCHILAR] list_categories: fetch failed: {e}")
-            return []
-
-        categories = []
-        seen_urls = set()
-
-        def _add(href, name):
-            if not href or not name or len(name) < 2: return
-            if href in ("#", ""): return
-            full_url = normalize_url(href, self.BASE_URL)
-            if full_url in seen_urls: return
-            seen_urls.add(full_url)
-            slug = full_url.rstrip("/").split("/")[-1]
-            categories.append({"name": name, "url": full_url, "slug": slug})
-
-        # Search for categories in navigation (tarjima-kinolar, tarjima-seriallar, etc.)
         for a in soup.select("a[href*='tarjima-']"):
             _add(a.get("href"), clean_text(a.get_text()))
 

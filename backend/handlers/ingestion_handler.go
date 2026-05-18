@@ -1870,21 +1870,7 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 				confidence := identityConfidence(selectedIdentity, fetchedIdentity)
 				log.Printf("[identity] selected=%s", identityLogString(selectedIdentity))
 				log.Printf("[identity] fetched=%s", identityLogString(fetchedIdentity))
-				log.Printf("[identity] confidence=%.3f", confidence)
-				if !input.ForceConfirmed && (normalizeIdentityType(fetchedIdentity.Type) == "unknown" || confidence < 0.85) {
-					c.JSON(http.StatusConflict, gin.H{
-						"error":                 "admin confirmation required",
-						"reason":                "selected result did not confidently match fetched detail page",
-						"confidence":            confidence,
-						"selected":              selectedIdentity,
-						"fetched":               fetchedIdentity,
-						"requires_confirmation": true,
-					})
-					return
-				}
-				if input.ForceConfirmed {
-					log.Printf("[identity] force_confirmed=true accepted confidence=%.3f", confidence)
-				}
+				log.Printf("[identity] confidence=%.3f (auto-accepted; manual confirmation disabled)", confidence)
 				if sid, ok := details["source_id"].(string); ok && sid != "" && input.SourceID == "" {
 					input.SourceID = sid
 				}
