@@ -823,10 +823,31 @@ def set_active_download(job_id, state):
         _active_downloads[job_id] = state
 
 def clear_active_download(job_id):
-    """Clear active download state for job_id"""
+    """Clear active download state for job_id.
+
+    Also kills the running downloader process (ffmpeg / aria2c / n_m3u8dl) for
+    that job. Without this, a /download?force=1 retry from the worker (e.g.
+    after trying a different quality URL) leaves the previous process running
+    in the background. Both processes then write to the same output file and
+    keep reporting progress for the same backend job_id, which shows up as
+    bytes oscillating (400MB ↔ 800MB) in the admin UI.
+    """
     with _downloads_lock:
-        if job_id in _active_downloads:
-            del _active_downloads[job_id]
+        state = _active_downloads.pop(job_id, None)
+
+    if state is None:
+        return
+
+    pid = getattr(state, "pid", 0) or 0
+    if pid > 0:
+        try:
+            import signal as _sig
+            os.kill(pid, _sig.SIGKILL)
+            logger.warning(f"[CLEAR] killed leaked downloader pid={pid} for job_id={job_id}")
+        except ProcessLookupError:
+            pass
+        except Exception as exc:
+            logger.warning(f"[CLEAR] kill pid={pid} for job_id={job_id} failed: {exc}")
 
 def is_download_active(job_id):
     """Check if download is active for job_id"""
