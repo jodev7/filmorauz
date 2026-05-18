@@ -2042,6 +2042,31 @@ export async function deleteIngestionJob(token: string, jobId: string): Promise<
   }
 }
 
+export async function deleteIngestionSeries(
+  token: string,
+  seriesSlug: string,
+): Promise<{ deleted: number }> {
+  const res = await fetch(
+    `${API_URL}/admin/ingestion/series/${encodeURIComponent(seriesSlug)}`,
+    {
+      method: "DELETE",
+      headers: authHeaders(token),
+    },
+  );
+  if (!res.ok) {
+    let msg = "Failed to delete series jobs";
+    try {
+      const err = await res.json();
+      msg = err.error || msg;
+    } catch {
+      /* keep default */
+    }
+    throw new Error(msg);
+  }
+  const data = await res.json().catch(() => ({}));
+  return { deleted: Number(data.deleted) || 0 };
+}
+
 // ── Catalog & Source Import Types ───────────────────────────────────────
 
 export interface CatalogItem {

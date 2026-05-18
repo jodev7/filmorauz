@@ -244,6 +244,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		admin.GET("/ingestion/jobs/:id", ingestionHandler.GetIngestionJob)
 		admin.POST("/ingestion/jobs/:id/retry", ingestionHandler.RetryIngestionJob)
 		admin.DELETE("/ingestion/jobs/:id", ingestionHandler.DeleteIngestionJob)
+		admin.DELETE("/ingestion/series/:slug", ingestionHandler.DeleteIngestionSeries)
 		// Manual import from direct video URL
 		admin.POST("/ingestion/manual", ingestionHandler.CreateManualJob)
 		// Import from catalog

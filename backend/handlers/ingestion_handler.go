@@ -1393,6 +1393,34 @@ func (h *IngestionHandler) ParserClaimJob(c *gin.Context) {
 	})
 }
 
+// DeleteIngestionSeries removes ALL ingestion jobs that share a series_slug.
+// Used by the admin UI to bulk-delete every episode of a serial in one click.
+// DELETE /api/admin/ingestion/series/:slug
+func (h *IngestionHandler) DeleteIngestionSeries(c *gin.Context) {
+	slug := strings.TrimSpace(c.Param("slug"))
+	if slug == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing series slug"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	res, err := h.jobRepo.GetCollection().DeleteMany(ctx, bson.M{"series_slug": slug})
+	if err != nil {
+		log.Printf("[INGESTION] DELETE SERIES: mongo error slug=%s err=%v", slug, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete series jobs"})
+		return
+	}
+	if res.DeletedCount == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no jobs found for series", "slug": slug})
+		return
+	}
+
+	log.Printf("[INGESTION] DELETE SERIES: removed %d job(s) slug=%s", res.DeletedCount, slug)
+	c.JSON(http.StatusOK, gin.H{"message": "series jobs deleted", "slug": slug, "deleted": res.DeletedCount})
+}
+
 // DeleteIngestionJob removes an ingestion job from MongoDB.
 // DELETE /api/admin/ingestion/jobs/:id
 func (h *IngestionHandler) DeleteIngestionJob(c *gin.Context) {

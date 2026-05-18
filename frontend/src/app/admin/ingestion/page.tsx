@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import {
   searchSource, createIngestionJob, getIngestionJobs,
-  retryIngestionJob, deleteIngestionJob, IngestionJob, SearchResult, IngestionStatus,
+  retryIngestionJob, deleteIngestionJob, deleteIngestionSeries, IngestionJob, SearchResult, IngestionStatus,
   listCatalog, listCatalogCategories, CatalogItem, CatalogResponse, CatalogCategory,
   createManualImport, importFromCatalog, ImportConfirmationError, ImportConfirmationResponse,
   bulkImport
@@ -24,9 +24,9 @@ type SeasonGroup = {
 };
 
 // Grouped job type for serial display
-type JobGroup = 
+type JobGroup =
   | { type: "single"; job: IngestionJob }
-  | { type: "serial"; id: string; title: string; seasons: SeasonGroup[]; expanded: boolean; totalEpisodes: number; totalSeasons: number };
+  | { type: "serial"; id: string; title: string; seriesSlug: string; seasons: SeasonGroup[]; expanded: boolean; totalEpisodes: number; totalSeasons: number };
 
 type PendingImportConfirmation = {
   input: {
@@ -214,6 +214,7 @@ function groupJobsBySerial(jobs: IngestionJob[]): JobGroup[] {
       type: "serial",
       id: firstEp?.id || seriesKey,
       title: seriesTitle,
+      seriesSlug: firstEp?.series_slug || seriesKey,
       seasons,
       expanded: false,
       totalEpisodes,
@@ -1782,6 +1783,7 @@ function JobsTab({
   retryingStage,
   handleRetry,
   handleDelete,
+  handleDeleteSeries,
   currentFilter,
   handleFilterChange,
   currentPage,
@@ -1795,6 +1797,7 @@ function JobsTab({
   retryingStage: {jobId: string; stage: string} | null;
   handleRetry: (jobId: string, stage: "download" | "process" | "upload") => void;
   handleDelete: (jobId: string) => void;
+  handleDeleteSeries: (seriesSlug: string, title: string, episodeCount: number) => void;
   currentFilter: JobFilter;
   handleFilterChange: (filter: JobFilter) => void;
   currentPage: number;
@@ -2370,6 +2373,16 @@ function JobsTab({
                       />
                     </div>
                   </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteSeries(serial.seriesSlug, serial.title, serial.totalEpisodes);
+                    }}
+                    className="p-2 bg-brand-dark hover:bg-red-900/40 rounded-lg transition-colors"
+                    title={`Delete all ${serial.totalEpisodes} episodes from MongoDB`}
+                  >
+                    <Trash2 className="w-4 h-4 text-red-400" />
+                  </button>
                 </div>
 
                 {isExpanded && (
@@ -2556,6 +2569,25 @@ export default function IngestionPage() {
     }
   };
 
+  const handleDeleteSeries = async (seriesSlug: string, title: string, episodeCount: number) => {
+    if (!token || !seriesSlug) return;
+    if (!window.confirm(
+      `"${title}" — barcha ${episodeCount} ta epizodni MongoDB'dan o'chirishni tasdiqlaysizmi? Bu amalni qaytarib bo'lmaydi.`
+    )) {
+      return;
+    }
+    try {
+      const { deleted } = await deleteIngestionSeries(token, seriesSlug);
+      if (fetchJobsRef.current) {
+        fetchJobsRef.current(currentPage, currentFilter);
+      }
+      console.log(`Deleted ${deleted} episode jobs for series ${seriesSlug}`);
+    } catch (err) {
+      console.error("Series delete failed:", err);
+      window.alert(err instanceof Error ? err.message : "Failed to delete series jobs");
+    }
+  };
+
   const handleImportSuccess = () => {
     setCurrentFilter("all");
     setCurrentPage(1);
@@ -2709,6 +2741,7 @@ export default function IngestionPage() {
             retryingStage={retryingStage}
             handleRetry={handleRetry}
             handleDelete={handleDelete}
+            handleDeleteSeries={handleDeleteSeries}
             currentFilter={currentFilter}
             handleFilterChange={handleFilterChange}
             currentPage={currentPage}
