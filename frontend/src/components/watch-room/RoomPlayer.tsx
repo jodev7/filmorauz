@@ -134,7 +134,34 @@ export default function RoomPlayer({
           hls.levels.map((l) => ({ h: l.height, b: l.bitrate })),
         );
         setQualities((curr) => (curr.length > 1 ? curr : buildLevels(hls.levels)));
+        return;
       }
+      // Hls gave us nothing — fetch the master playlist directly and
+      // parse #EXT-X-STREAM-INF lines. This is the most reliable path
+      // when MANIFEST_PARSED / LEVEL_LOADED never fire with real heights.
+      fetch(src, { credentials: "omit" })
+        .then((r) => (r.ok ? r.text() : ""))
+        .then((text) => {
+          if (!text) return;
+          const variants: Array<{ height: number; bitrate: number }> = [];
+          const re = /#EXT-X-STREAM-INF:([^\n]+)/g;
+          let mm: RegExpExecArray | null;
+          while ((mm = re.exec(text)) !== null) {
+            const attrs = mm[1];
+            const resMatch = /RESOLUTION=\d+x(\d+)/.exec(attrs);
+            const bwMatch = /BANDWIDTH=(\d+)/.exec(attrs);
+            variants.push({
+              height: resMatch ? Number(resMatch[1]) : 0,
+              bitrate: bwMatch ? Number(bwMatch[1]) : 0,
+            });
+          }
+          // eslint-disable-next-line no-console
+          console.log("[room player] manual parsed variants =", variants);
+          if (variants.length > 0) {
+            setQualities((curr) => (curr.length > 1 ? curr : buildLevels(variants)));
+          }
+        })
+        .catch(() => undefined);
     }, 1500);
     hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
       // Keep the picker label in sync when auto-bitrate switches.

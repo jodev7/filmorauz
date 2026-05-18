@@ -441,7 +441,10 @@ export default function WatchRoomPage() {
   return (
     <div className="min-h-screen bg-brand-dark text-white">
       <Navbar />
-      <div className="max-w-7xl mx-auto px-2 sm:px-4 pt-4 sm:pt-6">
+      {/* Navbar is position:fixed h-16 so the page content has to start
+          below it manually — without pt-16 the back-row sits underneath
+          the navbar and looks "tiqilib qolgan". */}
+      <div className="max-w-7xl mx-auto px-2 sm:px-4 pt-20 sm:pt-24">
         <div className="flex items-center gap-2 mb-3">
           <button
             onClick={() => router.back()}
