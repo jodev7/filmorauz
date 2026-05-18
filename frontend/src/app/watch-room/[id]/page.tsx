@@ -9,10 +9,12 @@ import {
   listRoomMessages,
   createRoomInvite,
   searchRoomUsers,
+  getProtectedMediaAccess,
   WatchRoom,
   WatchRoomMessage,
   RoomUserResult,
 } from "@/lib/api";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 import {
   useRoomSocket,
   effectivePosition,
@@ -76,33 +78,55 @@ export default function WatchRoomPage() {
         const r = await getWatchRoom(roomID);
         if (cancelled) return;
         setRoom(r);
-        const apiBase = process.env.NEXT_PUBLIC_API_URL || "";
+        // Resolve via the same protected-media access flow the regular watch
+        // page uses. Raw master_playlist_url/video_url on the doc are
+        // typically B2 keys that require a signed CDN URL — without this
+        // step the room sees an empty/forbidden URL and renders black.
         let resolved = "";
-        if (r.content_type === "movie") {
-          const m = await fetch(`${apiBase}/movies/${r.content_id}`).then((res) =>
-            res.ok ? res.json() : null,
+        try {
+          const access = await getProtectedMediaAccess(
+            r.content_type === "movie"
+              ? { movieId: r.content_id, token }
+              : { episodeId: r.content_id, token },
           );
-          if (m) {
-            resolved =
-              m.master_playlist_url ||
-              m.streaming_url ||
-              m.playlist_url ||
-              m.video_url ||
-              "";
-          }
-        } else {
-          const ep = await fetch(`${apiBase}/episodes/${r.content_id}`).then((res) =>
-            res.ok ? res.json() : null,
-          );
-          if (ep) {
-            resolved =
-              ep.video_url ||
-              ep.master_playlist_url ||
-              ep.streaming_url ||
-              ep.playlist_url ||
-              "";
+          const playback = access.playback_url || "";
+          resolved = playback.startsWith("https://cdn.filmorauz.net/media/")
+            ? playback
+            : normalizeMediaUrl(playback, "") || playback;
+        } catch {
+          /* fall through to direct-URL fallback */
+        }
+
+        if (!resolved) {
+          // Last-resort fallback: try fetching the public movie/episode doc
+          // and using whatever direct URL is set on it (works for legacy
+          // movies that don't go through protected media).
+          const apiBase = process.env.NEXT_PUBLIC_API_URL || "";
+          if (r.content_type === "movie") {
+            const m = await fetch(`${apiBase}/movies/${r.content_id}`).then((res) =>
+              res.ok ? res.json() : null,
+            );
+            if (m)
+              resolved =
+                m.master_playlist_url ||
+                m.streaming_url ||
+                m.playlist_url ||
+                m.video_url ||
+                "";
+          } else {
+            const ep = await fetch(`${apiBase}/episodes/${r.content_id}`).then((res) =>
+              res.ok ? res.json() : null,
+            );
+            if (ep)
+              resolved =
+                ep.video_url ||
+                ep.master_playlist_url ||
+                ep.streaming_url ||
+                ep.playlist_url ||
+                "";
           }
         }
+
         if (!cancelled) {
           if (!resolved) {
             setLoadError(
