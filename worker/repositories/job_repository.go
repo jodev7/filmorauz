@@ -974,6 +974,11 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 		cursor, findErr := r.collection.Find(ctx, bson.M{
 			"status":     stage.status,
 			"updated_at": bson.M{"$lt": stageCutoff},
+			// Exclude serial-parent jobs sitting in waiting_for_episodes —
+			// they're not "stuck", they're intentionally waiting for child
+			// episode jobs to finish so the finalizer can build Series /
+			// Seasons / Episodes from the completed children.
+			"stage": bson.M{"$ne": "waiting_for_episodes"},
 		})
 		if findErr != nil {
 			log.Printf("[REPO] RecoverStaleJobs(%s): ERROR - %v", stage.status, findErr)
