@@ -4053,6 +4053,7 @@ export interface RoomUserResult {
   id: string;
   display_name: string;
   avatar: string;
+  telegram_id?: number;
 }
 export async function searchRoomUsers(token: string, q: string): Promise<{ items: RoomUserResult[] }> {
   const res = await fetch(`${API_URL}/rooms/users/search?q=${encodeURIComponent(q)}`, {

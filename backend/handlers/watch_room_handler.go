@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -144,8 +145,8 @@ func (h *WatchRoomHandler) CreateRoom(c *gin.Context) {
 	now := time.Now()
 	room := &models.WatchRoom{
 		OwnerID:         userID,
-		OwnerName:       user.DisplayName,
-		OwnerAvatar:     user.PhotoURL,
+		OwnerName:       resolveDisplayName(user),
+		OwnerAvatar:     resolveAvatarURL(user),
 		OwnerIsPremium:  isPremium,
 		ContentType:     body.ContentType,
 		ContentID:       contentID,
@@ -486,8 +487,8 @@ func (h *WatchRoomHandler) WebSocket(c *gin.Context, validateToken func(string) 
 	}
 	client := &services.HubClient{
 		UserID:     userID,
-		UserName:   user.DisplayName,
-		UserAvatar: user.PhotoURL,
+		UserName:   resolveDisplayName(user),
+		UserAvatar: resolveAvatarURL(user),
 		IsHost:     room.OwnerID == userID,
 		Conn:       conn,
 	}
@@ -526,14 +527,35 @@ func (h *WatchRoomHandler) SearchUsersForInvite(c *gin.Context) {
 		ID          string `json:"id"`
 		DisplayName string `json:"display_name"`
 		Avatar      string `json:"avatar"`
+		TelegramID  int64  `json:"telegram_id,omitempty"`
 	}
 	out := make([]item, 0)
 
-	// Exact ID lookup first — admins often paste an ObjectID.
+	// Exact ObjectID lookup.
 	if oid, err := primitive.ObjectIDFromHex(q); err == nil {
 		u, _ := h.userRepo.FindByID(oid.Hex())
 		if u != nil && !u.IsBannedActive() {
-			out = append(out, item{ID: u.ID.Hex(), DisplayName: u.DisplayName, Avatar: u.PhotoURL})
+			out = append(out, item{
+				ID:          u.ID.Hex(),
+				DisplayName: resolveDisplayName(u),
+				Avatar:      resolveAvatarURL(u),
+				TelegramID:  u.TelegramID,
+			})
+			c.JSON(http.StatusOK, gin.H{"items": out})
+			return
+		}
+	}
+
+	// Exact Telegram-ID lookup — users typically copy this from Telegram.
+	if tid, err := strconv.ParseInt(q, 10, 64); err == nil && tid > 0 {
+		u, _ := h.userRepo.FindByTelegramID(tid)
+		if u != nil && !u.IsBannedActive() {
+			out = append(out, item{
+				ID:          u.ID.Hex(),
+				DisplayName: resolveDisplayName(u),
+				Avatar:      resolveAvatarURL(u),
+				TelegramID:  u.TelegramID,
+			})
 			c.JSON(http.StatusOK, gin.H{"items": out})
 			return
 		}
@@ -546,9 +568,44 @@ func (h *WatchRoomHandler) SearchUsersForInvite(c *gin.Context) {
 	}
 	for i := range users {
 		u := users[i]
-		out = append(out, item{ID: u.ID.Hex(), DisplayName: u.DisplayName, Avatar: u.PhotoURL})
+		out = append(out, item{
+			ID:          u.ID.Hex(),
+			DisplayName: resolveDisplayName(&u),
+			Avatar:      resolveAvatarURL(&u),
+			TelegramID:  u.TelegramID,
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{"items": out})
+}
+
+// resolveDisplayName picks the best non-empty label for a user. The hub
+// previously fed bare user.DisplayName into UserName, which is often empty
+// for Telegram-onboarded accounts where only first_name is set; the
+// frontend then rendered "Foydalanuvchi" for everyone.
+func resolveDisplayName(u *models.User) string {
+	if u == nil {
+		return "Foydalanuvchi"
+	}
+	if s := strings.TrimSpace(u.DisplayName); s != "" && s != "." && s != "-" {
+		return s
+	}
+	if s := strings.TrimSpace(u.FirstName); s != "" && s != "." && s != "-" {
+		return s
+	}
+	if s := strings.TrimSpace(u.TelegramUser); s != "" {
+		return s
+	}
+	return "Foydalanuvchi"
+}
+
+func resolveAvatarURL(u *models.User) string {
+	if u == nil {
+		return ""
+	}
+	if u.ProfileImageURL != "" {
+		return u.ProfileImageURL
+	}
+	return u.PhotoURL
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────

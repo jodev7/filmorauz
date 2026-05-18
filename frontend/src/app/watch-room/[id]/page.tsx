@@ -59,6 +59,7 @@ export default function WatchRoomPage() {
   const [typingUsers, setTypingUsers] = useState<Record<string, string>>({}); // userID → name
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [linkPopup, setLinkPopup] = useState<{ url: string; copied: boolean } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
@@ -76,12 +77,40 @@ export default function WatchRoomPage() {
         if (cancelled) return;
         setRoom(r);
         const apiBase = process.env.NEXT_PUBLIC_API_URL || "";
+        let resolved = "";
         if (r.content_type === "movie") {
-          const m = await fetch(`${apiBase}/movies/${r.content_id}`).then((res) => res.json());
-          if (!cancelled) setVideoSrc(m.master_playlist_url || m.streaming_url || "");
+          const m = await fetch(`${apiBase}/movies/${r.content_id}`).then((res) =>
+            res.ok ? res.json() : null,
+          );
+          if (m) {
+            resolved =
+              m.master_playlist_url ||
+              m.streaming_url ||
+              m.playlist_url ||
+              m.video_url ||
+              "";
+          }
         } else {
-          const ep = await fetch(`${apiBase}/episodes/${r.content_id}`).then((res) => res.json());
-          if (!cancelled) setVideoSrc(ep.video_url || ep.master_playlist_url || "");
+          const ep = await fetch(`${apiBase}/episodes/${r.content_id}`).then((res) =>
+            res.ok ? res.json() : null,
+          );
+          if (ep) {
+            resolved =
+              ep.video_url ||
+              ep.master_playlist_url ||
+              ep.streaming_url ||
+              ep.playlist_url ||
+              "";
+          }
+        }
+        if (!cancelled) {
+          if (!resolved) {
+            setLoadError(
+              "Bu kontent uchun video manzili topilmadi. Admin tomonidan tasdiqlanmagan bo'lishi mumkin.",
+            );
+          } else {
+            setVideoSrc(resolved);
+          }
         }
         const msgs = await listRoomMessages(roomID).catch(() => ({ items: [] as WatchRoomMessage[] }));
         if (!cancelled) {
@@ -261,10 +290,16 @@ export default function WatchRoomPage() {
     try {
       const inv = await createRoomInvite(token, room.id, {});
       const url = `${window.location.origin}/watch-room/${room.id}?invite=${inv.code}`;
-      await navigator.clipboard.writeText(url);
-      alert("Taklif havolasi nusxa olindi:\n\n" + url);
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(url);
+        copied = true;
+      } catch {
+        /* clipboard may be unavailable on non-https or older Safari */
+      }
+      setLinkPopup({ url, copied });
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Taklif yaratishda xatolik");
+      setLinkPopup({ url: e instanceof Error ? e.message : "Taklif yaratishda xatolik", copied: false });
     }
   }, [token, room]);
 
@@ -581,6 +616,60 @@ export default function WatchRoomPage() {
         />
       )}
 
+      {/* Invite link popup */}
+      {linkPopup && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+          onClick={() => setLinkPopup(null)}
+        >
+          <div
+            className="bg-brand-card border border-brand-border rounded-xl w-full max-w-md overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-brand-border flex items-center justify-between">
+              <h3 className="font-semibold">Taklif havolasi</h3>
+              <button onClick={() => setLinkPopup(null)} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-3">
+              {linkPopup.copied && (
+                <p className="text-xs text-green-300">Havola nusxa olindi ✓</p>
+              )}
+              <p className="text-xs text-gray-400">Ushbu havolani do&apos;stlaringizga yuboring:</p>
+              <div className="bg-brand-dark border border-brand-border rounded p-2 text-xs break-all font-mono select-all">
+                {linkPopup.url}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(linkPopup.url);
+                      setLinkPopup({ ...linkPopup, copied: true });
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                  className="flex-1 px-3 py-2 bg-brand-red rounded-lg text-sm flex items-center justify-center gap-2"
+                >
+                  <Copy className="w-4 h-4" /> Nusxa olish
+                </button>
+                <button
+                  onClick={() => setLinkPopup(null)}
+                  className="px-3 py-2 bg-brand-dark border border-brand-border rounded-lg text-sm"
+                >
+                  Yopish
+                </button>
+              </div>
+              <p className="text-[10px] text-gray-500">
+                Havola 6 soat amal qiladi (premium uchun 24 soat). Faqat ro&apos;yxatdan o&apos;tgan
+                foydalanuvchilar kira oladi.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Animation styles for floating reactions */}
       <style jsx global>{`
         @keyframes floatUp {
@@ -704,12 +793,12 @@ function InviteModal({
             <span className="text-white">{contentTitle}</span> uchun room
           </p>
           <div>
-            <p className="text-xs text-gray-400 mb-1">Foydalanuvchi ID yoki ismi:</p>
+            <p className="text-xs text-gray-400 mb-1">Telegram ID yoki ism orqali qidiring:</p>
             <input
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="qidirish..."
+              placeholder="123456789 yoki Ali"
               className="w-full bg-brand-dark border border-brand-border rounded px-3 py-2 text-sm focus:outline-none focus:border-brand-red"
             />
           </div>
@@ -738,7 +827,11 @@ function InviteModal({
                   )}
                   <div className="flex-1 min-w-0">
                     <p className="text-sm truncate">{u.display_name || "Foydalanuvchi"}</p>
-                    <p className="text-[10px] text-gray-500 font-mono truncate">{u.id}</p>
+                    {u.telegram_id ? (
+                      <p className="text-[10px] text-gray-500 font-mono truncate">TG: {u.telegram_id}</p>
+                    ) : (
+                      <p className="text-[10px] text-gray-500 font-mono truncate">{u.id}</p>
+                    )}
                   </div>
                   <button
                     disabled={!!sentTo[u.id]}
