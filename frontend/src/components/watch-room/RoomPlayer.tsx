@@ -127,11 +127,18 @@ export default function RoomPlayer({
   // Stable reference to the master playlist URL so the dropdown can
   // re-trigger a fetch later. Mirrors `src` 1:1.
   const lastSrcRef = useRef<string>("");
+  // Tracks whether the current picker entries came from hls.js (whose
+  // indices are valid `hls.currentLevel` arguments) or from the manual
+  // master-playlist parse (whose indices are master-order positions
+  // that may NOT match hls.levels). Click handling needs to know so it
+  // can map height → hls.levels index instead of trusting the raw idx.
+  const qualitiesSourceRef = useRef<"hls" | "manual" | null>(null);
 
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !src) return;
     lastSrcRef.current = src;
+    qualitiesSourceRef.current = null;
     const isHls = /\.m3u8(\?|$)/i.test(src) || src.includes("/master.m3u8");
 
     // ALWAYS try to parse the master playlist for the quality picker —
@@ -139,9 +146,13 @@ export default function RoomPlayer({
     // Safari users would never see a populated picker.
     if (isHls) {
       void parseMasterPlaylist(src).then((variants) => {
-        if (variants.length > 0) {
-          const built = buildFromVariants(variants);
-          setQualities((curr) => (built.length > curr.length ? built : curr));
+        // Only populate from the manual parse if hls.js hasn't already
+        // taken over. Manual indices are master-order positions; using
+        // them as `hls.currentLevel` arguments can land on the wrong
+        // resolution because hls.js reorders levels internally.
+        if (variants.length > 0 && qualitiesSourceRef.current !== "hls") {
+          qualitiesSourceRef.current = "manual";
+          setQualities(buildFromVariants(variants));
         }
       });
     }
@@ -160,24 +171,24 @@ export default function RoomPlayer({
     hls.loadSource(src);
     hls.attachMedia(v);
     const buildLevels = buildFromVariants;
-    // Important: every setQualities here goes through a "don't shrink"
-    // guard. Without it, hls.js events fire in unpredictable order
-    // (MANIFEST_PARSED with 0 levels, then LEVELS_UPDATED with 4, then
-    // a stale LEVEL_LOADED with 0 again) and the later empty event
-    // wipes the populated picker back to just "Auto". The merge keeps
-    // whichever list has the most entries.
-    const mergeQualities = (next: QualityLevel[]) =>
-      setQualities((curr) => (next.length > curr.length ? next : curr));
+    // Hls-sourced events ALWAYS overwrite the picker because their
+    // indices map 1:1 to `hls.currentLevel`. Manual-fetch entries are
+    // a fallback only used when hls.js hasn't populated yet.
+    const setFromHls = (next: QualityLevel[]) => {
+      if (next.length <= 1) return; // ignore stub events
+      qualitiesSourceRef.current = "hls";
+      setQualities(next);
+    };
     hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
-      mergeQualities(buildLevels(data.levels));
+      setFromHls(buildLevels(data.levels));
     });
     hls.on(Hls.Events.LEVEL_LOADED, () => {
       if (hls.levels && hls.levels.length > 0) {
-        mergeQualities(buildLevels(hls.levels));
+        setFromHls(buildLevels(hls.levels));
       }
     });
     hls.on(Hls.Events.LEVELS_UPDATED, (_, data) => {
-      if (data.levels.length > 0) mergeQualities(buildLevels(data.levels));
+      if (data.levels.length > 0) setFromHls(buildLevels(data.levels));
     });
     // (Manual master.m3u8 parse already kicked off above, runs in
     // parallel with hls.js to populate the picker as fast as possible.)
@@ -683,9 +694,9 @@ export default function RoomPlayer({
                 // variants (CORS hiccup, hls.js stub levels, etc.).
                 if (nextOpen && qualities.length <= 1 && lastSrcRef.current) {
                   void parseMasterPlaylist(lastSrcRef.current).then((variants) => {
-                    if (variants.length > 0) {
-                      const built = buildFromVariants(variants);
-                      setQualities((curr) => (built.length > curr.length ? built : curr));
+                    if (variants.length > 0 && qualitiesSourceRef.current !== "hls") {
+                      qualitiesSourceRef.current = "manual";
+                      setQualities(buildFromVariants(variants));
                     }
                   });
                 }
