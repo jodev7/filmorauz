@@ -356,6 +356,11 @@ func (p *Pipeline) ProcessDownloadJob(ctx context.Context, job *models.Ingestion
 	if videoURL == "" {
 		return p.failDownloadJob(jobID, fmt.Errorf("download_url empty after parser resolve"))
 	}
+	// Some sources (kinochilar, uzmedia, kinolar) return the embed
+	// iframe wrapper URL (e.g. /player/playerjs.html?file=https://...)
+	// instead of the bare video URL. Unwrap before validation /
+	// download so the worker handles every source uniformly.
+	videoURL = unwrapEmbedURL(videoURL)
 	selectedQuality := normalizeQualityLabel(firstNonEmptyString(candidates[0].Quality, metadata.Quality))
 	mediaType := normalizeMediaType(candidates[0].Type, videoURL)
 	log.Printf("[download-debug] job_id=%s source=%s detail_url=%s video_url=%s download_url=%s selected_quality=%q media_type=%s",
@@ -3038,6 +3043,55 @@ func (p *Pipeline) updateMessage(jobID string, message string) error {
 func (p *Pipeline) log(jobID, message, level string) {
 	p.jobRepo.AddLog(context.Background(), jobID, message, level)
 	log.Printf("[%s] %s", level, message)
+}
+
+// unwrapEmbedURL extracts the real video URL from player-embed wrappers
+// that some sources return (kinochilar, uzmedia, kinolar). Examples:
+//
+//	/player/playerjs.html?file=https://.../master.m3u8
+//	/embed.html?file=http://.../*.mp4
+//	/player/playerjs.html?file=URL1,URL2,URL3&qualities=480P,720P,1080P
+//
+// For the multi-URL kinolar variant we pick the LAST entry — that's
+// usually the highest quality (1080p) for these sources. The simple
+// single-URL case returns the embedded URL verbatim. URLs that don't
+// match the wrapper pattern are returned unchanged.
+func unwrapEmbedURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	path := strings.ToLower(u.Path)
+	isEmbed := strings.Contains(path, "playerjs.html") ||
+		strings.HasSuffix(path, "/embed.html") ||
+		path == "/embed.html"
+	if !isEmbed {
+		return raw
+	}
+	file := strings.TrimSpace(u.Query().Get("file"))
+	if file == "" {
+		return raw
+	}
+	// kinolar packs multiple qualities into one file= value separated
+	// by commas. Pick the last (highest quality) entry.
+	if strings.Contains(file, ",") {
+		parts := strings.Split(file, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			candidate := strings.TrimSpace(parts[i])
+			if strings.HasPrefix(candidate, "http://") || strings.HasPrefix(candidate, "https://") {
+				return candidate
+			}
+		}
+		return raw
+	}
+	if strings.HasPrefix(file, "http://") || strings.HasPrefix(file, "https://") {
+		return file
+	}
+	return raw
 }
 
 func validateDownloadURL(raw string) error {
