@@ -441,6 +441,18 @@ export default function RoomPlayer({
 
   const setQuality = (idx: number) => {
     const hls = hlsRef.current;
+    // eslint-disable-next-line no-console
+    console.log("[quality CLICK]", {
+      pickedIdx: idx,
+      qualities,
+      hasHls: !!hls,
+      hlsLevels: (hls?.levels || []).map((l, i) => ({
+        i,
+        h: l.height,
+        b: l.bitrate,
+        url: l.url?.[0]?.slice(-40),
+      })),
+    });
     if (hls) {
       if (idx === -1) {
         hls.currentLevel = -1;
