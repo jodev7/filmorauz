@@ -730,7 +730,17 @@ export default function WatchRoomPage() {
                 posterUrl={room.content_poster}
                 isHost={isHost}
                 isMoviePremium={!!room.owner_is_premium}
-                persistKey={isHost ? `${room.id}-${user.id}` : undefined}
+                persistKey={
+                  isHost
+                    ? room.content_type === "series"
+                      ? // Series rooms: scope the saved position to the
+                        // CURRENT episode so switching epizodes always
+                        // starts the new one from 0 instead of resuming
+                        // at the previous episode's playhead.
+                        `${room.id}-${user.id}-${room.current_episode_id || "ep"}`
+                      : `${room.id}-${user.id}`
+                    : undefined
+                }
                 onHostPlay={onHostPlay}
                 onHostPause={onHostPause}
                 onHostSeek={onHostSeek}
