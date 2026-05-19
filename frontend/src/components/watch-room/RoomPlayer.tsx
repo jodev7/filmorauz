@@ -474,29 +474,15 @@ export default function RoomPlayer({
           }
         }
         if (resolvedIdx >= 0) {
-          // Force-switch on every API hls.js exposes for level pinning.
+          // Just set currentLevel — in hls.js v1.x this is the canonical
+          // "switch right now" API and it handles flushing the forward
+          // buffer + reloading from the new variant on its own. The
+          // previous approach (currentLevel + loadLevel + nextLoadLevel
+          // + manual BUFFER_FLUSHING + seek nudge) was fighting itself:
+          // the seek would land in an already-buffered range and skip
+          // the just-issued flush, so the switch sometimes "stuck" at
+          // the old quality. Trusting the single API is reliable.
           hls.currentLevel = resolvedIdx;
-          hls.loadLevel = resolvedIdx;
-          hls.nextLoadLevel = resolvedIdx;
-          // Trigger an immediate flush so the already-buffered segments
-          // at the OLD quality are discarded and the new quality starts
-          // downloading right away. Without this, hls.js keeps playing
-          // the 1080p buffer for ~30s before switching.
-          const v = videoRef.current;
-          if (v) {
-            const pos = v.currentTime;
-            try {
-              hls.trigger(Hls.Events.BUFFER_FLUSHING, {
-                startOffset: pos,
-                endOffset: Number.POSITIVE_INFINITY,
-                type: null,
-              });
-            } catch {
-              /* older hls — ignore */
-            }
-            // Tiny seek nudges the decoder to pick up the new level.
-            v.currentTime = pos + 0.01;
-          }
         }
       }
     }

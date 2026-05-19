@@ -84,6 +84,9 @@ export default function WatchRoomPage() {
   const [episodeRequestToast, setEpisodeRequestToast] = useState<
     { userName: string; reason: string; targetEpisodeID?: string; ts: number } | null
   >(null);
+  // Confirm popup for host's "close room" action.
+  const [closeConfirm, setCloseConfirm] = useState(false);
+  const [closeBusy, setCloseBusy] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
@@ -642,17 +645,7 @@ export default function WatchRoomPage() {
               the 5-min disconnect grace. */}
           {isHost && (
             <button
-              onClick={async () => {
-                if (!token || !room) return;
-                if (!confirm("Roomni yopmoqchimisiz? Barcha a'zolar chiqariladi.")) return;
-                try {
-                  await closeWatchRoom(token, room.id);
-                  // The WS will fire `room_closed` and the page will
-                  // navigate to "/" via the existing handler.
-                } catch (err) {
-                  alert(err instanceof Error ? err.message : "Xato");
-                }
-              }}
+              onClick={() => setCloseConfirm(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm text-red-300 bg-red-900/30 hover:bg-red-900/50 border border-red-700/50 rounded-lg transition-colors"
               title="Roomni yopish (host)"
             >
@@ -992,6 +985,65 @@ export default function WatchRoomPage() {
                   </ul>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Close-room confirm popup (host-only) */}
+      {closeConfirm && isHost && room && token && (
+        <div
+          className="fixed inset-0 z-[10000] bg-black/75 flex items-center justify-center p-4"
+          onClick={() => !closeBusy && setCloseConfirm(false)}
+        >
+          <div
+            className="bg-brand-card border border-red-700/60 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-brand-border flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <XCircle className="w-5 h-5 text-red-400" />
+                <h3 className="font-semibold text-white">Roomni yopish</h3>
+              </div>
+              <button
+                onClick={() => !closeBusy && setCloseConfirm(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-gray-300">
+                Roomni yopmoqchimisiz? <span className="text-white font-semibold">Barcha a&apos;zolar</span>{" "}
+                chiqariladi va siz yangi room ocha olasiz.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  disabled={closeBusy}
+                  onClick={async () => {
+                    setCloseBusy(true);
+                    try {
+                      await closeWatchRoom(token, room.id);
+                      // WS will broadcast room_closed → page navigates
+                      // away via existing handler.
+                    } catch (err) {
+                      alert(err instanceof Error ? err.message : "Xato");
+                      setCloseBusy(false);
+                    }
+                  }}
+                  className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 rounded-lg text-white text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-60"
+                >
+                  {closeBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
+                  Ha, yopish
+                </button>
+                <button
+                  disabled={closeBusy}
+                  onClick={() => setCloseConfirm(false)}
+                  className="px-4 py-2.5 bg-brand-dark border border-brand-border rounded-lg text-sm text-gray-300 disabled:opacity-60"
+                >
+                  Bekor qilish
+                </button>
+              </div>
             </div>
           </div>
         </div>
