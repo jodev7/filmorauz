@@ -106,9 +106,18 @@ export default function WatchRoomPage() {
         let resolved = "";
         let rawMaster = "";
         const apiBase = process.env.NEXT_PUBLIC_API_URL || "";
+        // For series rooms, content_id is the SERIES id; the actual
+        // playable resource is the current episode. Resolve via
+        // current_episode_id so we don't hit /episodes/<seriesID> 404.
+        const playableType: "movie" | "episode" =
+          r.content_type === "movie" ? "movie" : "episode";
+        const playableID =
+          r.content_type === "series" ? (r.current_episode_id || "") : r.content_id;
         try {
-          if (r.content_type === "movie") {
-            const m = await fetch(`${apiBase}/movies/${r.content_id}`).then((res) =>
+          if (!playableID) {
+            // Series with no current episode — nothing to play yet.
+          } else if (playableType === "movie") {
+            const m = await fetch(`${apiBase}/movies/${playableID}`).then((res) =>
               res.ok ? res.json() : null,
             );
             if (m) {
@@ -120,33 +129,32 @@ export default function WatchRoomPage() {
                 "";
             }
           } else {
-            const ep = await fetch(`${apiBase}/episodes/${r.content_id}`).then((res) =>
+            const ep = await fetch(`${apiBase}/episodes/${playableID}`).then((res) =>
               res.ok ? res.json() : null,
             );
             if (ep) {
+              // /episodes/:id returns {episode, previous_episode, next_episode}
+              const epDoc = ep.episode || ep;
               rawMaster =
-                ep.master_playlist_url ||
-                ep.streaming_url ||
-                ep.playlist_url ||
-                ep.video_url ||
+                epDoc.master_playlist_url ||
+                epDoc.streaming_url ||
+                epDoc.playlist_url ||
+                epDoc.video_url ||
                 "";
             }
           }
         } catch {
           /* ignore */
         }
-        // If the raw URL looks like a directly-playable master playlist,
-        // use it — that's the only path that gives us multi-variant HLS
-        // and a working quality picker.
         if (rawMaster && /\.m3u8(\?|$)/i.test(rawMaster) && /^https?:\/\//i.test(rawMaster)) {
           resolved = rawMaster;
         }
-        if (!resolved) {
+        if (!resolved && playableID) {
           try {
             const access = await getProtectedMediaAccess(
-              r.content_type === "movie"
-                ? { movieId: r.content_id, token }
-                : { episodeId: r.content_id, token },
+              playableType === "movie"
+                ? { movieId: playableID, token }
+                : { episodeId: playableID, token },
             );
             const playback = access.playback_url || "";
             resolved = playback.startsWith("https://cdn.filmorauz.net/media/")

@@ -113,29 +113,31 @@ export default function RoomPlayer({
       });
       return out;
     };
+    // Important: every setQualities here goes through a "don't shrink"
+    // guard. Without it, hls.js events fire in unpredictable order
+    // (MANIFEST_PARSED with 0 levels, then LEVELS_UPDATED with 4, then
+    // a stale LEVEL_LOADED with 0 again) and the later empty event
+    // wipes the populated picker back to just "Auto". The merge keeps
+    // whichever list has the most entries.
+    const mergeQualities = (next: QualityLevel[]) =>
+      setQualities((curr) => (next.length > curr.length ? next : curr));
     hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
       // eslint-disable-next-line no-console
       console.log("[room player] MANIFEST_PARSED levels =", data.levels.map((l) => ({ h: l.height, b: l.bitrate })));
-      setQualities(buildLevels(data.levels));
+      mergeQualities(buildLevels(data.levels));
     });
-    // LEVEL_LOADED fires for each variant as it parses — refresh the
-    // picker in case MANIFEST_PARSED came in with stub levels and the
-    // real heights/bitrates land after sub-playlist parsing.
     hls.on(Hls.Events.LEVEL_LOADED, () => {
       if (hls.levels && hls.levels.length > 0) {
-        setQualities(buildLevels(hls.levels));
+        mergeQualities(buildLevels(hls.levels));
       }
     });
-    // LEVELS_UPDATED fires whenever hls.js mutates its internal levels
-    // array — newer hls versions populate variants through this path
-    // rather than MANIFEST_PARSED.
     hls.on(Hls.Events.LEVELS_UPDATED, (_, data) => {
       // eslint-disable-next-line no-console
       console.log(
         "[room player] LEVELS_UPDATED =",
         data.levels.map((l) => ({ h: l.height, b: l.bitrate })),
       );
-      if (data.levels.length > 0) setQualities(buildLevels(data.levels));
+      if (data.levels.length > 0) mergeQualities(buildLevels(data.levels));
     });
     // Race-condition fix: previously this manual fetch only ran after
     // 1.5s as a fallback. In practice hls.js' MANIFEST_PARSED was
@@ -161,13 +163,11 @@ export default function RoomPlayer({
         }
         // eslint-disable-next-line no-console
         console.log("[room player] manual parsed variants =", variants);
-        if (variants.length >= 2) {
-          // Manual parse always wins when it sees ≥2 variants — that's
-          // the ground truth from the master playlist and bypasses
-          // any hls.js stub-level weirdness.
-          setQualities(buildLevels(variants));
-        } else if (variants.length === 1) {
-          setQualities((curr) => (curr.length > 1 ? curr : buildLevels(variants)));
+        if (variants.length > 0) {
+          // Manual parse wins whenever it returns more entries than
+          // whatever hls.js has shown so far. Don't shrink.
+          const built = buildLevels(variants);
+          setQualities((curr) => (built.length > curr.length ? built : curr));
         }
       })
       .catch(() => undefined);
