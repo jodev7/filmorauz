@@ -157,11 +157,17 @@ export default function RoomPlayer({
       });
     }
 
-    // Safari native HLS path.
-    if (!isHls || v.canPlayType("application/vnd.apple.mpegurl")) {
+    // Non-HLS source — just hand the URL to the video element.
+    if (!isHls) {
       v.src = src;
       return;
     }
+    // PREFER hls.js whenever it's supported, even on browsers (like
+    // some Chromium / Edge builds) that happen to advertise native
+    // HLS playback. Native playback works but gives us no API to
+    // switch quality, so the picker is dead. hls.js gives us both
+    // playback and level switching. Native HLS is only used as a
+    // true last resort (Safari without MSE workarounds).
     if (!Hls.isSupported()) {
       v.src = src;
       return;
@@ -441,18 +447,6 @@ export default function RoomPlayer({
 
   const setQuality = (idx: number) => {
     const hls = hlsRef.current;
-    // eslint-disable-next-line no-console
-    console.log("[quality CLICK]", {
-      pickedIdx: idx,
-      qualities,
-      hasHls: !!hls,
-      hlsLevels: (hls?.levels || []).map((l, i) => ({
-        i,
-        h: l.height,
-        b: l.bitrate,
-        url: l.url?.[0]?.slice(-40),
-      })),
-    });
     if (hls) {
       if (idx === -1) {
         hls.currentLevel = -1;
@@ -479,18 +473,6 @@ export default function RoomPlayer({
             resolvedIdx = idx;
           }
         }
-        // One diagnostic log: lets the user paste back what hls.levels
-        // actually looks like at click time so we can verify the height
-        // matching is reaching the right level.
-        // eslint-disable-next-line no-console
-        console.log(
-          "[quality switch] target=",
-          target,
-          "hls.levels=",
-          (hls.levels || []).map((l, i) => ({ i, h: l.height, b: l.bitrate, url: l.url?.[0]?.slice(-30) })),
-          "resolvedIdx=",
-          resolvedIdx,
-        );
         if (resolvedIdx >= 0) {
           // Force-switch on every API hls.js exposes for level pinning.
           hls.currentLevel = resolvedIdx;
