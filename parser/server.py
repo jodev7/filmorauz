@@ -1225,16 +1225,42 @@ class ParserHandler(BaseHTTPRequestHandler):
         Get details from parser. Calls get_details(url) or get_detail(url).
         Errors from the parser method are NOT swallowed — they propagate immediately
         so the real cause is visible in logs.
+
+        Parser methods come in two shapes:
+          - simple:   get_details(url)
+          - extended: get_details(url, source_id, is_serial=False, episode_id="")
+        We introspect the signature so the helper passes whichever extras
+        the target parser declares. Previously the helper always called
+        get_details(url) and three parsers (kinolar, kinochilar, uzmedia)
+        crashed with "missing 1 required positional argument: 'source_id'".
         """
+        import inspect
+
         url = detail_url if detail_url else source_id
 
+        method = None
         if hasattr(parser, "get_details"):
-            return parser.get_details(url)
+            method = getattr(parser, "get_details")
+        elif hasattr(parser, "get_detail"):
+            method = getattr(parser, "get_detail")
+        if method is None:
+            raise ValueError(f"Parser '{source}' does not have a valid get_details method")
 
-        if hasattr(parser, "get_detail"):
-            return parser.get_detail(url)
+        try:
+            sig = inspect.signature(method)
+            params = sig.parameters
+        except (TypeError, ValueError):
+            # Builtin / C-implemented method without an introspectable
+            # signature — fall back to the simple call.
+            return method(url)
 
-        raise ValueError(f"Parser '{source}' does not have a valid get_details method")
+        kwargs = {}
+        if "source_id" in params and source_id is not None:
+            kwargs["source_id"] = source_id
+        # is_serial / episode_id are optional everywhere — only pass
+        # them if the parser explicitly declares them so we don't
+        # accidentally break a future overload.
+        return method(url, **kwargs)
     
     def _extract_best_video_url(self, details, source):
         """
