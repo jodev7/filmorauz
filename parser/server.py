@@ -887,6 +887,43 @@ def _report_backend_failure(job_id: str, message: str):
     })
 
 
+def _unwrap_embed_url(url: str) -> str:
+    """Unwrap player-embed wrappers like
+    /player/playerjs.html?file=https://...master.m3u8 and
+    /embed.html?file=http://...mp4 into the bare video URL the
+    file= parameter points to.
+
+    Some sources (kinochilar, uzmedia) return the embed iframe URL from
+    /details instead of the real video. The downloader's URL validator
+    then rejects it as "invalid URL scheme/netloc" because the embed
+    path is relative. We unwrap once here so downstream code can treat
+    every source uniformly.
+    """
+    if not url:
+        return url
+    try:
+        from urllib.parse import urlparse, parse_qs, unquote
+        parsed = urlparse(url)
+        # Recognise common embed players whose real video URL sits in
+        # the `file` query parameter.
+        path = (parsed.path or "").lower()
+        is_embed = (
+            "playerjs.html" in path
+            or path.endswith("/embed.html")
+            or path == "/embed.html"
+        )
+        if not is_embed:
+            return url
+        qs = parse_qs(parsed.query)
+        inner = (qs.get("file") or [""])[0]
+        inner = unquote(inner).strip()
+        if inner and (inner.startswith("http://") or inner.startswith("https://")):
+            return inner
+    except Exception:
+        pass
+    return url
+
+
 def _resolve_claimed_job_video(job: dict, parser_base_url: str) -> tuple[str, str]:
     stored_video_url = (job.get("video_url") or "").strip()
     referer = ""
@@ -908,7 +945,7 @@ def _resolve_claimed_job_video(job: dict, parser_base_url: str) -> tuple[str, st
     if stored_video_url and not needs_refresh:
         if not referer:
             referer = detail_url
-        return stored_video_url, referer
+        return _unwrap_embed_url(stored_video_url), referer
 
     params = {
         "source": job.get("source", ""),
@@ -971,7 +1008,7 @@ def _resolve_claimed_job_video(job: dict, parser_base_url: str) -> tuple[str, st
         )
 
     referer = (payload.get("video_page_url") or referer or job.get("detail_url") or "").strip()
-    return video_url, referer
+    return _unwrap_embed_url(video_url), referer
 
 
 def _run_claimed_download(job: dict, parser_base_url: str):
