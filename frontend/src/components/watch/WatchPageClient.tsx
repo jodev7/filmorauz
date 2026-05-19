@@ -401,7 +401,6 @@ export default function WatchPageClient({
     resumeResolvedRef.current = false;
     getWatchProgress(token, progressTargetId, { targetType })
       .then((progress) => {
-        console.log(`[progress] loaded target_type=${targetType} target_id=${progressTargetId} current_time=${progress.current_time}`);
         const tooEarly = progress.current_time < 10;
         const tooLate = progress.duration > 0 && progress.current_time > progress.duration - 30;
         const canResume = !progress.completed && progress.current_time >= 10 && !tooLate;
@@ -411,10 +410,6 @@ export default function WatchPageClient({
         setResumePromptVisible(false);
         if (!canResume) {
           resumeResolvedRef.current = true;
-          if (isDev) {
-            const reason = progress.completed ? "completed" : tooEarly ? "current_time<10" : tooLate ? "current_time>duration-30" : "no_progress";
-            console.log(`[player] resume skipped reason=${reason}`);
-          }
         }
       })
       .catch(console.error);
@@ -465,12 +460,9 @@ export default function WatchPageClient({
     persistProgress(true);
   }, [persistProgress]);
 
-  const handleInitialSeekResolved = useCallback((applied: boolean) => {
+  const handleInitialSeekResolved = useCallback(() => {
     resumeResolvedRef.current = true;
-    if (isDev && applied && selectedStartPosition > 0) {
-      console.debug("[progress] seek applied", selectedStartPosition);
-    }
-  }, [isDev, selectedStartPosition]);
+  }, []);
 
   // Handle video end
   const handleVideoEnded = () => {

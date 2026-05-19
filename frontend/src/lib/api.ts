@@ -921,9 +921,6 @@ export async function saveUnifiedWatchProgress(
     current_time: normalizedCurrentTime,
     duration: normalizedDuration,
   };
-  if (process.env.NODE_ENV !== "production") {
-    console.debug("[progress] save payload", payload);
-  }
   const res = await fetch(`${API_URL}/watch/progress`, {
     method: "POST",
     headers: authHeaders(token),

@@ -104,11 +104,7 @@ export default function RoomPlayer({
   // on-demand when the user opens an empty quality dropdown.
   const parseMasterPlaylist = async (url: string) => {
     try {
-      // eslint-disable-next-line no-console
-      console.log("[room player] fetching master playlist:", url);
       const r = await fetch(url, { credentials: "omit" });
-      // eslint-disable-next-line no-console
-      console.log("[room player] master fetch status:", r.status, "ok:", r.ok);
       if (!r.ok) return [] as Array<{ height: number; bitrate: number }>;
       const text = await r.text();
       const variants: Array<{ height: number; bitrate: number }> = [];
@@ -123,12 +119,8 @@ export default function RoomPlayer({
           bitrate: bwMatch ? Number(bwMatch[1]) : 0,
         });
       }
-      // eslint-disable-next-line no-console
-      console.log("[room player] master parsed variants:", variants);
       return variants;
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("[room player] master fetch failed:", e);
+    } catch {
       return [] as Array<{ height: number; bitrate: number }>;
     }
   };
@@ -177,8 +169,6 @@ export default function RoomPlayer({
     const mergeQualities = (next: QualityLevel[]) =>
       setQualities((curr) => (next.length > curr.length ? next : curr));
     hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
-      // eslint-disable-next-line no-console
-      console.log("[room player] MANIFEST_PARSED levels =", data.levels.map((l) => ({ h: l.height, b: l.bitrate })));
       mergeQualities(buildLevels(data.levels));
     });
     hls.on(Hls.Events.LEVEL_LOADED, () => {
@@ -187,11 +177,6 @@ export default function RoomPlayer({
       }
     });
     hls.on(Hls.Events.LEVELS_UPDATED, (_, data) => {
-      // eslint-disable-next-line no-console
-      console.log(
-        "[room player] LEVELS_UPDATED =",
-        data.levels.map((l) => ({ h: l.height, b: l.bitrate })),
-      );
       if (data.levels.length > 0) mergeQualities(buildLevels(data.levels));
     });
     // (Manual master.m3u8 parse already kicked off above, runs in
@@ -225,23 +210,39 @@ export default function RoomPlayer({
     if (!isHost || !persistKey) return;
     const v = videoRef.current;
     if (!v) return;
+    // Critical: reset the "already applied" flag whenever src changes.
+    // Without this reset the restore only fires the very first time the
+    // component sees a non-empty src, so a host who navigated away and
+    // back never resumes from their saved position.
+    positionLoadedRef.current = false;
     const apply = () => {
       if (positionLoadedRef.current) return;
-      positionLoadedRef.current = true;
       try {
         const raw = window.localStorage.getItem(`watchroom:pos:${persistKey}`);
         const saved = raw ? Number(raw) : 0;
-        if (saved > 5 && (!v.duration || saved < v.duration - 5)) {
+        // Lowered the threshold from 5s → 2s so even a quick scrub
+        // before navigating away is restored.
+        if (saved > 2 && (!v.duration || saved < v.duration - 2)) {
           v.currentTime = saved;
+          positionLoadedRef.current = true;
+        } else if (v.duration > 0) {
+          // Duration known but no usable saved value — mark loaded so
+          // the canplay listener doesn't keep re-trying.
+          positionLoadedRef.current = true;
         }
       } catch {
         /* localStorage unavailable */
       }
     };
     if (v.readyState >= 1 /* HAVE_METADATA */) apply();
-    else v.addEventListener("loadedmetadata", apply, { once: true });
+    v.addEventListener("loadedmetadata", apply);
+    // Belt-and-braces: canplay fires later than loadedmetadata on slow
+    // connections and is the latest point at which we can still seek
+    // reliably before the user notices playback starting at 0.
+    v.addEventListener("canplay", apply);
     return () => {
       v.removeEventListener("loadedmetadata", apply);
+      v.removeEventListener("canplay", apply);
     };
   }, [isHost, persistKey, src]);
 
@@ -255,7 +256,7 @@ export default function RoomPlayer({
     const key = `watchroom:pos:${persistKey}`;
     const save = () => {
       try {
-        if (v.currentTime > 5) {
+        if (v.currentTime > 2) {
           window.localStorage.setItem(key, String(v.currentTime));
         }
       } catch {
@@ -430,7 +431,56 @@ export default function RoomPlayer({
   const setQuality = (idx: number) => {
     const hls = hlsRef.current;
     if (hls) {
-      hls.currentLevel = idx;
+      // Auto mode.
+      if (idx === -1) {
+        hls.currentLevel = -1;
+      } else {
+        // The `idx` in the picker comes from buildFromVariants, which
+        // numbers items by their order in the master playlist. hls.js'
+        // own `hls.levels` array can be reordered internally (e.g.
+        // sorted by bandwidth ascending), so passing our `idx` straight
+        // into hls.currentLevel can switch to a totally different
+        // resolution than what the user clicked. Find the matching
+        // hls.levels entry by height and use THAT index instead.
+        const target = qualities.find((q) => q.index === idx);
+        if (target && hls.levels && hls.levels.length > 0) {
+          let resolvedIdx = -1;
+          for (let i = 0; i < hls.levels.length; i++) {
+            if (hls.levels[i].height === target.height) {
+              resolvedIdx = i;
+              break;
+            }
+          }
+          // Fallback: if no height match (e.g. bitrate-only label),
+          // try matching by bitrate. Last resort — pass the raw idx
+          // if it's in range.
+          if (resolvedIdx < 0) {
+            for (let i = 0; i < hls.levels.length; i++) {
+              if (hls.levels[i].bitrate === target.height) {
+                resolvedIdx = i;
+                break;
+              }
+            }
+          }
+          if (resolvedIdx < 0 && idx >= 0 && idx < hls.levels.length) {
+            resolvedIdx = idx;
+          }
+          if (resolvedIdx >= 0) {
+            hls.currentLevel = resolvedIdx;
+            // Force the next segment to be downloaded at the new
+            // bitrate immediately — without nextLevel, hls.js keeps
+            // playing already-buffered segments at the old quality.
+            hls.nextLevel = resolvedIdx;
+            // Flush the buffer ahead of the playhead so the new
+            // quality replaces what was already downloaded.
+            const v = videoRef.current;
+            if (v) {
+              const pos = v.currentTime;
+              v.currentTime = pos + 0.01;
+            }
+          }
+        }
+      }
     }
     setSelectedLevel(idx);
     setShowSettings(false);
