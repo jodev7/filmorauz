@@ -68,6 +68,9 @@ export default function RoomPlayer({
   const [qualities, setQualities] = useState<QualityLevel[]>([]);
   const [selectedLevel, setSelectedLevel] = useState<number>(-1); // -1 = auto
   const [controlsVisible, setControlsVisible] = useState(true);
+  // Progress-bar hover state: fractional position (0..1) and pixel-x for
+  // the tooltip. Null when the cursor isn't over the bar.
+  const [scrubHover, setScrubHover] = useState<{ frac: number; x: number } | null>(null);
   const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -134,45 +137,44 @@ export default function RoomPlayer({
       );
       if (data.levels.length > 0) setQualities(buildLevels(data.levels));
     });
-    // Last-resort poll: some streams populate hls.levels after a delay
-    // that doesn't line up with either of the events above. Re-read after
-    // 1.5s to make sure the picker isn't stuck on "Auto".
+    // Race-condition fix: previously this manual fetch only ran after
+    // 1.5s as a fallback. In practice hls.js' MANIFEST_PARSED was
+    // firing with a single stub level, so the picker locked to "Auto"
+    // and never updated even though the master playlist has 3
+    // variants. Run the manual master parse immediately and prefer
+    // its result whenever it returns ≥2 variants.
+    fetch(src, { credentials: "omit" })
+      .then((r) => (r.ok ? r.text() : ""))
+      .then((text) => {
+        if (!text) return;
+        const variants: Array<{ height: number; bitrate: number }> = [];
+        const re = /#EXT-X-STREAM-INF:([^\n]+)/g;
+        let mm: RegExpExecArray | null;
+        while ((mm = re.exec(text)) !== null) {
+          const attrs = mm[1];
+          const resMatch = /RESOLUTION=\d+x(\d+)/.exec(attrs);
+          const bwMatch = /BANDWIDTH=(\d+)/.exec(attrs);
+          variants.push({
+            height: resMatch ? Number(resMatch[1]) : 0,
+            bitrate: bwMatch ? Number(bwMatch[1]) : 0,
+          });
+        }
+        // eslint-disable-next-line no-console
+        console.log("[room player] manual parsed variants =", variants);
+        if (variants.length >= 2) {
+          // Manual parse always wins when it sees ≥2 variants — that's
+          // the ground truth from the master playlist and bypasses
+          // any hls.js stub-level weirdness.
+          setQualities(buildLevels(variants));
+        } else if (variants.length === 1) {
+          setQualities((curr) => (curr.length > 1 ? curr : buildLevels(variants)));
+        }
+      })
+      .catch(() => undefined);
     const lateCheck = setTimeout(() => {
       if (hls.levels && hls.levels.length > 0) {
-        // eslint-disable-next-line no-console
-        console.log(
-          "[room player] late-check hls.levels =",
-          hls.levels.map((l) => ({ h: l.height, b: l.bitrate })),
-        );
         setQualities((curr) => (curr.length > 1 ? curr : buildLevels(hls.levels)));
-        return;
       }
-      // Hls gave us nothing — fetch the master playlist directly and
-      // parse #EXT-X-STREAM-INF lines. This is the most reliable path
-      // when MANIFEST_PARSED / LEVEL_LOADED never fire with real heights.
-      fetch(src, { credentials: "omit" })
-        .then((r) => (r.ok ? r.text() : ""))
-        .then((text) => {
-          if (!text) return;
-          const variants: Array<{ height: number; bitrate: number }> = [];
-          const re = /#EXT-X-STREAM-INF:([^\n]+)/g;
-          let mm: RegExpExecArray | null;
-          while ((mm = re.exec(text)) !== null) {
-            const attrs = mm[1];
-            const resMatch = /RESOLUTION=\d+x(\d+)/.exec(attrs);
-            const bwMatch = /BANDWIDTH=(\d+)/.exec(attrs);
-            variants.push({
-              height: resMatch ? Number(resMatch[1]) : 0,
-              bitrate: bwMatch ? Number(bwMatch[1]) : 0,
-            });
-          }
-          // eslint-disable-next-line no-console
-          console.log("[room player] manual parsed variants =", variants);
-          if (variants.length > 0) {
-            setQualities((curr) => (curr.length > 1 ? curr : buildLevels(variants)));
-          }
-        })
-        .catch(() => undefined);
     }, 1500);
     hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
       // Keep the picker label in sync when auto-bitrate switches.
@@ -506,9 +508,18 @@ export default function RoomPlayer({
         }`}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Progress bar */}
+        {/* Progress bar — onMouseMove drives the hover dot + time
+            tooltip so users can see where they're about to seek to.
+            Guests get the preview too (they can't actually seek but
+            knowing the time helps for chat coordination). */}
         <div
-          className={`relative h-1.5 bg-white/20 rounded-full mb-2 ${isHost ? "cursor-pointer" : "cursor-not-allowed"}`}
+          className={`relative h-1.5 bg-white/20 rounded-full mb-2 group/scrub ${isHost ? "cursor-pointer" : "cursor-not-allowed"}`}
+          onMouseMove={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+            setScrubHover({ frac, x: e.clientX - rect.left });
+          }}
+          onMouseLeave={() => setScrubHover(null)}
           onClick={(e) => {
             if (!isHost) return;
             const rect = e.currentTarget.getBoundingClientRect();
@@ -520,6 +531,31 @@ export default function RoomPlayer({
             className="absolute inset-y-0 left-0 bg-brand-red rounded-full"
             style={{ width: `${progressPct}%` }}
           />
+          {/* Hover dot + time tooltip. Shown while the cursor is over
+              the bar. Pointer-events disabled so it doesn't swallow
+              the click handler on the bar itself. */}
+          {scrubHover && duration > 0 && (
+            <>
+              <div
+                className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-white border-2 border-brand-red shadow-md pointer-events-none"
+                style={{ left: `${scrubHover.x}px` }}
+              />
+              <div
+                className="absolute -top-7 -translate-x-1/2 px-1.5 py-0.5 text-[10px] tabular-nums bg-black/90 text-white rounded pointer-events-none whitespace-nowrap"
+                style={{ left: `${scrubHover.x}px` }}
+              >
+                {formatTime(duration * scrubHover.frac)}
+              </div>
+            </>
+          )}
+          {/* Always-on playhead dot at the current position (only when
+              not hovering, so it doesn't double up with the hover dot). */}
+          {!scrubHover && progressPct > 0 && (
+            <div
+              className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-white opacity-0 group-hover/scrub:opacity-100 transition-opacity pointer-events-none"
+              style={{ left: `${progressPct}%` }}
+            />
+          )}
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3 text-white">
