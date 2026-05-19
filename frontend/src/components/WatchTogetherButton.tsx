@@ -32,6 +32,10 @@ export default function WatchTogetherButton({ contentType, contentID, className 
   // dedicated upsell popup instead of a generic toast — the goal is to
   // route the user to /premium, not to confuse them with an error.
   const [quotaPopup, setQuotaPopup] = useState(false);
+  // Set when the backend rejects with 409 ("you already have an open
+  // room"). The popup links to the active room so the user can finish
+  // or close it before starting a new one.
+  const [existingRoomID, setExistingRoomID] = useState<string | null>(null);
   // Portal target — `document.body` is only available after mount, so we
   // gate render-to-portal behind a hydration flag.
   const [mounted, setMounted] = useState(false);
@@ -71,6 +75,15 @@ export default function WatchTogetherButton({ contentType, contentID, className 
       if (lower.includes("daily room limit") || lower.includes("limit reached")) {
         setOpen(false);
         setQuotaPopup(true);
+        setBusy(false);
+        return;
+      }
+      // 409 — user already has an active room. Show a popup with a
+      // direct link back to that room.
+      const errAny = e as { activeRoomID?: string; status?: number };
+      if (errAny.status === 409 || lower.includes("already have an open room")) {
+        setOpen(false);
+        setExistingRoomID(errAny.activeRoomID || "");
         setBusy(false);
         return;
       }
@@ -238,6 +251,58 @@ export default function WatchTogetherButton({ contentType, contentID, className 
               </div>
               <p className="text-[10px] text-gray-500 text-center">
                 Limit har kuni yarim tunda yangilanadi.
+              </p>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* "You already have an open room" popup. Routes the user back
+          to their existing session. Server-side rule: every user
+          (free or premium) can host one active room at a time. */}
+      {existingRoomID !== null && mounted && createPortal(
+        <div
+          className="fixed inset-0 z-[10000] bg-black/75 flex items-center justify-center p-4"
+          onClick={() => setExistingRoomID(null)}
+        >
+          <div
+            className="bg-brand-card border border-brand-red rounded-2xl w-full max-w-md overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-brand-border flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Users className="w-5 h-5 text-brand-red" />
+                <h3 className="font-semibold text-white">Sizda allaqachon ochiq room bor</h3>
+              </div>
+              <button onClick={() => setExistingRoomID(null)} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-gray-300">
+                Bir vaqtning o&apos;zida faqat <span className="text-white font-semibold">1 ta</span> aktiv
+                room hostlik qilishingiz mumkin. Yangi room ochish uchun avval mavjud roomni yoping.
+              </p>
+              <div className="flex gap-2">
+                {existingRoomID && (
+                  <Link
+                    href={`/watch-room/${existingRoomID}`}
+                    onClick={() => setExistingRoomID(null)}
+                    className="flex-1 px-4 py-2.5 bg-brand-red rounded-lg text-white text-sm font-semibold flex items-center justify-center gap-2"
+                  >
+                    <Users className="w-4 h-4" /> Mavjud roomga o&apos;tish
+                  </Link>
+                )}
+                <button
+                  onClick={() => setExistingRoomID(null)}
+                  className="px-4 py-2.5 bg-brand-dark border border-brand-border rounded-lg text-sm text-gray-300"
+                >
+                  Yopish
+                </button>
+              </div>
+              <p className="text-[10px] text-gray-500 text-center">
+                Roomni yopish uchun room ichida &quot;Roomni yopish&quot; tugmasini bosing.
               </p>
             </div>
           </div>

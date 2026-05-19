@@ -11,6 +11,7 @@ import {
   searchRoomUsers,
   getProtectedMediaAccess,
   changeRoomEpisode,
+  closeWatchRoom,
   WatchRoom,
   WatchRoomMessage,
   RoomUserResult,
@@ -40,6 +41,7 @@ import {
   AlertTriangle,
   SkipForward,
   List,
+  XCircle,
 } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Link from "next/link";
@@ -632,6 +634,31 @@ export default function WatchRoomPage() {
           >
             <Home className="w-4 h-4" /> Bosh sahifa
           </Link>
+          <div className="flex-1" />
+          {/* Host-only "close room" button. Tears the room down for
+              everyone — guests get a `room_closed` WS event and land
+              on the "Room yopildi" screen. Required so a host can
+              free up their one-active-room slot without waiting for
+              the 5-min disconnect grace. */}
+          {isHost && (
+            <button
+              onClick={async () => {
+                if (!token || !room) return;
+                if (!confirm("Roomni yopmoqchimisiz? Barcha a'zolar chiqariladi.")) return;
+                try {
+                  await closeWatchRoom(token, room.id);
+                  // The WS will fire `room_closed` and the page will
+                  // navigate to "/" via the existing handler.
+                } catch (err) {
+                  alert(err instanceof Error ? err.message : "Xato");
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm text-red-300 bg-red-900/30 hover:bg-red-900/50 border border-red-700/50 rounded-lg transition-colors"
+              title="Roomni yopish (host)"
+            >
+              <XCircle className="w-4 h-4" /> Roomni yopish
+            </button>
+          )}
         </div>
       </div>
       <div className="max-w-7xl mx-auto px-2 sm:px-4 pb-4 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-3 lg:gap-4">

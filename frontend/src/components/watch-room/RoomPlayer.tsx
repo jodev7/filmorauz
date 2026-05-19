@@ -442,29 +442,19 @@ export default function RoomPlayer({
   const setQuality = (idx: number) => {
     const hls = hlsRef.current;
     if (hls) {
-      // Auto mode.
       if (idx === -1) {
         hls.currentLevel = -1;
+        hls.loadLevel = -1;
       } else {
-        // The `idx` in the picker comes from buildFromVariants, which
-        // numbers items by their order in the master playlist. hls.js'
-        // own `hls.levels` array can be reordered internally (e.g.
-        // sorted by bandwidth ascending), so passing our `idx` straight
-        // into hls.currentLevel can switch to a totally different
-        // resolution than what the user clicked. Find the matching
-        // hls.levels entry by height and use THAT index instead.
         const target = qualities.find((q) => q.index === idx);
+        let resolvedIdx = -1;
         if (target && hls.levels && hls.levels.length > 0) {
-          let resolvedIdx = -1;
           for (let i = 0; i < hls.levels.length; i++) {
             if (hls.levels[i].height === target.height) {
               resolvedIdx = i;
               break;
             }
           }
-          // Fallback: if no height match (e.g. bitrate-only label),
-          // try matching by bitrate. Last resort — pass the raw idx
-          // if it's in range.
           if (resolvedIdx < 0) {
             for (let i = 0; i < hls.levels.length; i++) {
               if (hls.levels[i].bitrate === target.height) {
@@ -476,19 +466,42 @@ export default function RoomPlayer({
           if (resolvedIdx < 0 && idx >= 0 && idx < hls.levels.length) {
             resolvedIdx = idx;
           }
-          if (resolvedIdx >= 0) {
-            hls.currentLevel = resolvedIdx;
-            // Force the next segment to be downloaded at the new
-            // bitrate immediately — without nextLevel, hls.js keeps
-            // playing already-buffered segments at the old quality.
-            hls.nextLevel = resolvedIdx;
-            // Flush the buffer ahead of the playhead so the new
-            // quality replaces what was already downloaded.
-            const v = videoRef.current;
-            if (v) {
-              const pos = v.currentTime;
-              v.currentTime = pos + 0.01;
+        }
+        // One diagnostic log: lets the user paste back what hls.levels
+        // actually looks like at click time so we can verify the height
+        // matching is reaching the right level.
+        // eslint-disable-next-line no-console
+        console.log(
+          "[quality switch] target=",
+          target,
+          "hls.levels=",
+          (hls.levels || []).map((l, i) => ({ i, h: l.height, b: l.bitrate, url: l.url?.[0]?.slice(-30) })),
+          "resolvedIdx=",
+          resolvedIdx,
+        );
+        if (resolvedIdx >= 0) {
+          // Force-switch on every API hls.js exposes for level pinning.
+          hls.currentLevel = resolvedIdx;
+          hls.loadLevel = resolvedIdx;
+          hls.nextLoadLevel = resolvedIdx;
+          // Trigger an immediate flush so the already-buffered segments
+          // at the OLD quality are discarded and the new quality starts
+          // downloading right away. Without this, hls.js keeps playing
+          // the 1080p buffer for ~30s before switching.
+          const v = videoRef.current;
+          if (v) {
+            const pos = v.currentTime;
+            try {
+              hls.trigger(Hls.Events.BUFFER_FLUSHING, {
+                startOffset: pos,
+                endOffset: Number.POSITIVE_INFINITY,
+                type: null,
+              });
+            } catch {
+              /* older hls — ignore */
             }
+            // Tiny seek nudges the decoder to pick up the new level.
+            v.currentTime = pos + 0.01;
           }
         }
       }

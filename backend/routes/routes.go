@@ -53,6 +53,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		roomAuth.GET("/mine/active", watchRoomHandler.GetMyActiveRoom)
 		roomAuth.POST("/:id/invites", watchRoomHandler.CreateInvite)
 		roomAuth.POST("/:id/kick", watchRoomHandler.KickMember)
+		roomAuth.POST("/:id/close", watchRoomHandler.CloseRoomEndpoint)
 		roomAuth.POST("/:id/episode", watchRoomHandler.ChangeEpisode)
 	}
 

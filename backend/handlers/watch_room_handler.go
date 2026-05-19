@@ -117,6 +117,19 @@ func (h *WatchRoomHandler) CreateRoom(c *gin.Context) {
 	}
 	isPremium := user.IsPremiumActive()
 
+	// Concurrent-rooms cap: every user (free OR premium) is limited to
+	// ONE active hosted room at a time. Without this a host could leave
+	// orphaned rooms running and rack up unbounded resource use, and
+	// the "active room" pill in the navbar would have ambiguous targets.
+	if existing, err := h.repo.FindActiveByOwner(ctx, userID); err == nil && existing != nil {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":           "you already have an open room",
+			"active_room_id":  existing.ID.Hex(),
+			"detail":          "close your current room before opening a new one",
+		})
+		return
+	}
+
 	// Quota check (free only).
 	if !isPremium {
 		since := time.Now().Truncate(24 * time.Hour)
@@ -478,6 +491,52 @@ func (h *WatchRoomHandler) KickMember(c *gin.Context) {
 		return
 	}
 	h.hub.KickUser(hubRoom, target)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// POST /api/rooms/:id/close — host explicitly tears down their room.
+// Anyone else hitting this gets 403. The hub broadcasts `room_closed`
+// to every connected client and the persisted row's status flips to
+// "closed".
+func (h *WatchRoomHandler) CloseRoomEndpoint(c *gin.Context) {
+	userIDRaw, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "auth required"})
+		return
+	}
+	userIDHex, _ := userIDRaw.(string)
+	userID, err := primitive.ObjectIDFromHex(userIDHex)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user id"})
+		return
+	}
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	room, err := h.repo.GetRoomByID(ctx, id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "room not found"})
+		return
+	}
+	if room.OwnerID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only host can close the room"})
+		return
+	}
+	if room.Status != "active" {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "already_closed": true})
+		return
+	}
+	if hubRoom, hErr := h.hub.GetOrLoadRoom(ctx, id); hErr == nil {
+		h.hub.CloseRoom(hubRoom, "host_closed")
+	} else {
+		// No hub instance (no one ever connected) — close the row
+		// directly so it doesn't linger as active.
+		_ = h.repo.CloseRoom(ctx, id)
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

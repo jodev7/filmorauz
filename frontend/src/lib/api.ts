@@ -4033,7 +4033,14 @@ export async function createWatchRoom(
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error((err as { error?: string }).error || "Failed to create room");
+    const e = err as { error?: string; active_room_id?: string };
+    const error = new Error(e.error || "Failed to create room") as Error & {
+      activeRoomID?: string;
+      status?: number;
+    };
+    error.activeRoomID = e.active_room_id;
+    error.status = res.status;
+    throw error;
   }
   return res.json();
 }
@@ -4041,6 +4048,17 @@ export async function createWatchRoom(
 // Returns the user's currently-open hosted room, or null if none. Used by
 // the navbar "you have an open room" pill so a host who clicked Back/Home
 // can hop back in instead of being orphaned outside their own session.
+export async function closeWatchRoom(token: string, roomID: string): Promise<void> {
+  const res = await fetch(`${API_URL}/rooms/${roomID}/close`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Failed to close room");
+  }
+}
+
 export async function listPublicRooms(): Promise<{ items: PublicRoomListItem[] }> {
   const res = await fetch(`${API_URL}/rooms/public`);
   if (!res.ok) throw new Error("Failed to load public rooms");
