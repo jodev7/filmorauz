@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { createWatchRoom } from "@/lib/api";
@@ -31,6 +32,10 @@ export default function WatchTogetherButton({ contentType, contentID, className 
   // dedicated upsell popup instead of a generic toast — the goal is to
   // route the user to /premium, not to confuse them with an error.
   const [quotaPopup, setQuotaPopup] = useState(false);
+  // Portal target — `document.body` is only available after mount, so we
+  // gate render-to-portal behind a hydration flag.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   const openModal = () => {
     if (!user || !token) {
@@ -88,9 +93,9 @@ export default function WatchTogetherButton({ contentType, contentID, className 
         Birga ko&apos;rish
       </button>
 
-      {open && (
+      {open && mounted && createPortal(
         <div
-          className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-4"
+          className="fixed inset-0 z-[10000] bg-black/70 flex items-center justify-center p-4"
           onClick={() => !busy && setOpen(false)}
         >
           <div
@@ -178,15 +183,16 @@ export default function WatchTogetherButton({ contentType, contentID, className 
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Daily-quota upsell popup — fires when the backend rejects with
           "daily room limit reached" (free tier only). Steers the user to
           /premium instead of just showing an error toast. */}
-      {quotaPopup && (
+      {quotaPopup && mounted && createPortal(
         <div
-          className="fixed inset-0 z-[110] bg-black/75 flex items-center justify-center p-4"
+          className="fixed inset-0 z-[10000] bg-black/75 flex items-center justify-center p-4"
           onClick={() => setQuotaPopup(false)}
         >
           <div
@@ -235,7 +241,8 @@ export default function WatchTogetherButton({ contentType, contentID, className 
               </p>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
