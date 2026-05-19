@@ -2199,6 +2199,12 @@ class ParserHandler(BaseHTTPRequestHandler):
             selected_quality = query.get("selected_quality", [""])[0]
             referer = query.get("referer", [""])[0]
             force = query.get("force", [""])[0] == "1"
+            # Defence in depth — the worker is supposed to unwrap embed
+            # wrappers before calling /download, but if anything ever
+            # passes an iframe URL here we'd silently 422 in the
+            # downloader's URL validator. Apply the same unwrap that
+            # _resolve_claimed_job_video uses on the queue path.
+            video_url = _unwrap_embed_url(video_url)
             
             logger.info(f"[PARSER] /download called — job_id={job_id}")
             logger.info(f"[PARSER] new download started — job_id={job_id}, url={safe_truncate(video_url, 60)}")
@@ -2342,7 +2348,26 @@ class ParserHandler(BaseHTTPRequestHandler):
                         if source and source in PARSERS and referer:
                             logger.info(f"[PARSER] Attempting to auto-refresh URL for failed download — job_id={job_id}, source={source}")
                             try:
-                                fresh_details = PARSERS[source].get_details(referer)
+                                # Signature-aware call: kinolar/kinochilar/uzmedia
+                                # require source_id in addition to url; the
+                                # other parsers take url only. Re-use the
+                                # helper that already introspects this.
+                                parser_inst = PARSERS[source]
+                                # Build a kwargs dict the same way
+                                # _get_details_from_parser does, then call.
+                                import inspect as _inspect
+                                _sig = _inspect.signature(parser_inst.get_details)
+                                _kwargs = {}
+                                if "source_id" in _sig.parameters:
+                                    # Best-effort: pull source_id out of
+                                    # the active DownloadState (the job
+                                    # row's source_id isn't directly in
+                                    # scope here).
+                                    _state = get_active_download(job_id)
+                                    _sid = getattr(_state, "backend_job_id", "") if _state else ""
+                                    if _sid:
+                                        _kwargs["source_id"] = _sid
+                                fresh_details = parser_inst.get_details(referer, **_kwargs)
                                 fresh_url = ""
                                 target_quality = selected_quality or quality or ""
                                 if fresh_details.video_urls:
@@ -2353,6 +2378,11 @@ class ParserHandler(BaseHTTPRequestHandler):
                                                 break
                                     if not fresh_url:
                                         fresh_url = fresh_details.video_urls[0].get("url")
+                                # Unwrap embed wrappers — kinochilar /
+                                # uzmedia / kinolar return playerjs.html
+                                # iframe URLs which the downloader's
+                                # validator would reject.
+                                fresh_url = _unwrap_embed_url(fresh_url)
                                 
                                 if fresh_url and fresh_url != video_url:
                                     logger.info(f"[PARSER] Successfully fetched fresh URL for job_id={job_id}, retrying download...")
