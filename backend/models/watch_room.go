@@ -15,15 +15,25 @@ type WatchRoom struct {
 	OwnerName       string             `bson:"owner_name,omitempty" json:"owner_name,omitempty"`
 	OwnerAvatar     string             `bson:"owner_avatar,omitempty" json:"owner_avatar,omitempty"`
 	OwnerIsPremium  bool               `bson:"owner_is_premium,omitempty" json:"owner_is_premium,omitempty"`
-	ContentType     string             `bson:"content_type" json:"content_type"` // "movie" | "episode"
+	// ContentType:
+	//   "movie"   — single-movie room. ContentID = movie ID.
+	//   "episode" — single-episode room (legacy). ContentID = episode ID.
+	//   "series"  — series room with episode switching + auto-advance.
+	//               ContentID = series ID; CurrentEpisodeID tracks what's playing.
+	ContentType     string             `bson:"content_type" json:"content_type"`
 	ContentID       primitive.ObjectID `bson:"content_id" json:"content_id"`
 	ContentTitle    string             `bson:"content_title,omitempty" json:"content_title,omitempty"`
 	ContentPoster   string             `bson:"content_poster,omitempty" json:"content_poster,omitempty"`
 	ContentSlug     string             `bson:"content_slug,omitempty" json:"content_slug,omitempty"`
-	// SeriesID + SeasonID for episode rooms — lets the frontend build the
-	// /watch URL without an extra round-trip.
-	SeriesID  primitive.ObjectID `bson:"series_id,omitempty" json:"series_id,omitempty"`
-	SeasonID  primitive.ObjectID `bson:"season_id,omitempty" json:"season_id,omitempty"`
+	// SeriesID + SeasonID for episode/series rooms — lets the frontend build
+	// the /watch URL without an extra round-trip.
+	SeriesID         primitive.ObjectID `bson:"series_id,omitempty" json:"series_id,omitempty"`
+	SeasonID         primitive.ObjectID `bson:"season_id,omitempty" json:"season_id,omitempty"`
+	// CurrentEpisodeID is the episode currently playing in a series room.
+	// Set on creation (first episode by default) and bumped by host when
+	// they switch or when auto-advance fires.
+	CurrentEpisodeID    primitive.ObjectID `bson:"current_episode_id,omitempty" json:"current_episode_id,omitempty"`
+	CurrentEpisodeTitle string             `bson:"current_episode_title,omitempty" json:"current_episode_title,omitempty"`
 	Visibility string            `bson:"visibility" json:"visibility"` // "public" | "private"
 	MaxMembers int               `bson:"max_members" json:"max_members"`
 

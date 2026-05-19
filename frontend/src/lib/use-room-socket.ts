@@ -49,6 +49,10 @@ export type RoomEvent =
   | { type: "kicked"; reason: string }
   | { type: "typing"; typing: RoomTyping }
   | { type: "reaction"; reaction: RoomReaction }
+  | { type: "host_disconnected"; deadlineMs: number; graceSeconds: number }
+  | { type: "host_reconnected" }
+  | { type: "episode_change"; episodeID: string; episodeTitle: string }
+  | { type: "episode_request"; userID: string; userName: string; targetEpisodeID?: string; reason: string }
   | { type: "error"; message: string };
 
 export type UseRoomSocketResult = {
@@ -60,6 +64,7 @@ export type UseRoomSocketResult = {
   sendTyping: (isTyping: boolean) => void;
   sendReaction: (emoji: string) => void;
   sendKick: (userID: string) => void;
+  sendEpisodeRequest: (targetEpisodeID: string, reason: "next" | "prev" | "ended" | "manual") => void;
   close: () => void;
 };
 
@@ -204,6 +209,32 @@ export function useRoomSocket(
             },
           });
           break;
+        case "host_disconnected":
+          pushEvent({
+            type: "host_disconnected",
+            deadlineMs: Number(p.deadline_ms) || Date.now(),
+            graceSeconds: Number(p.grace_seconds) || 300,
+          });
+          break;
+        case "host_reconnected":
+          pushEvent({ type: "host_reconnected" });
+          break;
+        case "episode_change":
+          pushEvent({
+            type: "episode_change",
+            episodeID: String(p.episode_id || ""),
+            episodeTitle: String(p.episode_title || ""),
+          });
+          break;
+        case "episode_request":
+          pushEvent({
+            type: "episode_request",
+            userID: String(p.user_id || ""),
+            userName: String(p.user_name || ""),
+            targetEpisodeID: typeof p.target_episode_id === "string" ? p.target_episode_id : undefined,
+            reason: String(p.reason || ""),
+          });
+          break;
         case "error":
           pushEvent({ type: "error", message: String(p.error || "") });
           break;
@@ -238,6 +269,8 @@ export function useRoomSocket(
     sendTyping: (isTyping: boolean) => send("typing", { is_typing: isTyping }),
     sendReaction: (emoji: string) => send("reaction", { emoji }),
     sendKick: (userID: string) => send("host_kick", { user_id: userID }),
+    sendEpisodeRequest: (targetEpisodeID, reason) =>
+      send("episode_request", { target_episode_id: targetEpisodeID, reason }),
     close: () => {
       closedByUserRef.current = true;
       wsRef.current?.close();

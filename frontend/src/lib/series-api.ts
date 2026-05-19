@@ -121,6 +121,22 @@ export async function getSeriesBySlug(slug: string): Promise<SeriesWithSeasons> 
   return res.json();
 }
 
+// Get all seasons + episodes for a series by ID. Used by the watch-room
+// page so the host can switch episodes from a dropdown.
+export async function getSeriesEpisodesByID(seriesID: string): Promise<SeasonWithEpisodes[]> {
+  const seasonsRes = await fetch(`${API_URL}/series-by-id/${seriesID}/seasons`, { cache: "no-store" });
+  if (!seasonsRes.ok) throw new Error("Failed to fetch seasons");
+  const seasonsJson = await seasonsRes.json();
+  const seasons: Season[] = seasonsJson.data || [];
+  const out: SeasonWithEpisodes[] = [];
+  for (const s of seasons) {
+    const epRes = await fetch(`${API_URL}/seasons/${s.id}/episodes`, { cache: "no-store" });
+    const epJson = epRes.ok ? await epRes.json() : { data: [] };
+    out.push({ season: s, episodes: (epJson.data as Episode[]) || [] });
+  }
+  return out;
+}
+
 // Get episode by ID
 export async function getEpisode(id: string): Promise<EpisodeDetailResponse> {
   const res = await fetch(`${API_URL}/episodes/${id}`, {

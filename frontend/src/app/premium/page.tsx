@@ -19,6 +19,7 @@ import {
   Wallet,
   ExternalLink,
   Star,
+  Users,
 } from "lucide-react";
 
 const TELEGRAM_BOT_USERNAME =
@@ -127,7 +128,19 @@ const premiumFeatures = [
   "Serial auto-next",
   "Premium kontent",
   "Barcha qurilmalarda foydalanish",
-  "Cheksiz film va seriallar"
+  "Cheksiz film va seriallar",
+  "Birga ko'rish: kuniga cheksiz room (free 3 ta)",
+  "Birga ko'rish: 20 ta a'zo (free 2 ta)",
+];
+
+// Side-by-side limits table — Free vs Premium for the "Birga ko'rish" room
+// feature. Kept as a const so the same data drives a future i18n pass
+// without hunting through JSX.
+const roomLimitRows: Array<{ label: string; free: string; premium: string }> = [
+  { label: "Kuniga ochiladigan room", free: "3 ta", premium: "Cheksiz" },
+  { label: "Bir roomda a'zolar", free: "2 ta (siz bilan)", premium: "20 ta (siz bilan)" },
+  { label: "Ko'rinish", free: "Maxfiy + Ochiq", premium: "Maxfiy + Ochiq" },
+  { label: "Taklif havolasi", free: "10 daqiqa", premium: "10 daqiqa" },
 ];
 
 export default function PremiumPage() {
@@ -175,6 +188,11 @@ export default function PremiumPage() {
       icon: <Crown className="w-8 h-8" />,
       title: "Premium kontent",
       description: "Faqat Premium foydalanuvchilar uchun mo'ljallangan kontentga kirish"
+    },
+    {
+      icon: <Users className="w-8 h-8" />,
+      title: "Birga ko'rish: cheksiz",
+      description: "Cheksiz room va 20 ta a'zo (free 3 ta room / 2 a'zo)"
     }
   ];
 
@@ -401,6 +419,45 @@ export default function PremiumPage() {
             <h2 className="font-display text-3xl sm:text-4xl text-white text-center mb-12">
               Premium <span className="text-brand-red">afzalliklari</span>
             </h2>
+
+            {/* Birga ko'rish (room) comparison — Free vs Premium. Sits
+                inside the Features section so a user weighing the upgrade
+                immediately sees what changes for their movie-night flow. */}
+            <div className="mb-10 rounded-2xl border border-brand-border bg-brand-card/50 backdrop-blur-sm overflow-hidden">
+              <div className="px-5 py-4 border-b border-brand-border flex items-center gap-2">
+                <Users className="w-5 h-5 text-brand-red" />
+                <h3 className="font-semibold text-white">Birga ko&apos;rish (Watch Together) limitlari</h3>
+              </div>
+              <div className="grid grid-cols-3 text-sm">
+                <div className="px-4 py-2 text-xs uppercase tracking-wider text-gray-500 border-b border-brand-border">
+                  Imkoniyat
+                </div>
+                <div className="px-4 py-2 text-xs uppercase tracking-wider text-gray-500 border-b border-brand-border text-center">
+                  Free
+                </div>
+                <div className="px-4 py-2 text-xs uppercase tracking-wider text-brand-red border-b border-brand-border text-center font-semibold">
+                  Premium
+                </div>
+                {roomLimitRows.map((row, i) => (
+                  <div key={row.label} className="contents">
+                    <div className={`px-4 py-3 text-gray-300 ${i < roomLimitRows.length - 1 ? "border-b border-brand-border/50" : ""}`}>
+                      {row.label}
+                    </div>
+                    <div className={`px-4 py-3 text-center text-gray-400 ${i < roomLimitRows.length - 1 ? "border-b border-brand-border/50" : ""}`}>
+                      {row.free}
+                    </div>
+                    <div className={`px-4 py-3 text-center text-brand-red font-medium ${i < roomLimitRows.length - 1 ? "border-b border-brand-border/50" : ""}`}>
+                      {row.premium}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="px-5 py-3 text-[11px] text-gray-500 border-t border-brand-border bg-black/20">
+                Free hisobda kunlik 3 room limiti tugasa, &quot;Birga ko&apos;rish&quot;
+                tugmasi cheklov xabarini ko&apos;rsatadi. Premium hisobda esa
+                kuniga ochiladigan roomlar soni cheklanmagan.
+              </p>
+            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
               {features.map((feature, index) => (

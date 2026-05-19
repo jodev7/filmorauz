@@ -16,8 +16,10 @@ import (
 var _ = primitive.NilObjectID // keep primitive imported even if every direct use is via models
 
 // HostDisconnectGrace is how long we wait for the host to reconnect after
-// their websocket drops before tearing down the room.
-const HostDisconnectGrace = 60 * time.Second
+// their websocket drops before tearing down the room. Bumped to 5 minutes
+// per UX request — a host who tab-closes by mistake or loses connectivity
+// briefly should be able to walk back in and resume.
+const HostDisconnectGrace = 5 * time.Minute
 
 // HubClient is a single websocket connection inside a room. One per browser
 // tab; the same user may have multiple clients (multi-device).
@@ -41,6 +43,10 @@ type HubRoom struct {
 	Position         float64
 	IsPlaying        bool
 	LastStateUpdate  time.Time
+	// hostDisconnectDeadline is set when the host drops; clients use it to
+	// render the "Host qaytmoqda… (mm:ss qoldi)" countdown. Zero when the
+	// host is currently connected.
+	HostDisconnectDeadline time.Time
 
 	mu      sync.Mutex
 	clients map[*HubClient]struct{}
@@ -113,12 +119,19 @@ func (h *WatchRoomHub) AddClient(rm *HubRoom, c *HubClient) error {
 	}
 	c.send = make(chan []byte, 32)
 	rm.clients[c] = struct{}{}
-	// Host reconnected — cancel any pending teardown.
+	// Host reconnected — cancel any pending teardown and clear the
+	// "host disconnected" deadline so guests stop seeing the countdown.
+	hostReconnected := false
 	if c.IsHost && rm.hostGraceTimer != nil {
 		rm.hostGraceTimer.Stop()
 		rm.hostGraceTimer = nil
+		rm.HostDisconnectDeadline = time.Time{}
+		hostReconnected = true
 	}
 	rm.mu.Unlock()
+	if hostReconnected {
+		h.broadcast(rm, hubMessage{Type: "host_reconnected", Payload: map[string]any{}}, nil)
+	}
 
 	go h.writePump(c)
 	h.sendState(rm, c)
@@ -173,11 +186,24 @@ func (h *WatchRoomHub) RemoveClient(rm *HubRoom, c *HubClient) {
 	if isHostGone {
 		rm.mu.Lock()
 		if rm.hostGraceTimer == nil {
+			deadline := time.Now().Add(HostDisconnectGrace)
+			rm.HostDisconnectDeadline = deadline
 			rm.hostGraceTimer = time.AfterFunc(HostDisconnectGrace, func() {
 				h.CloseRoom(rm, "host_disconnect")
 			})
+			rm.mu.Unlock()
+			// Tell every remaining client when the room will be torn down
+			// so they can render a countdown instead of a silent buffer.
+			h.broadcast(rm, hubMessage{
+				Type: "host_disconnected",
+				Payload: map[string]any{
+					"deadline_ms":    deadline.UnixMilli(),
+					"grace_seconds": int(HostDisconnectGrace.Seconds()),
+				},
+			}, nil)
+		} else {
+			rm.mu.Unlock()
 		}
-		rm.mu.Unlock()
 	} else {
 		rm.mu.Lock()
 		empty := len(rm.clients) == 0
@@ -331,6 +357,36 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 			},
 		}, nil)
 
+	case "episode_request":
+		// Guests use this to nudge the host to switch episodes (typically
+		// auto-advance or "let's watch the next one"). Hub just forwards
+		// to the host as a typed message; host UI decides whether to ack.
+		var p struct {
+			TargetEpisodeID string `json:"target_episode_id"`
+			Reason          string `json:"reason"` // "next" | "prev" | "ended"
+		}
+		_ = decodePayload(msg.Payload, &p)
+		rm.mu.Lock()
+		var host *HubClient
+		for cc := range rm.clients {
+			if cc.IsHost {
+				host = cc
+				break
+			}
+		}
+		rm.mu.Unlock()
+		if host != nil {
+			h.sendTo(host, hubMessage{
+				Type: "episode_request",
+				Payload: map[string]any{
+					"user_id":           c.UserID.Hex(),
+					"user_name":         c.UserName,
+					"target_episode_id": p.TargetEpisodeID,
+					"reason":            p.Reason,
+				},
+			})
+		}
+
 	case "host_kick":
 		if !c.IsHost {
 			return
@@ -350,6 +406,24 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 	case "ping":
 		h.sendTo(c, hubMessage{Type: "pong", Payload: map[string]any{"ts": time.Now().UnixMilli()}})
 	}
+}
+
+// BroadcastEpisodeChange tells every client in the room to reload its
+// player against a new episode. Also resets the in-memory playback state
+// so the next state_sync isn't stuck on the old episode's position.
+func (h *WatchRoomHub) BroadcastEpisodeChange(rm *HubRoom, episodeID, episodeTitle string) {
+	rm.mu.Lock()
+	rm.Position = 0
+	rm.IsPlaying = false
+	rm.LastStateUpdate = time.Now()
+	rm.mu.Unlock()
+	h.broadcast(rm, hubMessage{
+		Type: "episode_change",
+		Payload: map[string]any{
+			"episode_id":    episodeID,
+			"episode_title": episodeTitle,
+		},
+	}, nil)
 }
 
 // KickUser disconnects every connection owned by `userID` from the room and
@@ -512,7 +586,11 @@ func (h *WatchRoomHub) writePump(c *HubClient) {
 // to be called once at backend startup.
 func (h *WatchRoomHub) StartHeartbeat() {
 	go func() {
-		t := time.NewTicker(5 * time.Second)
+		// 2s instead of 5s — guests reported a noticeable lag between
+		// host actions and their own playhead. A tighter heartbeat
+		// catches drift faster without measurable bandwidth cost
+		// (one tiny JSON per room every 2s).
+		t := time.NewTicker(2 * time.Second)
 		defer t.Stop()
 		for range t.C {
 			h.mu.RLock()

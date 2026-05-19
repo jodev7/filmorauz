@@ -10,6 +10,7 @@ import Footer from "@/components/Footer";
 import MediaImage from "@/components/MediaImage";
 import MovieCode from "@/components/MovieCode";
 import SeasonList from "@/components/SeasonList";
+import WatchTogetherButton from "@/components/WatchTogetherButton";
 import SeriesCarousel from "@/components/SeriesCarousel";
 import { getSeriesBySlug, getSeries } from "@/lib/series-api";
 import { localizeSingleGenre } from "@/lib/localization";
@@ -232,6 +233,10 @@ export default async function SeriesDetailPage({ params }: Props) {
               <p className="text-gray-300 leading-relaxed max-w-2xl mb-6 text-sm sm:text-base">
                 {series.description}
               </p>
+
+              <div className="mb-4 flex flex-wrap gap-2">
+                <WatchTogetherButton contentType="series" contentID={series.id} />
+              </div>
 
               <div className="mb-6">
                 <StarRating seriesId={series.id} readOnly />

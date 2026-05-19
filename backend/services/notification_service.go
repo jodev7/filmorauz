@@ -368,6 +368,14 @@ func (s *NotificationService) MarkAsRead(ctx context.Context, notificationID pri
 	return s.notificationRepo.MarkAsRead(ctx, notificationID, userID)
 }
 
+// DeleteNotification removes a notification entirely.
+func (s *NotificationService) DeleteNotification(ctx context.Context, notificationID primitive.ObjectID, userID primitive.ObjectID) error {
+	if s.notificationRepo == nil {
+		return nil
+	}
+	return s.notificationRepo.DeleteByID(ctx, notificationID, userID)
+}
+
 // MarkAllAsRead marks all notifications as read for a user
 func (s *NotificationService) MarkAllAsRead(ctx context.Context, userID primitive.ObjectID) error {
 	if s.notificationRepo == nil {

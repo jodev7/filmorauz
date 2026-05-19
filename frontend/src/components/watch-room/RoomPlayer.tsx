@@ -263,7 +263,10 @@ export default function RoomPlayer({
       const v = videoRef.current;
       if (!v || v.readyState < 1) return;
       const { position, playing } = pendingSyncRef.current;
-      if (position !== null && Math.abs(v.currentTime - position) > 1.5) {
+      // 0.7s drift threshold — was 1.5s; guests reported a multi-second
+      // lag between their playhead and the host's. Tighter snap matches
+      // the heartbeat (now 2s) so noticeable drift is corrected quickly.
+      if (position !== null && Math.abs(v.currentTime - position) > 0.7) {
         v.currentTime = position;
       }
       if (playing !== null) {

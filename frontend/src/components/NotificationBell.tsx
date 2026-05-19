@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { getNotifications, getUnreadNotificationCount, markNotificationAsRead, markAllNotificationsAsRead, Notification } from "@/lib/api";
+import { getNotifications, getUnreadNotificationCount, markNotificationAsRead, markAllNotificationsAsRead, deleteNotification, Notification } from "@/lib/api";
 import { Bell, Check, CheckCheck, X, Clock, Gift, AlertTriangle, MessageCircle, Ban, FileText } from "lucide-react";
 
 export default function NotificationBell() {
@@ -84,6 +84,13 @@ export default function NotificationBell() {
     } else if (isRoomInvite) {
       // Even a "read" room-invite shouldn't be re-clickable.
       setNotifications((prev) => prev.filter((n) => n.id !== notification.id));
+    }
+
+    // Persist the removal server-side for room invites — local-only removal
+    // wasn't enough; the entry would come back on the next dropdown open
+    // and a later re-click would land on an already-closed room.
+    if (isRoomInvite && token) {
+      deleteNotification(token, notification.id).catch(() => undefined);
     }
 
     // Navigate to action URL

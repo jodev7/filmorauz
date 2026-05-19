@@ -103,6 +103,32 @@ func (h *NotificationHandler) MarkAsRead(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Bildirishnoma o'qilgan deb belgilandi"})
 }
 
+// DeleteNotification handles DELETE /api/notifications/:id — used for
+// one-shot notifications (room invites) so the dropdown entry disappears
+// permanently the moment the user clicks it.
+func (h *NotificationHandler) DeleteNotification(c *gin.Context) {
+	userIDStr, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Foydalanuvchi avtorizatsiyadan o'tmagan"})
+		return
+	}
+	notificationID, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Noto'g'ri bildirishnoma ID"})
+		return
+	}
+	userID, err := primitive.ObjectIDFromHex(userIDStr.(string))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Noto'g'ri foydalanuvchi ID"})
+		return
+	}
+	if err := h.notificationService.DeleteNotification(c.Request.Context(), notificationID, userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "O'chirib bo'lmadi"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "O'chirildi"})
+}
+
 // MarkAllAsRead handles PATCH /api/notifications/read-all
 func (h *NotificationHandler) MarkAllAsRead(c *gin.Context) {
 	userIDStr, exists := c.Get("user_id")

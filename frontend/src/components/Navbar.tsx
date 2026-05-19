@@ -10,6 +10,7 @@ import { searchMovies, Movie } from "@/lib/api";
 import TelegramLoginModal from "./TelegramLoginModal";
 import SuggestionModal from "./SuggestionModal";
 import NotificationBell from "./NotificationBell";
+import ActiveRoomBadge from "./ActiveRoomBadge";
 import { resolveIsPremium } from "./PremiumComponents";
 import { getLocalizedTitle, getLocalizedGenres } from "@/lib/localization";
 import { DEFAULT_AVATAR_PLACEHOLDER, DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
@@ -149,6 +150,9 @@ export default function Navbar() {
           <Link href="/movies" className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors">
             {t("common.movies")}
           </Link>
+          <Link href="/rooms" className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors">
+            Roomlar
+          </Link>
           <Link href="/series" className="px-3 py-2 rounded-lg hover:text-white hover:bg-white/5 transition-colors">
             Seriallar
           </Link>
@@ -260,6 +264,7 @@ export default function Navbar() {
           {!isLoading && (
             isAuthenticated ? (
               <div className="flex items-center gap-2">
+                <ActiveRoomBadge />
                 <NotificationBell />
                 <button
                   onClick={() => setSuggestionModalOpen(true)}

@@ -3974,13 +3974,15 @@ export interface WatchRoom {
   owner_name?: string;
   owner_avatar?: string;
   owner_is_premium?: boolean;
-  content_type: "movie" | "episode";
+  content_type: "movie" | "episode" | "series";
   content_id: string;
   content_title?: string;
   content_poster?: string;
   content_slug?: string;
   series_id?: string;
   season_id?: string;
+  current_episode_id?: string;
+  current_episode_title?: string;
   visibility: RoomVisibility;
   max_members: number;
   position_seconds: number;
@@ -3989,6 +3991,10 @@ export interface WatchRoom {
   status: "active" | "closed";
   created_at: string;
   expires_at: string;
+}
+
+export interface PublicRoomListItem extends WatchRoom {
+  member_count: number;
 }
 
 export interface WatchRoomInvite {
@@ -4016,7 +4022,12 @@ export interface WatchRoomMessage {
 
 export async function createWatchRoom(
   token: string,
-  input: { content_type: "movie" | "episode"; content_id: string; visibility?: RoomVisibility },
+  input: {
+    content_type: "movie" | "episode" | "series";
+    content_id: string;
+    visibility?: RoomVisibility;
+    max_members?: number;
+  },
 ): Promise<WatchRoom> {
   const res = await fetch(`${API_URL}/rooms`, {
     method: "POST",
@@ -4030,6 +4041,41 @@ export async function createWatchRoom(
   return res.json();
 }
 
+// Returns the user's currently-open hosted room, or null if none. Used by
+// the navbar "you have an open room" pill so a host who clicked Back/Home
+// can hop back in instead of being orphaned outside their own session.
+export async function listPublicRooms(): Promise<{ items: PublicRoomListItem[] }> {
+  const res = await fetch(`${API_URL}/rooms/public`);
+  if (!res.ok) throw new Error("Failed to load public rooms");
+  return res.json();
+}
+
+export async function changeRoomEpisode(token: string, roomID: string, episodeID: string): Promise<void> {
+  const res = await fetch(`${API_URL}/rooms/${roomID}/episode`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ episode_id: episodeID }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Failed to change episode");
+  }
+}
+
+export async function getMyActiveRoom(token: string): Promise<WatchRoom | null> {
+  const res = await fetch(`${API_URL}/rooms/mine/active`, { headers: authHeaders(token) });
+  if (res.status === 204) return null;
+  if (!res.ok) return null;
+  return res.json();
+}
+
+export async function deleteNotification(token: string, id: string): Promise<void> {
+  await fetch(`${API_URL}/notifications/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+}
+
 export async function getWatchRoom(id: string): Promise<WatchRoom> {
   const res = await fetch(`${API_URL}/rooms/${id}`);
   if (!res.ok) throw new Error("Room not found");
@@ -4041,6 +4087,33 @@ export interface AdminRoomSnapshot {
   room: WatchRoom;
   members: Array<{ user_id: string; user_name: string; user_avatar?: string; is_host: boolean }>;
 }
+export interface AdminRoomTopContent {
+  content_id: string;
+  content_type: string;
+  content_title: string;
+  content_poster: string;
+  room_count: number;
+}
+export interface AdminRoomTopHost {
+  owner_id: string;
+  owner_name: string;
+  owner_avatar: string;
+  room_count: number;
+}
+export interface AdminRoomStats {
+  active: number;
+  closed: number;
+  total: number;
+  this_month: number;
+  top_content?: AdminRoomTopContent[];
+  top_hosts?: AdminRoomTopHost[];
+}
+export async function adminGetRoomStats(token: string): Promise<AdminRoomStats> {
+  const res = await fetch(`${API_URL}/admin/rooms/stats`, { headers: authHeaders(token) });
+  if (!res.ok) throw new Error("Failed to load room stats");
+  return res.json();
+}
+
 export async function adminListWatchRooms(token: string): Promise<{ items: AdminRoomSnapshot[] }> {
   const res = await fetch(`${API_URL}/admin/rooms`, {
     headers: authHeaders(token),

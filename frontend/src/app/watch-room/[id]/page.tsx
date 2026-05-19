@@ -10,10 +10,12 @@ import {
   createRoomInvite,
   searchRoomUsers,
   getProtectedMediaAccess,
+  changeRoomEpisode,
   WatchRoom,
   WatchRoomMessage,
   RoomUserResult,
 } from "@/lib/api";
+import { getSeriesEpisodesByID, SeasonWithEpisodes } from "@/lib/series-api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 import {
   useRoomSocket,
@@ -35,6 +37,9 @@ import {
   PartyPopper,
   ArrowLeft,
   Home,
+  AlertTriangle,
+  SkipForward,
+  List,
 } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Link from "next/link";
@@ -66,6 +71,17 @@ export default function WatchRoomPage() {
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [linkPopup, setLinkPopup] = useState<{ url: string; copied: boolean } | null>(null);
+  // Host-disconnect countdown — non-null while the host is gone and the
+  // grace timer is ticking down. Cleared on host_reconnected.
+  const [hostGoneDeadline, setHostGoneDeadline] = useState<number | null>(null);
+  const [graceLeft, setGraceLeft] = useState<number>(0);
+  // Episode switcher state (series rooms only). Lazy-loaded on host open.
+  const [showEpisodes, setShowEpisodes] = useState(false);
+  const [episodes, setEpisodes] = useState<SeasonWithEpisodes[]>([]);
+  // Inbound episode-change requests from guests (host-side toast).
+  const [episodeRequestToast, setEpisodeRequestToast] = useState<
+    { userName: string; reason: string; targetEpisodeID?: string; ts: number } | null
+  >(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
@@ -82,53 +98,66 @@ export default function WatchRoomPage() {
         const r = await getWatchRoom(roomID);
         if (cancelled) return;
         setRoom(r);
-        // Resolve via the same protected-media access flow the regular watch
-        // page uses. Raw master_playlist_url/video_url on the doc are
-        // typically B2 keys that require a signed CDN URL — without this
-        // step the room sees an empty/forbidden URL and renders black.
+        // Resolve playback URL. We try TWO sources and prefer whichever
+        // is a multi-variant master playlist (so the quality picker has
+        // something to pick). Users reported that with protected-only the
+        // picker shows "Bu video uchun boshqa sifat mavjud emas" because
+        // the protected playback URL is a single-variant CDN URL.
         let resolved = "";
+        let rawMaster = "";
+        const apiBase = process.env.NEXT_PUBLIC_API_URL || "";
         try {
-          const access = await getProtectedMediaAccess(
-            r.content_type === "movie"
-              ? { movieId: r.content_id, token }
-              : { episodeId: r.content_id, token },
-          );
-          const playback = access.playback_url || "";
-          resolved = playback.startsWith("https://cdn.filmorauz.net/media/")
-            ? playback
-            : normalizeMediaUrl(playback, "") || playback;
-        } catch {
-          /* fall through to direct-URL fallback */
-        }
-
-        if (!resolved) {
-          // Last-resort fallback: try fetching the public movie/episode doc
-          // and using whatever direct URL is set on it (works for legacy
-          // movies that don't go through protected media).
-          const apiBase = process.env.NEXT_PUBLIC_API_URL || "";
           if (r.content_type === "movie") {
             const m = await fetch(`${apiBase}/movies/${r.content_id}`).then((res) =>
               res.ok ? res.json() : null,
             );
-            if (m)
-              resolved =
+            if (m) {
+              rawMaster =
                 m.master_playlist_url ||
                 m.streaming_url ||
                 m.playlist_url ||
                 m.video_url ||
                 "";
+            }
           } else {
             const ep = await fetch(`${apiBase}/episodes/${r.content_id}`).then((res) =>
               res.ok ? res.json() : null,
             );
-            if (ep)
-              resolved =
-                ep.video_url ||
+            if (ep) {
+              rawMaster =
                 ep.master_playlist_url ||
                 ep.streaming_url ||
                 ep.playlist_url ||
+                ep.video_url ||
                 "";
+            }
           }
+        } catch {
+          /* ignore */
+        }
+        // If the raw URL looks like a directly-playable master playlist,
+        // use it — that's the only path that gives us multi-variant HLS
+        // and a working quality picker.
+        if (rawMaster && /\.m3u8(\?|$)/i.test(rawMaster) && /^https?:\/\//i.test(rawMaster)) {
+          resolved = rawMaster;
+        }
+        if (!resolved) {
+          try {
+            const access = await getProtectedMediaAccess(
+              r.content_type === "movie"
+                ? { movieId: r.content_id, token }
+                : { episodeId: r.content_id, token },
+            );
+            const playback = access.playback_url || "";
+            resolved = playback.startsWith("https://cdn.filmorauz.net/media/")
+              ? playback
+              : normalizeMediaUrl(playback, "") || playback;
+          } catch {
+            /* fall through */
+          }
+        }
+        if (!resolved && rawMaster) {
+          resolved = rawMaster;
         }
 
         if (!cancelled) {
@@ -175,6 +204,7 @@ export default function WatchRoomPage() {
     sendTyping,
     sendReaction,
     sendKick,
+    sendEpisodeRequest,
   } = useRoomSocket(!authLoading && token && room ? roomID : null, token, inviteCode);
 
   // ── Drain WS events ──────────────────────────────────────────────────
@@ -217,7 +247,7 @@ export default function WatchRoomPage() {
             userName: "system",
             kind: "text",
             text: wasHost
-              ? `${leaverName} (host) chiqib ketdi. 60 soniya ichida qaytmasa room yopiladi.`
+              ? `${leaverName} (host) chiqib ketdi. 5 daqiqa ichida qaytmasa room yopiladi.`
               : e.kicked
                 ? `${leaverName} room'dan chiqarildi`
                 : `${leaverName} chiqib ketdi`,
@@ -243,6 +273,70 @@ export default function WatchRoomPage() {
           }
           return next;
         });
+      } else if (e.type === "host_disconnected") {
+        setHostGoneDeadline(e.deadlineMs);
+        setChat((prev) => [
+          ...prev,
+          {
+            userID: "system",
+            userName: "system",
+            kind: "text",
+            text: `Host vaqtincha uzildi. ${Math.round(e.graceSeconds / 60)} daqiqa ichida qaytmasa room yopiladi.`,
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+      } else if (e.type === "host_reconnected") {
+        setHostGoneDeadline(null);
+        setChat((prev) => [
+          ...prev,
+          {
+            userID: "system",
+            userName: "system",
+            kind: "text",
+            text: "Host qaytib keldi.",
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+      } else if (e.type === "episode_change") {
+        // Re-resolve the new episode's playback URL and swap videoSrc.
+        // Update the room object too so the title overlay matches.
+        setRoom((prev) =>
+          prev
+            ? { ...prev, current_episode_id: e.episodeID, current_episode_title: e.episodeTitle }
+            : prev,
+        );
+        (async () => {
+          try {
+            const access = await getProtectedMediaAccess({ episodeId: e.episodeID, token });
+            const playback = access.playback_url || "";
+            const url = playback.startsWith("https://cdn.filmorauz.net/media/")
+              ? playback
+              : normalizeMediaUrl(playback, "") || playback;
+            if (url) setVideoSrc(url);
+          } catch {
+            /* ignore */
+          }
+        })();
+        setChat((prev) => [
+          ...prev,
+          {
+            userID: "system",
+            userName: "system",
+            kind: "text",
+            text: `Epizod o'zgardi: ${e.episodeTitle}`,
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+      } else if (e.type === "episode_request") {
+        if (isHost) {
+          setEpisodeRequestToast({
+            userName: e.userName,
+            reason: e.reason,
+            targetEpisodeID: e.targetEpisodeID,
+            ts: Date.now(),
+          });
+          setTimeout(() => setEpisodeRequestToast(null), 8000);
+        }
       } else if (e.type === "reaction") {
         const id = `${e.reaction.ts}-${e.reaction.userID}-${Math.random()}`;
         setFloatingReactions((prev) => [...prev, { ...e.reaction, id }]);
@@ -295,6 +389,78 @@ export default function WatchRoomPage() {
     },
     [isHost, sendHostAction],
   );
+
+  // ── Series-room: load episode list once for the switcher + auto-advance ─
+  useEffect(() => {
+    if (!room || room.content_type !== "series" || !room.series_id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await getSeriesEpisodesByID(room.series_id!);
+        if (!cancelled) setEpisodes(list);
+      } catch {
+        /* non-fatal — switcher just stays empty */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [room?.id, room?.series_id, room?.content_type]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Host-disconnect countdown ticker ─────────────────────────────────
+  useEffect(() => {
+    if (hostGoneDeadline == null) {
+      setGraceLeft(0);
+      return;
+    }
+    const update = () => {
+      const left = Math.max(0, Math.round((hostGoneDeadline - Date.now()) / 1000));
+      setGraceLeft(left);
+    };
+    update();
+    const t = setInterval(update, 500);
+    return () => clearInterval(t);
+  }, [hostGoneDeadline]);
+
+  // ── Helpers: flatten episodes, find next/prev for auto-advance ──────
+  const flatEpisodes = (() => {
+    const out: Array<{ id: string; title: string; seasonNumber: number; episodeNumber: number }> = [];
+    for (const sw of episodes) {
+      for (const ep of sw.episodes) {
+        out.push({
+          id: ep.id,
+          title: ep.title,
+          seasonNumber: sw.season.season_number,
+          episodeNumber: ep.episode_number,
+        });
+      }
+    }
+    return out;
+  })();
+  const currentEpIdx = room?.current_episode_id
+    ? flatEpisodes.findIndex((e) => e.id === room.current_episode_id)
+    : -1;
+  const nextEp = currentEpIdx >= 0 ? flatEpisodes[currentEpIdx + 1] : undefined;
+
+  // ── Host: when current episode video ends, auto-advance ─────────────
+  // We rely on the page-level <video> ref inside RoomPlayer firing an
+  // "ended" event; bind it via the videoRef we already capture for guest
+  // volume. RoomPlayer renders its own <video> so we listen via document.
+  useEffect(() => {
+    if (!isHost || !room || room.content_type !== "series" || !token) return;
+    const v = document.querySelector("video");
+    if (!v) return;
+    const onEnded = async () => {
+      if (!nextEp) return;
+      try {
+        await changeRoomEpisode(token, room.id, nextEp.id);
+      } catch {
+        /* ignore — switcher still works manually */
+      }
+    };
+    v.addEventListener("ended", onEnded);
+    return () => v.removeEventListener("ended", onEnded);
+  }, [isHost, room, token, nextEp, videoSrc]);
 
   // Chat auto-scroll
   useEffect(() => {
@@ -495,6 +661,23 @@ export default function WatchRoomPage() {
               ))}
             </div>
 
+            {/* Host-disconnect countdown overlay — only shown to guests
+                while the host is gone and the grace timer is ticking. */}
+            {hostGoneDeadline != null && !isHost && (
+              <div className="absolute inset-0 z-30 bg-black/70 flex items-center justify-center text-center px-4">
+                <div className="space-y-3">
+                  <AlertTriangle className="w-10 h-10 text-yellow-400 mx-auto" />
+                  <p className="text-white font-medium">Host vaqtincha uzildi</p>
+                  <p className="text-3xl font-mono tabular-nums">
+                    {String(Math.floor(graceLeft / 60)).padStart(2, "0")}:
+                    {String(graceLeft % 60).padStart(2, "0")}
+                  </p>
+                  <p className="text-xs text-gray-400 max-w-xs">
+                    Agar shu vaqt ichida qaytib kelmasa, room avtomatik yopiladi.
+                  </p>
+                </div>
+              </div>
+            )}
             <div className="absolute top-2 right-2 flex items-center gap-2 z-20 pointer-events-none">
               <span
                 className={`text-[10px] sm:text-xs px-2 py-1 rounded ${
@@ -524,6 +707,52 @@ export default function WatchRoomPage() {
               </button>
             )}
           </div>
+
+          {/* Series-room controls: host has an episode switcher; guests
+              can nudge the host with a "next episode" request. */}
+          {room.content_type === "series" && (
+            <div className="bg-brand-card border border-brand-border rounded-xl p-3 flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-gray-400 mr-1">Hozir:</span>
+              <span className="text-sm font-medium truncate flex-1 min-w-0">
+                {room.current_episode_title || "—"}
+              </span>
+              {isHost ? (
+                <>
+                  {nextEp && (
+                    <button
+                      onClick={async () => {
+                        if (!token) return;
+                        try {
+                          await changeRoomEpisode(token, room.id, nextEp.id);
+                        } catch (err) {
+                          alert(err instanceof Error ? err.message : "Xato");
+                        }
+                      }}
+                      className="px-2.5 py-1.5 bg-brand-dark border border-brand-border hover:border-brand-red rounded-lg text-xs flex items-center gap-1.5"
+                    >
+                      <SkipForward className="w-3.5 h-3.5" /> Keyingisi
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowEpisodes(true)}
+                    className="px-2.5 py-1.5 bg-brand-dark border border-brand-border hover:border-brand-red rounded-lg text-xs flex items-center gap-1.5"
+                  >
+                    <List className="w-3.5 h-3.5" /> Epizodlar
+                  </button>
+                </>
+              ) : (
+                nextEp && (
+                  <button
+                    onClick={() => sendEpisodeRequest(nextEp.id, "next")}
+                    className="px-2.5 py-1.5 bg-brand-dark border border-brand-border hover:border-brand-red rounded-lg text-xs flex items-center gap-1.5"
+                    title="Hostga keyingi epizodga o'tishni so'rash"
+                  >
+                    <SkipForward className="w-3.5 h-3.5" /> Keyingisini so&apos;rash
+                  </button>
+                )
+              )}
+            </div>
+          )}
 
           <div className="bg-brand-card border border-brand-border rounded-xl p-3 sm:p-4">
             <div className="flex items-start gap-3 sm:gap-4">
@@ -671,6 +900,103 @@ export default function WatchRoomPage() {
           </div>
         </div>
       </div>
+
+      {/* Episode switcher modal (host, series rooms) */}
+      {showEpisodes && room.content_type === "series" && token && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+          onClick={() => setShowEpisodes(false)}
+        >
+          <div
+            className="bg-brand-card border border-brand-border rounded-xl w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-brand-border flex items-center justify-between">
+              <h3 className="font-semibold">Epizodlar</h3>
+              <button onClick={() => setShowEpisodes(false)} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="overflow-y-auto p-3 space-y-3">
+              {episodes.length === 0 && (
+                <p className="text-xs text-gray-500">Epizodlar topilmadi</p>
+              )}
+              {episodes.map((sw) => (
+                <div key={sw.season.id}>
+                  <p className="text-xs text-gray-400 mb-1">
+                    Season {sw.season.season_number} — {sw.season.title}
+                  </p>
+                  <ul className="space-y-1">
+                    {sw.episodes.map((ep) => {
+                      const active = ep.id === room.current_episode_id;
+                      return (
+                        <li key={ep.id}>
+                          <button
+                            disabled={active}
+                            onClick={async () => {
+                              try {
+                                await changeRoomEpisode(token, room.id, ep.id);
+                                setShowEpisodes(false);
+                              } catch (err) {
+                                alert(err instanceof Error ? err.message : "Xato");
+                              }
+                            }}
+                            className={`w-full text-left px-2 py-1.5 rounded text-sm flex items-center gap-2 ${
+                              active
+                                ? "bg-brand-red/20 text-brand-red"
+                                : "hover:bg-brand-dark"
+                            }`}
+                          >
+                            <span className="text-xs opacity-60 w-8">E{ep.episode_number}</span>
+                            <span className="truncate flex-1">{ep.title}</span>
+                            {active && <span className="text-[10px]">▶</span>}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Episode-request toast (host-only) */}
+      {episodeRequestToast && isHost && (
+        <div className="fixed bottom-4 right-4 z-[60] bg-brand-card border border-brand-red rounded-xl p-3 max-w-xs shadow-2xl">
+          <p className="text-sm">
+            <span className="font-medium">{episodeRequestToast.userName}</span>{" "}
+            {episodeRequestToast.reason === "next"
+              ? "keyingi epizodga o'tishni so'radi"
+              : "epizod o'zgartirishni so'radi"}
+          </p>
+          <div className="flex gap-2 mt-2">
+            {episodeRequestToast.targetEpisodeID && (
+              <button
+                onClick={async () => {
+                  if (!token || !episodeRequestToast.targetEpisodeID) return;
+                  try {
+                    await changeRoomEpisode(token, room.id, episodeRequestToast.targetEpisodeID);
+                    setEpisodeRequestToast(null);
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                className="px-3 py-1.5 bg-brand-red text-white rounded text-xs"
+              >
+                O&apos;tish
+              </button>
+            )}
+            <button
+              onClick={() => setEpisodeRequestToast(null)}
+              className="px-3 py-1.5 bg-brand-dark border border-brand-border rounded text-xs"
+            >
+              Yopish
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Invite modal */}
       {inviteOpen && room && token && (

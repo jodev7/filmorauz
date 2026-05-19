@@ -192,6 +192,15 @@ func (r *NotificationRepository) GetUnreadByType(ctx context.Context, userID pri
 	return notifications, nil
 }
 
+// DeleteByID deletes a single notification owned by `userID`. Used for
+// one-shot notifications (e.g. ROOM_INVITE) that should disappear from
+// the dropdown the moment the user clicks them — without this, the row
+// stays and a later re-click follows a now-expired invite link.
+func (r *NotificationRepository) DeleteByID(ctx context.Context, notificationID primitive.ObjectID, userID primitive.ObjectID) error {
+	_, err := r.collection.DeleteOne(ctx, bson.M{"_id": notificationID, "user_id": userID})
+	return err
+}
+
 // DeleteOld deletes notifications older than the specified days
 func (r *NotificationRepository) DeleteOld(ctx context.Context, daysOld int) (int64, error) {
 	cutoff := time.Now().AddDate(0, 0, -daysOld)

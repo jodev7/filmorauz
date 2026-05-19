@@ -22,6 +22,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	api.GET("/proxy-image", handlers.ProxyImage)
 
 	// ── Watch rooms (private-invite only) ────────────────────────────
+	api.GET("/rooms/public", watchRoomHandler.ListPublicRoomsHandler)
 	api.GET("/rooms/:id", watchRoomHandler.GetRoom)
 	api.GET("/rooms/:id/messages", watchRoomHandler.ListMessages)
 	// User search used by the in-room invite UI — auth-required.
@@ -49,8 +50,10 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	roomAuth.Use(middleware.RequireAuth(authService))
 	{
 		roomAuth.POST("", watchRoomHandler.CreateRoom)
+		roomAuth.GET("/mine/active", watchRoomHandler.GetMyActiveRoom)
 		roomAuth.POST("/:id/invites", watchRoomHandler.CreateInvite)
 		roomAuth.POST("/:id/kick", watchRoomHandler.KickMember)
+		roomAuth.POST("/:id/episode", watchRoomHandler.ChangeEpisode)
 	}
 
 	// Telegram Auth routes (public)
@@ -89,6 +92,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		notifications.GET("", notificationHandler.GetNotifications)
 		notifications.GET("/unread-count", notificationHandler.GetUnreadCount)
 		notifications.PATCH("/:id/read", notificationHandler.MarkAsRead)
+		notifications.DELETE("/:id", notificationHandler.DeleteNotification)
 		notifications.PATCH("/read-all", notificationHandler.MarkAllAsRead)
 	}
 
@@ -287,6 +291,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 
 		// Watch rooms (admin overview)
 		admin.GET("/rooms", watchRoomHandler.AdminListRooms)
+		admin.GET("/rooms/stats", watchRoomHandler.AdminRoomsStats)
 
 		// User management
 		admin.GET("/dashboard/stats", adminUserHandler.DashboardStats)
