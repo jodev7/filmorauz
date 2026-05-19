@@ -133,6 +133,16 @@ func (r *WatchRoomRepository) UpdatePlaybackState(ctx context.Context, id primit
 	return err
 }
 
+// SetTheme persists a host-chosen background gradient on the room doc.
+func (r *WatchRoomRepository) SetTheme(ctx context.Context, id primitive.ObjectID, from, to string) error {
+	_, err := r.rooms.UpdateByID(ctx, id, bson.M{"$set": bson.M{
+		"theme.from": from,
+		"theme.to":   to,
+		"updated_at": time.Now(),
+	}})
+	return err
+}
+
 // SetCurrentEpisode mutates a series room's currently-playing episode and
 // resets the playback head to zero. Called both from the host's manual
 // "switch episode" action and from the auto-advance flow when an episode

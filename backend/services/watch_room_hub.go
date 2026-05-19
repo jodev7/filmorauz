@@ -408,6 +408,18 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 	}
 }
 
+// BroadcastTheme pushes a theme_change WS event so every connected
+// guest repaints their background without a page reload.
+func (h *WatchRoomHub) BroadcastTheme(rm *HubRoom, from, to string) {
+	h.broadcast(rm, hubMessage{
+		Type: "theme_change",
+		Payload: map[string]any{
+			"from": from,
+			"to":   to,
+		},
+	}, nil)
+}
+
 // BroadcastEpisodeChange tells every client in the room to reload its
 // player against a new episode. Also resets the in-memory playback state
 // so the next state_sync isn't stuck on the old episode's position.
@@ -507,14 +519,20 @@ func (h *WatchRoomHub) CloseRoom(rm *HubRoom, reason string) {
 
 // ── broadcast helpers ─────────────────────────────────────────────────────
 
+// CRITICAL: `as_of_ms` MUST be the timestamp of the host action that
+// last set `Position` — NOT time.Now() at broadcast time. The guest
+// computes `target = position + (now - as_of_ms)/1000`. If as_of_ms is
+// "now" while position is stale, elapsed=0 and the guest seeks back
+// to the OLD position every heartbeat — visible as the "last segment
+// loops forever" bug on every non-host viewer.
 func (h *WatchRoomHub) sendState(rm *HubRoom, c *HubClient) {
 	rm.mu.Lock()
 	state := hubMessage{
 		Type: "state_sync",
 		Payload: map[string]any{
-			"position":    rm.Position,
-			"is_playing":  rm.IsPlaying,
-			"as_of_ms":    time.Now().UnixMilli(),
+			"position":     rm.Position,
+			"is_playing":   rm.IsPlaying,
+			"as_of_ms":     rm.LastStateUpdate.UnixMilli(),
 			"member_count": len(rm.clients),
 		},
 	}
@@ -529,7 +547,7 @@ func (h *WatchRoomHub) broadcastState(rm *HubRoom, except *HubClient) {
 		Payload: map[string]any{
 			"position":   rm.Position,
 			"is_playing": rm.IsPlaying,
-			"as_of_ms":   time.Now().UnixMilli(),
+			"as_of_ms":   rm.LastStateUpdate.UnixMilli(),
 		},
 	}
 	rm.mu.Unlock()

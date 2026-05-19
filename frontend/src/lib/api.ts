@@ -3980,6 +3980,7 @@ export interface WatchRoom {
   season_id?: string;
   current_episode_id?: string;
   current_episode_title?: string;
+  theme?: { from?: string; to?: string };
   visibility: RoomVisibility;
   max_members: number;
   position_seconds: number;
@@ -4048,6 +4049,23 @@ export async function createWatchRoom(
 // Returns the user's currently-open hosted room, or null if none. Used by
 // the navbar "you have an open room" pill so a host who clicked Back/Home
 // can hop back in instead of being orphaned outside their own session.
+export async function updateRoomTheme(
+  token: string,
+  roomID: string,
+  from: string,
+  to: string,
+): Promise<void> {
+  const res = await fetch(`${API_URL}/rooms/${roomID}/theme`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ from, to }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Failed to update theme");
+  }
+}
+
 export async function closeWatchRoom(token: string, roomID: string): Promise<void> {
   const res = await fetch(`${API_URL}/rooms/${roomID}/close`, {
     method: "POST",

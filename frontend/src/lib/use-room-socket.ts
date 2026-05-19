@@ -53,6 +53,7 @@ export type RoomEvent =
   | { type: "host_reconnected" }
   | { type: "episode_change"; episodeID: string; episodeTitle: string }
   | { type: "episode_request"; userID: string; userName: string; targetEpisodeID?: string; reason: string }
+  | { type: "theme_change"; from: string; to: string }
   | { type: "error"; message: string };
 
 export type UseRoomSocketResult = {
@@ -233,6 +234,13 @@ export function useRoomSocket(
             userName: String(p.user_name || ""),
             targetEpisodeID: typeof p.target_episode_id === "string" ? p.target_episode_id : undefined,
             reason: String(p.reason || ""),
+          });
+          break;
+        case "theme_change":
+          pushEvent({
+            type: "theme_change",
+            from: String(p.from || ""),
+            to: String(p.to || ""),
           });
           break;
         case "error":

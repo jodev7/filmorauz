@@ -494,6 +494,81 @@ func (h *WatchRoomHandler) KickMember(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// POST /api/rooms/:id/theme — premium host customises the room
+// background. Body: {from, to}. Broadcast via WS so connected guests
+// repaint immediately.
+func (h *WatchRoomHandler) UpdateTheme(c *gin.Context) {
+	userIDRaw, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "auth required"})
+		return
+	}
+	userIDHex, _ := userIDRaw.(string)
+	userID, err := primitive.ObjectIDFromHex(userIDHex)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user id"})
+		return
+	}
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	var body struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	// Very light validation — colour string must look CSS-safe so we
+	// don't end up injecting markup via the gradient. Allow hex,
+	// rgb()/rgba(), hsl()/hsla(), and named colours.
+	safe := func(s string) bool {
+		if len(s) > 32 {
+			return false
+		}
+		for _, r := range s {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+				(r >= '0' && r <= '9') || r == '#' || r == '(' || r == ')' ||
+				r == ',' || r == '.' || r == ' ' || r == '%') {
+				return false
+			}
+		}
+		return true
+	}
+	if !safe(body.From) || !safe(body.To) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid colour value"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	room, err := h.repo.GetRoomByID(ctx, id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "room not found"})
+		return
+	}
+	if room.OwnerID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only host can change theme"})
+		return
+	}
+	// Premium gate.
+	user, _ := h.userRepo.FindByID(userID.Hex())
+	if user == nil || !user.IsPremiumActive() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "premium only"})
+		return
+	}
+	if err := h.repo.SetTheme(ctx, id, body.From, body.To); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "update failed"})
+		return
+	}
+	if hubRoom, hErr := h.hub.GetOrLoadRoom(ctx, id); hErr == nil {
+		h.hub.BroadcastTheme(hubRoom, body.From, body.To)
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "from": body.From, "to": body.To})
+}
+
 // POST /api/rooms/:id/close — host explicitly tears down their room.
 // Anyone else hitting this gets 403. The hub broadcasts `room_closed`
 // to every connected client and the persisted row's status flips to

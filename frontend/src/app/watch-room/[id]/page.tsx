@@ -12,6 +12,7 @@ import {
   getProtectedMediaAccess,
   changeRoomEpisode,
   closeWatchRoom,
+  updateRoomTheme,
   WatchRoom,
   WatchRoomMessage,
   RoomUserResult,
@@ -42,11 +43,25 @@ import {
   SkipForward,
   List,
   XCircle,
+  Palette,
+  Share2,
 } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Link from "next/link";
 
 const EMOJI_PALETTE = ["😀", "😂", "❤️", "🔥", "👏", "🎉", "😮", "😢", "👍", "🤔", "😍", "🍿"];
+
+// Preset gradients for the premium-only room theme picker. Each gradient
+// is hard-coded as a (from, to) hex pair so the picker is deterministic
+// and the backend's input validation stays tight.
+const ROOM_THEMES: Array<{ label: string; from: string; to: string }> = [
+  { label: "Default", from: "#0a0a0f", to: "#0a0a0f" },
+  { label: "Ocean", from: "#0f172a", to: "#1e3a8a" },
+  { label: "Sunset", from: "#7c2d12", to: "#7c1d6f" },
+  { label: "Forest", from: "#052e16", to: "#14532d" },
+  { label: "Crimson", from: "#1f0a0a", to: "#7f1d1d" },
+  { label: "Gold", from: "#1c1917", to: "#854d0e" },
+];
 
 type FloatingReaction = RoomReaction & { id: string };
 
@@ -87,6 +102,10 @@ export default function WatchRoomPage() {
   // Confirm popup for host's "close room" action.
   const [closeConfirm, setCloseConfirm] = useState(false);
   const [closeBusy, setCloseBusy] = useState(false);
+  const [themePickerOpen, setThemePickerOpen] = useState(false);
+  // Live theme; mirrors room.theme but updates instantly when a
+  // theme_change WS event arrives so guests repaint without reload.
+  const [liveTheme, setLiveTheme] = useState<{ from: string; to: string } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
@@ -103,6 +122,9 @@ export default function WatchRoomPage() {
         const r = await getWatchRoom(roomID);
         if (cancelled) return;
         setRoom(r);
+        if (r.theme && r.theme.from && r.theme.to) {
+          setLiveTheme({ from: r.theme.from, to: r.theme.to });
+        }
         // Resolve playback URL. We try TWO sources and prefer whichever
         // is a multi-variant master playlist (so the quality picker has
         // something to pick). Users reported that with protected-only the
@@ -350,6 +372,8 @@ export default function WatchRoomPage() {
           });
           setTimeout(() => setEpisodeRequestToast(null), 8000);
         }
+      } else if (e.type === "theme_change") {
+        setLiveTheme({ from: e.from, to: e.to });
       } else if (e.type === "reaction") {
         const id = `${e.reaction.ts}-${e.reaction.userID}-${Math.random()}`;
         setFloatingReactions((prev) => [...prev, { ...e.reaction, id }]);
@@ -618,7 +642,17 @@ export default function WatchRoomPage() {
   const typingNames = Object.values(typingUsers);
 
   return (
-    <div className="min-h-screen bg-brand-dark text-white">
+    <div
+      className="min-h-screen bg-brand-dark text-white"
+      style={
+        liveTheme
+          ? {
+              backgroundImage: `linear-gradient(135deg, ${liveTheme.from}, ${liveTheme.to})`,
+              backgroundAttachment: "fixed",
+            }
+          : undefined
+      }
+    >
       <Navbar />
       {/* Navbar is position:fixed h-16 so the page content has to start
           below it manually — without pt-16 the back-row sits underneath
@@ -643,6 +677,15 @@ export default function WatchRoomPage() {
               on the "Room yopildi" screen. Required so a host can
               free up their one-active-room slot without waiting for
               the 5-min disconnect grace. */}
+          {isHost && (user as { is_premium?: boolean } | null)?.is_premium && (
+            <button
+              onClick={() => setThemePickerOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm text-yellow-300 bg-yellow-900/30 hover:bg-yellow-900/50 border border-yellow-700/50 rounded-lg transition-colors"
+              title="Room mavzusi (premium)"
+            >
+              <Palette className="w-4 h-4" /> Mavzu
+            </button>
+          )}
           {isHost && (
             <button
               onClick={() => setCloseConfirm(true)}
@@ -990,6 +1033,52 @@ export default function WatchRoomPage() {
         </div>
       )}
 
+      {/* Theme picker (premium host only) — 6 preset gradients +
+          a "Default" reset. Updates broadcast via WS so all guests
+          repaint their background without a reload. */}
+      {themePickerOpen && isHost && room && token && (
+        <div
+          className="fixed inset-0 z-[10000] bg-black/75 flex items-center justify-center p-4"
+          onClick={() => setThemePickerOpen(false)}
+        >
+          <div
+            className="bg-brand-card border border-yellow-700/60 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-brand-border flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Palette className="w-5 h-5 text-yellow-400" />
+                <h3 className="font-semibold text-white">Room mavzusi</h3>
+                <span className="text-[10px] bg-yellow-500/20 text-yellow-300 px-1.5 rounded">PREMIUM</span>
+              </div>
+              <button onClick={() => setThemePickerOpen(false)} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 grid grid-cols-3 gap-2">
+              {ROOM_THEMES.map((t) => (
+                <button
+                  key={t.label}
+                  onClick={async () => {
+                    try {
+                      await updateRoomTheme(token, room.id, t.from, t.to);
+                      setLiveTheme({ from: t.from, to: t.to });
+                      setThemePickerOpen(false);
+                    } catch (err) {
+                      alert(err instanceof Error ? err.message : "Xato");
+                    }
+                  }}
+                  className="aspect-square rounded-lg border border-brand-border hover:border-yellow-500 transition-colors p-2 flex flex-col items-end justify-end text-[10px] text-white/90"
+                  style={{ backgroundImage: `linear-gradient(135deg, ${t.from}, ${t.to})` }}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Close-room confirm popup (host-only) */}
       {closeConfirm && isHost && room && token && (
         <div
@@ -1134,6 +1223,29 @@ export default function WatchRoomPage() {
                 >
                   <Copy className="w-4 h-4" /> Nusxa olish
                 </button>
+                {/* Native share sheet — Web Share API. Best UX on
+                    mobile (Telegram / WhatsApp / SMS bottom sheet)
+                    and falls back gracefully on desktops that don't
+                    support it (button just isn't rendered). */}
+                {typeof navigator !== "undefined" && "share" in navigator && (
+                  <button
+                    onClick={async () => {
+                      try {
+                        await navigator.share({
+                          title: room?.content_title || "Birga ko'rish",
+                          text: `Birga ko'ramiz: ${room?.content_title || "kinoga"}`,
+                          url: linkPopup.url,
+                        });
+                      } catch {
+                        /* user cancelled — ignore */
+                      }
+                    }}
+                    className="px-3 py-2 bg-brand-dark border border-brand-border rounded-lg text-sm flex items-center gap-1"
+                    title="Ulashish"
+                  >
+                    <Share2 className="w-4 h-4" />
+                  </button>
+                )}
                 <button
                   onClick={() => setLinkPopup(null)}
                   className="px-3 py-2 bg-brand-dark border border-brand-border rounded-lg text-sm"

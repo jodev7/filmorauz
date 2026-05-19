@@ -42,11 +42,26 @@ type WatchRoom struct {
 	IsPlaying        bool      `bson:"is_playing" json:"is_playing"`
 	LastStateUpdate  time.Time `bson:"last_state_update" json:"last_state_update"`
 
+	// Theme is a host-selectable colour for the room background.
+	// Premium-only feature. Stored verbatim (CSS-safe strings) so the
+	// frontend can drop it into a linear-gradient without further
+	// processing. Empty values → frontend uses the default brand bg.
+	Theme RoomTheme `bson:"theme,omitempty" json:"theme,omitempty"`
+
 	Status    string    `bson:"status" json:"status"` // "active" | "closed"
 	CreatedAt time.Time `bson:"created_at" json:"created_at"`
 	UpdatedAt time.Time `bson:"updated_at" json:"updated_at"`
 	ClosedAt  *time.Time `bson:"closed_at,omitempty" json:"closed_at,omitempty"`
 	ExpiresAt time.Time `bson:"expires_at" json:"expires_at"` // automatic cleanup at this point
+}
+
+// RoomTheme is the host-chosen background gradient for the room page.
+// Both fields are stored as the bare colour strings the frontend will
+// drop into `linear-gradient(135deg, from, to)` — typically hex or
+// rgb()/rgba(). Empty values mean "use the default theme".
+type RoomTheme struct {
+	From string `bson:"from,omitempty" json:"from,omitempty"`
+	To   string `bson:"to,omitempty"   json:"to,omitempty"`
 }
 
 // WatchRoomInvite is a single shareable invite link for a room. One row per
