@@ -491,8 +491,16 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 	// -threads caps CPU usage so parallel renditions do not starve the
 	// parser service running on the same VPS.
 	ffThreads := ffmpegThreadsFromEnv()
+	// Tolerate corrupt packets in the source mp4. Some scraped uploads
+	// contain occasional broken AAC frames that report bogus channel
+	// counts (e.g. "33 channels"); ffmpeg's auto-aresample then aborts
+	// the whole job with "Rematrix is needed between 33 channels and
+	// stereo but there is not enough information to do it". With these
+	// flags ffmpeg drops the corrupt frame and continues.
 	baseArgs := []string{
 		"-y",
+		"-fflags", "+discardcorrupt+genpts",
+		"-err_detect", "ignore_err",
 		"-threads", ffThreads,
 		"-filter_threads", ffThreads,
 		"-filter_complex_threads", ffThreads,
@@ -538,6 +546,13 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 		"-level", "4.1",
 		"-c:a", "aac",
 		"-b:a", "192k",
+		// Force the AAC encoder to stereo. Without this, a single
+		// corrupt input packet that reports a bogus channel count
+		// re-initialises the audio filter chain and kills the encode
+		// because the auto-aresample filter has no channel layout to
+		// rematrix to.
+		"-ac", "2",
+		"-ar", "44100",
 		"-movflags", "+faststart",
 		"-progress", "pipe:1", // MUST appear before output path
 		outputPath,
