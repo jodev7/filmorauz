@@ -917,7 +917,18 @@ def _unwrap_embed_url(url: str) -> str:
         qs = parse_qs(parsed.query)
         inner = (qs.get("file") or [""])[0]
         inner = unquote(inner).strip()
-        if inner and (inner.startswith("http://") or inner.startswith("https://")):
+        if not inner:
+            return url
+        # kinolar packs multiple-quality URLs into a single file= value,
+        # comma-separated (file=URL1,URL2,URL3&qualities=480P,720P,1080P).
+        # Pick the LAST entry — typically the highest quality.
+        if "," in inner:
+            for candidate in reversed(inner.split(",")):
+                candidate = candidate.strip()
+                if candidate.startswith("http://") or candidate.startswith("https://"):
+                    return candidate
+            return url
+        if inner.startswith("http://") or inner.startswith("https://"):
             return inner
     except Exception:
         pass
