@@ -18,6 +18,30 @@ import { useAuth } from "@/lib/auth-context";
 
 type QualityLevel = { index: number; label: string; height: number };
 
+// Hoisted out of the component so both the hls.js path and the
+// master-playlist fetch (used as fallback for native-HLS browsers and
+// the on-demand "refresh" path) can call it.
+function buildFromVariants(raw: Array<{ height: number; bitrate: number }>): QualityLevel[] {
+  const out: QualityLevel[] = [{ index: -1, label: "Auto", height: -1 }];
+  const seenHeights = new Set<number>();
+  const sorted = raw
+    .map((l, idx) => ({ idx, height: l.height || 0, bitrate: l.bitrate || 0 }))
+    .sort((a, b) => (b.height || b.bitrate) - (a.height || a.bitrate));
+  sorted.forEach(({ idx, height, bitrate }) => {
+    if (height > 0 && !seenHeights.has(height)) {
+      seenHeights.add(height);
+      out.push({ index: idx, label: `${height}p`, height });
+    } else if (height <= 0 && bitrate > 0) {
+      out.push({
+        index: idx,
+        label: `${Math.round(bitrate / 1000)} kbps`,
+        height: bitrate,
+      });
+    }
+  });
+  return out;
+}
+
 type Props = {
   src: string;
   title?: string;
@@ -75,10 +99,60 @@ export default function RoomPlayer({
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Attach HLS / set src ─────────────────────────────────────────────
+  // Helper: fetch the master playlist URL and parse #EXT-X-STREAM-INF
+  // lines into quality levels. Used both from the main hls effect and
+  // on-demand when the user opens an empty quality dropdown.
+  const parseMasterPlaylist = async (url: string) => {
+    try {
+      // eslint-disable-next-line no-console
+      console.log("[room player] fetching master playlist:", url);
+      const r = await fetch(url, { credentials: "omit" });
+      // eslint-disable-next-line no-console
+      console.log("[room player] master fetch status:", r.status, "ok:", r.ok);
+      if (!r.ok) return [] as Array<{ height: number; bitrate: number }>;
+      const text = await r.text();
+      const variants: Array<{ height: number; bitrate: number }> = [];
+      const re = /#EXT-X-STREAM-INF:([^\n]+)/g;
+      let mm: RegExpExecArray | null;
+      while ((mm = re.exec(text)) !== null) {
+        const attrs = mm[1];
+        const resMatch = /RESOLUTION=\d+x(\d+)/.exec(attrs);
+        const bwMatch = /BANDWIDTH=(\d+)/.exec(attrs);
+        variants.push({
+          height: resMatch ? Number(resMatch[1]) : 0,
+          bitrate: bwMatch ? Number(bwMatch[1]) : 0,
+        });
+      }
+      // eslint-disable-next-line no-console
+      console.log("[room player] master parsed variants:", variants);
+      return variants;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[room player] master fetch failed:", e);
+      return [] as Array<{ height: number; bitrate: number }>;
+    }
+  };
+  // Stable reference to the master playlist URL so the dropdown can
+  // re-trigger a fetch later. Mirrors `src` 1:1.
+  const lastSrcRef = useRef<string>("");
+
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !src) return;
+    lastSrcRef.current = src;
     const isHls = /\.m3u8(\?|$)/i.test(src) || src.includes("/master.m3u8");
+
+    // ALWAYS try to parse the master playlist for the quality picker —
+    // even on Safari (native HLS) where hls.js isn't used. Without this
+    // Safari users would never see a populated picker.
+    if (isHls) {
+      void parseMasterPlaylist(src).then((variants) => {
+        if (variants.length > 0) {
+          const built = buildFromVariants(variants);
+          setQualities((curr) => (built.length > curr.length ? built : curr));
+        }
+      });
+    }
 
     // Safari native HLS path.
     if (!isHls || v.canPlayType("application/vnd.apple.mpegurl")) {
@@ -93,26 +167,7 @@ export default function RoomPlayer({
     hlsRef.current = hls;
     hls.loadSource(src);
     hls.attachMedia(v);
-    const buildLevels = (raw: Array<{ height: number; bitrate: number }>) => {
-      const out: QualityLevel[] = [{ index: -1, label: "Auto", height: -1 }];
-      const seenHeights = new Set<number>();
-      const sorted = raw
-        .map((l, idx) => ({ idx, height: l.height || 0, bitrate: l.bitrate || 0 }))
-        .sort((a, b) => (b.height || b.bitrate) - (a.height || a.bitrate));
-      sorted.forEach(({ idx, height, bitrate }) => {
-        if (height > 0 && !seenHeights.has(height)) {
-          seenHeights.add(height);
-          out.push({ index: idx, label: `${height}p`, height });
-        } else if (height <= 0 && bitrate > 0) {
-          out.push({
-            index: idx,
-            label: `${Math.round(bitrate / 1000)} kbps`,
-            height: bitrate,
-          });
-        }
-      });
-      return out;
-    };
+    const buildLevels = buildFromVariants;
     // Important: every setQualities here goes through a "don't shrink"
     // guard. Without it, hls.js events fire in unpredictable order
     // (MANIFEST_PARSED with 0 levels, then LEVELS_UPDATED with 4, then
@@ -139,38 +194,8 @@ export default function RoomPlayer({
       );
       if (data.levels.length > 0) mergeQualities(buildLevels(data.levels));
     });
-    // Race-condition fix: previously this manual fetch only ran after
-    // 1.5s as a fallback. In practice hls.js' MANIFEST_PARSED was
-    // firing with a single stub level, so the picker locked to "Auto"
-    // and never updated even though the master playlist has 3
-    // variants. Run the manual master parse immediately and prefer
-    // its result whenever it returns ≥2 variants.
-    fetch(src, { credentials: "omit" })
-      .then((r) => (r.ok ? r.text() : ""))
-      .then((text) => {
-        if (!text) return;
-        const variants: Array<{ height: number; bitrate: number }> = [];
-        const re = /#EXT-X-STREAM-INF:([^\n]+)/g;
-        let mm: RegExpExecArray | null;
-        while ((mm = re.exec(text)) !== null) {
-          const attrs = mm[1];
-          const resMatch = /RESOLUTION=\d+x(\d+)/.exec(attrs);
-          const bwMatch = /BANDWIDTH=(\d+)/.exec(attrs);
-          variants.push({
-            height: resMatch ? Number(resMatch[1]) : 0,
-            bitrate: bwMatch ? Number(bwMatch[1]) : 0,
-          });
-        }
-        // eslint-disable-next-line no-console
-        console.log("[room player] manual parsed variants =", variants);
-        if (variants.length > 0) {
-          // Manual parse wins whenever it returns more entries than
-          // whatever hls.js has shown so far. Don't shrink.
-          const built = buildLevels(variants);
-          setQualities((curr) => (built.length > curr.length ? built : curr));
-        }
-      })
-      .catch(() => undefined);
+    // (Manual master.m3u8 parse already kicked off above, runs in
+    // parallel with hls.js to populate the picker as fast as possible.)
     const lateCheck = setTimeout(() => {
       if (hls.levels && hls.levels.length > 0) {
         setQualities((curr) => (curr.length > 1 ? curr : buildLevels(hls.levels)));
@@ -599,7 +624,21 @@ export default function RoomPlayer({
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                setShowSettings((v) => !v);
+                const nextOpen = !showSettings;
+                setShowSettings(nextOpen);
+                // On-demand refresh: if the picker is about to open with
+                // only "Auto" (or empty), re-fetch the master playlist
+                // and populate. This is the last line of defense for
+                // streams where the initial parse silently dropped the
+                // variants (CORS hiccup, hls.js stub levels, etc.).
+                if (nextOpen && qualities.length <= 1 && lastSrcRef.current) {
+                  void parseMasterPlaylist(lastSrcRef.current).then((variants) => {
+                    if (variants.length > 0) {
+                      const built = buildFromVariants(variants);
+                      setQualities((curr) => (built.length > curr.length ? built : curr));
+                    }
+                  });
+                }
               }}
               className="flex items-center gap-1 text-xs hover:text-brand-red transition-colors px-1 py-0.5"
               type="button"
