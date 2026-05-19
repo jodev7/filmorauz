@@ -391,6 +391,7 @@ export default function Navbar() {
             { href: "/", label: t("common.home") },
             { href: "/movies", label: t("common.movies") },
             { href: "/series", label: "Seriallar" },
+            { href: "/rooms", label: "Roomlar" },
             ...GENRE_NAV_LINKS,
           ].map((item) => (
             <Link

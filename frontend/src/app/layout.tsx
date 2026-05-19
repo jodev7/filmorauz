@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Bebas_Neue, Inter } from "next/font/google";
+import { Bebas_Neue, Inter, Poppins } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
 import { I18nProvider } from "@/lib/i18n";
@@ -19,6 +19,16 @@ const bebasNeue = Bebas_Neue({
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-body",
+  display: "swap",
+});
+
+// Poppins — used by the watch-room chat for a softer, more friendly
+// feel than the default UI font. Variable exposed app-wide so any
+// "font-poppins" class on a child can pick it up.
+const poppins = Poppins({
+  weight: ["400", "500", "600"],
+  subsets: ["latin"],
+  variable: "--font-poppins",
   display: "swap",
 });
 
@@ -85,7 +95,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="uz" className={`${bebasNeue.variable} ${inter.variable}`}>
+    <html lang="uz" className={`${bebasNeue.variable} ${inter.variable} ${poppins.variable}`}>
       <head>
         <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png" />
         <link rel="preconnect" href="https://cdn.filmorauz.net" crossOrigin="" />

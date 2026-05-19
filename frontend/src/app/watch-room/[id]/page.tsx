@@ -121,6 +121,15 @@ export default function WatchRoomPage() {
       try {
         const r = await getWatchRoom(roomID);
         if (cancelled) return;
+        // Hard-gate closed rooms at fetch time. Without this check the
+        // page kept rendering the "Ulanish…" badge forever because the
+        // WS upgrade silently 404'd against a `status: closed` row
+        // while the React page sat waiting for state.
+        if (r.status !== "active") {
+          setClosedReason("yopilgan");
+          setRoom(r);
+          return;
+        }
         setRoom(r);
         if (r.theme && r.theme.from && r.theme.to) {
           setLiveTheme({ from: r.theme.from, to: r.theme.to });
@@ -731,19 +740,15 @@ export default function WatchRoomPage() {
                 fullscreenOverlay={
                   <FullscreenChatOverlay reactions={floatingReactions} chat={chat} />
                 }
+                reactionsOverlay={floatingReactions.map((r, idx) => (
+                  <FloatingReactionBubble key={r.id} reaction={r} index={idx} />
+                ))}
               />
             ) : (
               <div className="flex items-center justify-center h-full">
                 <Loader2 className="w-8 h-8 animate-spin text-brand-red" />
               </div>
             )}
-
-            {/* Floating reactions overlay — visible outside fullscreen too. */}
-            <div className="pointer-events-none absolute inset-0 overflow-hidden">
-              {floatingReactions.map((r, idx) => (
-                <FloatingReactionBubble key={r.id} reaction={r} index={idx} />
-              ))}
-            </div>
 
             {/* Host-disconnect countdown overlay — only shown to guests
                 while the host is gone and the grace timer is ticking. */}
@@ -910,7 +915,7 @@ export default function WatchRoomPage() {
           </div>
 
           {/* Chat — always visible */}
-          <div className="flex-1 bg-brand-card border border-brand-border rounded-xl flex flex-col min-h-0">
+          <div className="flex-1 bg-brand-card border border-brand-border rounded-xl flex flex-col min-h-0 font-poppins">
             <div className="px-3 py-2 border-b border-brand-border text-sm font-medium flex items-center justify-between">
               <span>Chat</span>
               {typingNames.length > 0 && (
@@ -930,7 +935,7 @@ export default function WatchRoomPage() {
                     <>
                       <span className="text-gray-400 text-xs">{c.userName || "Foydalanuvchi"}: </span>
                       {c.kind === "emoji" ? (
-                        <span className="text-2xl">{c.emoji}</span>
+                        <span className="text-2xl font-emoji">{c.emoji}</span>
                       ) : (
                         <span className="break-words">{c.text}</span>
                       )}
@@ -946,7 +951,7 @@ export default function WatchRoomPage() {
                     <button
                       key={e}
                       onClick={() => handleSendEmoji(e)}
-                      className="text-2xl hover:bg-brand-card rounded p-1"
+                      className="text-2xl hover:bg-brand-card rounded p-1 font-emoji"
                     >
                       {e}
                     </button>
@@ -1333,7 +1338,7 @@ function FullscreenChatOverlay({
             ) : c.kind === "emoji" ? (
               <span>
                 <span className="text-gray-300 text-xs mr-1">{c.userName}:</span>
-                <span className="text-xl">{c.emoji}</span>
+                <span className="text-xl font-emoji">{c.emoji}</span>
               </span>
             ) : (
               <span>
@@ -1358,7 +1363,7 @@ function FullscreenChatOverlay({
           node: (
             <span>
               <span className="text-gray-300 text-xs mr-1">{r.userName}:</span>
-              <span className="text-xl">{r.emoji}</span>
+              <span className="text-xl font-emoji">{r.emoji}</span>
             </span>
           ),
         });
@@ -1380,7 +1385,7 @@ function FullscreenChatOverlay({
 
   if (visible.length === 0) return null;
   return (
-    <div className="flex flex-col gap-1.5 text-white text-sm">
+    <div className="flex flex-col gap-1.5 text-white text-sm font-poppins">
       {visible.map((e) => (
         <div
           key={e.key}
@@ -1582,7 +1587,7 @@ function FloatingReactionBubble({ reaction, index }: { reaction: FloatingReactio
         animation: "floatUp 3s ease-out forwards",
       }}
     >
-      <span className="block leading-none drop-shadow-lg">{reaction.emoji}</span>
+      <span className="block leading-none drop-shadow-lg font-emoji">{reaction.emoji}</span>
       <span className="block text-[10px] text-white/80 mt-1 text-center whitespace-nowrap">
         {reaction.userName}
       </span>

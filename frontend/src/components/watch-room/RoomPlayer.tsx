@@ -61,6 +61,11 @@ type Props = {
   registerSync?: (api: { setPosition: (sec: number) => void; setPlaying: (p: boolean) => void }) => void;
   // Slot for the Twitch-style chat overlay rendered inside fullscreen.
   fullscreenOverlay?: React.ReactNode;
+  // Slot for floating reaction emoji — rendered inside the player
+  // container so it's visible in fullscreen too. Rendering this in
+  // the parent (outside the player container) meant fullscreen took
+  // the player but left reactions behind on the page.
+  reactionsOverlay?: React.ReactNode;
 };
 
 export default function RoomPlayer({
@@ -75,6 +80,7 @@ export default function RoomPlayer({
   onHostSeek,
   registerSync,
   fullscreenOverlay,
+  reactionsOverlay,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -692,6 +698,11 @@ export default function RoomPlayer({
           <button onClick={toggleMute} className="hover:text-brand-red transition-colors">
             {muted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
           </button>
+          {/* Volume slider is hidden on mobile — iOS Safari ignores
+              programmatic volume changes (hardware buttons only) and
+              Android Chrome's behaviour is inconsistent. Showing a
+              slider that doesn't do anything is worse than not having
+              it. Desktop still gets the slider. */}
           <input
             type="range"
             min={0}
@@ -699,7 +710,7 @@ export default function RoomPlayer({
             step={0.01}
             value={muted ? 0 : volume}
             onChange={(e) => onVolumeChange(Number(e.target.value))}
-            className="w-14 sm:w-24 accent-brand-red"
+            className="hidden sm:block w-24 accent-brand-red"
           />
 
           {/* Time */}
@@ -790,6 +801,13 @@ export default function RoomPlayer({
         </div>
       </div>
 
+      {/* Floating reactions — always inside the player container so
+          they survive fullscreen. */}
+      {reactionsOverlay && (
+        <div className="absolute inset-0 pointer-events-none overflow-hidden">
+          {reactionsOverlay}
+        </div>
+      )}
       {/* Fullscreen-only chat overlay slot */}
       {isFullscreen && fullscreenOverlay && (
         <div className="absolute top-12 right-3 z-10 pointer-events-none w-72 max-w-[50%]">
