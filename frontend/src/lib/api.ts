@@ -4103,9 +4103,15 @@ export async function getMyActiveRoom(token: string): Promise<WatchRoom | null> 
 }
 
 export async function deleteNotification(token: string, id: string): Promise<void> {
+  // keepalive lets the DELETE survive the page navigation that
+  // typically fires right after clicking a notification (the click
+  // routes to the action_url). Without it the browser would cancel
+  // the in-flight request and the row would reappear on the next
+  // dropdown open.
   await fetch(`${API_URL}/notifications/${id}`, {
     method: "DELETE",
     headers: authHeaders(token),
+    keepalive: true,
   });
 }
 

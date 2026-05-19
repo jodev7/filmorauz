@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { getNotifications, getUnreadNotificationCount, markNotificationAsRead, markAllNotificationsAsRead, deleteNotification, Notification } from "@/lib/api";
 import { Bell, Check, CheckCheck, X, Clock, Gift, AlertTriangle, MessageCircle, Ban, FileText } from "lucide-react";
+import MediaImage from "@/components/ui/MediaImage";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 
 export default function NotificationBell() {
   const { isAuthenticated, token, unreadNotificationCount, setUnreadNotificationCount } = useAuth();
@@ -205,8 +207,15 @@ export default function NotificationBell() {
               >
                 {isRoomInvite && poster ? (
                   <div className="w-12 h-16 shrink-0 rounded-md overflow-hidden bg-brand-dark border border-brand-border">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={poster} alt={movieTitle} className="w-full h-full object-cover" />
+                    {/* MediaImage handles B2 key → CDN URL conversion
+                        and gives a placeholder when the URL is bad,
+                        so raw <img> URLs that previously rendered
+                        broken (e.g. relative paths) now load. */}
+                    <MediaImage
+                      src={normalizeMediaUrl(poster, "") || poster}
+                      alt={movieTitle}
+                      className="w-full h-full object-cover"
+                    />
                   </div>
                 ) : (
                   <div className="flex-shrink-0 mt-1">

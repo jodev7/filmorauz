@@ -321,8 +321,16 @@ export default function RoomPlayer({
     };
     const v = videoRef.current;
     if (v) {
+      // Re-apply on every readiness milestone — without seeked /
+      // playing listeners the guest could end up with a pending sync
+      // that never gets re-tried after the previous seek settled. The
+      // result was guests "freezing" after a frantic host scrub: the
+      // first seek lost its target while buffering and no further
+      // event triggered a catch-up to the new (debounced) target.
       v.addEventListener("loadedmetadata", apply);
       v.addEventListener("canplay", apply);
+      v.addEventListener("seeked", apply);
+      v.addEventListener("playing", apply);
     }
     registerSync({
       setPosition: (sec: number) => {
@@ -338,6 +346,8 @@ export default function RoomPlayer({
       if (v) {
         v.removeEventListener("loadedmetadata", apply);
         v.removeEventListener("canplay", apply);
+        v.removeEventListener("seeked", apply);
+        v.removeEventListener("playing", apply);
       }
     };
   }, [registerSync, src]);
@@ -437,11 +447,38 @@ export default function RoomPlayer({
 
   const toggleFullscreen = async () => {
     const el = containerRef.current;
+    const v = videoRef.current as
+      | (HTMLVideoElement & {
+          webkitEnterFullscreen?: () => void;
+          webkitExitFullscreen?: () => void;
+          webkitDisplayingFullscreen?: boolean;
+        })
+      | null;
+    // iOS Safari doesn't support Fullscreen API on container divs —
+    // only the <video> element itself can go fullscreen via the legacy
+    // webkit API. Use it when available; fall back to the standard
+    // container API on desktop / Android Chrome.
+    if (v && typeof v.webkitEnterFullscreen === "function") {
+      if (v.webkitDisplayingFullscreen) {
+        v.webkitExitFullscreen?.();
+      } else {
+        v.webkitEnterFullscreen();
+      }
+      return;
+    }
     if (!el) return;
     if (document.fullscreenElement) {
       await document.exitFullscreen().catch(() => undefined);
     } else {
-      await el.requestFullscreen().catch(() => undefined);
+      // Some Android browsers also need to fullscreen the <video>
+      // directly when the container request is denied.
+      try {
+        await el.requestFullscreen();
+      } catch {
+        if (v && "requestFullscreen" in v) {
+          await (v as HTMLVideoElement).requestFullscreen().catch(() => undefined);
+        }
+      }
     }
   };
 
@@ -537,6 +574,8 @@ export default function RoomPlayer({
         ref={videoRef}
         poster={posterUrl}
         playsInline
+        webkit-playsinline="true"
+        x5-playsinline="true"
         className="w-full h-full"
       />
 

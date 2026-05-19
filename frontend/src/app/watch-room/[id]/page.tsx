@@ -420,9 +420,22 @@ export default function WatchRoomPage() {
     },
     [isHost, sendHostAction],
   );
+  // Seek broadcasts are debounced so a frantic scrub (drag back and
+  // forth across the timeline) doesn't spray dozens of state_sync
+  // messages at every guest. Without this, guests can't keep up:
+  // each new sync triggers a buffer flush + seek, the next one
+  // arrives before the seek lands, and the guest's video silently
+  // stops advancing. 200ms is short enough that releasing the scrub
+  // bar feels instant but long enough to coalesce a hold-and-drag.
+  const seekDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onHostSeek = useCallback(
     (pos: number) => {
-      if (isHost) sendHostAction("seek", pos);
+      if (!isHost) return;
+      if (seekDebounceRef.current) clearTimeout(seekDebounceRef.current);
+      seekDebounceRef.current = setTimeout(() => {
+        sendHostAction("seek", pos);
+        seekDebounceRef.current = null;
+      }, 200);
     },
     [isHost, sendHostAction],
   );
