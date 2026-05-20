@@ -25,6 +25,7 @@ import {
   RoomMember,
   RoomChatEntry,
   RoomReaction,
+  RoomEvent,
 } from "@/lib/use-room-socket";
 import MediaImage from "@/components/ui/MediaImage";
 import {
@@ -112,6 +113,8 @@ export default function WatchRoomPage() {
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isHost = !!user && !!room && user.id === room.owner_id;
+  // Sync isHostRef (declared below) to current isHost so the WS event
+  // handler — which closes over a ref — can branch on host status.
 
   // ── Load room metadata + chat history ─────────────────────────────────
   useEffect(() => {
@@ -239,173 +242,174 @@ export default function WatchRoomPage() {
     };
   }, [roomID]);
 
+  // Members are read from a ref inside the WS event handler so the
+  // handler identity stays stable across renders (otherwise every
+  // member change would re-subscribe and we'd lose the "fresh callback"
+  // optimisation in useRoomSocket).
+  const membersRef = useRef<Record<string, RoomMember>>({});
+  useEffect(() => {
+    membersRef.current = members;
+  }, [members]);
+  const userIDRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    userIDRef.current = user?.id;
+  }, [user?.id]);
+  const isHostRef = useRef(false);
+  useEffect(() => {
+    isHostRef.current = isHost;
+  }, [isHost]);
+
+  // Cap chat history so a marathon session doesn't accumulate thousands
+  // of entries and slow each re-render to a crawl.
+  const appendChat = useCallback((entry: RoomChatEntry) => {
+    setChat((prev) => {
+      const next = prev.length >= 300 ? [...prev.slice(prev.length - 299), entry] : [...prev, entry];
+      return next;
+    });
+  }, []);
+
+  const handleRoomEvent = useCallback((e: RoomEvent) => {
+    const members = membersRef.current;
+    const userID = userIDRef.current;
+    const isHost = isHostRef.current;
+    if (e.type === "chat") {
+      appendChat(e.chat);
+    } else if (e.type === "member_snapshot") {
+      const map: Record<string, RoomMember> = {};
+      for (const m of e.members) map[m.userID] = m;
+      setMembers(map);
+    } else if (e.type === "member_joined") {
+      if (e.member.userID !== userID) {
+        appendChat({
+          userID: "system",
+          userName: "system",
+          kind: "text",
+          text: `${e.member.userName || "Foydalanuvchi"} room'ga qo'shildi`,
+          createdAt: new Date().toISOString(),
+        });
+      }
+      setMembers((prev) => ({ ...prev, [e.member.userID]: e.member }));
+    } else if (e.type === "member_left") {
+      const leavingMember = members[e.userID];
+      const leaverName = leavingMember?.userName || "Foydalanuvchi";
+      const wasHost = !!leavingMember?.isHost;
+      appendChat({
+        userID: "system",
+        userName: "system",
+        kind: "text",
+        text: wasHost
+          ? `${leaverName} (host) chiqib ketdi. 5 daqiqa ichida qaytmasa room yopiladi.`
+          : e.kicked
+            ? `${leaverName} room'dan chiqarildi`
+            : `${leaverName} chiqib ketdi`,
+        createdAt: new Date().toISOString(),
+      });
+      setMembers((prev) => {
+        const next = { ...prev };
+        delete next[e.userID];
+        return next;
+      });
+    } else if (e.type === "closed") {
+      setClosedReason(e.reason);
+    } else if (e.type === "kicked") {
+      setKicked(true);
+    } else if (e.type === "typing") {
+      setTypingUsers((prev) => {
+        const next = { ...prev };
+        if (e.typing.isTyping && e.typing.userID !== userID) {
+          next[e.typing.userID] = e.typing.userName;
+        } else {
+          delete next[e.typing.userID];
+        }
+        return next;
+      });
+    } else if (e.type === "host_disconnected") {
+      setHostGoneDeadline(e.deadlineMs);
+      appendChat({
+        userID: "system",
+        userName: "system",
+        kind: "text",
+        text: `Host vaqtincha uzildi. ${Math.round(e.graceSeconds / 60)} daqiqa ichida qaytmasa room yopiladi.`,
+        createdAt: new Date().toISOString(),
+      });
+    } else if (e.type === "host_reconnected") {
+      setHostGoneDeadline(null);
+      appendChat({
+        userID: "system",
+        userName: "system",
+        kind: "text",
+        text: "Host qaytib keldi.",
+        createdAt: new Date().toISOString(),
+      });
+    } else if (e.type === "episode_change") {
+      setRoom((prev) =>
+        prev
+          ? { ...prev, current_episode_id: e.episodeID, current_episode_title: e.episodeTitle }
+          : prev,
+      );
+      (async () => {
+        try {
+          const access = await getProtectedMediaAccess({ episodeId: e.episodeID, token });
+          const playback = access.playback_url || "";
+          const url = playback.startsWith("https://cdn.filmorauz.net/media/")
+            ? playback
+            : normalizeMediaUrl(playback, "") || playback;
+          if (url) setVideoSrc(url);
+        } catch {
+          /* ignore */
+        }
+      })();
+      appendChat({
+        userID: "system",
+        userName: "system",
+        kind: "text",
+        text: `Epizod o'zgardi: ${e.episodeTitle}`,
+        createdAt: new Date().toISOString(),
+      });
+    } else if (e.type === "episode_request") {
+      if (isHost) {
+        setEpisodeRequestToast({
+          userName: e.userName,
+          reason: e.reason,
+          targetEpisodeID: e.targetEpisodeID,
+          ts: Date.now(),
+        });
+        setTimeout(() => setEpisodeRequestToast(null), 8000);
+      }
+    } else if (e.type === "theme_change") {
+      setLiveTheme({ from: e.from, to: e.to });
+    } else if (e.type === "reaction") {
+      const id = `${e.reaction.ts}-${e.reaction.userID}-${Math.random()}`;
+      setFloatingReactions((prev) => [...prev, { ...e.reaction, id }]);
+      setTimeout(() => {
+        setFloatingReactions((prev) => prev.filter((r) => r.id !== id));
+      }, 3000);
+      appendChat({
+        userID: e.reaction.userID,
+        userName: e.reaction.userName,
+        userAvatar: undefined,
+        kind: "emoji",
+        emoji: e.reaction.emoji,
+        createdAt: new Date(e.reaction.ts).toISOString(),
+      });
+    }
+  }, [appendChat, token]);
+
   const {
     connected,
     state,
-    events,
     sendHostAction,
     sendChat,
     sendTyping,
     sendReaction,
     sendKick,
     sendEpisodeRequest,
-  } = useRoomSocket(!authLoading && token && room ? roomID : null, token, inviteCode);
-
-  // ── Drain WS events ──────────────────────────────────────────────────
-  const lastEventIndexRef = useRef(0);
-  useEffect(() => {
-    if (events.length === lastEventIndexRef.current) return;
-    const newOnes = events.slice(lastEventIndexRef.current);
-    lastEventIndexRef.current = events.length;
-    for (const e of newOnes) {
-      if (e.type === "chat") {
-        setChat((prev) => [...prev, e.chat]);
-      } else if (e.type === "member_snapshot") {
-        const map: Record<string, RoomMember> = {};
-        for (const m of e.members) map[m.userID] = m;
-        setMembers(map);
-      } else if (e.type === "member_joined") {
-        // System chat entry — "{name} room'ga qo'shildi".
-        if (e.member.userID !== user?.id) {
-          setChat((prev) => [
-            ...prev,
-            {
-              userID: "system",
-              userName: "system",
-              kind: "text",
-              text: `${e.member.userName || "Foydalanuvchi"} room'ga qo'shildi`,
-              createdAt: new Date().toISOString(),
-            },
-          ]);
-        }
-        setMembers((prev) => ({ ...prev, [e.member.userID]: e.member }));
-      } else if (e.type === "member_left") {
-        const leavingMember = members[e.userID];
-        const leaverName = leavingMember?.userName || "Foydalanuvchi";
-        const wasHost = !!leavingMember?.isHost;
-        // System chat entry — host gets a special "60s grace" notice.
-        setChat((prev) => [
-          ...prev,
-          {
-            userID: "system",
-            userName: "system",
-            kind: "text",
-            text: wasHost
-              ? `${leaverName} (host) chiqib ketdi. 5 daqiqa ichida qaytmasa room yopiladi.`
-              : e.kicked
-                ? `${leaverName} room'dan chiqarildi`
-                : `${leaverName} chiqib ketdi`,
-            createdAt: new Date().toISOString(),
-          },
-        ]);
-        setMembers((prev) => {
-          const next = { ...prev };
-          delete next[e.userID];
-          return next;
-        });
-      } else if (e.type === "closed") {
-        setClosedReason(e.reason);
-      } else if (e.type === "kicked") {
-        setKicked(true);
-      } else if (e.type === "typing") {
-        setTypingUsers((prev) => {
-          const next = { ...prev };
-          if (e.typing.isTyping && e.typing.userID !== user?.id) {
-            next[e.typing.userID] = e.typing.userName;
-          } else {
-            delete next[e.typing.userID];
-          }
-          return next;
-        });
-      } else if (e.type === "host_disconnected") {
-        setHostGoneDeadline(e.deadlineMs);
-        setChat((prev) => [
-          ...prev,
-          {
-            userID: "system",
-            userName: "system",
-            kind: "text",
-            text: `Host vaqtincha uzildi. ${Math.round(e.graceSeconds / 60)} daqiqa ichida qaytmasa room yopiladi.`,
-            createdAt: new Date().toISOString(),
-          },
-        ]);
-      } else if (e.type === "host_reconnected") {
-        setHostGoneDeadline(null);
-        setChat((prev) => [
-          ...prev,
-          {
-            userID: "system",
-            userName: "system",
-            kind: "text",
-            text: "Host qaytib keldi.",
-            createdAt: new Date().toISOString(),
-          },
-        ]);
-      } else if (e.type === "episode_change") {
-        // Re-resolve the new episode's playback URL and swap videoSrc.
-        // Update the room object too so the title overlay matches.
-        setRoom((prev) =>
-          prev
-            ? { ...prev, current_episode_id: e.episodeID, current_episode_title: e.episodeTitle }
-            : prev,
-        );
-        (async () => {
-          try {
-            const access = await getProtectedMediaAccess({ episodeId: e.episodeID, token });
-            const playback = access.playback_url || "";
-            const url = playback.startsWith("https://cdn.filmorauz.net/media/")
-              ? playback
-              : normalizeMediaUrl(playback, "") || playback;
-            if (url) setVideoSrc(url);
-          } catch {
-            /* ignore */
-          }
-        })();
-        setChat((prev) => [
-          ...prev,
-          {
-            userID: "system",
-            userName: "system",
-            kind: "text",
-            text: `Epizod o'zgardi: ${e.episodeTitle}`,
-            createdAt: new Date().toISOString(),
-          },
-        ]);
-      } else if (e.type === "episode_request") {
-        if (isHost) {
-          setEpisodeRequestToast({
-            userName: e.userName,
-            reason: e.reason,
-            targetEpisodeID: e.targetEpisodeID,
-            ts: Date.now(),
-          });
-          setTimeout(() => setEpisodeRequestToast(null), 8000);
-        }
-      } else if (e.type === "theme_change") {
-        setLiveTheme({ from: e.from, to: e.to });
-      } else if (e.type === "reaction") {
-        const id = `${e.reaction.ts}-${e.reaction.userID}-${Math.random()}`;
-        setFloatingReactions((prev) => [...prev, { ...e.reaction, id }]);
-        // Auto-remove after the float animation (~3s).
-        setTimeout(() => {
-          setFloatingReactions((prev) => prev.filter((r) => r.id !== id));
-        }, 3000);
-        // Also mirror the reaction into the side-chat log so users who
-        // looked away can scroll back and see who reacted with what.
-        setChat((prev) => [
-          ...prev,
-          {
-            userID: e.reaction.userID,
-            userName: e.reaction.userName,
-            userAvatar: undefined,
-            kind: "emoji",
-            emoji: e.reaction.emoji,
-            createdAt: new Date(e.reaction.ts).toISOString(),
-          },
-        ]);
-      }
-    }
-  }, [events, user?.id]);
+  } = useRoomSocket(
+    !authLoading && token && room ? roomID : null,
+    token,
+    inviteCode,
+    handleRoomEvent,
+  );
 
   // ── Sync guest player to host state via the RoomPlayer's sync API ───
   const syncApiRef = useRef<{ setPosition: (s: number) => void; setPlaying: (p: boolean) => void } | null>(null);
@@ -968,15 +972,18 @@ export default function WatchRoomPage() {
                   ))}
                 </div>
               )}
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1 min-w-0">
                 <button
                   onClick={() => setEmojiOpen((v) => !v)}
-                  className="p-2 text-gray-400 hover:text-white"
+                  className="p-2 text-gray-400 hover:text-white shrink-0"
                   aria-label="Reaktsiya"
                   title="Reaktsiya yuborish (video ustida ko'rinadi)"
                 >
                   {emojiOpen ? <X className="w-4 h-4" /> : <PartyPopper className="w-4 h-4" />}
                 </button>
+                {/* min-w-0 + w-0 lets the flex-1 input actually shrink. Without
+                    it the input's intrinsic content width (from a long typed
+                    string) keeps growing and pushes the send button off-screen. */}
                 <input
                   value={chatInput}
                   onChange={(e) => onChatInputChange(e.target.value)}
@@ -984,12 +991,12 @@ export default function WatchRoomPage() {
                     if (e.key === "Enter") handleSendChat();
                   }}
                   placeholder="Xabar yozing…"
-                  className="flex-1 bg-brand-dark border border-brand-border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-brand-red"
+                  className="flex-1 min-w-0 w-0 bg-brand-dark border border-brand-border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-brand-red"
                 />
                 <button
                   onClick={handleSendChat}
                   disabled={!chatInput.trim()}
-                  className="p-2 text-brand-red disabled:opacity-40"
+                  className="p-2 text-brand-red disabled:opacity-40 shrink-0"
                   aria-label="Yuborish"
                 >
                   <Send className="w-4 h-4" />

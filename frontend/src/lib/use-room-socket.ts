@@ -59,7 +59,6 @@ export type RoomEvent =
 export type UseRoomSocketResult = {
   connected: boolean;
   state: RoomSyncState | null;
-  events: RoomEvent[];
   sendHostAction: (action: "play" | "pause" | "seek", position: number) => void;
   sendChat: (kind: "text" | "emoji", payload: string) => void;
   sendTyping: (isTyping: boolean) => void;
@@ -75,21 +74,29 @@ export type UseRoomSocketResult = {
 export function useRoomSocket(
   roomID: string | null,
   token: string | null,
-  inviteCode?: string,
+  inviteCode: string | undefined,
+  onEvent: (e: RoomEvent) => void,
 ): UseRoomSocketResult {
   const [connected, setConnected] = useState(false);
   const [state, setState] = useState<RoomSyncState | null>(null);
-  const [events, setEvents] = useState<RoomEvent[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef(0);
   const closedByUserRef = useRef(false);
 
+  // Keep the latest callback in a ref so a new function identity on the
+  // caller side doesn't trigger a WebSocket reconnect. We also dispatch
+  // events synchronously inside ws.onmessage instead of buffering them in
+  // React state — previously every message caused a full re-render plus a
+  // drain effect, which thrashed under chat bursts and froze the UI. The
+  // index-tracking drain also silently dropped messages once the 500-slot
+  // event buffer wrapped (lastIndex pointed past the trimmed array).
+  const onEventRef = useRef(onEvent);
+  useEffect(() => {
+    onEventRef.current = onEvent;
+  }, [onEvent]);
+
   const pushEvent = useCallback((e: RoomEvent) => {
-    setEvents((prev) => {
-      const next = [...prev, e];
-      // Bound the buffer so memory doesn't grow unbounded over a long session.
-      return next.length > 500 ? next.slice(-500) : next;
-    });
+    onEventRef.current(e);
   }, []);
 
   const connect = useCallback(() => {
@@ -268,7 +275,6 @@ export function useRoomSocket(
   return {
     connected,
     state,
-    events,
     sendHostAction: (action, position) => send("host_action", { action, position }),
     sendChat: (kind, payload) => {
       if (kind === "emoji") send("chat_send", { kind: "emoji", emoji: payload });

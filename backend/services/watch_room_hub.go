@@ -117,7 +117,11 @@ func (h *WatchRoomHub) AddClient(rm *HubRoom, c *HubClient) error {
 		rm.mu.Unlock()
 		return ErrRoomFull
 	}
-	c.send = make(chan []byte, 32)
+	// Bumped from 32 → 256. A busy chat plus the 2s state-sync heartbeat
+	// could fill a 32-slot buffer fast and start dropping messages —
+	// observed as "chat freezes after a flurry, reappears after refresh"
+	// and "sync lags behind the host." A larger buffer absorbs the burst.
+	c.send = make(chan []byte, 256)
 	rm.clients[c] = struct{}{}
 	// Host reconnected — cancel any pending teardown and clear the
 	// "host disconnected" deadline so guests stop seeing the countdown.
