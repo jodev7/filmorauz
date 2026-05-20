@@ -13,6 +13,8 @@ import {
   Loader2,
   Crown,
   RotateCcw,
+  Rewind,
+  FastForward,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
@@ -103,6 +105,26 @@ export default function RoomPlayer({
   const [scrubHover, setScrubHover] = useState<{ frac: number; x: number } | null>(null);
   const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Host-only skip-step (seconds). Persisted to localStorage so it
+  // survives reloads. Default 10s — same as most major players.
+  const SKIP_STORAGE_KEY = "roomPlayer.skipSeconds";
+  const SKIP_PRESETS = [5, 10, 15, 30, 60];
+  const [skipSeconds, setSkipSeconds] = useState<number>(10);
+  const [showSkipMenu, setShowSkipMenu] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const raw = window.localStorage.getItem(SKIP_STORAGE_KEY);
+    const n = raw ? Number(raw) : NaN;
+    if (Number.isFinite(n) && n >= 1 && n <= 300) setSkipSeconds(n);
+  }, []);
+  const updateSkipSeconds = (n: number) => {
+    const clamped = Math.max(1, Math.min(300, Math.round(n)));
+    setSkipSeconds(clamped);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(SKIP_STORAGE_KEY, String(clamped));
+    }
+  };
 
   // ── Attach HLS / set src ─────────────────────────────────────────────
   // Helper: fetch the master playlist URL and parse #EXT-X-STREAM-INF
@@ -417,6 +439,36 @@ export default function RoomPlayer({
 
   const showControls = () => setControlsVisible(true);
 
+  // Host-only keyboard shortcuts: ←/→ skip by `skipSeconds`, Space toggles
+  // play/pause. We bind on document so the host doesn't have to focus the
+  // player first, and bail out when the focus is inside a chat input,
+  // textarea, or any contentEditable element so typing isn't hijacked.
+  useEffect(() => {
+    if (!isHost) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || t.isContentEditable) return;
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        skip(skipSeconds);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        skip(-skipSeconds);
+      } else if (e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        togglePlay();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+    // skip + togglePlay are stable (closures over refs), so we only need
+    // skipSeconds in deps to pick up a settings change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHost, skipSeconds]);
+
   // ── Actions ─────────────────────────────────────────────────────────
   const togglePlay = () => {
     if (!isHost) return; // guests can't drive playback
@@ -431,6 +483,19 @@ export default function RoomPlayer({
     const v = videoRef.current;
     if (!v || !duration) return;
     v.currentTime = duration * frac;
+  };
+
+  // Host-only ±N seconds skip. The native "seeked" event listener
+  // already broadcasts the new position to guests, so we just nudge
+  // currentTime and let the existing pipeline handle the sync.
+  const skip = (deltaSeconds: number) => {
+    if (!isHost) return;
+    const v = videoRef.current;
+    if (!v) return;
+    const dur = isFinite(v.duration) ? v.duration : duration;
+    const target = Math.max(0, Math.min(dur || Infinity, v.currentTime + deltaSeconds));
+    if (!isFinite(target)) return;
+    v.currentTime = target;
   };
 
   const toggleMute = () => {
@@ -683,6 +748,21 @@ export default function RoomPlayer({
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3 text-white">
+          {/* Skip backward (host only) */}
+          {isHost && (
+            <button
+              onClick={() => skip(-skipSeconds)}
+              className="hover:text-brand-red transition-colors relative"
+              title={`${skipSeconds}s orqaga (←)`}
+              aria-label="Orqaga otkazish"
+            >
+              <Rewind className="w-5 h-5" />
+              <span className="absolute -top-1 -right-2 text-[9px] tabular-nums bg-black/60 rounded px-1 leading-tight">
+                {skipSeconds}
+              </span>
+            </button>
+          )}
+
           {/* Play/Pause (host only) */}
           {isHost ? (
             <button onClick={togglePlay} className="hover:text-brand-red transition-colors">
@@ -692,6 +772,86 @@ export default function RoomPlayer({
             <span className="text-xs opacity-70 px-1">
               {playing ? <Pause className="w-4 h-4 inline" /> : <Play className="w-4 h-4 inline" />}
             </span>
+          )}
+
+          {/* Skip forward + step picker (host only). Long-press / right-click
+              opens a small popover to set the step (5/10/15/30/60 + custom). */}
+          {isHost && (
+            <div className="relative">
+              <button
+                onClick={() => skip(skipSeconds)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setShowSkipMenu((v) => !v);
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="hover:text-brand-red transition-colors relative"
+                title={`${skipSeconds}s oldinga (→) — sozlash uchun o'ng-bosing`}
+                aria-label="Oldinga otkazish"
+              >
+                <FastForward className="w-5 h-5" />
+                <span className="absolute -top-1 -right-2 text-[9px] tabular-nums bg-black/60 rounded px-1 leading-tight">
+                  {skipSeconds}
+                </span>
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowSkipMenu((v) => !v);
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="ml-0.5 text-[10px] opacity-70 hover:opacity-100 hover:text-brand-red transition px-1"
+                title="Otkazish sekundlarini sozlash"
+                aria-label="Otkazish sozlamalari"
+              >
+                ⚙
+              </button>
+              {showSkipMenu && (
+                <div
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
+                  className="absolute left-0 bottom-8 bg-black/95 border border-white/10 rounded-lg overflow-hidden min-w-[160px] z-50 shadow-xl p-2"
+                >
+                  <div className="text-[10px] text-gray-400 mb-1 px-1">
+                    Otkazish sekundi
+                  </div>
+                  <div className="grid grid-cols-3 gap-1">
+                    {SKIP_PRESETS.map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => {
+                          updateSkipSeconds(s);
+                          setShowSkipMenu(false);
+                        }}
+                        className={`text-xs px-2 py-1 rounded ${
+                          skipSeconds === s
+                            ? "bg-brand-red text-white"
+                            : "bg-white/5 hover:bg-white/15 text-white"
+                        }`}
+                      >
+                        {s}s
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-2 flex items-center gap-1">
+                    <input
+                      type="number"
+                      min={1}
+                      max={300}
+                      value={skipSeconds}
+                      onChange={(e) => updateSkipSeconds(Number(e.target.value))}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-brand-red"
+                    />
+                    <span className="text-[10px] text-gray-400">sek</span>
+                  </div>
+                  <div className="mt-2 text-[10px] text-gray-500 leading-snug">
+                    Klaviatura: ←/→ otkazish, Space play/pause
+                  </div>
+                </div>
+              )}
+            </div>
           )}
 
           {/* Volume */}
