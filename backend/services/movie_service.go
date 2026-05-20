@@ -12,6 +12,7 @@ import (
 
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
+	"github.com/filmorauz/backend/services/seo"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 )
@@ -111,6 +112,13 @@ type MovieService struct {
 	publishJobRepo  *repositories.PublishJobRepository        // optional — clip-linked multi-platform publish job cleanup
 	jobRepo         *repositories.JobRepository               // optional — ingestion job cascade cleanup
 	b2Cleanup       *B2CleanupService                         // optional — nil means skip B2 cleanup
+	seoNotifier     *seo.Notifier                             // optional — pings search engines on publish/update
+}
+
+// SetSEONotifier wires the search-engine indexing notifier. Optional; nil
+// means publish events do not trigger external pings.
+func (s *MovieService) SetSEONotifier(n *seo.Notifier) {
+	s.seoNotifier = n
 }
 
 func NewMovieService(repo *repositories.MovieRepository, seriesRepo *repositories.SeriesRepository, counterRepo *repositories.CounterRepository, notificationSvc *NotificationService, viewEventRepo *repositories.MovieViewEventRepository) *MovieService {
@@ -626,6 +634,9 @@ func (s *MovieService) UpdateMovie(id string, input *models.MovieInput) (*models
 
 	if err := s.repo.Update(objID, existing); err != nil {
 		return nil, fmt.Errorf("failed to update movie: %w", err)
+	}
+	if s.seoNotifier != nil && existing.IsPublished && existing.ApprovalStatus == "approved" && existing.Slug != "" {
+		s.seoNotifier.NotifyURL("/movies/" + existing.Slug)
 	}
 	return existing, nil
 }
@@ -1187,7 +1198,15 @@ func (s *MovieService) SetMovieApprovalStatus(id, status, byUserID string) error
 			}
 		}
 	}
-	return s.repo.SetApprovalStatus(id, status, byUserID)
+	if err := s.repo.SetApprovalStatus(id, status, byUserID); err != nil {
+		return err
+	}
+	if status == "approved" && s.seoNotifier != nil {
+		if current, err := s.GetMovieByID(id); err == nil && current != nil && current.Slug != "" {
+			s.seoNotifier.NotifyURL("/movies/" + current.Slug)
+		}
+	}
+	return nil
 }
 
 func sanitizeMovieSource(source *models.MovieSource) *models.MovieSource {

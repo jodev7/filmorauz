@@ -1,5 +1,233 @@
 # Changelog
 
+## 2026-05-20 — Watch-room polish + parser/worker ingestion unblock
+
+A big mixed-bag day: a critical guest-sync regression, mobile and
+fullscreen fixes, custom themes / share sheet, the long-standing
+quality picker race, and three rounds of unblocking failed
+ingestions on the worker server.
+
+### Watch-room — critical guest-sync bug
+
+- **as_of_ms must be the host-action timestamp, not now**
+  (`backend/services/watch_room_hub.go`). Guests were reporting that
+  the playback would "stick" near the last loaded segment, with the
+  playhead snapping back every ~2s. Root cause: the hub's heartbeat
+  broadcast `as_of_ms = time.Now()` while keeping `position =
+  rm.Position` (only updated on explicit host actions). The guest's
+  `effectivePosition` computed `position + (now - asOfMs)/1000 ≈
+  position + 0`, so every heartbeat ordered the guest *back* to the
+  OLD position. Fixed by sending `as_of_ms =
+  rm.LastStateUpdate.UnixMilli()`. Linear extrapolation now works
+  correctly between actions.
+
+- **Seek debounce on the host** (`watch-room/[id]/page.tsx`).
+  Frantic scrubbing fired one host_action per "seeked" event, which
+  guests couldn't keep up with — each new sync triggered a flush +
+  seek, the next arrived before the previous landed, and the guest's
+  video silently stopped advancing. `onHostSeek` now coalesces with
+  a 200ms debounce so only the final target is broadcast.
+
+- **Guest sync re-apply on seeked / playing**
+  (`components/watch-room/RoomPlayer.tsx`). Without these listeners
+  a pending sync that lost its target during buffering never got
+  re-tried — guest "froze". Now apply runs on every readiness
+  milestone, not just loadedmetadata / canplay.
+
+### Watch-room — mobile + fullscreen UX
+
+- **iOS / Android fullscreen** (`RoomPlayer.tsx`). Container
+  `requestFullscreen()` silently no-ops on iOS Safari (only the
+  bare `<video>` can go fullscreen there). Now detects
+  `webkitEnterFullscreen` and calls it directly, falls back to the
+  standard container API on desktop / Android Chrome, and falls
+  back to `video.requestFullscreen()` if the container request is
+  rejected. Added `webkit-playsinline` / `x5-playsinline`
+  attributes so the `<video>` doesn't pop into native iOS playback
+  on tap.
+
+- **Hamburger menu missing /rooms link** (`components/Navbar.tsx`).
+  Added "Roomlar" to the mobile nav list.
+
+- **Closed rooms were still reachable by URL** and showed "Ulanish…"
+  forever (`watch-room/[id]/page.tsx`). The WS upgrade silently
+  404'd against a `status: closed` row. The page now hard-gates at
+  fetch time and renders the "Room yopildi" screen instead of
+  waiting for the never-arriving WS state.
+
+- **Mobile volume slider hidden below sm breakpoint**
+  (`RoomPlayer.tsx`). iOS ignores programmatic volume entirely;
+  Android Chrome is inconsistent. Showing a slider that doesn't do
+  anything is worse than not having it. Desktop still gets it.
+
+- **Floating reactions invisible in fullscreen** (`RoomPlayer.tsx`,
+  `watch-room/[id]/page.tsx`). The reactions were rendered in the
+  parent OUTSIDE the player container, so `requestFullscreen()`
+  took the player and left the emojis behind. Added a
+  `reactionsOverlay` slot on RoomPlayer that renders inside the
+  container; page now passes the floating bubbles through it.
+
+- **Quality picker** (`RoomPlayer.tsx`). Two earlier passes left
+  the picker still showing only "Auto" — the manual master.m3u8
+  parse ran in a race that hls.js' MANIFEST_PARSED could lose. The
+  picker now prefers hls.js levels always (their indices map 1:1
+  to `hls.currentLevel`), with manual parse as a fallback. Also
+  added a defensive on-open re-fetch so opening the dropdown with
+  qualities = [Auto] triggers another master parse on demand.
+
+- **Quality switch on click was a no-op on some Chromium builds**
+  (`RoomPlayer.tsx`). hls.js never initialised because
+  `canPlayType("application/vnd.apple.mpegurl")` returned truthy
+  on the user's browser, so the code went down the native-HLS path
+  (no level switching API). Mirrored the regular watch page's
+  ordering: prefer `Hls.isSupported()` always, native HLS only as
+  true last resort.
+
+- **Quality switch sometimes deterministic, sometimes not**
+  (`RoomPlayer.tsx`). The over-engineered setQuality flow piled on
+  `currentLevel + loadLevel + nextLoadLevel + manual
+  BUFFER_FLUSHING + a +0.01 seek`. The seek landed in an
+  already-buffered range and skipped the just-issued flush.
+  Stripped to a single `hls.currentLevel = resolvedIdx` — the
+  canonical "switch now, flush forward, reload" API in v1.x.
+
+- **Series rooms** — clicking "Birga ko'rish" on /series/[slug]
+  errored with "video manzili topilmadi" because content_id on a
+  series room is the SERIES id, not an episode. Page now resolves
+  through current_episode_id when content_type=series, and
+  unwraps `/episodes/:id` response (`{episode, prev, next}`).
+
+- **Series episode-scoped resume position** (`page.tsx`). persistKey
+  was just `{roomID}-{userID}`, so switching epizodes resumed at the
+  previous episode's playhead. Now includes `current_episode_id`
+  in the key for series rooms — each episode keeps its own slot.
+
+### Watch-room — new features
+
+- **Custom room themes (premium hosts)** —
+  `models/watch_room.go` (new `RoomTheme {from, to}` struct),
+  `POST /api/rooms/:id/theme` with host+premium gate and CSS-safe
+  validation, `SetTheme` repo + `BroadcastTheme` hub, frontend
+  picker with 6 preset gradients. Theme is applied as a fixed
+  linear-gradient on the page root; WS `theme_change` event mirrors
+  to every guest in real time.
+
+- **Mobile share sheet** (`watch-room/[id]/page.tsx`). Invite link
+  popup now renders a Share2 button when `navigator.share` is
+  available — opens the OS share sheet (Telegram / WhatsApp / SMS)
+  prefilled with the room title + invite URL. Desktops without
+  Web Share API just don't see the button (graceful fallback).
+
+- **One active room per user (free or premium)**
+  (`backend/handlers/watch_room_handler.go`). CreateRoom now refuses
+  with 409 + `active_room_id` when the user already has an open
+  hosted room. WatchTogetherButton catches the 409 and opens a
+  popup linking back to the existing room.
+
+- **Host "Roomni yopish" button** — `POST /api/rooms/:id/close`
+  host-only endpoint flips the room to closed, fires `room_closed`
+  WS, and frees the user's one-room slot. Custom portal modal
+  (z-[10000]) on click instead of native `confirm()`.
+
+### Watch-room — chat/notification polish
+
+- **`keepalive: true` on notification DELETE** (`lib/api.ts`). The
+  delete request was being cancelled by the navigation that fires
+  right after clicking a notification (the action_url routes to
+  the room). Now survives navigation, so the row stays gone.
+
+- **Notification poster via MediaImage** (`NotificationBell.tsx`).
+  Switched the raw `<img>` to `MediaImage + normalizeMediaUrl` so
+  B2 keys / relative paths resolve correctly.
+
+- **Apple-style emojis + Poppins chat** (`layout.tsx`,
+  `tailwind.config.ts`, `watch-room/[id]/page.tsx`). Added a
+  `font-emoji` Tailwind utility that picks the platform's
+  colour-emoji font (Apple Color Emoji / Segoe UI Emoji / Noto
+  Color Emoji) so chat reactions render with high-quality glyphs
+  everywhere. Imported Poppins via `next/font` and applied
+  `font-poppins` to the chat panel + fullscreen overlay.
+
+- **WS event types added** (`lib/use-room-socket.ts`):
+  `host_disconnected`, `host_reconnected`, `episode_change`,
+  `episode_request`, `theme_change`.
+
+### Parser / worker — ingestion unblock
+
+A user reported a flood of failed `ingestion_jobs`. Tracked through
+three rounds of root causes:
+
+- **`get_details` signature mismatch** (`parser/server.py`). 3 of 4
+  source parsers (kinolar, kinochilar, uzmedia) declare
+  `get_details(url, source_id, is_serial=False, episode_id="")`
+  while the helper was always calling `get_details(url)`. Every
+  import from those sources crashed at the parser stage. Helper
+  now introspects `inspect.signature(method)` and passes
+  `source_id` as a kwarg whenever it's declared.
+
+- **playerjs / embed iframe URL wrappers**
+  (`parser/server.py`, `worker/pipeline/pipeline.go`). After the
+  signature fix, kinochilar / uzmedia / kinolar all started
+  returning the embed-iframe URL
+  (`/player/playerjs.html?file=https://.../master.m3u8`,
+  `/embed.html?file=http://.../mp4`) as the `video_url` field.
+  Validator rejected as "invalid URL scheme/netloc". New
+  `_unwrap_embed_url` helper in Python (and Go mirror
+  `unwrapEmbedURL`) extracts the URL from the `file=` query
+  parameter. Wired into:
+  - `_resolve_claimed_job_video` (both stored-URL fast path and
+    re-resolved /details response)
+  - `/download` HTTP entry (defence in depth)
+  - Auto-refresh fallback inside background_download
+  - Worker `runDownloadJob` before `validateDownloadURL`
+
+- **kinolar comma-separated multi-quality variant**. kinolar packs
+  multiple-quality URLs into one `file=` value, comma-separated
+  (`file=URL1,URL2,URL3&qualities=480P,720P,1080P`). Both Python
+  and Go unwrap helpers now split on commas and return the LAST
+  http(s) candidate (typically 1080p).
+
+- **Auto-refresh path also passes source_id**
+  (`parser/server.py`). The auto-refresh fallback in
+  `background_download` was calling
+  `PARSERS[source].get_details(referer)` with one positional arg
+  too — same `source_id` crash as the top-level path. Now
+  introspects the signature and passes source_id when declared,
+  AND unwraps the returned fresh URL.
+
+- **Python bytecode cache cleared** during deploys after seeing
+  stale `.pyc` files mask the new code on the parser server.
+
+### ffmpeg pipeline (carried over from the night before)
+
+- **Tolerate corrupt source packets when building the processed
+  master** (`worker/pipeline/hls_adaptive.go`). Munnaboy 3 (2003)
+  failed mid-encode with "Rematrix is needed between 33 channels
+  and stereo" — a few corrupt AAC frames reported a bogus
+  channel-config. Added `-fflags +discardcorrupt+genpts` and
+  `-err_detect ignore_err` on input + `-ac 2 -ar 44100` on
+  output to pin the AAC encoder to stereo @ 44.1kHz.
+
+### Files touched
+
+- `backend/handlers/watch_room_handler.go`
+- `backend/repositories/watch_room_repository.go`
+- `backend/services/watch_room_hub.go`
+- `backend/models/watch_room.go`
+- `backend/routes/routes.go`
+- `frontend/src/app/layout.tsx`
+- `frontend/src/app/watch-room/[id]/page.tsx`
+- `frontend/src/components/watch-room/RoomPlayer.tsx`
+- `frontend/src/components/Navbar.tsx`
+- `frontend/src/components/NotificationBell.tsx`
+- `frontend/src/components/WatchTogetherButton.tsx`
+- `frontend/src/lib/api.ts`
+- `frontend/src/lib/use-room-socket.ts`
+- `frontend/tailwind.config.ts`
+- `parser/server.py`
+- `worker/pipeline/pipeline.go`
+- `worker/pipeline/hls_adaptive.go`
+
 ## 2026-05-19 (follow-up 4) — Room limits on /premium + free-tier quota popup
 
 ### Frontend

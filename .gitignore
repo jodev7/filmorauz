@@ -69,3 +69,6 @@ Thumbs.db
 
 # Worker
 worker/readyvideo
+# Service account keys — never commit
+backend/secrets/
+

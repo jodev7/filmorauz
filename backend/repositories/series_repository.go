@@ -21,10 +21,15 @@ type SeriesRepository struct {
 }
 
 type SitemapSeriesRecord struct {
-	ID        primitive.ObjectID `bson:"_id"`
-	Slug      string             `bson:"slug"`
-	Genre     []string           `bson:"genre"`
-	UpdatedAt time.Time          `bson:"updated_at"`
+	ID          primitive.ObjectID `bson:"_id"`
+	Slug        string             `bson:"slug"`
+	Genre       []string           `bson:"genre"`
+	UpdatedAt   time.Time          `bson:"updated_at"`
+	Title       string             `bson:"title,omitempty"`
+	Description string             `bson:"description,omitempty"`
+	PosterURL   string             `bson:"poster_url,omitempty"`
+	Year        int                `bson:"year,omitempty"`
+	CreatedAt   time.Time          `bson:"created_at,omitempty"`
 }
 
 type SitemapSeasonRecord struct {
@@ -131,10 +136,15 @@ func (r *SeriesRepository) ListPublishedForSitemap() ([]SitemapSeriesRecord, err
 
 	opts := options.Find().
 		SetProjection(bson.M{
-			"_id":        1,
-			"slug":       1,
-			"genre":      1,
-			"updated_at": 1,
+			"_id":         1,
+			"slug":        1,
+			"genre":       1,
+			"updated_at":  1,
+			"title":       1,
+			"description": 1,
+			"poster_url":  1,
+			"year":        1,
+			"created_at":  1,
 		}).
 		SetSort(bson.D{{Key: "updated_at", Value: -1}, {Key: "_id", Value: 1}})
 

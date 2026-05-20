@@ -100,6 +100,44 @@ export default function RootLayout({
         <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png" />
         <link rel="preconnect" href="https://cdn.filmorauz.net" crossOrigin="" />
         <link rel="preconnect" href="https://api.filmorauz.net" crossOrigin="" />
+        {/*
+          Site-wide JSON-LD: Organization gives Google the entity card and
+          logo; WebSite + SearchAction unlocks the sitelinks search box in
+          the SERP. Inline so every crawled page carries it.
+        */}
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@graph": [
+                {
+                  "@type": "Organization",
+                  "@id": `${SITE_URL}/#organization`,
+                  name: "FILMORAUZ",
+                  url: SITE_URL,
+                  logo: `${SITE_URL}/favicon.png`,
+                  sameAs: [
+                    "https://t.me/filmorauz",
+                  ],
+                },
+                {
+                  "@type": "WebSite",
+                  "@id": `${SITE_URL}/#website`,
+                  url: SITE_URL,
+                  name: "FILMORAUZ",
+                  publisher: { "@id": `${SITE_URL}/#organization` },
+                  inLanguage: "uz",
+                  potentialAction: {
+                    "@type": "SearchAction",
+                    target: `${SITE_URL}/search?q={search_term_string}`,
+                    "query-input": "required name=search_term_string",
+                  },
+                },
+              ],
+            }),
+          }}
+        />
       </head>
       <body className="bg-brand-dark text-white font-body antialiased">
         <AuthProvider>

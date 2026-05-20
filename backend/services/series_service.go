@@ -11,6 +11,7 @@ import (
 
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
+	"github.com/filmorauz/backend/services/seo"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -29,6 +30,12 @@ type SeriesService struct {
 	publishJobRepo *repositories.PublishJobRepository
 	jobRepo        *repositories.JobRepository
 	b2Cleanup      *B2CleanupService
+	seoNotifier    *seo.Notifier
+}
+
+// SetSEONotifier wires the search-engine indexing notifier. Optional.
+func (s *SeriesService) SetSEONotifier(n *seo.Notifier) {
+	s.seoNotifier = n
 }
 
 // SetJobRepository wires the ingestion-jobs repository so DeleteSeries
@@ -305,6 +312,10 @@ func (s *SeriesService) UpdateSeries(id primitive.ObjectID, input *models.Series
 	err = s.seriesRepo.Update(series)
 	if err != nil {
 		return nil, err
+	}
+
+	if s.seoNotifier != nil && series.Slug != "" {
+		s.seoNotifier.NotifyURL("/series/" + series.Slug)
 	}
 
 	return series, nil
@@ -904,7 +915,18 @@ func (s *SeriesService) SetSeriesApprovalStatus(id, status, byUserID string) err
 			return err
 		}
 	}
-	return s.seriesRepo.SetApprovalStatus(id, status, byUserID)
+	if err := s.seriesRepo.SetApprovalStatus(id, status, byUserID); err != nil {
+		return err
+	}
+	if status == "approved" && s.seoNotifier != nil {
+		oid, err := primitive.ObjectIDFromHex(id)
+		if err == nil {
+			if series, err := s.seriesRepo.GetByID(oid); err == nil && series != nil && series.Slug != "" {
+				s.seoNotifier.NotifyURL("/series/" + series.Slug)
+			}
+		}
+	}
+	return nil
 }
 
 func (s *SeriesService) ensureSeriesCode(series *models.Series) error {

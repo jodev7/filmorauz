@@ -10,10 +10,12 @@ import (
 
 	"github.com/filmorauz/backend/config"
 	"github.com/filmorauz/backend/handlers"
+	"github.com/filmorauz/backend/middleware"
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
 	"github.com/filmorauz/backend/routes"
 	"github.com/filmorauz/backend/services"
+	"github.com/filmorauz/backend/services/seo"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -333,6 +335,31 @@ func main() {
 
 	// Register routes
 	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler)
+
+	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)
+	seoNotifier := buildSEONotifier(cfg, db)
+	if seoNotifier != nil && seoNotifier.Enabled() {
+		movieService.SetSEONotifier(seoNotifier)
+		seriesService.SetSEONotifier(seoNotifier)
+		seoHandler := handlers.NewSEOHandler(seoNotifier, movieRepo, seriesRepo)
+		seoAdmin := r.Group("/api/admin/seo")
+		seoAdmin.Use(middleware.RequireAdmin(authService))
+		seoAdmin.GET("/status", seoHandler.Status)
+		seoAdmin.POST("/reindex", seoHandler.Reindex)
+		seoAdmin.POST("/reindex/all", seoHandler.ReindexAll)
+		seoAdmin.POST("/sitemap-resubmit", seoHandler.SitemapResubmit)
+		log.Printf("[SEO] notifier enabled — status=%+v", seoNotifier.Status())
+		// Periodic sitemap resubmit — once every 6 hours.
+		go func() {
+			ticker := time.NewTicker(6 * time.Hour)
+			defer ticker.Stop()
+			for range ticker.C {
+				seoNotifier.NotifySitemap()
+			}
+		}()
+	} else {
+		log.Printf("[SEO] notifier disabled (set SEO_NOTIFY_ENABLED=true and configure providers to enable)")
+	}
 
 	// Start premium cleanup background job (runs every 10 minutes)
 	go startPremiumCleanupJob(userRepo, notificationService)
@@ -672,4 +699,71 @@ func cleanupOnce(userRepo *repositories.UserRepository, notificationService *ser
 		}
 		log.Printf("[PremiumCleanup] Sent %d expired notifications", len(usersExpired))
 	}
+}
+
+// buildSEONotifier wires the search-engine indexing notifier. Each
+// downstream provider (IndexNow / Google Indexing / Search Console) is
+// independently optional — when env vars are missing we log and skip
+// that provider but keep the Notifier alive for the others.
+func buildSEONotifier(cfg *config.Config, db *mongo.Database) *seo.Notifier {
+	if !cfg.SEONotifyEnabled {
+		return nil
+	}
+	site := strings.TrimRight(cfg.BaseSiteURL, "/")
+	if site == "" {
+		log.Printf("[SEO] BASE_SITE_URL is empty — notifier disabled")
+		return nil
+	}
+
+	var indexNow *seo.IndexNowService
+	if cfg.IndexNowKey != "" {
+		svc, err := seo.NewIndexNowService(cfg.IndexNowKey, site)
+		if err != nil {
+			log.Printf("[SEO] IndexNow init failed: %v", err)
+		} else {
+			indexNow = svc
+		}
+	} else {
+		log.Printf("[SEO] INDEXNOW_KEY not set — IndexNow disabled")
+	}
+
+	var googleIndexing *seo.GoogleIndexingService
+	if cfg.GoogleIndexingCredentialsPath != "" {
+		svc, err := seo.NewGoogleIndexingService(cfg.GoogleIndexingCredentialsPath)
+		if err != nil {
+			log.Printf("[SEO] Google Indexing init failed: %v", err)
+		} else {
+			googleIndexing = svc
+		}
+	}
+
+	var searchConsole *seo.SearchConsoleService
+	if cfg.GoogleIndexingCredentialsPath != "" && cfg.GoogleSearchConsoleSiteURL != "" {
+		svc, err := seo.NewSearchConsoleService(cfg.GoogleIndexingCredentialsPath, cfg.GoogleSearchConsoleSiteURL)
+		if err != nil {
+			log.Printf("[SEO] Search Console init failed: %v", err)
+		} else {
+			searchConsole = svc
+		}
+	}
+
+	eventsCol := db.Collection("seo_events")
+	// Trim very old events so the collection stays bounded.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cutoff := time.Now().Add(-30 * 24 * time.Hour)
+		_, _ = eventsCol.DeleteMany(ctx, map[string]any{"created_at": map[string]any{"$lt": cutoff}})
+	}()
+
+	return seo.NewNotifier(seo.Config{
+		Enabled:               true,
+		SiteURL:               site,
+		IndexNow:              indexNow,
+		GoogleIndexing:        googleIndexing,
+		SearchConsole:         searchConsole,
+		EventsCol:             eventsCol,
+		SitemapURLs:           []string{"/sitemap.xml"},
+		GoogleIndexingEnabled: googleIndexing != nil,
+	})
 }

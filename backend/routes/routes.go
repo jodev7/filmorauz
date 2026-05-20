@@ -8,7 +8,14 @@ import (
 )
 
 func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler) {
-	r.GET("/sitemap.xml", sitemapHandler.GetSitemap)
+	r.GET("/sitemap.xml", sitemapHandler.GetSitemapIndex)
+	r.GET("/sitemap-static.xml", sitemapHandler.GetSitemapStatic)
+	r.GET("/sitemap-genres.xml", sitemapHandler.GetSitemapGenres)
+	r.GET("/sitemap-movies.xml", sitemapHandler.GetSitemapMovies)
+	r.GET("/sitemap-series.xml", sitemapHandler.GetSitemapSeries)
+	r.GET("/sitemap-episodes.xml", sitemapHandler.GetSitemapEpisodes)
+	r.GET("/sitemap-videos.xml", sitemapHandler.GetSitemapVideos)
+	r.GET("/robots.txt", sitemapHandler.GetRobotsTxt)
 
 	api := r.Group("/api")
 

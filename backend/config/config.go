@@ -47,6 +47,15 @@ type Config struct {
 	WorkerUploadURL         string
 	TelegramChannels        []string // loaded from TELEGRAM_CHANNELS env (comma-separated)
 	TelegramSerialsChannel  string   // loaded from TELEGRAM_SERIALS_CHANNEL env
+
+	// SEO / search-engine notification settings.
+	SEONotifyEnabled              bool
+	IndexNowKey                   string
+	GoogleIndexingCredentialsPath string
+	GoogleSearchConsoleSiteURL    string
+	YandexWebmasterUserID         string
+	YandexWebmasterHostID         string
+	YandexWebmasterOAuthToken     string
 }
 
 var current *Config
@@ -94,6 +103,14 @@ func Load() *Config {
 		WorkerUploadURL:         getEnv("WORKER_UPLOAD_URL", ""),
 		TelegramChannels:        parseTelegramChannels(getEnv("TELEGRAM_CHANNELS", "")),
 		TelegramSerialsChannel:  getEnv("TELEGRAM_SERIALS_CHANNEL", ""),
+
+		SEONotifyEnabled:              strings.EqualFold(strings.TrimSpace(getEnv("SEO_NOTIFY_ENABLED", "true")), "true"),
+		IndexNowKey:                   strings.TrimSpace(getEnv("INDEXNOW_KEY", "")),
+		GoogleIndexingCredentialsPath: strings.TrimSpace(getEnv("GOOGLE_INDEXING_CREDENTIALS_PATH", "")),
+		GoogleSearchConsoleSiteURL:    strings.TrimSpace(getEnv("GOOGLE_SEARCH_CONSOLE_SITE_URL", "")),
+		YandexWebmasterUserID:         strings.TrimSpace(getEnv("YANDEX_WEBMASTER_USER_ID", "")),
+		YandexWebmasterHostID:         strings.TrimSpace(getEnv("YANDEX_WEBMASTER_HOST_ID", "")),
+		YandexWebmasterOAuthToken:     strings.TrimSpace(getEnv("YANDEX_WEBMASTER_OAUTH_TOKEN", "")),
 	}
 
 	// Validate required fields

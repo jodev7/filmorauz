@@ -187,6 +187,23 @@ export default async function MovieDetailPage({ params }: Props) {
     };
   }
 
+  // VideoObject — required for Google Video Search results. Carries the
+  // poster, page URL as embedUrl, and the watch URL as contentUrl.
+  const videoJsonLd: Record<string, any> = {
+    "@context": "https://schema.org",
+    "@type": "VideoObject",
+    name: localizedTitle,
+    description: localizedDescription || buildContentDescription(localizedTitle, movie.year),
+    thumbnailUrl: [pickSeoImage(movie.poster_url, movie.backdrop_url)],
+    uploadDate: movie.created_at || (movie.year ? `${movie.year}-01-01` : undefined),
+    contentUrl: `${SITE_URL}/watch/${slug}`,
+    embedUrl: movieUrl,
+    duration: movie.duration ? `PT${movie.duration}M` : undefined,
+    inLanguage: "uz",
+    isFamilyFriendly: true,
+    publisher: { "@type": "Organization", name: "FILMORAUZ", logo: { "@type": "ImageObject", url: `${SITE_URL}/favicon.png` } },
+  };
+
   return (
     <>
       {/* Breadcrumbs JSON-LD */}
@@ -200,6 +217,12 @@ export default async function MovieDetailPage({ params }: Props) {
         id="movie-schema"
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(movieJsonLd) }}
+      />
+      {/* VideoObject JSON-LD — drives Google Video Search */}
+      <Script
+        id="video-schema"
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(videoJsonLd) }}
       />
       <Navbar />
       <main className="min-h-screen">
