@@ -259,13 +259,38 @@ export default function WatchRoomPage() {
     isHostRef.current = isHost;
   }, [isHost]);
 
-  // Cap chat history so a marathon session doesn't accumulate thousands
-  // of entries and slow each re-render to a crawl.
-  const appendChat = useCallback((entry: RoomChatEntry) => {
-    setChat((prev) => {
-      const next = prev.length >= 300 ? [...prev.slice(prev.length - 299), entry] : [...prev, entry];
-      return next;
+  // Batched chat append: incoming entries are collected into a ref and
+  // flushed once per animation frame, so a chat burst (e.g. 50 msgs/s)
+  // produces ~60 re-renders/s at most instead of one per message.
+  // Cap chat history at 300 — anything older is dropped so a marathon
+  // session doesn't accumulate thousands of DOM nodes and slow each
+  // render to a crawl.
+  const pendingChatRef = useRef<RoomChatEntry[]>([]);
+  const flushRafRef = useRef<number | null>(null);
+  const scheduleChatFlush = useCallback(() => {
+    if (flushRafRef.current != null) return;
+    flushRafRef.current = requestAnimationFrame(() => {
+      flushRafRef.current = null;
+      const pending = pendingChatRef.current;
+      if (pending.length === 0) return;
+      pendingChatRef.current = [];
+      setChat((prev) => {
+        const merged = prev.concat(pending);
+        return merged.length > 300 ? merged.slice(merged.length - 300) : merged;
+      });
     });
+  }, []);
+  const appendChat = useCallback(
+    (entry: RoomChatEntry) => {
+      pendingChatRef.current.push(entry);
+      scheduleChatFlush();
+    },
+    [scheduleChatFlush],
+  );
+  useEffect(() => {
+    return () => {
+      if (flushRafRef.current != null) cancelAnimationFrame(flushRafRef.current);
+    };
   }, []);
 
   const handleRoomEvent = useCallback((e: RoomEvent) => {

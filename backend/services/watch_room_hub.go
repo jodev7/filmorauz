@@ -515,9 +515,17 @@ func (h *WatchRoomHub) CloseRoom(rm *HubRoom, reason string) {
 	delete(h.rooms, rm.ID)
 	h.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = h.repo.CloseRoom(ctx, rm.ID)
+	// Wipe the chat rows on close (manual close, host-disconnect grace
+	// expiry, or "empty room" teardown). Without this, the messages
+	// collection grows forever in proportion to total rooms ever opened.
+	if deleted, err := h.repo.DeleteRoomMessages(ctx, rm.ID); err != nil {
+		log.Printf("[hub] room=%s delete messages failed: %v", rm.ID.Hex(), err)
+	} else if deleted > 0 {
+		log.Printf("[hub] room=%s deleted %d chat messages on close", rm.ID.Hex(), deleted)
+	}
 	log.Printf("[hub] room=%s closed reason=%s", rm.ID.Hex(), reason)
 }
 

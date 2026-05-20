@@ -609,8 +609,10 @@ func (h *WatchRoomHandler) CloseRoomEndpoint(c *gin.Context) {
 		h.hub.CloseRoom(hubRoom, "host_closed")
 	} else {
 		// No hub instance (no one ever connected) — close the row
-		// directly so it doesn't linger as active.
+		// directly so it doesn't linger as active. Still wipe any chat
+		// rows that may exist (host could have created+chatted+reloaded).
 		_ = h.repo.CloseRoom(ctx, id)
+		_, _ = h.repo.DeleteRoomMessages(ctx, id)
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

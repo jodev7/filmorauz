@@ -432,3 +432,14 @@ func (r *WatchRoomRepository) ListRoomMessages(ctx context.Context, roomID primi
 	}
 	return msgs, nil
 }
+
+// DeleteRoomMessages wipes every chat row for a room. Called from
+// CloseRoom (manual close + 5-min host-disconnect grace expiry) so a
+// long-lived deployment doesn't accumulate dead-room chat forever.
+func (r *WatchRoomRepository) DeleteRoomMessages(ctx context.Context, roomID primitive.ObjectID) (int64, error) {
+	res, err := r.messages.DeleteMany(ctx, bson.M{"room_id": roomID})
+	if err != nil {
+		return 0, err
+	}
+	return res.DeletedCount, nil
+}
