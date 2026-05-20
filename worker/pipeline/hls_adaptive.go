@@ -445,6 +445,27 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+// hasAudioStream reports whether the input file has at least one decodable
+// audio stream. It uses ffprobe directly so the result is independent of
+// whatever stream layout ffmpeg's auto-detection picks during transcoding.
+// When ffprobe fails for any reason we assume audio is present so the
+// caller falls back to the safer (audio-aware) ffmpeg pipeline.
+func hasAudioStream(path string) bool {
+	cmd := exec.Command("ffprobe",
+		"-v", "error",
+		"-select_streams", "a",
+		"-show_entries", "stream=index",
+		"-of", "csv=p=0",
+		path,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		log.Printf("[HLS] hasAudioStream: ffprobe failed (%v), assuming audio present", err)
+		return true
+	}
+	return strings.TrimSpace(string(out)) != ""
+}
+
 // createBaseVideo creates an intermediate base video with logo overlay applied
 func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int, jobStatusCallback func(status models.IngestionStatus, progress int)) error {
 	log.Printf("[HLS] Creating base video: requested_cut=%ds, logo overlay, input=%s", cutSeconds, inputPath)
@@ -508,6 +529,26 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 		"-i", inputPath,
 	}
 
+	// Audio normalisation chain — forces every input frame through a
+	// known channel layout and sample rate BEFORE ffmpeg inserts its own
+	// auto_aresample filter. Without this, scraped MP4s with a single
+	// corrupt AAC frame (reporting bogus 33-channel layout) cause
+	// `auto_aresample_0: Rematrix is needed between 33 channels and
+	// stereo but there is not enough information to do it` and abort the
+	// whole encode. `aresample=async=1` re-syncs PTS when corrupt frames
+	// are dropped; `aformat=channel_layouts=stereo` pins the layout so
+	// downstream rematrix never has to guess.
+	audioFilter := "aresample=async=1:first_pts=0,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo"
+
+	// Probe for audio so we can omit the audio mapping on the rare
+	// silent-video case. A missing audio stream would otherwise cause
+	// `Stream specifier ':a' matches no streams` when the filter_complex
+	// branch references [0:a].
+	audioPresent := hasAudioStream(inputPath)
+	if !audioPresent {
+		log.Printf("[HLS] no audio stream detected — encoding video-only")
+	}
+
 	var filterArgs []string
 	var filterDescription string
 	if logoExists {
@@ -518,23 +559,34 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 		// scale2ref=w=iw*0.18 → logo is 18% of video width (~3× larger than iw/7):
 		//   1080p(1920px)→346px  720p(1280px)→230px  360p(640px)→115px
 		// overlay=W-w-20:H-h-20 → bottom-right corner, 20px padding.
-		filterComplex := fmt.Sprintf(
+		// Audio chain is merged into filter_complex because -af is ignored
+		// when -filter_complex is set.
+		videoGraph := fmt.Sprintf(
 			"[0:v]%s[vscaled];[1:v]format=rgba,colorchannelmixer=aa=0.8[logo_alpha];[logo_alpha][vscaled]scale2ref=w=iw*0.25:h=-1[logo][vref];[vref][logo]overlay=W-w-20:H-h-20:shortest=1[out]",
 			videoChain,
 		)
+		filterComplex := videoGraph
+		if audioPresent {
+			filterComplex = videoGraph + ";[0:a]" + audioFilter + "[aout]"
+		}
 		filterArgs = []string{
 			"-loop", "1",
 			"-i", logoPath,
 			"-filter_complex", filterComplex,
 			"-map", "[out]",
-			"-map", "0:a?",
 		}
-		filterDescription = "logo watermark 18%-video-width bottom-right 20px padding"
+		if audioPresent {
+			filterArgs = append(filterArgs, "-map", "[aout]")
+		}
+		filterDescription = "logo watermark 18%-video-width bottom-right 20px padding + stereo audio normalisation"
 		log.Printf("[HLS] APPLYING logo overlay — scale=video_width*0.18  position=bottom-right+20px")
 		log.Printf("[HLS] APPLYING logo overlay — filter_complex: %s", filterComplex)
 	} else {
 		filterArgs = []string{"-vf", videoChain}
-		filterDescription = "scale filter only (no logo)"
+		if audioPresent {
+			filterArgs = append(filterArgs, "-af", audioFilter)
+		}
+		filterDescription = "scale filter only (no logo) + stereo audio normalisation"
 		log.Printf("[HLS] NO logo overlay - using filter: %s", filterDescription)
 	}
 
@@ -544,19 +596,28 @@ func (p *Pipeline) createBaseVideo(inputPath, outputPath string, cutSeconds int,
 		"-crf", "18",
 		"-profile:v", "high",
 		"-level", "4.1",
-		"-c:a", "aac",
-		"-b:a", "192k",
-		// Force the AAC encoder to stereo. Without this, a single
-		// corrupt input packet that reports a bogus channel count
-		// re-initialises the audio filter chain and kills the encode
-		// because the auto-aresample filter has no channel layout to
-		// rematrix to.
-		"-ac", "2",
-		"-ar", "44100",
+		// Larger muxing queue absorbs late audio packets when corrupt
+		// input frames cause the demuxer to fall behind, avoiding the
+		// "Too many packets buffered" mux abort.
+		"-max_muxing_queue_size", "4096",
+	}
+	if audioPresent {
+		encodeArgs = append(encodeArgs,
+			"-c:a", "aac",
+			"-b:a", "192k",
+			// Belt-and-braces: explicit ac/ar matches the upstream
+			// aformat filter so the encoder never has to negotiate.
+			"-ac", "2",
+			"-ar", "44100",
+		)
+	} else {
+		encodeArgs = append(encodeArgs, "-an")
+	}
+	encodeArgs = append(encodeArgs,
 		"-movflags", "+faststart",
 		"-progress", "pipe:1", // MUST appear before output path
 		outputPath,
-	}
+	)
 
 	ffmpegArgs := append(append(baseArgs, filterArgs...), encodeArgs...)
 
