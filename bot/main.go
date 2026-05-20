@@ -239,6 +239,29 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 			return
 		}
 
+		// Check for movie deep link: /start movie_<code>
+		// Lets Instagram captions link straight to the bot with the code
+		// pre-filled, so IG visitors never need to learn /code syntax.
+		if code := b.parseMovieStart(msg.Text); code != "" {
+			log.Printf("Detected movie deep link: code=%s", code)
+			// Register the user first (mirrors handleStart) so the
+			// freshly-arrived IG visitor gets a row in the DB even if
+			// they only ever look up movies via the deep link.
+			go func() {
+				if err := b.authClient.RegisterBotUser(chatID, msg.From); err != nil {
+					log.Printf("[START movie_] register user failed telegram_id=%d: %v", msg.From.ID, err)
+				}
+			}()
+			// Subscription gate must still apply.
+			status := b.subscriptionService.CheckUserSubscriptions(userID)
+			if !status.IsSubscribed {
+				b.sendSubscriptionRequestWithMissing(chatID, status.MissingChans)
+				return
+			}
+			b.lookupMovie(chatID, code)
+			return
+		}
+
 		// Regular /start
 		b.handleStart(chatID, userID, msg.From)
 		return
@@ -290,22 +313,28 @@ func (b *Bot) handleStart(chatID int64, userID int64, from *tgbotapi.User) {
 		return
 	}
 
-	// User IS subscribed - show welcome and usage
+	// User IS subscribed - show welcome and usage.
+	// Two-message onboarding so first-time users (often arriving from
+	// Instagram with no idea what to do) see an actionable CTA before
+	// any instructions to read.
 	log.Printf("[START] User %d is subscribed - showing welcome", userID)
-	welcomeText := "🎬 FilmoraUz Rasmiy Botiga xush kelibsiz!\n\nEndi kinolarni qidirish orqali filmlarni tomosha qilishingiz mumkin."
-	b.sendMessage(chatID, welcomeText)
+	siteURL := b.config.SiteURL
+	if siteURL == "" {
+		siteURL = "https://filmorauz.net"
+	}
+
+	// 1. Short welcome + dual CTA (site / top movies).
+	welcomeMsg := tgbotapi.NewMessage(chatID, keyboards.BuildWelcomeShortMessage())
+	welcomeMsg.ParseMode = "HTML"
+	welcomeMsg.ReplyMarkup = keyboards.BuildWelcomeKeyboard(siteURL)
+	if _, err := b.api.Send(welcomeMsg); err != nil {
+		log.Printf("[START] welcome short message failed user=%d: %v", userID, err)
+	}
 
 	time.Sleep(150 * time.Millisecond)
 
-	usageText := `📌 Kino kodini yuboring:
-
-<code>/code KINO_KODI</code>
-
-💡 Masalan:
-<code>/code 0001</code>
-
-	Yoki filmorauz.net web sahifamiz orqali barcha kinolarni ko'rishingiz mumkin.`
-	b.sendMessage(chatID, usageText)
+	// 2. Detailed usage walkthrough.
+	b.sendMessage(chatID, keyboards.BuildWelcomeUsageMessage())
 }
 
 // handleCode handles the /code command
@@ -411,6 +440,9 @@ func (b *Bot) lookupMovie(chatID int64, code string) {
 		Duration:    movie.Duration,
 	}
 	detailsText := keyboards.BuildMovieDetailsText(movieInfo)
+	// Append the "long-press to open in browser" hint so users on
+	// Telegram's in-app browser know how to escape into Chrome/Safari.
+	detailsText = detailsText + "\n\n" + keyboards.BrowserOpenHint
 
 	posterURL := firstNonEmpty(movie.PosterURL, movie.PosterAlt, movie.Poster, movie.BackdropURL)
 	log.Printf(
@@ -783,6 +815,33 @@ func (b *Bot) parseLoginCode(text string) string {
 	return strings.ToUpper(code)
 }
 
+// parseMovieStart parses a "/start movie_<code>" deep link payload.
+// Returns the bare code (e.g. "0001") or "" when the input is anything
+// else. The code is validated with the same regex /code uses, so this
+// path can never trigger a backend lookup with garbage.
+//
+// Telegram deep-link payloads are alphanumeric + "_" + "-" only, so
+// underscore is reserved as our namespace separator (movie_, login_,
+// premium_). The "movie_" prefix wins because we register it first in
+// the handler.
+func (b *Bot) parseMovieStart(text string) string {
+	cleanText := strings.ToLower(strings.TrimSpace(text))
+	if idx := strings.Index(cleanText, "@"); idx != -1 {
+		// "/start@filmorauzbot movie_0001" → "/start movie_0001"
+		cleanText = cleanText[:idx] + cleanText[strings.Index(cleanText, " "):]
+	}
+	const moviePrefix = "/start movie_"
+	if !strings.HasPrefix(cleanText, moviePrefix) {
+		return ""
+	}
+	code := strings.TrimSpace(strings.TrimPrefix(cleanText, moviePrefix))
+	if !isValidMovieCode(code) {
+		log.Printf("[START movie_] invalid code %q", code)
+		return ""
+	}
+	return code
+}
+
 // handleLogin handles the website login flow
 // This is triggered by /start login_<AUTH_CODE>
 func (b *Bot) handleLogin(chatID int64, userID int64, user *tgbotapi.User, authCode string) {
@@ -864,7 +923,16 @@ func (b *Bot) handleLogin(chatID int64, userID int64, user *tgbotapi.User, authC
 
 	// Auth successful!
 	log.Printf("[LOGIN] <<< Auth successful for user %d", userID)
-	b.sendMessage(chatID, keyboards.BuildAuthSuccessMessage())
+	siteURL := b.config.SiteURL
+	if siteURL == "" {
+		siteURL = "https://filmorauz.net"
+	}
+	successMsg := tgbotapi.NewMessage(chatID, keyboards.BuildAuthSuccessMessage())
+	successMsg.ParseMode = "HTML"
+	successMsg.ReplyMarkup = keyboards.BuildAuthSuccessKeyboard(siteURL)
+	if _, err := b.api.Send(successMsg); err != nil {
+		log.Printf("[LOGIN] success message send failed user=%d: %v", userID, err)
+	}
 }
 
 // getChannelTitles returns just the channel titles from RequiredChannel list

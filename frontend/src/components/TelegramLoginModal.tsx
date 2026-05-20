@@ -76,15 +76,11 @@ export default function TelegramLoginModal({ isOpen, onClose }: TelegramLoginMod
             clearInterval(pollingRef.current);
           }
           setStatus("success");
-          // Close modal after success
+          // Full reload so server-rendered pages (movie/series detail,
+          // profile, etc.) re-fetch with the auth cookie set. Without
+          // this, only client-rendered widgets pick up the new session.
           setTimeout(() => {
-            onClose();
-            // Reset state for next time
-            setTimeout(() => {
-              setStatus("idle");
-              setAuthCode(null);
-              setBotUrl("");
-            }, 500);
+            window.location.reload();
           }, 1500);
         }
         // If not success, continue polling
@@ -186,6 +182,10 @@ export default function TelegramLoginModal({ isOpen, onClose }: TelegramLoginMod
             <CheckCircle className="text-green-500 mx-auto mb-4" size={48} />
             <p className="text-green-400 font-medium text-lg">
               Tizimga muvaffaqiyatli kirdingiz!
+            </p>
+            <p className="text-gray-500 text-sm mt-2 flex items-center justify-center gap-2">
+              <Loader2 className="animate-spin" size={14} />
+              Sahifa yangilanmoqda...
             </p>
           </div>
         )}

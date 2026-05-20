@@ -196,11 +196,71 @@ func BuildBackendErrorMessage() string {
 Iltimos, keyinroq urinib ko'ring.`
 }
 
-// BuildAuthSuccessMessage returns the success message after Telegram login
+// BuildAuthSuccessMessage returns the success message after Telegram login.
+// The hint about returning to the original tab is critical: Telegram has no
+// API for popping the user back into the system browser, so we have to ask
+// them politely. The companion URL button below opens the site inside
+// Telegram's in-app browser as a fallback when they can't switch back.
 func BuildAuthSuccessMessage() string {
 	return `✅ <b>Tizimga muvaffaqiyatli kirdingiz!</b>
 
-🌐 Endi FilmoraUz saytiga qayting va foydalanishda davom eting.`
+🌐 Brauzeringizdagi sayt tab'iga qayting — sayt allaqachon avtomatik kirgan.
+
+Agar saytni shu yerda davom ettirmoqchi bo'lsangiz, quyidagi tugmani bosing:`
+}
+
+// BuildAuthSuccessKeyboard returns a single "open site" URL button shown
+// alongside BuildAuthSuccessMessage. The URL hits the homepage so the
+// user lands on something useful even when their original tab was a
+// deep link.
+func BuildAuthSuccessKeyboard(siteURL string) tgbotapi.InlineKeyboardMarkup {
+	if siteURL == "" {
+		siteURL = "https://filmorauz.net"
+	}
+	button := tgbotapi.NewInlineKeyboardButtonURL("🎬 Saytni ochish", siteURL)
+	row := []tgbotapi.InlineKeyboardButton{button}
+	return tgbotapi.NewInlineKeyboardMarkup(row)
+}
+
+// BuildWelcomeShortMessage is the first message a subscribed user sees on
+// /start. Three lines, no slash commands — the user can act on the
+// buttons immediately without reading anything.
+func BuildWelcomeShortMessage() string {
+	return `🎬 <b>FilmoraUz Rasmiy Botiga xush kelibsiz!</b>
+
+Quyidagi tugmalar orqali saytni oching yoki 2-xabardagi yo'riqnomani o'qing.`
+}
+
+// BuildWelcomeKeyboard returns the dual CTA shown with the short welcome.
+func BuildWelcomeKeyboard(siteURL string) tgbotapi.InlineKeyboardMarkup {
+	if siteURL == "" {
+		siteURL = "https://filmorauz.net"
+	}
+	site := strings.TrimRight(siteURL, "/")
+	return tgbotapi.NewInlineKeyboardMarkup(
+		[]tgbotapi.InlineKeyboardButton{
+			tgbotapi.NewInlineKeyboardButtonURL("🌐 Saytni ochish", site),
+			tgbotapi.NewInlineKeyboardButtonURL("🎬 Top kinolar", site+"/movies"),
+		},
+	)
+}
+
+// BuildWelcomeUsageMessage is the longer second message walking the user
+// through every supported lookup. Kept after the buttons so the user
+// only reads it when they actually need it.
+func BuildWelcomeUsageMessage() string {
+	return `📌 <b>Bot bilan qanday ishlash:</b>
+
+1️⃣ <b>Kino kodini bilmaysizmi?</b>
+   Saytga kirib, istalgan kino sahifasidagi 4-6 xonali kodni ko'ring.
+
+2️⃣ <b>Kodingiz bormi?</b>
+   <code>/code 0001</code> — masalan, kino kodini yuboring.
+
+3️⃣ <b>To'g'ridan-to'g'ri tomosha qilmoqchimisiz?</b>
+   🌐 Yuqoridagi tugmalardan birini bosing.
+
+💡 <i>Tashqi brauzerda ochish uchun tugmani bosib turing va "Brauzerda ochish" ni tanlang.</i>`
 }
 
 // BuildAuthFailedMessage returns the failure message for invalid/expired auth code
@@ -244,6 +304,13 @@ func BuildMovieFoundMessageWithBranding(title, botUsername string) string {
 	}
 	return "🎬 Kino topildi: " + title + branding
 }
+
+// BrowserOpenHint is shown under the watch button so users discover the
+// long-press → "Open in browser" gesture. Telegram has no API to force a
+// URL button into the system browser, so this hint is the cleanest path
+// for users who want a real browser session (bookmarks, real cookies,
+// etc.) instead of Telegram's in-app webview.
+const BrowserOpenHint = "💡 <i>Tashqi brauzerda ochish uchun tugmani bosib turing va \"Brauzerda ochish\" ni tanlang.</i>"
 
 // BuildMovieFoundMessageWithBrandingAndURL returns movie found message with raw URL and bot branding
 func BuildMovieFoundMessageWithBrandingAndURL(title, url, botUsername string) string {
