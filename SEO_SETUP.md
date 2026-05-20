@@ -285,3 +285,11 @@ curl https://filmorauz.net/robots.txt
 2. **Yandex sitemaps panel'iga `/sitemap-videos.xml`** ni alohida qo'shing — Yandex.Video uchun.
 3. **Core Web Vitals** ni monitor qiling: https://pagespeed.web.dev/?url=https://filmorauz.net — LCP, CLS, FID ko'rsatkichlari ranking factor.
 4. **Internal linking** ni kuchaytiring — har film page'da "shu janrdagi boshqa kinolar", "shu yildagi kinolar" linklari.
+
+
+
+
+
+ssh root@144.91.79.0
+  cd /opt/filmorauz/parser
+  ./venv/bin/python ig_login.py filmora_extra

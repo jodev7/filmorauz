@@ -335,6 +335,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		// Clip management
 		admin.GET("/clips/groups", clipHandler.ListClipGroups)
 		admin.GET("/clips/groups/debug", clipHandler.GetClipGroupsDebug)
+		admin.GET("/clips/genres", clipHandler.ListClipGenres)
 		admin.GET("/clips", clipHandler.ListClips)
 		admin.GET("/clips/movie/:movieId", clipHandler.GetClipsByMovie)
 		admin.GET("/clips/:id/download", clipHandler.DownloadClip)
@@ -344,6 +345,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		admin.POST("/clips/:id/instagram/schedule", igScheduleHandler.Create)
 		admin.GET("/clips/:id/instagram/schedules", igScheduleHandler.ListForClip)
 		admin.GET("/instagram/accounts", clipHandler.ListInstagramAccounts)
+		admin.GET("/instagram/accounts/:name/stats", clipHandler.AccountStats)
 		admin.GET("/instagram/schedules", igScheduleHandler.ListAll)
 		admin.PATCH("/instagram/schedules/:scheduleId", igScheduleHandler.UpdateTime)
 		admin.DELETE("/instagram/schedules/:scheduleId", igScheduleHandler.Cancel)

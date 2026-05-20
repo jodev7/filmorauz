@@ -170,6 +170,7 @@ interface ServerSeriesGroup {
   series_id: string;
   title: string;
   slug: string;
+  genre?: string[];
   clip_count: number;
   ig_uploaded_count: number;
   last_ig_upload_at?: string;
@@ -184,6 +185,7 @@ interface ServerMovieGroup {
   title: string;
   slug: string;
   code: string;
+  genre?: string[];
   clip_count: number;
   ig_uploaded_count: number;
   last_ig_upload_at?: string;
@@ -192,13 +194,32 @@ interface ServerMovieGroup {
   match_movie_slugs?: string[];
   match_movie_titles?: string[];
 }
+
+interface InstagramAccountFilter {
+  kind?: "movie" | "series" | "";
+  genres?: string[];
+  series_slugs?: string[];
+  movie_slugs?: string[];
+}
+
+interface InstagramAccountWithFilter {
+  name: string;
+  filter?: InstagramAccountFilter;
+}
+
+type ClipKind = "all" | "movie" | "series";
+type ClipSort = "title" | "newest" | "most_clips" | "least_posted";
 interface ServerGroups {
   movies: ServerMovieGroup[];
   series: ServerSeriesGroup[];
   total_clips: number;
   total_contents: number;
+  total_filtered?: number;
+  total_movies?: number;
+  total_series?: number;
   movie_group_count?: number;
   series_group_count?: number;
+  all_genres?: string[];
 }
 
 // Lazy-loaded clip page for a single scope (movie or episode).
@@ -646,6 +667,214 @@ function ClipTable({
   );
 }
 
+// matchingAccountsForClip returns the IG account names whose filter
+// rules match the given clip. A rule matches when at least one of the
+// configured constraints (kind / genres / slugs) hits — empty rules
+// match nothing here so users opt-in to the auto-select by configuring
+// the filter. Accounts with NO filter at all are also returned (they
+// accept everything by definition).
+function matchingAccountsForClip(
+  clip: Clip,
+  accounts: InstagramAccountWithFilter[]
+): string[] {
+  const clipKind: "movie" | "series" =
+    clip.content_kind === "series" || clip.series_id ? "series" : "movie";
+  const clipSlug = clipKind === "series" ? (clip.series_slug || "") : (clip.movie_slug || "");
+  const out: string[] = [];
+  for (const a of accounts) {
+    const f = a.filter;
+    if (!f || (!f.kind && !f.genres?.length && !f.series_slugs?.length && !f.movie_slugs?.length)) {
+      // No filter — generic account, always eligible.
+      out.push(a.name);
+      continue;
+    }
+    if (f.kind && f.kind !== clipKind) continue;
+    if (clipKind === "series" && f.series_slugs?.length) {
+      if (clipSlug && f.series_slugs.includes(clipSlug)) {
+        out.push(a.name);
+        continue;
+      }
+    }
+    if (clipKind === "movie" && f.movie_slugs?.length) {
+      if (clipSlug && f.movie_slugs.includes(clipSlug)) {
+        out.push(a.name);
+        continue;
+      }
+    }
+    // Genre matching needs the group's genre list — the clip doc
+    // itself doesn't carry genre, so we leave that to the upload-time
+    // suggestion code which has the group context.
+  }
+  return out;
+}
+
+// ─── Filter bar ───────────────────────────────────────────────────────────────
+
+interface ClipFilterBarProps {
+  kind: ClipKind;
+  onKindChange: (k: ClipKind) => void;
+  query: string;
+  onQueryChange: (q: string) => void;
+  genres: string[];
+  onGenresChange: (g: string[]) => void;
+  allGenres: string[];
+  account: string;
+  onAccountChange: (a: string) => void;
+  accounts: InstagramAccountWithFilter[];
+  onlyUnposted: boolean;
+  onOnlyUnpostedChange: (b: boolean) => void;
+  sort: ClipSort;
+  onSortChange: (s: ClipSort) => void;
+  totalMovies: number;
+  totalSeries: number;
+  totalFiltered: number;
+}
+
+function ClipFilterBar(props: ClipFilterBarProps) {
+  const {
+    kind, onKindChange,
+    query, onQueryChange,
+    genres, onGenresChange, allGenres,
+    account, onAccountChange, accounts,
+    onlyUnposted, onOnlyUnpostedChange,
+    sort, onSortChange,
+    totalMovies, totalSeries, totalFiltered,
+  } = props;
+
+  const toggleGenre = (g: string) => {
+    if (genres.includes(g)) onGenresChange(genres.filter((x) => x !== g));
+    else onGenresChange([...genres, g]);
+  };
+
+  const tabs: Array<{ id: ClipKind; label: string; count?: number }> = [
+    { id: "all", label: "Hammasi", count: totalFiltered },
+    { id: "movie", label: "🎬 Kinolar", count: totalMovies },
+    { id: "series", label: "📺 Seriallar", count: totalSeries },
+  ];
+
+  return (
+    <div className="bg-brand-card border border-brand-border rounded-xl p-3 sm:p-4 mb-4 space-y-3">
+      {/* Tabs */}
+      <div className="flex items-center gap-1 overflow-x-auto -mx-1 px-1">
+        {tabs.map((t) => {
+          const active = kind === t.id;
+          return (
+            <button
+              key={t.id}
+              onClick={() => onKindChange(t.id)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+                active
+                  ? "bg-white text-black"
+                  : "text-gray-400 hover:text-white hover:bg-white/5"
+              }`}
+            >
+              {t.label}
+              {typeof t.count === "number" && (
+                <span className={`ml-2 text-xs ${active ? "text-gray-600" : "text-gray-500"}`}>
+                  {t.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Row 2: search + account + sort */}
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-2">
+        <div className="md:col-span-6 relative">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => onQueryChange(e.target.value)}
+            placeholder="Kontent nomi bo'yicha qidirish..."
+            className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-500"
+          />
+          {query && (
+            <button
+              onClick={() => onQueryChange("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
+              aria-label="Tozalash"
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+
+        <select
+          value={account}
+          onChange={(e) => onAccountChange(e.target.value)}
+          className="md:col-span-3 bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-gray-500"
+        >
+          <option value="">Barcha akkauntlar</option>
+          {accounts.map((a) => {
+            const filterBits: string[] = [];
+            if (a.filter?.kind) filterBits.push(a.filter.kind);
+            if (a.filter?.genres?.length) filterBits.push(a.filter.genres.join("/"));
+            if (a.filter?.series_slugs?.length) filterBits.push(`${a.filter.series_slugs.length} serial`);
+            const label = filterBits.length > 0 ? `${a.name} · ${filterBits.join(" · ")}` : a.name;
+            return (
+              <option key={a.name} value={a.name}>{label}</option>
+            );
+          })}
+        </select>
+
+        <select
+          value={sort}
+          onChange={(e) => onSortChange(e.target.value as ClipSort)}
+          className="md:col-span-3 bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-gray-500"
+        >
+          <option value="title">Tartib: Nom (A→Z)</option>
+          <option value="newest">Tartib: Yangi yuklanganlar</option>
+          <option value="most_clips">Tartib: Eng ko'p klip</option>
+          <option value="least_posted">Tartib: IG'ga kam yuborilgan</option>
+        </select>
+      </div>
+
+      {/* Row 3: only-unposted + genre chips */}
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="inline-flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={onlyUnposted}
+            onChange={(e) => onOnlyUnpostedChange(e.target.checked)}
+            className="accent-white"
+          />
+          Faqat IG'ga yuborilmaganlar
+        </label>
+        {allGenres.length > 0 && (
+          <div className="flex-1 flex flex-wrap gap-1 items-center">
+            <span className="text-xs text-gray-500 mr-1">Janrlar:</span>
+            {allGenres.map((g) => {
+              const active = genres.includes(g);
+              return (
+                <button
+                  key={g}
+                  onClick={() => toggleGenre(g)}
+                  className={`px-2 py-0.5 rounded-full text-xs border transition-colors ${
+                    active
+                      ? "bg-white text-black border-white"
+                      : "bg-transparent text-gray-400 border-brand-border hover:text-white hover:border-gray-500"
+                  }`}
+                >
+                  {g}
+                </button>
+              );
+            })}
+            {genres.length > 0 && (
+              <button
+                onClick={() => onGenresChange([])}
+                className="ml-1 text-xs text-gray-500 hover:text-white underline"
+              >
+                tozalash
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function AdminClipsPage() {
@@ -656,6 +885,30 @@ export default function AdminClipsPage() {
   const [groups, setGroups] = useState<ServerGroups | null>(null);
   const [groupsLoading, setGroupsLoading] = useState(true);
   const [groupsPage, setGroupsPage] = useState(1);
+
+  // Filter state — controls what GET /api/admin/clips/groups returns.
+  // Each change re-runs the server query (debounced for the search box).
+  const [filterKind, setFilterKind] = useState<ClipKind>("all");
+  const [filterQuery, setFilterQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [filterGenres, setFilterGenres] = useState<string[]>([]);
+  const [filterAccount, setFilterAccount] = useState<string>(""); // "" ⇒ all accounts
+  const [filterOnlyUnposted, setFilterOnlyUnposted] = useState(false);
+  const [filterSort, setFilterSort] = useState<ClipSort>("title");
+  const [allGenres, setAllGenres] = useState<string[]>([]);
+  const [igAccountsMeta, setIgAccountsMeta] = useState<InstagramAccountWithFilter[]>([]);
+
+  // Debounce the search input so we don't spam the backend on every
+  // keystroke. 300ms is enough to feel instant without firing per key.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(filterQuery.trim()), 300);
+    return () => clearTimeout(t);
+  }, [filterQuery]);
+
+  // Reset to the first page whenever the filter changes.
+  useEffect(() => {
+    setGroupsPage(1);
+  }, [filterKind, debouncedQuery, filterGenres, filterAccount, filterOnlyUnposted, filterSort]);
 
   const [allAccounts, setAllAccounts] = useState<AllAccounts>({ instagram: [], youtube: [], tiktok: [] });
   const [publishJobs, setPublishJobs] = useState<PublishJob[]>([]);
@@ -681,35 +934,66 @@ export default function AdminClipsPage() {
     if (!token) return;
     setGroupsLoading(true);
     try {
-      const res = await fetch(`${API}/admin/clips/groups`, {
+      const params = new URLSearchParams();
+      if (filterKind !== "all") params.set("kind", filterKind);
+      if (debouncedQuery) params.set("q", debouncedQuery);
+      if (filterGenres.length > 0) params.set("genres", filterGenres.join(","));
+      if (filterAccount) params.set("account", filterAccount);
+      if (filterOnlyUnposted) params.set("only_unposted", "true");
+      if (filterSort && filterSort !== "title") params.set("sort", filterSort);
+      params.set("limit", String(groupsPageLimit));
+      params.set("offset", String((groupsPage - 1) * groupsPageLimit));
+
+      const res = await fetch(`${API}/admin/clips/groups?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
         const data: ServerGroups = await res.json();
-        if (process.env.NODE_ENV === "development") {
-          console.log("[admin/clips] grouped response", {
-            total_groups: (data.movies?.length || 0) + (data.series?.length || 0),
-            movie_group_count: data.movie_group_count ?? (data.movies?.length || 0),
-            series_group_count: data.series_group_count ?? (data.series?.length || 0),
-            total_clips: data.total_clips || 0,
-            first_10_groups: [
-              ...(data.movies || []).map((m) => ({ title: m.title, type: "movie", count: m.clip_count })),
-              ...(data.series || []).map((s) => ({ title: s.title, type: "series", count: s.clip_count })),
-            ].slice(0, 10),
-          });
-        }
         setGroups({
           movies: data.movies || [],
           series: data.series || [],
           total_clips: data.total_clips || 0,
           total_contents: data.total_contents || 0,
+          total_filtered: data.total_filtered,
+          total_movies: data.total_movies,
+          total_series: data.total_series,
+          movie_group_count: data.movie_group_count,
+          series_group_count: data.series_group_count,
         });
+        if (data.all_genres && data.all_genres.length > 0 && allGenres.length === 0) {
+          setAllGenres(data.all_genres);
+        }
       }
     } catch {
       // silently ignore
     } finally {
       setGroupsLoading(false);
     }
+  }, [token, filterKind, debouncedQuery, filterGenres, filterAccount, filterOnlyUnposted, filterSort, groupsPage, groupsPageLimit, allGenres.length]);
+
+  // Load the full genre list once — separate endpoint so the chip
+  // selector shows every option even when the current filter excludes
+  // most groups.
+  useEffect(() => {
+    if (!token) return;
+    fetch(`${API}/admin/clips/genres`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.genres) setAllGenres(data.genres);
+      })
+      .catch(() => {});
+  }, [token]);
+
+  // Load IG account metadata (name + filter rules) so the account
+  // dropdown can label them and the upload modal can auto-select.
+  useEffect(() => {
+    if (!token) return;
+    fetch(`${API}/admin/instagram/accounts`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (Array.isArray(data?.items)) setIgAccountsMeta(data.items);
+      })
+      .catch(() => {});
   }, [token]);
 
   const fetchScopedClips = useCallback(
@@ -941,8 +1225,16 @@ export default function AdminClipsPage() {
 
   const openModal = (clip: Clip) => {
     const defaultJobs: SelectedJob[] = [];
-    if (allAccounts.instagram.length > 0)
-      defaultJobs.push({ platform: "instagram", account_name: allAccounts.instagram[0] });
+    // Auto-select every IG account whose filter rules match this clip.
+    // When no account matches (or no account has a filter at all) we
+    // fall back to the first one so the modal is never blank.
+    const matched = matchingAccountsForClip(clip, igAccountsMeta);
+    const igDefaults = matched.length > 0
+      ? matched
+      : (allAccounts.instagram[0] ? [allAccounts.instagram[0]] : []);
+    igDefaults.forEach((name) => {
+      defaultJobs.push({ platform: "instagram", account_name: name });
+    });
     setModal({
       clip,
       selectedJobs: defaultJobs,
@@ -1118,11 +1410,11 @@ export default function AdminClipsPage() {
     ];
   }, [groups]);
 
-  const groupsTotalPages = Math.max(1, Math.ceil(flatGroups.length / groupsPageLimit));
-  const pagedGroups = flatGroups.slice(
-    (groupsPage - 1) * groupsPageLimit,
-    groupsPage * groupsPageLimit
-  );
+  // Server-side pagination — backend already sliced the result to
+  // [offset, offset+limit). flatGroups IS the current page.
+  const totalFiltered = groups?.total_filtered ?? flatGroups.length;
+  const groupsTotalPages = Math.max(1, Math.ceil(totalFiltered / groupsPageLimit));
+  const pagedGroups = flatGroups;
 
   useEffect(() => {
     if (groupsPage > groupsTotalPages) setGroupsPage(groupsTotalPages);
@@ -1172,6 +1464,27 @@ export default function AdminClipsPage() {
           </div>
         )}
       </div>
+
+      {/* ── Filter bar: tabs + search + genre + account + sort + only-unposted */}
+      <ClipFilterBar
+        kind={filterKind}
+        onKindChange={setFilterKind}
+        query={filterQuery}
+        onQueryChange={setFilterQuery}
+        genres={filterGenres}
+        onGenresChange={setFilterGenres}
+        allGenres={allGenres}
+        account={filterAccount}
+        onAccountChange={setFilterAccount}
+        accounts={igAccountsMeta}
+        onlyUnposted={filterOnlyUnposted}
+        onOnlyUnpostedChange={setFilterOnlyUnposted}
+        sort={filterSort}
+        onSortChange={setFilterSort}
+        totalMovies={groups?.total_movies ?? 0}
+        totalSeries={groups?.total_series ?? 0}
+        totalFiltered={totalFiltered}
+      />
 
       {groupsLoading ? (
         <div className="flex items-center gap-2 text-gray-500 py-12 justify-center">
@@ -1227,8 +1540,17 @@ export default function AdminClipsPage() {
                           {m.code && (
                             <span className="text-xs font-mono text-gray-500">#{m.code}</span>
                           )}
-                          <span className="text-xs text-emerald-300/80">Movie clips</span>
+                          <span className="text-xs text-emerald-300/80">Movie</span>
                           <span className="text-xs text-gray-600">{m.clip_count} ta klip</span>
+                          {m.genre && m.genre.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {m.genre.slice(0, 3).map((g) => (
+                                <span key={g} className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-gray-400">
+                                  {g}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                         <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                           {m.ig_uploaded_count > 0 ? (
@@ -1333,8 +1655,17 @@ export default function AdminClipsPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-3 flex-wrap">
                         <span className="text-white font-medium truncate">{s.title || "Untitled series"}</span>
-                        <span className="text-xs text-amber-300/80">Serial episode clips</span>
+                        <span className="text-xs text-amber-300/80">Series</span>
                         <span className="text-xs text-gray-600">{s.clip_count} ta klip</span>
+                        {s.genre && s.genre.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {s.genre.slice(0, 3).map((g) => (
+                              <span key={g} className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-gray-400">
+                                {g}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                         {s.ig_uploaded_count > 0 ? (

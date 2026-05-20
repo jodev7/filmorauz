@@ -35,10 +35,28 @@ type InstagramUploadResult struct {
 	Recovered bool // true when result came from sidecar after a transport error
 }
 
+// InstagramAccountFilter restricts which clips an account is intended
+// for. Empty / zero fields disable the corresponding gate, so a fully
+// empty filter (the default for legacy accounts) accepts everything.
+// Kind is "movie" | "series" | "" (both).
+type InstagramAccountFilter struct {
+	Kind        string   `json:"kind,omitempty"`
+	Genres      []string `json:"genres,omitempty"`
+	SeriesSlugs []string `json:"series_slugs,omitempty"`
+	MovieSlugs  []string `json:"movie_slugs,omitempty"`
+}
+
+// IsEmpty reports whether the filter blocks nothing — used by the admin
+// UI to render a generic "all content" label.
+func (f InstagramAccountFilter) IsEmpty() bool {
+	return f.Kind == "" && len(f.Genres) == 0 && len(f.SeriesSlugs) == 0 && len(f.MovieSlugs) == 0
+}
+
 type InstagramAccount struct {
-	Name     string `json:"name"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Name     string                 `json:"name"`
+	Username string                 `json:"username"`
+	Password string                 `json:"password"`
+	Filter   InstagramAccountFilter `json:"filter,omitempty"`
 }
 
 // LoadInstagramAccounts parses INSTAGRAM_ACCOUNTS_JSON from env.

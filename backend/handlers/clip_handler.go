@@ -161,24 +161,113 @@ func (h *ClipHandler) ListClips(c *gin.Context) {
 }
 
 // ListClipGroups GET /api/admin/clips/groups
-// Returns a (movies, series→season→episode) summary tree built via aggregation.
-// Counts only — clip docs are loaded lazily via ListClips with filters.
+//
+// Returns a (movies, series→season→episode) summary tree. Optional query
+// params filter and paginate the result so the admin clips page can
+// power the tab / search / genre / account UI without loading every
+// group up front.
+//
+// Query params:
+//
+//	kind          movie | series | (empty = both)
+//	q             case-insensitive substring against title/slug/code
+//	genres        csv of genre slugs (OR semantics)
+//	only_unposted true ⇒ hide groups whose every clip is already on IG
+//	sort          title (default) | newest | most_clips | least_posted
+//	account       IG account name; applies that account's filter (genres,
+//	              series_slugs, movie_slugs, kind) on top of explicit params
+//	limit, offset pagination (legacy callers omit ⇒ no pagination)
 func (h *ClipHandler) ListClipGroups(c *gin.Context) {
 	ctx := context.Background()
-	movies, series, total, err := h.clipRepo.GroupClips(ctx)
+
+	opts := repositories.ClipGroupFilter{
+		Kind:         strings.ToLower(strings.TrimSpace(c.Query("kind"))),
+		Query:        strings.TrimSpace(c.Query("q")),
+		Genres:       splitCSV(c.Query("genres")),
+		OnlyUnposted: strings.EqualFold(strings.TrimSpace(c.Query("only_unposted")), "true"),
+		Sort:         strings.ToLower(strings.TrimSpace(c.Query("sort"))),
+	}
+	if v := strings.TrimSpace(c.Query("limit")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			opts.Limit = n
+		}
+	}
+	if v := strings.TrimSpace(c.Query("offset")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			opts.Offset = n
+		}
+	}
+
+	// `account=<name>` layers the account's saved filter on top of
+	// any explicit query params — explicit params always take precedence
+	// when both are present.
+	if name := strings.TrimSpace(c.Query("account")); name != "" {
+		if acc := services.GetInstagramAccount(name); acc != nil {
+			if opts.Kind == "" {
+				opts.Kind = acc.Filter.Kind
+			}
+			if len(opts.Genres) == 0 {
+				opts.Genres = acc.Filter.Genres
+			}
+			opts.SeriesSlugs = acc.Filter.SeriesSlugs
+			opts.MovieSlugs = acc.Filter.MovieSlugs
+		}
+	}
+
+	res, err := h.clipRepo.GroupClipsFiltered(ctx, opts)
 	if err != nil {
 		log.Printf("[ClipHandler] ListClipGroups: failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to group clips"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"movies":             movies,
-		"series":             series,
-		"total_clips":        total,
-		"total_contents":     len(movies) + len(series),
-		"movie_group_count":  len(movies),
-		"series_group_count": len(series),
+		"movies":             res.Movies,
+		"series":             res.Series,
+		"total_clips":        res.TotalClips,
+		"total_contents":     res.GroupCountMovies + res.GroupCountSeries,
+		"total_filtered":     res.TotalFiltered,
+		"total_movies":       res.TotalMovies,
+		"total_series":       res.TotalSeries,
+		"movie_group_count":  res.GroupCountMovies,
+		"series_group_count": res.GroupCountSeries,
+		"all_genres":         res.AllGenres,
+		"limit":              opts.Limit,
+		"offset":             opts.Offset,
 	})
+}
+
+// ListClipGenres GET /api/admin/clips/genres
+// Returns the unique sorted genre list across all movies and series.
+// Powers the admin clips filter chip selector independently of the
+// current page's content.
+func (h *ClipHandler) ListClipGenres(c *gin.Context) {
+	ctx := context.Background()
+	genres, err := h.clipRepo.ListAllGenres(ctx)
+	if err != nil {
+		log.Printf("[ClipHandler] ListClipGenres: failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load genres"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"genres": genres})
+}
+
+// AccountStats GET /api/admin/instagram/accounts/:name/stats
+// Returns simple upload counters used by the admin clips header — clips
+// uploaded today / this week / this month for the given account.
+func (h *ClipHandler) AccountStats(c *gin.Context) {
+	name := strings.TrimSpace(c.Param("name"))
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "account name required"})
+		return
+	}
+	ctx := context.Background()
+	stats, err := h.clipRepo.AccountUploadStats(ctx, name)
+	if err != nil {
+		log.Printf("[ClipHandler] AccountStats: failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load account stats"})
+		return
+	}
+	c.JSON(http.StatusOK, stats)
 }
 
 // GetClipGroupsDebug GET /api/admin/clips/groups/debug
@@ -398,14 +487,25 @@ func (h *ClipHandler) SaveClips(c *gin.Context) {
 }
 
 // ListInstagramAccounts GET /api/admin/instagram/accounts
-// Returns account names from INSTAGRAM_ACCOUNTS_JSON env (no credentials exposed).
+// Returns account names + filter rules from INSTAGRAM_ACCOUNTS_JSON env.
+// Credentials are deliberately stripped. The legacy `accounts` array of
+// names is kept for backwards compatibility with older admin pages.
 func (h *ClipHandler) ListInstagramAccounts(c *gin.Context) {
 	accounts := services.LoadInstagramAccounts()
 	names := make([]string, len(accounts))
+	type publicAccount struct {
+		Name   string                          `json:"name"`
+		Filter services.InstagramAccountFilter `json:"filter,omitempty"`
+	}
+	full := make([]publicAccount, len(accounts))
 	for i, a := range accounts {
 		names[i] = a.Name
+		full[i] = publicAccount{Name: a.Name, Filter: a.Filter}
 	}
-	c.JSON(http.StatusOK, gin.H{"accounts": names})
+	c.JSON(http.StatusOK, gin.H{
+		"accounts": names,
+		"items":    full,
+	})
 }
 
 // UploadToInstagram POST /api/admin/clips/:id/instagram

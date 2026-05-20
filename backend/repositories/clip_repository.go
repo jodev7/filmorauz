@@ -17,12 +17,17 @@ import (
 )
 
 type ClipRepository struct {
-	col *mongo.Collection
+	col       *mongo.Collection
+	moviesCol *mongo.Collection // for $lookup-style genre enrichment
+	seriesCol *mongo.Collection
 }
 
 func NewClipRepository(db *mongo.Database) *ClipRepository {
-	col := db.Collection("clips")
-	return &ClipRepository{col: col}
+	return &ClipRepository{
+		col:       db.Collection("clips"),
+		moviesCol: db.Collection("movies"),
+		seriesCol: db.Collection("series"),
+	}
 }
 
 func (r *ClipRepository) Collection() *mongo.Collection {
@@ -168,6 +173,7 @@ type MovieClipGroup struct {
 	Title            string               `json:"title"`
 	Slug             string               `json:"slug"`
 	Code             string               `json:"code"`
+	Genre            []string             `json:"genre,omitempty"`
 	ClipCount        int                  `json:"clip_count"`
 	IGUploadedCount  int                  `json:"ig_uploaded_count"`
 	LastIGUploadAt   *time.Time           `json:"last_ig_upload_at,omitempty"`
@@ -202,6 +208,7 @@ type SeriesClipGroup struct {
 	SeriesID          primitive.ObjectID   `json:"series_id"`
 	Title             string               `json:"title"`
 	Slug              string               `json:"slug"`
+	Genre             []string             `json:"genre,omitempty"`
 	ClipCount         int                  `json:"clip_count"`
 	IGUploadedCount   int                  `json:"ig_uploaded_count"`
 	LastIGUploadAt    *time.Time           `json:"last_ig_upload_at,omitempty"`
