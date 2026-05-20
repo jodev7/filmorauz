@@ -536,6 +536,7 @@ func (h *ClipHandler) UploadToInstagram(c *gin.Context) {
 
 	caption := services.BuildInstagramClipCaption(
 		services.ResolveInstagramClipCode(ctx, clip, h.seriesRepo),
+		services.IsSeriesClip(clip),
 	)
 
 	type accountResult struct {

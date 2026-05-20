@@ -7,12 +7,36 @@ import (
 	"github.com/filmorauz/backend/models"
 )
 
-func TestBuildInstagramClipCaption(t *testing.T) {
-	got := BuildInstagramClipCaption("1234")
-	want := "🎬 Kinoni profildagi bot orqali toping!\n🔢 Kino Kodi: 1234"
-	if got != want {
-		t.Fatalf("caption mismatch\nwant: %q\ngot:  %q", want, got)
+func TestBuildInstagramClipCaptionMovie(t *testing.T) {
+	got := BuildInstagramClipCaption("1234", false)
+	wantHead := "🎬 Kinoni profildagi bot orqali toping!\n🔢 Kino Kodi: 1234"
+	if !startsWith(got, wantHead) {
+		t.Fatalf("caption head mismatch\nwant prefix: %q\ngot:         %q", wantHead, got)
 	}
+	if !contains(got, "#kinolar") {
+		t.Fatalf("caption missing movie hashtag block, got: %q", got)
+	}
+}
+
+func TestBuildInstagramClipCaptionSeries(t *testing.T) {
+	got := BuildInstagramClipCaption("1234", true)
+	wantHead := "📺 Serialni profildagi bot orqali toping!\n🔢 Serial Kodi: 1234"
+	if !startsWith(got, wantHead) {
+		t.Fatalf("series caption head mismatch\nwant prefix: %q\ngot:         %q", wantHead, got)
+	}
+	if !contains(got, "#seriallar") {
+		t.Fatalf("series caption missing series hashtag block, got: %q", got)
+	}
+}
+
+func startsWith(s, prefix string) bool { return len(s) >= len(prefix) && s[:len(prefix)] == prefix }
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
 
 func TestResolveInstagramClipCodeMovie(t *testing.T) {

@@ -27,6 +27,11 @@ type PublishJob struct {
 	MovieTitle   string             `bson:"movie_title"           json:"movie_title"`
 	MovieSlug    string             `bson:"movie_slug"            json:"movie_slug"`
 	MovieCode    string             `bson:"movie_code"            json:"movie_code"`
+	// ContentKind is "movie" (default) or "series". Captured at job
+	// creation so the caption builder picks the correct lead text,
+	// code label, and hashtag stack without a DB round-trip at publish
+	// time. Legacy rows missing the field are treated as "movie".
+	ContentKind  string             `bson:"content_kind,omitempty" json:"content_kind,omitempty"`
 	Platform     string             `bson:"platform"              json:"platform"`     // instagram | youtube | tiktok
 	AccountName  string             `bson:"account_name"          json:"account_name"`
 	ScheduledFor time.Time          `bson:"scheduled_for"         json:"scheduled_for"`

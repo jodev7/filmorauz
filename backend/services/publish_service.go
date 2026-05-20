@@ -10,8 +10,11 @@ import (
 
 // BuildYouTubeDescription returns the YouTube Shorts description.
 // Title is already set as the video title, so it is omitted here.
-func BuildYouTubeDescription(movieCode string) string {
-	return fmt.Sprintf("Kinoni profildagi bot orqali toping!\nKino Kodi: %s", movieCode)
+func BuildYouTubeDescription(code string, isSeries bool) string {
+	if isSeries {
+		return fmt.Sprintf("Serialni profildagi bot orqali toping!\nSerial Kodi: %s", code)
+	}
+	return fmt.Sprintf("Kinoni profildagi bot orqali toping!\nKino Kodi: %s", code)
 }
 
 // ExecutePlatformUpload dispatches the upload to the correct platform service
@@ -21,7 +24,7 @@ func BuildYouTubeDescription(movieCode string) string {
 func ExecutePlatformUpload(parserURL string, job *models.PublishJob) (mediaID, postURL string, err error) {
 	switch job.Platform {
 	case models.PublishPlatformInstagram:
-		caption := BuildInstagramClipCaption(job.MovieCode)
+		caption := BuildInstagramClipCaption(job.MovieCode, IsSeriesContentKind(job.ContentKind))
 		account := GetInstagramAccount(job.AccountName)
 		if account == nil {
 			return "", "", fmt.Errorf("instagram account not configured: %s", job.AccountName)
@@ -37,10 +40,10 @@ func ExecutePlatformUpload(parserURL string, job *models.PublishJob) (mediaID, p
 		if account == nil {
 			return "", "", fmt.Errorf("youtube account not configured: %s", job.AccountName)
 		}
-		ytDesc := BuildYouTubeDescription(job.MovieCode)
+		ytDesc := BuildYouTubeDescription(job.MovieCode, IsSeriesContentKind(job.ContentKind))
 		return "", "", UploadShortToYouTube(parserURL, job.ClipURL, job.MovieTitle, ytDesc, account)
 	case models.PublishPlatformTikTok:
-		caption := BuildInstagramClipCaption(job.MovieCode)
+		caption := BuildInstagramClipCaption(job.MovieCode, IsSeriesContentKind(job.ContentKind))
 		account := GetTikTokAccount(job.AccountName)
 		if account == nil {
 			return "", "", fmt.Errorf("tiktok account not configured: %s", job.AccountName)

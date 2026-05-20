@@ -11,14 +11,44 @@ import (
 )
 
 const (
-	instagramClipCaptionLead = "🎬 Kinoni profildagi bot orqali toping!"
-	instagramClipCaptionCode = "🔢 Kino Kodi: %s"
+	instagramClipCaptionLeadMovie  = "🎬 Kinoni profildagi bot orqali toping!"
+	instagramClipCaptionLeadSeries = "📺 Serialni profildagi bot orqali toping!"
+	instagramClipCaptionCodeMovie  = "🔢 Kino Kodi: %s"
+	instagramClipCaptionCodeSeries = "🔢 Serial Kodi: %s"
 )
 
-// BuildInstagramClipCaption returns the short Instagram caption required for
-// clip publishing. It intentionally excludes any movie/series title.
-func BuildInstagramClipCaption(code string) string {
-	return fmt.Sprintf("%s\n%s", instagramClipCaptionLead, fmt.Sprintf(instagramClipCaptionCode, strings.TrimSpace(code)))
+// instagramHashtagsMovie / instagramHashtagsSeries are the discovery
+// tags appended to every clip caption. Kept under 30 (Instagram's hard
+// cap) and split across niche / broad / brand buckets so the post can
+// surface on a mix of search and Explore feeds. Edit cautiously — IG
+// shadow-bans repeated identical tag stacks, so periodic rotation is
+// recommended.
+const (
+	instagramHashtagsMovie = "#uzbekistan #ozbekiston #filmorauz #filmorauznet\n" +
+		"#kino #kinolar #topkinolar #yangikinolar\n" +
+		"#hindkino #hollywoodkino #ozbektilida #tarjimakino\n" +
+		"#film #movie #reels #fyp #foryou"
+
+	instagramHashtagsSeries = "#uzbekistan #ozbekiston #filmorauz #filmorauznet\n" +
+		"#serial #seriallar #topseriallar #tarjimaserial\n" +
+		"#ozbektilida #serialkinolar\n" +
+		"#series #reels #fyp #foryou"
+)
+
+// BuildInstagramClipCaption returns the short Instagram caption required
+// for clip publishing. The caption shape depends on whether the clip
+// belongs to a movie or a series — separate lead, code label, and
+// hashtag stacks improve discoverability per content type.
+func BuildInstagramClipCaption(code string, isSeries bool) string {
+	lead := instagramClipCaptionLeadMovie
+	codeLine := instagramClipCaptionCodeMovie
+	tags := instagramHashtagsMovie
+	if isSeries {
+		lead = instagramClipCaptionLeadSeries
+		codeLine = instagramClipCaptionCodeSeries
+		tags = instagramHashtagsSeries
+	}
+	return fmt.Sprintf("%s\n%s\n\n%s", lead, fmt.Sprintf(codeLine, strings.TrimSpace(code)), tags)
 }
 
 // ResolveInstagramClipCode applies the code-selection rules for clip posts:
@@ -30,7 +60,7 @@ func ResolveInstagramClipCode(ctx context.Context, clip *models.Clip, seriesRepo
 	}
 
 	clipCode := strings.TrimSpace(clip.MovieCode)
-	if !isSeriesClip(clip) {
+	if !IsSeriesClip(clip) {
 		return clipCode
 	}
 	if clipCode != "" {
@@ -61,9 +91,20 @@ func ResolveInstagramCodeByClipID(
 	return ResolveInstagramClipCode(ctx, clip, seriesRepo)
 }
 
-func isSeriesClip(clip *models.Clip) bool {
+// IsSeriesClip reports whether the clip belongs to a series (any of:
+// explicit content_kind="series", non-zero series_id, or non-zero
+// episode_id). Exported so handlers can reuse the same rule when
+// populating PublishJob.ContentKind at creation time.
+func IsSeriesClip(clip *models.Clip) bool {
 	kind := strings.ToLower(strings.TrimSpace(clip.ContentKind))
 	return kind == "series" || !clip.SeriesID.IsZero() || !clip.EpisodeID.IsZero()
+}
+
+// IsSeriesContentKind reports whether the given kind string (as stored
+// on PublishJob.ContentKind) represents a series clip. Empty/unknown
+// strings default to false so legacy rows render as movie captions.
+func IsSeriesContentKind(kind string) bool {
+	return strings.EqualFold(strings.TrimSpace(kind), "series")
 }
 
 func lookupSeriesCode(ctx context.Context, seriesRepo *repositories.SeriesRepository, seriesID primitive.ObjectID) string {

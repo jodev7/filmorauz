@@ -30,6 +30,17 @@ func NewPublishJobHandler(
 	return &PublishJobHandler{jobRepo: jobRepo, clipRepo: clipRepo, seriesRepo: seriesRepo, parserURL: parserURL}
 }
 
+// contentKindForClip returns the PublishJob.ContentKind value for a clip
+// — "series" when the clip belongs to a serial episode, "movie"
+// otherwise. Reuses the same heuristic as the caption builder so the
+// classification stays consistent between job creation and publish.
+func contentKindForClip(clip *models.Clip) string {
+	if clip != nil && services.IsSeriesClip(clip) {
+		return "series"
+	}
+	return "movie"
+}
+
 // ListAccounts GET /api/admin/publish/accounts
 // Returns all configured account names grouped by platform.
 func (h *PublishJobHandler) ListAccounts(c *gin.Context) {
@@ -109,6 +120,7 @@ func (h *PublishJobHandler) UploadNow(c *gin.Context) {
 			MovieTitle:  clip.DisplayTitle(),
 			MovieSlug:   clip.DisplaySlug(),
 			MovieCode:   services.ResolveInstagramClipCode(ctx, clip, h.seriesRepo),
+			ContentKind: contentKindForClip(clip),
 			Platform:    j.Platform,
 			AccountName: j.AccountName,
 			CreatedBy:   createdBy,
@@ -215,6 +227,7 @@ func (h *PublishJobHandler) Schedule(c *gin.Context) {
 			MovieTitle:   clip.DisplayTitle(),
 			MovieSlug:    clip.DisplaySlug(),
 			MovieCode:    services.ResolveInstagramClipCode(ctx, clip, h.seriesRepo),
+			ContentKind:  contentKindForClip(clip),
 			Platform:     j.Platform,
 			AccountName:  j.AccountName,
 			ScheduledFor: scheduledFor.UTC(),

@@ -518,8 +518,18 @@ func executeInstagramSchedule(
 	schedule *models.InstagramSchedule,
 	parserURL string,
 ) {
+	// Re-read the clip so we can classify movie vs series for the caption
+	// builder. Falls back to "movie" semantics if the load fails — keeps
+	// the publish moving rather than blocking on a transient DB hiccup.
+	isSeries := false
+	if clipRepo != nil {
+		if clip, err := clipRepo.FindByID(context.Background(), schedule.ClipID); err == nil && clip != nil {
+			isSeries = services.IsSeriesClip(clip)
+		}
+	}
 	caption := services.BuildInstagramClipCaption(
 		services.ResolveInstagramCodeByClipID(context.Background(), clipRepo, seriesRepo, schedule.ClipID, schedule.MovieCode),
+		isSeries,
 	)
 	log.Printf("[instagram publish] start schedule_id=%s clip=%s accounts=%v",
 		schedule.ID.Hex(), schedule.ClipID.Hex(), schedule.AccountNames)
