@@ -3,7 +3,10 @@
 import { useEffect } from "react";
 import { useAuth } from "@/lib/auth-context";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+// NEXT_PUBLIC_API_URL already includes the /api prefix (see lib/api.ts), so
+// only the route path is appended here. The previous version double-prefixed
+// "/api/api/presence/heartbeat" and returned 404 in production.
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
 const SESSION_KEY = "filmorauz_session_id";
 const HEARTBEAT_MS = 45_000;
 
@@ -36,7 +39,7 @@ export default function PresencePinger() {
       if (typeof document !== "undefined" && document.hidden) return;
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (token) headers["Authorization"] = `Bearer ${token}`;
-      fetch(`${API_URL}/api/presence/heartbeat`, {
+      fetch(`${API_URL}/presence/heartbeat`, {
         method: "POST",
         headers,
         body: JSON.stringify({ session_id: sessionId }),
