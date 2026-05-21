@@ -25,15 +25,15 @@ const (
 // represents one submission attempt to one provider (indexnow / google /
 // search-console). The collection is used by the admin SEO dashboard.
 type SubmitEvent struct {
-	ID        any         `bson:"_id,omitempty"`
-	Provider  string      `bson:"provider"`
-	Action    string      `bson:"action"`
-	URL       string      `bson:"url,omitempty"`
-	Sitemap   string      `bson:"sitemap,omitempty"`
-	Status    EventStatus `bson:"status"`
-	Error     string      `bson:"error,omitempty"`
-	Count     int         `bson:"count,omitempty"`
-	CreatedAt time.Time   `bson:"created_at"`
+	ID        any         `bson:"_id,omitempty"            json:"id,omitempty"`
+	Provider  string      `bson:"provider"                 json:"provider"`
+	Action    string      `bson:"action"                   json:"action"`
+	URL       string      `bson:"url,omitempty"            json:"url,omitempty"`
+	Sitemap   string      `bson:"sitemap,omitempty"        json:"sitemap,omitempty"`
+	Status    EventStatus `bson:"status"                   json:"status"`
+	Error     string      `bson:"error,omitempty"          json:"error,omitempty"`
+	Count     int         `bson:"count,omitempty"          json:"count,omitempty"`
+	CreatedAt time.Time   `bson:"created_at"               json:"created_at"`
 }
 
 // Config is the wiring container passed by main.go.
