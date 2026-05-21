@@ -4,6 +4,7 @@ All parsers must inherit from this class and implement required methods.
 """
 import requests
 import threading
+import time
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from bs4 import BeautifulSoup
@@ -194,15 +195,62 @@ class BaseParser(ABC):
             pass
         return ""
 
-    def _fetch_page(self, url: str, timeout: int = 30) -> BeautifulSoup:
-        """Fetch a page and return BeautifulSoup object."""
-        try:
-            response = self.session.get(url, timeout=timeout)
-            response.raise_for_status()
-            return BeautifulSoup(response.content, "lxml")
-        except requests.RequestException as e:
-            logger.error(f"Failed to fetch {url}: {e}")
-            raise
+    # HTTP status codes that indicate a transient upstream problem and are
+    # worth retrying. 429 is included so we back off when the source rate-limits.
+    _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+    def _fetch_page(
+        self,
+        url: str,
+        timeout: int = 30,
+        retries: int = 3,
+        backoff: float = 1.5,
+    ) -> BeautifulSoup:
+        """Fetch a page and return a BeautifulSoup object.
+
+        Transient upstream errors (502/503/504, connection failures, timeouts)
+        are retried with exponential backoff. A single 502 from an overloaded
+        source previously killed the whole ingestion job — sibling episodes of
+        the exact same series would complete because the upstream recovered
+        seconds later, while one or two episodes stayed permanently failed.
+        """
+        last_exc: Optional[Exception] = None
+        for attempt in range(retries):
+            try:
+                response = self.session.get(url, timeout=timeout)
+                if response.status_code in self._RETRYABLE_STATUS and attempt < retries - 1:
+                    wait = backoff * (2 ** attempt)
+                    logger.warning(
+                        f"[FETCH] transient HTTP {response.status_code} from {url} "
+                        f"attempt={attempt + 1}/{retries} retrying in {wait:.1f}s"
+                    )
+                    time.sleep(wait)
+                    continue
+                response.raise_for_status()
+                return BeautifulSoup(response.content, "lxml")
+            except (requests.ConnectionError, requests.Timeout) as e:
+                last_exc = e
+                if attempt < retries - 1:
+                    wait = backoff * (2 ** attempt)
+                    logger.warning(
+                        f"[FETCH] network error from {url} attempt={attempt + 1}/{retries} "
+                        f"err={e} retrying in {wait:.1f}s"
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.error(f"Failed to fetch {url}: {e}")
+                raise
+            except requests.HTTPError as e:
+                # Non-retryable HTTP error (4xx other than 429, or final attempt).
+                logger.error(f"Failed to fetch {url}: {e}")
+                raise
+            except requests.RequestException as e:
+                logger.error(f"Failed to fetch {url}: {e}")
+                raise
+        # Should not be reachable, but keep mypy / linters happy.
+        if last_exc:
+            raise last_exc
+        raise requests.RequestException(f"failed to fetch {url} after {retries} attempts")
     
     def _try_search_endpoints(self, query: str, extract_func) -> List[SearchResult]:
         """

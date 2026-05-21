@@ -323,7 +323,7 @@ func (p *Pipeline) ProcessDownloadJob(ctx context.Context, job *models.Ingestion
 	jobID := job.ID.Hex()
 	log.Printf("[WORKER] download worker processing job_id=%s source=%s source_id=%s", jobID, job.Source, job.SourceID)
 
-	metadata, localPath, err := p.parseMovieDetails(job)
+	metadata, localPath, err := p.parseMovieDetailsWithRetry(job)
 	if err != nil {
 		return p.failDownloadJob(jobID, fmt.Errorf("parse details failed: %w", err))
 	}
@@ -944,6 +944,58 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		log.Printf("[PIPELINE] Job %s completed successfully", jobID)
 	}
 	return nil
+}
+
+// parseMovieDetailsWithRetry wraps parseMovieDetails with bounded retries for
+// transient upstream failures (502/503/504 from the source site bubbling up
+// through the parser as HTTP 500 + "Bad Gateway" / "Gateway Timeout" in the
+// body, or context/network timeouts on the parser call itself).
+//
+// Non-transient errors (needs_manual, empty video_url, parser error fields)
+// bubble up immediately so we don't waste time on jobs that genuinely cannot
+// be resolved.
+func (p *Pipeline) parseMovieDetailsWithRetry(job *models.IngestionJob) (*models.ParsedMovieMetadata, string, error) {
+	const maxAttempts = 3
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		metadata, localPath, err := p.parseMovieDetails(job)
+		if err == nil {
+			return metadata, localPath, nil
+		}
+		lastErr = err
+		if _, ok := err.(*needsManualError); ok {
+			return nil, "", err
+		}
+		if !isTransientParserError(err) || attempt == maxAttempts {
+			return nil, "", err
+		}
+		wait := time.Duration(attempt*attempt) * 2 * time.Second
+		log.Printf("[PARSER] transient error on /details job_id=%s attempt=%d/%d err=%v — retrying in %s",
+			job.ID.Hex(), attempt, maxAttempts, err, wait)
+		time.Sleep(wait)
+	}
+	return nil, "", lastErr
+}
+
+// isTransientParserError reports whether the given parseMovieDetails error
+// indicates a temporary upstream condition that's worth retrying.
+func isTransientParserError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	transientSignals := []string{
+		"502", "503", "504",
+		"bad gateway", "gateway timeout", "service unavailable",
+		"connection reset", "connection refused",
+		"timeout", "temporarily", "eof",
+	}
+	for _, s := range transientSignals {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseMovieDetails calls the parser service to get movie details
