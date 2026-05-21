@@ -32,6 +32,74 @@ import requests
 
 
 # Safe string truncation - never raises IndexError
+# Process start time used by /healthz to report parser process uptime.
+_PROCESS_START_TS = time.time()
+
+
+def _host_health_snapshot() -> dict:
+    """Return a HostStatus-compatible dict for the parser host.
+
+    Format mirrors backend/handlers/system_handler.go HostStatus so the
+    admin dashboard renders both hosts uniformly. psutil is the only
+    extra dependency; if it's missing the snapshot still returns
+    something useful (services map, error string) so the panel can show
+    a degraded state instead of crashing.
+    """
+    import socket
+    snap: dict = {
+        "ok": True,
+        "service": "parser",
+        "host": os.environ.get("PUBLIC_HOST", "").strip() or socket.gethostname(),
+        "hostname": socket.gethostname(),
+        "process_uptime_seconds": int(time.time() - _PROCESS_START_TS),
+        "services": {"parser": "up"},
+        "checks": {},
+        "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    try:
+        import psutil  # type: ignore
+        snap["uptime_seconds"] = int(time.time() - psutil.boot_time())
+        snap["cpu_percent"] = round(psutil.cpu_percent(interval=0.2), 1)
+        snap["cpu_cores"] = psutil.cpu_count(logical=True) or 0
+        vm = psutil.virtual_memory()
+        snap["memory"] = {
+            "total_mb": int(vm.total / (1024 * 1024)),
+            "used_mb": int(vm.used / (1024 * 1024)),
+            "percent": round(vm.percent, 1),
+        }
+        du = psutil.disk_usage("/")
+        snap["disk"] = {
+            "total_gb": int(du.total / (1024 ** 3)),
+            "used_gb": int(du.used / (1024 ** 3)),
+            "percent": round(du.percent, 1),
+        }
+        try:
+            la = psutil.getloadavg()
+            snap["load_avg"] = [round(la[0], 2), round(la[1], 2), round(la[2], 2)]
+        except (AttributeError, OSError):
+            snap["load_avg"] = [0.0, 0.0, 0.0]
+    except ImportError:
+        snap["checks"]["psutil"] = "missing — host metrics unavailable"
+    except Exception as exc:  # noqa: BLE001 — never let metrics break the health response
+        snap["checks"]["psutil_error"] = str(exc)
+
+    # Worker lives on the same VPS — probe its local port to decide if
+    # it's up. Default port matches worker/main.go (WORKER_HTTP_PORT=8083).
+    worker_port = os.environ.get("WORKER_HTTP_PORT", "8083")
+    snap["services"]["worker"] = _probe_local_port(int(worker_port))
+    return snap
+
+
+def _probe_local_port(port: int) -> str:
+    """Return "up" if a local TCP listener accepts a connect within 500ms."""
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return "up"
+    except OSError:
+        return "down"
+
+
 def safe_truncate(s: str, max_len: int) -> str:
     """Truncate string to max_len without raising IndexError"""
     if not s:
@@ -1647,6 +1715,19 @@ class ParserHandler(BaseHTTPRequestHandler):
         # Routes
         if path == "/health":
             self._send_json({"ok": True, "status": "ok", "service": "parser"})
+            return
+
+        # Host-level health snapshot consumed by the backend admin
+        # dashboard. Gated by X-Internal-Token (same token the backend
+        # uses for bot ↔ backend internal calls) so machine metrics don't
+        # leak to the public.
+        elif path == "/healthz":
+            expected = os.environ.get("BOT_INTERNAL_TOKEN", "")
+            provided = self.headers.get("X-Internal-Token", "")
+            if not expected or provided != expected:
+                self._send_error("unauthorized", 401)
+                return
+            self._send_json(_host_health_snapshot())
             return
 
         # Parser-wide health metrics: per-source success/fail counts + last N jobs.

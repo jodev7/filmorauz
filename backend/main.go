@@ -193,6 +193,7 @@ func main() {
 	adminUserHandler := handlers.NewAdminUserHandler(userRepo, movieRepo, seriesRepo, banHistoryRepo, notificationService)
 	presenceService := services.NewPresenceService()
 	presenceHandler := handlers.NewPresenceHandler(presenceService, userRepo)
+	systemHandler := handlers.NewSystemHandler(cfg, db, getParserURL())
 	userHandler := handlers.NewUserHandler(watchHistoryRepo, favoriteRepo, movieRepo, seriesRepo, userRepo)
 	collectionHandler := handlers.NewCollectionHandler(collectionService)
 	ratingHandler := handlers.NewRatingHandler(ratingService)
@@ -341,7 +342,7 @@ func main() {
 	}
 
 	// Register routes
-	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler)
+	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler)
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)
 	seoNotifier := buildSEONotifier(cfg, db)

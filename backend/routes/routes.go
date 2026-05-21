@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler, contentHandler *handlers.ContentHandler) {
+func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler, contentHandler *handlers.ContentHandler, systemHandler *handlers.SystemHandler) {
 	r.GET("/sitemap.xml", sitemapHandler.GetSitemapIndex)
 	r.GET("/sitemap-static.xml", sitemapHandler.GetSitemapStatic)
 	r.GET("/sitemap-genres.xml", sitemapHandler.GetSitemapGenres)
@@ -26,6 +26,10 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 
 	// Presence heartbeat — called by every browser tab (authed or anonymous).
 	api.POST("/presence/heartbeat", middleware.OptionalAuth(authService), presenceHandler.Heartbeat)
+
+	// Host healthz — gated by X-Internal-Token, used by the admin VPS
+	// status aggregator. Public path so backends can call each other.
+	api.GET("/system/healthz", systemHandler.Healthz)
 
 	// Image proxy for upstream hosts with broken TLS / HTTP-only delivery
 	// (e.g. uzmedia.tv self-signed cert). Whitelisted hosts only.
@@ -307,6 +311,9 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 
 		// Live activity stats (online users + DAU/WAU/MAU)
 		admin.GET("/stats/online", presenceHandler.OnlineStats)
+
+		// Aggregated VPS status across the fleet.
+		admin.GET("/system/status", systemHandler.AdminSystemStatus)
 
 		// User management
 		admin.GET("/dashboard/stats", adminUserHandler.DashboardStats)

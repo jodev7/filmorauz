@@ -4527,3 +4527,32 @@ export async function adminCancelPublishJob(token: string, jobId: string): Promi
   });
   if (!res.ok) throw new Error("Failed to cancel job");
 }
+
+// ── Admin: VPS / system status ──────────────────────────────────────────
+
+export interface SystemHostStatus {
+  ok: boolean;
+  host: string;
+  hostname: string;
+  service: string;
+  uptime_seconds: number;
+  process_uptime_seconds: number;
+  cpu_percent: number;
+  cpu_cores: number;
+  memory: { total_mb: number; used_mb: number; percent: number };
+  disk: { total_gb: number; used_gb: number; percent: number };
+  load_avg: [number, number, number];
+  services: Record<string, string>;
+  checks?: Record<string, string>;
+  error?: string;
+  checked_at: string;
+}
+
+export async function getAdminSystemStatus(token: string): Promise<{ hosts: SystemHostStatus[] }> {
+  const res = await fetch(`${API_URL}/admin/system/status`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch system status");
+  return res.json();
+}

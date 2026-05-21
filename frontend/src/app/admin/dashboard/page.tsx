@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth-context";
 import { adminGetMovies, Movie, getAdminDashboardStats, getAdminShareStats, getAdminUserMetrics, getAdminTopMovies, getAdminTopSeries, getAdminOnlineStats, DashboardStats, AdminShareStats, UserMetrics, TopContentItem, OnlineStats } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
+import SystemStatusBlock from "@/components/admin/SystemStatusBlock";
 
 export default function AdminDashboard() {
   const { token, user } = useAuth();
@@ -114,6 +115,9 @@ export default function AdminDashboard() {
           Xush kelibsiz{user?.display_name ? `, ${user.display_name}` : ""}. Bu yerda nima bo'layotganini ko'ring.
         </p>
       </div>
+
+      {/* VPS / fleet status */}
+      <SystemStatusBlock />
 
       {/* Live activity — online users (authed + anonymous) + DAU/WAU/MAU */}
       <div className="mb-8 sm:mb-10">
