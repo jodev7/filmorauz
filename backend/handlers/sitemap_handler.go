@@ -302,6 +302,11 @@ func (h *SitemapHandler) GetSitemapVideos(c *gin.Context) {
 			// Google requires a thumbnail — skip videos that don't have one.
 			continue
 		}
+		// Google Video sitemaps require absolute URLs. Posters stored with
+		// the relative "/images/..." path (DEV uploads or B2-key-only rows)
+		// must be prefixed with the site URL or Search Console rejects the
+		// entry with "Invalid URL, Missing thumbnail".
+		poster = absoluteMediaURL(poster, h.baseSiteURL)
 		pub := m.CreatedAt
 		if pub.IsZero() {
 			pub = m.UpdatedAt
@@ -417,3 +422,25 @@ func collectGenres(movies []repositories.SitemapMovieRecord, seriesList []reposi
 	return out
 }
 
+
+// absoluteMediaURL turns a possibly-relative media path (e.g.
+// "/images/posters/foo.webp" or "images/posters/foo.webp") into an
+// absolute URL rooted at baseSiteURL. URLs that already start with
+// "http://" / "https://" are returned unchanged.
+func absoluteMediaURL(raw, base string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return raw
+	}
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return raw
+	}
+	if strings.HasPrefix(raw, "/") {
+		return base + raw
+	}
+	return base + "/" + raw
+}
