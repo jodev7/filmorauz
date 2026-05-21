@@ -536,7 +536,13 @@ function PublishModal({
 }) {
   const { token } = useAuth();
   const [mode, setMode] = useState<"now" | "schedule">("now");
-  const [scheduledFor, setScheduledFor] = useState<string>("");
+  // Default the scheduler input to ~5 minutes from now in local time so the
+  // admin sees a sensible starting point instead of an empty field.
+  const [scheduledFor, setScheduledFor] = useState<string>(() => {
+    const d = new Date(Date.now() + 5 * 60_000);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

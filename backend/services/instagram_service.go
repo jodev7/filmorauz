@@ -46,6 +46,73 @@ type InstagramAccountFilter struct {
 	MovieSlugs  []string `json:"movie_slugs,omitempty"`
 }
 
+// UnmarshalJSON accepts `kind` as either a string ("series") or a JSON
+// array (["movies","series"]). A multi-kind array collapses to "" which
+// means "match both" downstream. "movies" is normalized to "movie" for
+// forgiveness against typos in the env JSON.
+func (f *InstagramAccountFilter) UnmarshalJSON(data []byte) error {
+	// Use an alias type with `kind` typed as json.RawMessage so we can
+	// peek at the shape (string vs array) without recursing.
+	type raw struct {
+		Kind        json.RawMessage `json:"kind,omitempty"`
+		Genres      []string        `json:"genres,omitempty"`
+		SeriesSlugs []string        `json:"series_slugs,omitempty"`
+		MovieSlugs  []string        `json:"movie_slugs,omitempty"`
+	}
+	var r raw
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	f.Genres = r.Genres
+	f.SeriesSlugs = r.SeriesSlugs
+	f.MovieSlugs = r.MovieSlugs
+
+	normalize := func(s string) string {
+		switch strings.ToLower(strings.TrimSpace(s)) {
+		case "movies":
+			return "movie"
+		default:
+			return strings.ToLower(strings.TrimSpace(s))
+		}
+	}
+
+	if len(r.Kind) == 0 {
+		f.Kind = ""
+		return nil
+	}
+	// Try string first.
+	var s string
+	if err := json.Unmarshal(r.Kind, &s); err == nil {
+		f.Kind = normalize(s)
+		return nil
+	}
+	// Fall back to array.
+	var arr []string
+	if err := json.Unmarshal(r.Kind, &arr); err != nil {
+		return fmt.Errorf("filter.kind: must be string or string array (%w)", err)
+	}
+	seen := map[string]struct{}{}
+	for _, v := range arr {
+		n := normalize(v)
+		if n == "" {
+			continue
+		}
+		seen[n] = struct{}{}
+	}
+	switch len(seen) {
+	case 0:
+		f.Kind = ""
+	case 1:
+		for k := range seen {
+			f.Kind = k
+		}
+	default:
+		// "movie" + "series" (or anything else multi) → match all.
+		f.Kind = ""
+	}
+	return nil
+}
+
 // IsEmpty reports whether the filter blocks nothing — used by the admin
 // UI to render a generic "all content" label.
 func (f InstagramAccountFilter) IsEmpty() bool {
