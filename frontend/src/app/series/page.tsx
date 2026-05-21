@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 export const dynamic = "force-dynamic";
+import { Suspense } from "react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import SeriesCarousel from "@/components/SeriesCarousel";
+import GenreFilter from "@/components/GenreFilter";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getSeries } from "@/lib/series-api";
 import { localizeSingleGenre } from "@/lib/localization";
@@ -66,6 +68,12 @@ export default async function SeriesPage({ searchParams }: SeriesPageProps) {
             <p className="text-gray-500 text-sm">
               {seriesData.length} ta serial topildi
             </p>
+          </div>
+
+          <div className="mb-6 sm:mb-8 overflow-x-auto pb-2">
+            <Suspense>
+              <GenreFilter basePath="/series" />
+            </Suspense>
           </div>
 
           <div className="mb-6">

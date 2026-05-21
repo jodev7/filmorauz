@@ -2506,6 +2506,21 @@ export interface CollectionMovie {
   created_at: string;
 }
 
+export interface CollectionSeries {
+  id: string;
+  code: string;
+  title: string;
+  slug: string;
+  poster_url: string;
+  year: number;
+  genre: string[];
+  genres: string[];
+  quality: string;
+  rating_avg: number;
+  rating_count: number;
+  created_at: string;
+}
+
 export interface Collection {
   id: string;
   title: string;
@@ -2514,6 +2529,7 @@ export interface Collection {
   poster_url: string;
   sort_order: number;
   movies: CollectionMovie[];
+  series?: CollectionSeries[];
 }
 
 export interface CollectionInput {
@@ -2526,6 +2542,7 @@ export interface CollectionInput {
   is_featured?: boolean;
   sort_order?: number;
   movie_ids?: string[];
+  series_ids?: string[];
 }
 
 // Get featured collections (public)

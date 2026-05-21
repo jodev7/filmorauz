@@ -19,8 +19,10 @@ import {
   createCollection,
   updateCollection,
   adminGetMovies,
+  adminGetSeries,
   CollectionInput,
   Movie,
+  AdminSeries,
   uploadCollectionPoster,
 } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
@@ -41,6 +43,11 @@ export default function EditCollectionPage() {
   const [filteredMovies, setFilteredMovies] = useState<Movie[]>([]);
   const [showMovieSearch, setShowMovieSearch] = useState(false);
 
+  const [seriesList, setSeriesList] = useState<AdminSeries[]>([]);
+  const [seriesSearch, setSeriesSearch] = useState("");
+  const [filteredSeries, setFilteredSeries] = useState<AdminSeries[]>([]);
+  const [showSeriesSearch, setShowSeriesSearch] = useState(false);
+
   const [form, setForm] = useState<CollectionInput>({
     title: "",
     slug: "",
@@ -50,6 +57,7 @@ export default function EditCollectionPage() {
     is_featured: false,
     sort_order: 0,
     movie_ids: [],
+    series_ids: [],
   });
 
   // Fetch collection if editing
@@ -67,6 +75,7 @@ export default function EditCollectionPage() {
               is_featured: data.is_featured || false,
               sort_order: data.sort_order || 0,
               movie_ids: data.movie_ids || [],
+              series_ids: data.series_ids || [],
             });
           }
         })
@@ -75,13 +84,15 @@ export default function EditCollectionPage() {
     }
   }, [isNew, token, collectionId]);
 
-  // Fetch movies for selection
+  // Fetch movies + series for selection
   useEffect(() => {
-    if (token) {
-      adminGetMovies(token)
-        .then((data) => setMovies(data || []))
-        .catch(console.error);
-    }
+    if (!token) return;
+    adminGetMovies(token)
+      .then((data) => setMovies(data || []))
+      .catch(console.error);
+    adminGetSeries(token)
+      .then((data) => setSeriesList(data || []))
+      .catch(console.error);
   }, [token]);
 
   // Filter movies
@@ -97,6 +108,20 @@ export default function EditCollectionPage() {
       );
     }
   }, [movieSearch, movies]);
+
+  // Filter series
+  useEffect(() => {
+    if (!seriesSearch.trim()) {
+      setFilteredSeries(seriesList.slice(0, 20));
+    } else {
+      const q = seriesSearch.toLowerCase();
+      setFilteredSeries(
+        seriesList
+          .filter((s) => s.title.toLowerCase().includes(q))
+          .slice(0, 20)
+      );
+    }
+  }, [seriesSearch, seriesList]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -142,6 +167,33 @@ export default function EditCollectionPage() {
 
   const selectedMovies = movies.filter((m) =>
     form.movie_ids?.includes(m.id)
+  );
+
+  const addSeries = (seriesId: string) => {
+    if (form.series_ids?.includes(seriesId)) return;
+    setForm({
+      ...form,
+      series_ids: [...(form.series_ids || []), seriesId],
+    });
+  };
+
+  const removeSeries = (seriesId: string) => {
+    setForm({
+      ...form,
+      series_ids: (form.series_ids || []).filter((id) => id !== seriesId),
+    });
+  };
+
+  const moveSeries = (index: number, direction: "up" | "down") => {
+    const newIds = [...(form.series_ids || [])];
+    const newIndex = direction === "up" ? index - 1 : index + 1;
+    if (newIndex < 0 || newIndex >= newIds.length) return;
+    [newIds[index], newIds[newIndex]] = [newIds[newIndex], newIds[index]];
+    setForm({ ...form, series_ids: newIds });
+  };
+
+  const selectedSeries = seriesList.filter((s) =>
+    form.series_ids?.includes(s.id)
   );
 
   // Generate slug from title
@@ -385,6 +437,100 @@ export default function EditCollectionPage() {
             </div>
           ) : (
             <p className="text-gray-500 text-sm">Kinolar tanlanmagan</p>
+          )}
+        </div>
+
+        {/* Series */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-gray-400 text-sm">Seriallar</label>
+            <button
+              type="button"
+              onClick={() => setShowSeriesSearch(!showSeriesSearch)}
+              className="flex items-center gap-1 text-sm text-brand-red hover:text-orange-400"
+            >
+              <Plus size={16} />
+              Qo'shish
+            </button>
+          </div>
+
+          {showSeriesSearch && (
+            <div className="mb-4 p-4 bg-brand-card border border-brand-border rounded-lg">
+              <div className="relative">
+                <Search
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                  size={18}
+                />
+                <input
+                  type="text"
+                  placeholder="Serial qidirish..."
+                  value={seriesSearch}
+                  onChange={(e) => setSeriesSearch(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 bg-brand-dark border border-brand-border rounded-lg text-white text-sm focus:outline-none focus:border-brand-red"
+                />
+              </div>
+              <div className="mt-2 max-h-48 overflow-y-auto space-y-1">
+                {filteredSeries
+                  .filter((s) => !form.series_ids?.includes(s.id))
+                  .map((series) => (
+                    <button
+                      key={series.id}
+                      type="button"
+                      onClick={() => addSeries(series.id)}
+                      className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-brand-border rounded flex items-center justify-between"
+                    >
+                      <span>{series.title}</span>
+                      <Plus size={14} />
+                    </button>
+                  ))}
+              </div>
+            </div>
+          )}
+
+          {selectedSeries.length > 0 ? (
+            <div className="space-y-2">
+              {selectedSeries.map((series, index) => (
+                <div
+                  key={series.id}
+                  className="flex items-center gap-3 p-3 bg-brand-card border border-brand-border rounded-lg"
+                >
+                  <GripVertical className="text-gray-600 cursor-move" size={16} />
+                  <div className="flex-1">
+                    <span className="text-white text-sm">{series.title}</span>
+                    {series.year ? (
+                      <span className="text-gray-500 text-xs ml-2">({series.year})</span>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => moveSeries(index, "up")}
+                      disabled={index === 0}
+                      className="p-1 text-gray-400 hover:text-white disabled:opacity-30"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => moveSeries(index, "down")}
+                      disabled={index === selectedSeries.length - 1}
+                      className="p-1 text-gray-400 hover:text-white disabled:opacity-30"
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeSeries(series.id)}
+                      className="p-1 text-gray-400 hover:text-red-500"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-gray-500 text-sm">Seriallar tanlanmagan</p>
           )}
         </div>
 

@@ -61,7 +61,7 @@ func main() {
 
 	// Collection repository and service
 	collectionRepo := repositories.NewCollectionRepository(db)
-	collectionService := services.NewCollectionService(collectionRepo, movieRepo)
+	collectionService := services.NewCollectionService(collectionRepo, movieRepo, seriesRepo)
 
 	// Ensure indexes
 	if err := userRepo.EnsureIndexes(); err != nil {

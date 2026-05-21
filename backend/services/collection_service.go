@@ -14,12 +14,14 @@ import (
 type CollectionService struct {
 	collectionRepo *repositories.CollectionRepository
 	movieRepo      *repositories.MovieRepository
+	seriesRepo     *repositories.SeriesRepository
 }
 
-func NewCollectionService(collectionRepo *repositories.CollectionRepository, movieRepo *repositories.MovieRepository) *CollectionService {
+func NewCollectionService(collectionRepo *repositories.CollectionRepository, movieRepo *repositories.MovieRepository, seriesRepo *repositories.SeriesRepository) *CollectionService {
 	return &CollectionService{
 		collectionRepo: collectionRepo,
 		movieRepo:      movieRepo,
+		seriesRepo:     seriesRepo,
 	}
 }
 
@@ -47,6 +49,10 @@ func (s *CollectionService) Create(ctx context.Context, input models.CollectionI
 	if err != nil {
 		return nil, err
 	}
+	seriesIDs, err := s.convertObjectIDs(input.SeriesIDs, "series")
+	if err != nil {
+		return nil, err
+	}
 
 	collection := &models.Collection{
 		Title:       input.Title,
@@ -57,6 +63,7 @@ func (s *CollectionService) Create(ctx context.Context, input models.CollectionI
 		IsFeatured:  input.IsFeatured,
 		SortOrder:   input.SortOrder,
 		MovieIDs:    movieIDs,
+		SeriesIDs:   seriesIDs,
 	}
 
 	if err := s.collectionRepo.Create(ctx, collection); err != nil {
@@ -94,8 +101,12 @@ func (s *CollectionService) Update(ctx context.Context, idHex string, input mode
 		return nil, fmt.Errorf("slug '%s' already exists", input.Slug)
 	}
 
-	// Convert movie ID strings to ObjectIDs
+	// Convert movie/series ID strings to ObjectIDs
 	movieIDs, err := s.convertMovieIDs(input.MovieIDs)
+	if err != nil {
+		return nil, err
+	}
+	seriesIDs, err := s.convertObjectIDs(input.SeriesIDs, "series")
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +120,7 @@ func (s *CollectionService) Update(ctx context.Context, idHex string, input mode
 	collection.IsFeatured = input.IsFeatured
 	collection.SortOrder = input.SortOrder
 	collection.MovieIDs = movieIDs
+	collection.SeriesIDs = seriesIDs
 
 	if err := s.collectionRepo.Update(ctx, collection.ID, collection); err != nil {
 		return nil, fmt.Errorf("failed to update collection: %w", err)
@@ -180,22 +192,28 @@ func (s *CollectionService) GetFeatured(ctx context.Context) ([]models.Collectio
 
 // convertMovieIDs converts string movie IDs to ObjectIDs
 func (s *CollectionService) convertMovieIDs(movieIDStrings []string) ([]primitive.ObjectID, error) {
-	movieIDs := make([]primitive.ObjectID, 0, len(movieIDStrings))
-	for _, idStr := range movieIDStrings {
+	return s.convertObjectIDs(movieIDStrings, "movie")
+}
+
+// convertObjectIDs converts string IDs to ObjectIDs, tagging errors with the
+// resource label ("movie" or "series") for clearer messages.
+func (s *CollectionService) convertObjectIDs(idStrings []string, label string) ([]primitive.ObjectID, error) {
+	ids := make([]primitive.ObjectID, 0, len(idStrings))
+	for _, idStr := range idStrings {
 		idStr = strings.TrimSpace(idStr)
 		if idStr == "" {
 			continue
 		}
 		objID, err := primitive.ObjectIDFromHex(idStr)
 		if err != nil {
-			return nil, fmt.Errorf("invalid movie id '%s': %w", idStr, err)
+			return nil, fmt.Errorf("invalid %s id '%s': %w", label, idStr, err)
 		}
-		movieIDs = append(movieIDs, objID)
+		ids = append(ids, objID)
 	}
-	return movieIDs, nil
+	return ids, nil
 }
 
-// populateCollectionWithMovies populates movie data for a single collection
+// populateCollectionWithMovies populates movie + series data for a single collection
 func (s *CollectionService) populateCollectionWithMovies(ctx context.Context, collection *models.Collection) (*models.CollectionWithMovies, error) {
 	movies, err := s.movieRepo.GetMoviesByIDs(ctx, collection.MovieIDs)
 	if err != nil {
@@ -221,6 +239,30 @@ func (s *CollectionService) populateCollectionWithMovies(ctx context.Context, co
 		})
 	}
 
+	seriesBasics := []models.SeriesBasic{}
+	if len(collection.SeriesIDs) > 0 && s.seriesRepo != nil {
+		seriesList, err := s.seriesRepo.GetSeriesByIDs(ctx, collection.SeriesIDs)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get series: %w", err)
+		}
+		for _, sr := range seriesList {
+			seriesBasics = append(seriesBasics, models.SeriesBasic{
+				ID:          sr.ID.Hex(),
+				Code:        sr.Code,
+				Title:       sr.Title,
+				Slug:        sr.Slug,
+				PosterURL:   sr.PosterURL,
+				Year:        sr.Year,
+				Genre:       sr.Genre,
+				Genres:      sr.Genre,
+				Quality:     sr.Quality,
+				RatingAvg:   sr.RatingAvg,
+				RatingCount: sr.RatingCount,
+				CreatedAt:   sr.CreatedAt.Format(time.RFC3339),
+			})
+		}
+	}
+
 	return &models.CollectionWithMovies{
 		ID:          collection.ID.Hex(),
 		Title:       collection.Title,
@@ -229,6 +271,7 @@ func (s *CollectionService) populateCollectionWithMovies(ctx context.Context, co
 		PosterURL:   collection.PosterURL,
 		SortOrder:   collection.SortOrder,
 		Movies:      movieBasics,
+		Series:      seriesBasics,
 	}, nil
 }
 

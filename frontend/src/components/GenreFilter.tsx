@@ -7,7 +7,11 @@ import { DEFAULT_GENRES } from "@/lib/genres";
 // Lowercase English keys — matches DB/API format. Display is localized to Uzbek.
 const GENRES = ["All", ...DEFAULT_GENRES];
 
-export default function GenreFilter() {
+interface GenreFilterProps {
+  basePath?: string; // defaults to /movies for backward compatibility
+}
+
+export default function GenreFilter({ basePath = "/movies" }: GenreFilterProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const activeGenre = searchParams.get("genre") || "All";
@@ -20,7 +24,8 @@ export default function GenreFilter() {
       params.set("genre", genre);
     }
     params.delete("page"); // reset pagination on filter change
-    router.push(`/movies?${params.toString()}`);
+    const qs = params.toString();
+    router.push(qs ? `${basePath}?${qs}` : basePath);
   };
 
   // Get localized display name for a genre (always Uzbek)

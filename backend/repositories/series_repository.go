@@ -76,6 +76,38 @@ func normalizeSeriesGenres(genres []string) []string {
 }
 
 // Collection returns the underlying mongo collection for admin operations
+// GetSeriesByIDs retrieves multiple series by their ObjectIDs, preserving the
+// order of the input IDs. Used by collection population.
+func (r *SeriesRepository) GetSeriesByIDs(ctx context.Context, ids []primitive.ObjectID) ([]models.Series, error) {
+	if len(ids) == 0 {
+		return []models.Series{}, nil
+	}
+
+	cursor, err := r.seriesCol.Find(ctx, bson.M{"_id": bson.M{"$in": ids}})
+	if err != nil {
+		return nil, fmt.Errorf("find series by ids: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var series []models.Series
+	if err := cursor.All(ctx, &series); err != nil {
+		return nil, fmt.Errorf("decode series: %w", err)
+	}
+
+	seriesMap := make(map[primitive.ObjectID]models.Series, len(series))
+	for _, s := range series {
+		seriesMap[s.ID] = s
+	}
+
+	ordered := make([]models.Series, 0, len(ids))
+	for _, id := range ids {
+		if s, ok := seriesMap[id]; ok {
+			ordered = append(ordered, s)
+		}
+	}
+	return ordered, nil
+}
+
 func (r *SeriesRepository) Collection() *mongo.Collection {
 	return r.seriesCol
 }

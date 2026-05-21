@@ -6,8 +6,9 @@ import { ChevronLeft } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MovieCard from "@/components/MovieCard";
+import SeriesCard from "@/components/SeriesCard";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
-import { getCollectionBySlug, getCollections } from "@/lib/api";
+import { getCollectionBySlug } from "@/lib/api";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 
@@ -17,7 +18,7 @@ interface Props {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = params;
-  
+
   try {
     const collection: any = await getCollectionBySlug(slug);
     return {
@@ -37,13 +38,22 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function CollectionDetailPage({ params }: Props) {
   const { slug } = params;
   let collection: any;
-  
+
   try {
     collection = await getCollectionBySlug(slug);
   } catch {
     notFound();
     return null;
   }
+
+  if (!collection) {
+    notFound();
+    return null;
+  }
+
+  const movies: any[] = collection.movies || [];
+  const series: any[] = collection.series || [];
+  const hasContent = movies.length > 0 || series.length > 0;
 
   return (
     <>
@@ -65,32 +75,67 @@ export default async function CollectionDetailPage({ params }: Props) {
             {collection.description && (
               <p className="text-gray-500 text-base">{collection.description}</p>
             )}
+            <p className="mt-2 text-gray-500 text-sm">
+              {movies.length} kino · {series.length} serial
+            </p>
           </div>
 
           <div className="mb-6">
             <WebsiteAdSlot placement="collection_detail_page_banner" variant="banner" />
           </div>
 
-          {collection.movies && collection.movies.length > 0 ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-              {collection.movies.map((movie: any) => (
-                <MovieCard
-                  key={movie.id}
-                  movie={{
-                    id: movie.id,
-                    title: movie.title,
-                    poster_url: movie.poster_url,
-                    slug: movie.slug,
-                    year: movie.year,
-                    genre: movie.genres,
-                  } as any}
-                />
-              ))}
-            </div>
-          ) : (
+          {!hasContent && (
             <div className="py-24 text-center text-gray-500">
-              <p className="text-lg">Bu kolleksiyada hali kinolar yo'q.</p>
+              <p className="text-lg">Bu kolleksiyada hali kontent yo'q.</p>
             </div>
+          )}
+
+          {movies.length > 0 && (
+            <section className="mb-12">
+              <h2 className="font-display text-2xl text-white tracking-wide mb-4">
+                KINOLAR
+              </h2>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                {movies.map((movie: any) => (
+                  <MovieCard
+                    key={movie.id}
+                    movie={{
+                      id: movie.id,
+                      title: movie.title,
+                      poster_url: movie.poster_url,
+                      slug: movie.slug,
+                      year: movie.year,
+                      genre: movie.genres,
+                    } as any}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
+          {series.length > 0 && (
+            <section className="mb-12">
+              <h2 className="font-display text-2xl text-white tracking-wide mb-4">
+                SERIALLAR
+              </h2>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                {series.map((s: any) => (
+                  <SeriesCard
+                    key={s.id}
+                    series={{
+                      id: s.id,
+                      title: s.title,
+                      poster_url: s.poster_url,
+                      slug: s.slug,
+                      year: s.year,
+                      genre: s.genres || s.genre,
+                      rating_avg: s.rating_avg,
+                      quality: s.quality,
+                    } as any}
+                  />
+                ))}
+              </div>
+            </section>
           )}
         </div>
       </main>
