@@ -81,6 +81,34 @@ func (r *PublishJobRepository) FindByClipID(clipID primitive.ObjectID) ([]models
 	return results, cursor.All(ctx, &results)
 }
 
+// FindByContentClipID returns publish jobs scheduled for a ContentClip.
+func (r *PublishJobRepository) FindByContentClipID(clipID primitive.ObjectID) ([]models.PublishJob, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cursor, err := r.col.Find(ctx, bson.M{"content_clip_id": clipID},
+		options.Find().SetSort(bson.D{{Key: "scheduled_for", Value: -1}}).SetLimit(200))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var results []models.PublishJob
+	return results, cursor.All(ctx, &results)
+}
+
+// FindByContentFolderID returns publish jobs for any clip in a folder.
+func (r *PublishJobRepository) FindByContentFolderID(folderID primitive.ObjectID) ([]models.PublishJob, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cursor, err := r.col.Find(ctx, bson.M{"content_folder_id": folderID},
+		options.Find().SetSort(bson.D{{Key: "scheduled_for", Value: -1}}).SetLimit(500))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var results []models.PublishJob
+	return results, cursor.All(ctx, &results)
+}
+
 func (r *PublishJobRepository) ListAll(limit, offset int64, platform string) ([]models.PublishJob, int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

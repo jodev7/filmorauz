@@ -303,6 +303,11 @@ func main() {
 	}
 	publishJobHandler := handlers.NewPublishJobHandler(publishJobRepo, clipRepo, seriesRepo, parserURL)
 
+	// Content folders — admin-curated clips (CapCut exports) with scheduling.
+	contentFolderRepo := repositories.NewContentFolderRepository(db)
+	contentClipRepo := repositories.NewContentClipRepository(db)
+	contentHandler := handlers.NewContentHandler(contentFolderRepo, contentClipRepo, publishJobRepo, uploadHandler, cfg, parserURL)
+
 	movieService.SetStorageDependencies(clipRepo, igScheduleRepo, publishJobRepo, b2Cleanup)
 	seriesService.SetStorageDependencies(clipRepo, igScheduleRepo, publishJobRepo, b2Cleanup)
 	movieService.SetJobRepository(jobRepo)
@@ -336,7 +341,7 @@ func main() {
 	}
 
 	// Register routes
-	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler)
+	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler)
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)
 	seoNotifier := buildSEONotifier(cfg, db)
@@ -387,7 +392,7 @@ func main() {
 	go startInstagramScheduler(igScheduleRepo, clipRepo, seriesRepo, parserURL)
 
 	// Start multi-platform publish job scheduler (runs every 60 seconds)
-	go startPublishJobScheduler(publishJobRepo, clipRepo, seriesRepo, parserURL)
+	go startPublishJobScheduler(publishJobRepo, clipRepo, contentClipRepo, seriesRepo, parserURL)
 
 	log.Printf("FilmoraUz API listening on :%s", cfg.Port)
 	if err := r.Run(":" + cfg.Port); err != nil {
@@ -590,20 +595,22 @@ func executeInstagramSchedule(
 func startPublishJobScheduler(
 	jobRepo *repositories.PublishJobRepository,
 	clipRepo *repositories.ClipRepository,
+	contentClipRepo *repositories.ContentClipRepository,
 	seriesRepo *repositories.SeriesRepository,
 	parserURL string,
 ) {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
-	runDuePublishJobs(jobRepo, clipRepo, seriesRepo, parserURL)
+	runDuePublishJobs(jobRepo, clipRepo, contentClipRepo, seriesRepo, parserURL)
 	for range ticker.C {
-		runDuePublishJobs(jobRepo, clipRepo, seriesRepo, parserURL)
+		runDuePublishJobs(jobRepo, clipRepo, contentClipRepo, seriesRepo, parserURL)
 	}
 }
 
 func runDuePublishJobs(
 	jobRepo *repositories.PublishJobRepository,
 	clipRepo *repositories.ClipRepository,
+	contentClipRepo *repositories.ContentClipRepository,
 	seriesRepo *repositories.SeriesRepository,
 	parserURL string,
 ) {
@@ -616,45 +623,60 @@ func runDuePublishJobs(
 		if job == nil {
 			return
 		}
-		log.Printf("[PublishScheduler] executing job=%s platform=%s account=%s clip=%s",
-			job.ID.Hex(), job.Platform, job.AccountName, job.ClipID.Hex())
-		go executePublishJob(jobRepo, clipRepo, seriesRepo, job, parserURL)
+		log.Printf("[PublishScheduler] executing job=%s platform=%s account=%s kind=%s",
+			job.ID.Hex(), job.Platform, job.AccountName, job.SourceKind)
+		go executePublishJob(jobRepo, clipRepo, contentClipRepo, seriesRepo, job, parserURL)
 	}
 }
 
 func executePublishJob(
 	jobRepo *repositories.PublishJobRepository,
 	clipRepo *repositories.ClipRepository,
+	contentClipRepo *repositories.ContentClipRepository,
 	seriesRepo *repositories.SeriesRepository,
 	job *models.PublishJob,
 	parserURL string,
 ) {
-	services.PopulateInstagramJobCode(context.Background(), job, clipRepo, seriesRepo)
+	// Movie/series clip caption derivation only runs for clip-derived jobs;
+	// content-folder jobs already carry the literal caption in CaptionOverride.
+	if job.SourceKind != "content" {
+		services.PopulateInstagramJobCode(context.Background(), job, clipRepo, seriesRepo)
+	}
 	mediaID, postURL, uploadErr := services.ExecutePlatformUpload(parserURL, job)
 
 	ctx := context.Background()
+	recordAggregateStatus := func(status string) {
+		if job.SourceKind == "content" {
+			if job.ContentClipID.IsZero() {
+				return
+			}
+			if err := contentClipRepo.RecordUpload(ctx, job.ContentClipID, status); err != nil {
+				log.Printf("[PublishScheduler] content RecordUpload(%s) clip=%s: %v", status, job.ContentClipID.Hex(), err)
+			}
+			return
+		}
+		// Legacy clip — only Instagram counter is tracked.
+		if job.Platform == models.PublishPlatformInstagram {
+			if err := clipRepo.RecordInstagramUpload(ctx, job.ClipID, status); err != nil {
+				log.Printf("[PublishScheduler] RecordInstagramUpload(%s) clip=%s: %v", status, job.ClipID.Hex(), err)
+			}
+		}
+	}
+
 	if uploadErr != nil {
 		errMsg := fmt.Sprintf("%v", uploadErr)
 		if err := jobRepo.MarkFailed(job.ID, errMsg); err != nil {
 			log.Printf("[PublishScheduler] MarkFailed error job=%s: %v", job.ID.Hex(), err)
 		}
-		if job.Platform == models.PublishPlatformInstagram {
-			if err := clipRepo.RecordInstagramUpload(ctx, job.ClipID, "failed"); err != nil {
-				log.Printf("[PublishScheduler] RecordInstagramUpload(failed) clip=%s: %v", job.ClipID.Hex(), err)
-			}
-		}
-		log.Printf("[instagram publish] failed reason=%s job=%s", errMsg, job.ID.Hex())
+		recordAggregateStatus("failed")
+		log.Printf("[publish] failed reason=%s job=%s kind=%s", errMsg, job.ID.Hex(), job.SourceKind)
 		return
 	}
 	if err := jobRepo.MarkSuccess(job.ID, mediaID, postURL); err != nil {
 		log.Printf("[PublishScheduler] MarkSuccess error job=%s: %v", job.ID.Hex(), err)
 	}
-	if job.Platform == models.PublishPlatformInstagram {
-		if err := clipRepo.RecordInstagramUpload(ctx, job.ClipID, "success"); err != nil {
-			log.Printf("[PublishScheduler] RecordInstagramUpload(success) clip=%s: %v", job.ClipID.Hex(), err)
-		}
-	}
-	log.Printf("[instagram publish] success job=%s platform=%s media_id=%s", job.ID.Hex(), job.Platform, mediaID)
+	recordAggregateStatus("success")
+	log.Printf("[publish] success job=%s platform=%s kind=%s media_id=%s", job.ID.Hex(), job.Platform, job.SourceKind, mediaID)
 }
 
 // startPremiumCleanupJob runs a background goroutine that cleans up expired premium subscriptions.

@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler) {
+func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler, contentHandler *handlers.ContentHandler) {
 	r.GET("/sitemap.xml", sitemapHandler.GetSitemapIndex)
 	r.GET("/sitemap-static.xml", sitemapHandler.GetSitemapStatic)
 	r.GET("/sitemap-genres.xml", sitemapHandler.GetSitemapGenres)
@@ -364,6 +364,22 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		admin.GET("/publish/jobs", publishJobHandler.ListAll)
 		admin.PATCH("/publish/jobs/:jobId", publishJobHandler.UpdateTime)
 		admin.DELETE("/publish/jobs/:jobId", publishJobHandler.Cancel)
+
+		// Content folders (admin-curated clips with scheduling)
+		admin.GET("/content/folders", contentHandler.ListFolders)
+		admin.POST("/content/folders", contentHandler.CreateFolder)
+		admin.GET("/content/folders/:id", contentHandler.GetFolder)
+		admin.PATCH("/content/folders/:id", contentHandler.UpdateFolder)
+		admin.DELETE("/content/folders/:id", contentHandler.DeleteFolder)
+		admin.GET("/content/folders/:id/clips", contentHandler.ListClips)
+		admin.POST("/content/folders/:id/clips", contentHandler.UploadClip)
+		admin.GET("/content/folders/:id/jobs", contentHandler.ListAllFolderJobs)
+		admin.POST("/upload/content-poster", contentHandler.UploadFolderPoster)
+		admin.PATCH("/content/clips/:clipId", contentHandler.UpdateClip)
+		admin.DELETE("/content/clips/:clipId", contentHandler.DeleteClip)
+		admin.POST("/content/clips/:clipId/publish/now", contentHandler.PublishNow)
+		admin.POST("/content/clips/:clipId/publish/schedule", contentHandler.Schedule)
+		admin.GET("/content/clips/:clipId/jobs", contentHandler.ListJobs)
 
 		// Suggestion management
 		admin.GET("/suggestions", suggestionHandler.AdminListSuggestions)

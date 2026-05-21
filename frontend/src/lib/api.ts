@@ -4256,3 +4256,274 @@ export function getRoomWebSocketURL(roomID: string, token: string, inviteCode?: 
   if (inviteCode) params.set("invite", inviteCode);
   return `${base}/ws/rooms/${roomID}?${params.toString()}`;
 }
+
+// ── Admin: Content folders (CapCut-style scheduled clips) ───────────────
+
+export interface ContentFolder {
+  id: string;
+  title: string;
+  slug: string;
+  poster_url?: string;
+  description?: string;
+  sort_order: number;
+  clips_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContentClip {
+  id: string;
+  folder_id: string;
+  title: string;
+  filename: string;
+  path: string;
+  url: string;
+  caption?: string;
+  storage_type: string;
+  size?: number;
+  duration?: number;
+  upload_count: number;
+  last_upload_status: "" | "success" | "failed";
+  last_upload_at?: string;
+  created_at: string;
+}
+
+export interface ContentPublishJob {
+  id: string;
+  content_clip_id: string;
+  content_folder_id: string;
+  source_kind: string;
+  clip_url: string;
+  movie_title: string;
+  platform: "instagram" | "youtube" | "tiktok";
+  account_name: string;
+  scheduled_for: string;
+  status: "pending" | "processing" | "success" | "failed";
+  caption_override?: string;
+  error?: string;
+  executed_at?: string;
+  published_at?: string;
+  instagram_post_url?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PublishAccountsResponse {
+  instagram: string[];
+  youtube: string[];
+  tiktok: string[];
+}
+
+export async function adminListContentFolders(token: string): Promise<ContentFolder[]> {
+  const res = await fetch(`${API_URL}/admin/content/folders`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to list folders");
+  const j = await res.json();
+  return j.data || [];
+}
+
+export async function adminCreateContentFolder(
+  token: string,
+  input: { title: string; poster_url?: string; description?: string; sort_order?: number }
+): Promise<ContentFolder> {
+  const res = await fetch(`${API_URL}/admin/content/folders`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error((e as { error?: string }).error || "Failed to create folder");
+  }
+  const j = await res.json();
+  return j.data;
+}
+
+export async function adminGetContentFolder(token: string, id: string): Promise<ContentFolder> {
+  const res = await fetch(`${API_URL}/admin/content/folders/${id}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Folder not found");
+  const j = await res.json();
+  return j.data;
+}
+
+export async function adminUpdateContentFolder(
+  token: string,
+  id: string,
+  patch: { title?: string; poster_url?: string; description?: string; sort_order?: number }
+): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/content/folders/${id}`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error("Failed to update folder");
+}
+
+export async function adminDeleteContentFolder(token: string, id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/content/folders/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error("Failed to delete folder");
+}
+
+export async function adminUploadContentPoster(
+  token: string,
+  file: File
+): Promise<{ url: string }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch(`${API_URL}/admin/upload/content-poster`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: fd,
+  });
+  if (!res.ok) throw new Error("Poster upload failed");
+  return res.json();
+}
+
+export async function adminListContentClips(
+  token: string,
+  folderId: string
+): Promise<ContentClip[]> {
+  const res = await fetch(`${API_URL}/admin/content/folders/${folderId}/clips`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to list clips");
+  const j = await res.json();
+  return j.data || [];
+}
+
+export async function adminUploadContentClip(
+  token: string,
+  folderId: string,
+  file: File,
+  title: string,
+  caption: string
+): Promise<ContentClip> {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("title", title);
+  fd.append("caption", caption);
+  const res = await fetch(`${API_URL}/admin/content/folders/${folderId}/clips`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: fd,
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error((e as { error?: string }).error || "Upload failed");
+  }
+  const j = await res.json();
+  return j.data;
+}
+
+export async function adminUpdateContentClip(
+  token: string,
+  clipId: string,
+  patch: { title?: string; caption?: string }
+): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/content/clips/${clipId}`, {
+    method: "PATCH",
+    headers: authHeaders(token),
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error("Failed to update clip");
+}
+
+export async function adminDeleteContentClip(token: string, clipId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/content/clips/${clipId}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error("Failed to delete clip");
+}
+
+export async function adminGetPublishAccounts(token: string): Promise<PublishAccountsResponse> {
+  const res = await fetch(`${API_URL}/admin/publish/accounts`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to list publish accounts");
+  return res.json();
+}
+
+export interface PublishTarget {
+  platform: "instagram" | "youtube" | "tiktok";
+  account_name: string;
+}
+
+export async function adminContentPublishNow(
+  token: string,
+  clipId: string,
+  jobs: PublishTarget[]
+): Promise<{ results: { platform: string; account_name: string; status: string; error?: string }[]; overall_status: string }> {
+  const res = await fetch(`${API_URL}/admin/content/clips/${clipId}/publish/now`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ jobs }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error((e as { error?: string }).error || "Publish failed");
+  }
+  return res.json();
+}
+
+export async function adminContentPublishSchedule(
+  token: string,
+  clipId: string,
+  jobs: PublishTarget[],
+  scheduledFor: string
+): Promise<{ count: number }> {
+  const res = await fetch(`${API_URL}/admin/content/clips/${clipId}/publish/schedule`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ jobs, scheduled_for: scheduledFor }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error((e as { error?: string }).error || "Schedule failed");
+  }
+  return res.json();
+}
+
+export async function adminContentListJobsForClip(
+  token: string,
+  clipId: string
+): Promise<ContentPublishJob[]> {
+  const res = await fetch(`${API_URL}/admin/content/clips/${clipId}/jobs`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) return [];
+  const j = await res.json();
+  return j.data || [];
+}
+
+export async function adminContentListJobsForFolder(
+  token: string,
+  folderId: string
+): Promise<ContentPublishJob[]> {
+  const res = await fetch(`${API_URL}/admin/content/folders/${folderId}/jobs`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) return [];
+  const j = await res.json();
+  return j.data || [];
+}
+
+export async function adminCancelPublishJob(token: string, jobId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/publish/jobs/${jobId}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error("Failed to cancel job");
+}

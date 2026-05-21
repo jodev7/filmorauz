@@ -48,4 +48,14 @@ type PublishJob struct {
 	InstagramPostURL string     `bson:"instagram_post_url,omitempty" json:"instagram_post_url,omitempty"`
 	PublishedAt      *time.Time `bson:"published_at,omitempty"       json:"published_at,omitempty"`
 	RetryCount       int        `bson:"retry_count,omitempty"        json:"retry_count,omitempty"`
+
+	// SourceKind distinguishes movie/series-derived clips ("clip", default
+	// for legacy rows) from admin-curated content folder clips ("content").
+	// When SourceKind == "content", ContentClipID + ContentFolderID identify
+	// the source and CaptionOverride is the literal caption to use — the
+	// caption builder's movie/series template is skipped.
+	SourceKind      string             `bson:"source_kind,omitempty"        json:"source_kind,omitempty"`
+	ContentClipID   primitive.ObjectID `bson:"content_clip_id,omitempty"    json:"content_clip_id,omitempty"`
+	ContentFolderID primitive.ObjectID `bson:"content_folder_id,omitempty"  json:"content_folder_id,omitempty"`
+	CaptionOverride string             `bson:"caption_override,omitempty"   json:"caption_override,omitempty"`
 }
