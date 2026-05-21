@@ -85,7 +85,7 @@ class KinolarSerialParser:
                 ep_soup = BeautifulSoup(ep_resp.text, "lxml")
                 entries = self._movie._extract_video_urls(ep_soup, full_href)
                 video_url = entries[0]["url"] if entries else ""
-                
+
                 grouped[key] = {
                     "season": season,
                     "episode": episode_no,
@@ -102,6 +102,45 @@ class KinolarSerialParser:
                 }
             except Exception as e:
                 logger.warning(f"[KINOLAR SERIAL] failed to fetch subpage S{season}E{episode_no}: {e}")
+
+        # Fallback: many kinolar.tv serial pages do not link out to per-episode
+        # subpages. Instead, the page embeds a hidden <p id="dispnone"> block
+        # with one row per episode: "<mp4-url> | duration | resolution | size".
+        # When the <a>-based scan returns nothing, parse that block directly.
+        if not grouped:
+            direct_url_re = re.compile(
+                r"https?://[^\s\"'<>]+?_(\d+)_qism\.mp4", re.IGNORECASE
+            )
+            dispnone = soup.select_one("#dispnone")
+            search_text = dispnone.get_text("\n", strip=True) if dispnone else resp.text
+            seen_urls = set()
+            for match in direct_url_re.finditer(search_text):
+                video_url = match.group(0)
+                if video_url in seen_urls:
+                    continue
+                seen_urls.add(video_url)
+                episode_no = int(match.group(1))
+                season = 1
+                key = (season, episode_no)
+                if key in grouped:
+                    continue
+                grouped[key] = {
+                    "season": season,
+                    "episode": episode_no,
+                    "season_number": season,
+                    "episode_number": episode_no,
+                    "title": f"{episode_no}-qism",
+                    "episode_url": url,
+                    "detail_url": url,
+                    "source_episode_url": url,
+                    "source_id": canonical_episode_id(parent_id, season, episode_no),
+                    "video_url": video_url,
+                    "poster": poster,
+                    "quality_urls": {},
+                }
+            logger.info(
+                f"[KINOLAR SERIAL] direct-mp4 fallback found {len(grouped)} episodes"
+            )
 
         episodes = list(grouped.values())
         episodes.sort(key=lambda x: (x["season"], x["episode"]))
