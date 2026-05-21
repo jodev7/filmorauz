@@ -1,5 +1,168 @@
 # Changelog
 
+## 2026-05-20 — SEO indexing pipeline, IG onboarding, admin clips overhaul
+
+A discovery + UX day, top to bottom. Google had 251 pages pending in
+Search Console for a month; the admin clips list mixed every movie
+and series into one flat page; Instagram visitors hitting the
+Telegram bot didn't understand what to do; the worker kept failing
+on a single corrupt-audio movie. Each got addressed end-to-end.
+
+### SEO — auto-indexing pipeline + sitemap rewrite
+
+- **New `services/seo` package**: IndexNow (Bing/Yandex/Seznam/Naver/
+  Yep — one POST hits all of them), Google Indexing API (stdlib RSA
+  JWT signing, no oauth2 dep), and Search Console sitemap resubmit.
+  A single `Notifier` facade fans out to all configured providers,
+  logging every submission into a 30-day-retention `seo_events`
+  Mongo collection. Movie/Series approval + update hooks fire async
+  pings so newly published content reaches Bing/Yandex within
+  minutes and Google's sitemap is re-read on every change. A 6-hour
+  cron resubmits the sitemap as a backstop.
+
+- **Sitemap split** (`backend/handlers/sitemap_handler.go`). The
+  legacy single-file sitemap got replaced with an index + per-section
+  files: `sitemap-static`, `sitemap-genres`, `sitemap-movies`,
+  `sitemap-series`, `sitemap-episodes`, and crucially
+  `sitemap-videos.xml` carrying `<video:video>` blocks per movie —
+  the entry point for Google Video Search. Frontend `sitemap.ts` /
+  `robots.ts` were removed; Next.js rewrites proxy
+  `/sitemap*.xml` and `/robots.txt` to the backend so MongoDB stays
+  the single source of truth.
+
+- **JSON-LD upgrades** (`frontend/src/app/layout.tsx`,
+  `app/movies/[slug]/page.tsx`). Root layout emits `Organization` +
+  `WebSite` + `SearchAction` (unlocks the sitelinks search box).
+  Movie detail pages now emit a `VideoObject` alongside the existing
+  `Movie` schema — required for Video Search.
+
+- **Admin SEO dashboard** at `/admin/seo`: provider status cards,
+  "re-ping all content" button, sitemap resubmit, per-URL textarea
+  re-ping, and a recent-events log surfacing per-provider errors.
+  Endpoints: `GET /api/admin/seo/status`, `POST /reindex`,
+  `POST /reindex/all`, `POST /sitemap-resubmit`.
+
+- **IndexNow key** published at
+  `frontend/public/<KEY>.txt`; full setup guide in `SEO_SETUP.md`
+  (Cloud Console steps, Search Console Owner role requirement,
+  Yandex/Bing Webmaster verification).
+
+### Worker — fix recurring HLS transcode failure on Munnaboy 3
+
+- **Pin audio channel layout via the filter graph**
+  (`worker/pipeline/hls_adaptive.go::createBaseVideo`). The download
+  succeeded (1.3 GB at 480p) but ffmpeg's auto-inserted
+  `auto_aresample_0` filter died on a single corrupt AAC frame that
+  reported a bogus 33-channel layout: *"Rematrix is needed between
+  33 channels and stereo but there is not enough information to do
+  it"*. `-ac 2` on the encoder side never helped because the filter
+  graph died before any data reached the encoder. Now the base-video
+  ffmpeg run inserts an explicit
+  `aresample=async=1,aformat=channel_layouts=stereo` chain upstream
+  of any auto filter — corrupt frames can no longer trigger a
+  mid-stream re-init. Probes for an audio stream first with
+  `ffprobe` so silent inputs fall back to `-an` instead of crashing
+  on `[0:a]`. Bumped `-max_muxing_queue_size` to 4096 to absorb late
+  audio packets caused by dropped frames.
+
+### Admin clips — tabs, search, genre filter, per-account view
+
+- **`GroupClips` extension** (`backend/repositories/`). Movie and
+  series clip-group structs now carry a `Genre` slice, enriched by
+  a bulk `$lookup`-style fetch against `movies` and `series` (one
+  round-trip per collection, cheap at admin scale). New
+  `GroupClipsFiltered` applies kind / `q` / genres / `only_unposted`
+  / sort / pagination in memory and returns `total_filtered` so the
+  UI can render a stable count badge while paging.
+
+- **New endpoints**: `GET /api/admin/clips/genres` (chip-selector
+  source) and `GET /api/admin/instagram/accounts/:name/stats`
+  (today / week / month upload counts).
+
+- **`InstagramAccount.Filter`**. Account JSON in
+  `INSTAGRAM_ACCOUNTS_JSON` now supports an optional
+  `{kind, genres, series_slugs, movie_slugs}` block. Backwards
+  compatible — accounts without `filter` accept every clip.
+  `ListInstagramAccounts` returns the filter rules (credentials
+  stripped) so the admin UI can label them and auto-route uploads.
+
+- **Frontend rewrite** (`app/admin/clips/page.tsx`). Three tabs
+  (Hammasi / Movies / Series) with live counts, a debounced search
+  box, multi-select genre chips, an account dropdown that shows
+  each account's filter rules inline, sort options (title / newest
+  / most_clips / least_posted), an "only IG-unposted" toggle, and
+  proper server-side pagination. Upload modal auto-selects every IG
+  account whose filter matches the clip's slug; falls back to the
+  first account otherwise.
+
+### Bot + frontend — Instagram onboarding & login UX
+
+- **`/start` two-message onboarding** (`bot/main.go`,
+  `bot/keyboards/`). New users arriving from Instagram now see a
+  short welcome with two CTA buttons (Open site, Top movies)
+  followed by a separate detailed walkthrough — actionable first,
+  readable second.
+
+- **`/code` result browser hint**. Caption now ends with
+  *"Long-press the button → Open in browser"* so users discover
+  Telegram's external-browser escape from the in-app webview.
+
+- **`/start movie_<code>` deep link**. Instagram captions can now
+  link straight to `t.me/FilmoraUzBot?start=movie_0001` and the
+  bot replies with the movie card immediately — no `/code` syntax
+  to learn. Reuses the existing subscription gate and `lookupMovie`
+  path. Backend `/api/public/movies/code/:code` already returns
+  series too, so the same `movie_<code>` prefix handles both
+  content kinds.
+
+- **Login success message rewrite**. The bot now acknowledges that
+  the original browser tab has already logged in (the polling on
+  the frontend caught it) and offers an optional "Open site" URL
+  button for users who prefer to continue inside Telegram.
+
+- **`TelegramLoginModal` auto-reload**
+  (`frontend/src/components/TelegramLoginModal.tsx`). On polling
+  success the modal now does a full `window.location.reload()`
+  after 1.5 s so server-rendered detail pages re-fetch with the
+  fresh auth cookie. UI shows a "Sahifa yangilanmoqda…" spinner
+  while the reload kicks in.
+
+- **In-app browser banner** (`frontend/src/lib/in-app-browser.ts` +
+  `components/InAppBrowserBanner.tsx`). Detects Telegram /
+  Instagram / Facebook webviews via UA + window probes and shows a
+  dismissible amber banner pointing users at the ⋯ menu's "Open in
+  browser" action. Dismiss state persists per-device via
+  localStorage. Mounted from `RootLayout`.
+
+### Clip pipeline — movie/series-aware overlay + IG caption
+
+- **Worker overlay** (`worker/pipeline/clip_generator.go`). Movie
+  clips now show `Kino kodi: X` on top and `Kino profilda!` on the
+  bottom; series clips show `Serial kodi: X` / `Serial profilda!`.
+  Series previously got mislabeled as "Kino" because the call site
+  copy-pasted the movie text.
+
+- **IG caption with hashtags + content-aware copy**
+  (`backend/services/instagram_caption_service.go`,
+  `publish_service.go`). `BuildInstagramClipCaption` now takes
+  `(code, isSeries)` and emits movie- or series-specific lead, code
+  label, and a tuned hashtag stack (brand + niche + broad +
+  discovery, under IG's 30-tag cap). `BuildYouTubeDescription`
+  follows the same pattern. New `IsSeriesClip` /
+  `IsSeriesContentKind` helpers exported so handlers can classify
+  consistently.
+
+- **`PublishJob.ContentKind` field**. Captured at job creation in
+  both the immediate-publish and scheduled-job paths so the caption
+  builder doesn't need a DB round-trip at publish time. Legacy rows
+  with empty `content_kind` render as movie captions (safe
+  default). Schedule-executor reloads the clip to classify when no
+  cached kind exists.
+
+- **Tests**: split `TestBuildInstagramClipCaption` into Movie /
+  Series cases covering both the lead text and the matching hashtag
+  block.
+
 ## 2026-05-20 — Watch-room polish + parser/worker ingestion unblock
 
 A big mixed-bag day: a critical guest-sync regression, mobile and

@@ -45,6 +45,9 @@ func (r *UserRepository) EnsureIndexes() error {
 		{
 			Keys: bson.D{{Key: "created_at", Value: -1}},
 		},
+		{
+			Keys: bson.D{{Key: "last_active_at", Value: -1}},
+		},
 	}
 
 	_, err := r.col.Indexes().CreateMany(ctx, indexes)
@@ -351,6 +354,37 @@ func (r *UserRepository) UpdateTelegramInfo(telegramID int64, username, firstNam
 		bson.M{"$set": setFields},
 	)
 	return err
+}
+
+// UpdateLastActive sets last_active_at to now for the given user. Used by
+// the presence heartbeat to power DAU/WAU/MAU counts.
+func (r *UserRepository) UpdateLastActive(userID primitive.ObjectID) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := r.col.UpdateOne(
+		ctx,
+		bson.M{"_id": userID},
+		bson.M{"$set": bson.M{"last_active_at": time.Now()}},
+	)
+	return err
+}
+
+// CountActiveSince returns the number of users whose last_active_at is >= since.
+// Falls back to last_login_at when last_active_at is missing (legacy users).
+func (r *UserRepository) CountActiveSince(since time.Time) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	return r.col.CountDocuments(ctx, bson.M{
+		"$or": []bson.M{
+			{"last_active_at": bson.M{"$gte": since}},
+			{
+				"last_active_at": bson.M{"$exists": false},
+				"last_login_at":  bson.M{"$gte": since},
+			},
+		},
+	})
 }
 
 func (r *UserRepository) UpdateLastLogin(userID primitive.ObjectID) error {

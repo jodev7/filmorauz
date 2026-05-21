@@ -12,6 +12,9 @@ type User struct {
 	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt   time.Time          `bson:"updated_at" json:"updated_at"`
 	LastLoginAt time.Time          `bson:"last_login_at" json:"last_login_at"`
+	// LastActiveAt is updated on every presence heartbeat from an authenticated
+	// client. Powers DAU/WAU/MAU admin metrics.
+	LastActiveAt time.Time `bson:"last_active_at,omitempty" json:"last_active_at,omitempty"`
 
 	// User-editable profile fields
 	DisplayName     string `bson:"display_name,omitempty" json:"display_name,omitempty"`

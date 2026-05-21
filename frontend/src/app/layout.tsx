@@ -7,6 +7,7 @@ import { AdSlotProvider } from "@/components/ads/AdSlotContext";
 import BanGuardWrapper from "@/components/BanGuardWrapper";
 import FixedBottomAd from "@/components/ads/FixedBottomAd";
 import InAppBrowserBanner from "@/components/InAppBrowserBanner";
+import PresencePinger from "@/components/PresencePinger";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 
@@ -145,6 +146,7 @@ export default function RootLayout({
           <I18nProvider>
             <AdSlotProvider>
               <BanGuardWrapper>
+                <PresencePinger />
                 <InAppBrowserBanner />
                 {children}
                 <FixedBottomAd placement="website_fixed_bottom" />

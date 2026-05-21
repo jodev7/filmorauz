@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Film, PlusCircle, List, ExternalLink, Users, UserPlus, Share2, Eye, Star, Tv } from "lucide-react";
+import { Film, PlusCircle, List, ExternalLink, Users, UserPlus, Share2, Eye, Star, Tv, Wifi, UserCheck, Globe, Activity, CalendarDays, CalendarRange } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { adminGetMovies, Movie, getAdminDashboardStats, getAdminShareStats, getAdminUserMetrics, getAdminTopMovies, getAdminTopSeries, DashboardStats, AdminShareStats, UserMetrics, TopContentItem } from "@/lib/api";
+import { adminGetMovies, Movie, getAdminDashboardStats, getAdminShareStats, getAdminUserMetrics, getAdminTopMovies, getAdminTopSeries, getAdminOnlineStats, DashboardStats, AdminShareStats, UserMetrics, TopContentItem, OnlineStats } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
 
@@ -23,6 +23,9 @@ export default function AdminDashboard() {
   // Top content
   const [topMovies, setTopMovies] = useState<TopContentItem[]>([]);
   const [topSeries, setTopSeries] = useState<TopContentItem[]>([]);
+
+  // Live activity (online + DAU/WAU/MAU). Refreshed on a short interval.
+  const [onlineStats, setOnlineStats] = useState<OnlineStats | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -45,6 +48,24 @@ export default function AdminDashboard() {
       })
       .catch(console.error)
       .finally(() => setLoading(false));
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    const load = () => {
+      getAdminOnlineStats(token)
+        .then((data) => {
+          if (!cancelled) setOnlineStats(data);
+        })
+        .catch(() => {});
+    };
+    load();
+    const t = setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
   }, [token]);
 
   const recentMovies = movies.slice(0, 5);
@@ -92,6 +113,98 @@ export default function AdminDashboard() {
         <p className="text-gray-500 text-sm mt-1">
           Xush kelibsiz{user?.display_name ? `, ${user.display_name}` : ""}. Bu yerda nima bo'layotganini ko'ring.
         </p>
+      </div>
+
+      {/* Live activity — online users (authed + anonymous) + DAU/WAU/MAU */}
+      <div className="mb-8 sm:mb-10">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+          </span>
+          <h2 className="text-base sm:text-lg font-semibold text-white">Jonli faollik</h2>
+          <span className="text-xs text-gray-500">har 15 soniyada yangilanadi</span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+          <div className="bg-brand-card border border-emerald-500/30 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-1.5">
+              <Wifi size={16} className="text-emerald-400" />
+              <span className="text-xs text-gray-400">Hozir onlayn</span>
+            </div>
+            <p className="text-2xl font-bold text-white">
+              {onlineStats ? onlineStats.online.total : "—"}
+            </p>
+            <p className="text-[11px] text-gray-500 mt-0.5">jami (auth + anonim)</p>
+          </div>
+
+          <div className="bg-brand-card border border-brand-border rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-1.5">
+              <UserCheck size={16} className="text-blue-400" />
+              <span className="text-xs text-gray-400">Login bo'lgan</span>
+            </div>
+            <p className="text-2xl font-bold text-white">
+              {onlineStats ? onlineStats.online.authenticated : "—"}
+            </p>
+            <p className="text-[11px] text-gray-500 mt-0.5">akkauntli onlayn</p>
+          </div>
+
+          <div className="bg-brand-card border border-brand-border rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-1.5">
+              <Globe size={16} className="text-amber-400" />
+              <span className="text-xs text-gray-400">Anonim</span>
+            </div>
+            <p className="text-2xl font-bold text-white">
+              {onlineStats ? onlineStats.online.anonymous : "—"}
+            </p>
+            <p className="text-[11px] text-gray-500 mt-0.5">mehmonlar onlayn</p>
+          </div>
+
+          <div className="bg-brand-card border border-brand-border rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-1.5">
+              <Activity size={16} className="text-pink-400" />
+              <span className="text-xs text-gray-400">DAU</span>
+            </div>
+            <p className="text-2xl font-bold text-white">
+              {onlineStats ? onlineStats.active.dau : "—"}
+            </p>
+            <p className="text-[11px] text-gray-500 mt-0.5">24 soat ichida</p>
+          </div>
+
+          <div className="bg-brand-card border border-brand-border rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-1.5">
+              <CalendarDays size={16} className="text-purple-400" />
+              <span className="text-xs text-gray-400">WAU</span>
+            </div>
+            <p className="text-2xl font-bold text-white">
+              {onlineStats ? onlineStats.active.wau : "—"}
+            </p>
+            <p className="text-[11px] text-gray-500 mt-0.5">7 kun ichida</p>
+          </div>
+
+          <div className="bg-brand-card border border-brand-border rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-1.5">
+              <CalendarRange size={16} className="text-cyan-400" />
+              <span className="text-xs text-gray-400">MAU</span>
+            </div>
+            <p className="text-2xl font-bold text-white">
+              {onlineStats ? onlineStats.active.mau : "—"}
+            </p>
+            <p className="text-[11px] text-gray-500 mt-0.5">30 kun ichida</p>
+          </div>
+
+          <div className="bg-brand-card border border-brand-border rounded-xl p-4 col-span-2 sm:col-span-3 lg:col-span-1">
+            <div className="flex items-center gap-2 mb-1.5">
+              <Tv size={16} className="text-gray-400" />
+              <span className="text-xs text-gray-400">Holat</span>
+            </div>
+            <p className="text-sm text-gray-300">
+              {onlineStats
+                ? `${onlineStats.online.authenticated} login, ${onlineStats.online.anonymous} anonim`
+                : "Yuklanmoqda..."}
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Movie Stats */}

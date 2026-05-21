@@ -2292,6 +2292,29 @@ export interface DashboardStats {
   };
 }
 
+// Live activity stats — online users (authed + anon) and DAU/WAU/MAU
+export interface OnlineStats {
+  online: {
+    authenticated: number;
+    anonymous: number;
+    total: number;
+  };
+  active: {
+    dau: number;
+    wau: number;
+    mau: number;
+  };
+}
+
+export async function getAdminOnlineStats(token: string): Promise<OnlineStats> {
+  const res = await fetch(`${API_URL}/admin/stats/online`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch online stats");
+  return res.json();
+}
+
 // Get admin dashboard stats including users
 export async function getAdminDashboardStats(token: string): Promise<DashboardStats> {
   const res = await fetch(`${API_URL}/admin/dashboard/stats`, {
