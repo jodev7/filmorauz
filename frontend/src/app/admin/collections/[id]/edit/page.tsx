@@ -277,12 +277,18 @@ export default function EditCollectionPage() {
           />
         </div>
 
-        {/* Poster URL */}
+        {/* Poster */}
         <div>
-          <label className="block text-gray-400 text-sm mb-2">Poster URL</label>
-          <label className="mb-2 flex items-center gap-2 cursor-pointer w-full bg-brand-card border border-brand-border rounded-lg px-3 py-2 text-sm text-gray-300 hover:border-brand-red transition-colors">
+          <label className="block text-gray-400 text-sm mb-2">Poster</label>
+          <label className="flex items-center gap-2 cursor-pointer w-full bg-brand-card border border-brand-border rounded-lg px-3 py-2 text-sm text-gray-300 hover:border-brand-red transition-colors">
             {uploadingPoster ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-            <span>{uploadingPoster ? "Uploading..." : "Upload poster"}</span>
+            <span>
+              {uploadingPoster
+                ? "Yuklanmoqda..."
+                : form.poster_url
+                ? "Posterni almashtirish"
+                : "Poster yuklash"}
+            </span>
             <input
               type="file"
               accept="image/jpeg,image/png,image/webp,image/gif"
@@ -294,13 +300,6 @@ export default function EditCollectionPage() {
               }}
             />
           </label>
-          <input
-            type="url"
-            value={form.poster_url}
-            onChange={(e) => setForm({ ...form, poster_url: e.target.value })}
-            className="w-full px-4 py-3 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-red-red"
-            placeholder="https://..."
-          />
           {form.poster_url ? (
             <MediaImage src={normalizeMediaUrl(form.poster_url)} alt="Poster preview" className="mt-2 h-24 rounded object-cover border border-brand-border" />
           ) : null}
