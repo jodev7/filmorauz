@@ -101,6 +101,13 @@ export default function RootLayout({
   return (
     <html lang="uz" className={`${bebasNeue.variable} ${inter.variable} ${poppins.variable}`}>
       <head>
+        {/*
+          Site Verification API token for the filmorauz-seo service account.
+          Required because the Search Console "Add user" dialog rejects
+          service-account emails — without this meta tag the SA can't be
+          registered as an owner and Indexing API / sitemap submissions 403.
+        */}
+        <meta name="google-site-verification" content="-JZgm6YLLXyLvbvkx4d8kwGgiscMACO5lJJ7ZNkKnIQ" />
         <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png" />
         <link rel="preconnect" href="https://cdn.filmorauz.net" crossOrigin="" />
         <link rel="preconnect" href="https://api.filmorauz.net" crossOrigin="" />
