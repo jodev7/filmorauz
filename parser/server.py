@@ -1014,11 +1014,13 @@ def _resolve_claimed_job_video(job: dict, parser_base_url: str) -> tuple[str, st
     detail_url = (job.get("detail_url") or "").strip()
 
     # Sources that hand out short-lived signed CDN URLs (e.g. freekino's
-    # a*.video-cdn.org with ?md5=&expires=, asilmedia's fayllar*.ru). The
-    # stored video_url is captured at /details time and frequently expires
-    # before the worker claims the job — re-resolve so we hand a fresh URL
-    # to the downloader. Other sources can keep using the stored value.
-    sources_with_signed_urls = {"freekino", "asilmedia"}
+    # a*.video-cdn.org with ?md5=&expires=, asilmedia's fayllar*.ru,
+    # uzmovi's srv*.uzdown.space which expires seconds after the Playwright
+    # session ends). The stored video_url is captured at /details time and
+    # frequently expires before the worker claims the job — re-resolve so
+    # we hand a fresh URL to the downloader. Other sources can keep using
+    # the stored value.
+    sources_with_signed_urls = {"freekino", "asilmedia", "uzmovi"}
     needs_refresh = source in sources_with_signed_urls and detail_url
 
     if stored_video_url and not needs_refresh:
