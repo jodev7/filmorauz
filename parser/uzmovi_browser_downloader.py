@@ -176,24 +176,51 @@ def download_uzmovi_video(
         finally:
             browser.close()
 
-    # Transcode .ts -> .mp4 (stream copy, no re-encode).
-    logger.info(f"[uzmovi-bd] transcoding {tmp_ts} -> {output_path}")
-    try:
-        cp = subprocess.run(
-            ["ffmpeg", "-y", "-i", tmp_ts, "-c", "copy", "-bsf:a", "aac_adtstoasc", output_path],
-            capture_output=True, timeout=1800,
+    # Sanity-check the .ts before handing it to ffmpeg — a 254/SIGINT-style
+    # failure on a missing or zero-byte input is otherwise indistinguishable
+    # from a real container problem.
+    if not os.path.exists(tmp_ts) or os.path.getsize(tmp_ts) == 0:
+        return _failure(
+            f"ts buffer missing or empty after segment download: {tmp_ts} exists={os.path.exists(tmp_ts)}",
+            started, segments_total, segments_done, bytes_done,
         )
-        if cp.returncode != 0:
-            return _failure(
-                f"ffmpeg returncode={cp.returncode} stderr={cp.stderr.decode('utf-8', errors='ignore')[:500]}",
-                started, segments_total, segments_done, bytes_done,
-            )
-    except Exception as e:
-        return _failure(f"ffmpeg invoke failed: {e}", started, segments_total, segments_done, bytes_done)
-    try:
-        os.unlink(tmp_ts)
-    except OSError:
-        pass
+
+    # Transcode .ts -> .mp4. Try stream copy first (fast); fall back to an
+    # audio re-encode if the input has an audio codec that the MP4 container
+    # rejects without re-muxing. KEEP the .ts on disk if both attempts fail
+    # so we can debug without re-downloading 700 MB of segments.
+    def _run_ffmpeg(extra_args):
+        cmd = ["ffmpeg", "-y", "-i", tmp_ts, "-loglevel", "warning"] + extra_args + [output_path]
+        logger.info(f"[uzmovi-bd] ffmpeg cmd: {' '.join(cmd)}")
+        try:
+            return subprocess.run(cmd, capture_output=True, timeout=1800)
+        except Exception as e:
+            return None, e
+
+    attempts = [
+        ["-c", "copy", "-bsf:a", "aac_adtstoasc"],     # fast path
+        ["-c:v", "copy", "-c:a", "aac", "-movflags", "+faststart"],  # audio re-encode
+    ]
+    last_err = ""
+    for i, extra in enumerate(attempts):
+        cp = _run_ffmpeg(extra)
+        if isinstance(cp, tuple):
+            last_err = f"ffmpeg invoke failed: {cp[1]}"
+            continue
+        if cp.returncode == 0:
+            try:
+                os.unlink(tmp_ts)
+            except OSError:
+                pass
+            break
+        # Take the TAIL of stderr — ffmpeg dumps its banner+config to stderr
+        # before the actual error, so the head is useless. 2000 chars is
+        # enough to see the failing demuxer line + cause.
+        tail = cp.stderr.decode("utf-8", errors="ignore")[-2000:]
+        last_err = f"ffmpeg attempt {i+1} returncode={cp.returncode} tail={tail!r}"
+        logger.error(f"[uzmovi-bd] {last_err}")
+    else:
+        return _failure(last_err, started, segments_total, segments_done, bytes_done)
 
     file_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
     logger.info(
