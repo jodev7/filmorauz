@@ -146,3 +146,22 @@ func (g *googleTokenSource) Token() (string, error) {
 }
 
 func (g *googleTokenSource) Email() string { return g.account.ClientEmail }
+
+// GoogleTokenSource is the public-facing handle returned by
+// NewGoogleTokenSourceForTool. Used by cmd/seo-verify-sa so the verification
+// CLI can reuse the same RS256 signing path as the in-process services.
+type GoogleTokenSource struct{ inner *googleTokenSource }
+
+// NewGoogleTokenSourceForTool exposes the package-private constructor for
+// out-of-process tools. Not intended for runtime services — they should keep
+// using the unexported helpers.
+func NewGoogleTokenSourceForTool(credentialsPath string, scopes ...string) (*GoogleTokenSource, error) {
+	ts, err := newGoogleTokenSource(credentialsPath, scopes...)
+	if err != nil {
+		return nil, err
+	}
+	return &GoogleTokenSource{inner: ts}, nil
+}
+
+func (g *GoogleTokenSource) Token() (string, error) { return g.inner.Token() }
+func (g *GoogleTokenSource) Email() string          { return g.inner.Email() }
