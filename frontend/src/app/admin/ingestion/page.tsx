@@ -2449,7 +2449,11 @@ export default function IngestionPage() {
   const [totalJobs, setTotalJobs] = useState<number>(0);
   const [statusCounts, setStatusCounts] = useState<Record<string, number> | null>(null);
   const [pageSize] = useState<number>(30); // Default page size
-  const [currentFilter, setCurrentFilter] = useState<JobFilter>("all");
+  // Default to "active" — when the user has many queued imports the
+  // "all" view sorts newest-created first, which buries actively
+  // downloading/processing items behind freshly-queued ones the user
+  // doesn't need to watch.
+  const [currentFilter, setCurrentFilter] = useState<JobFilter>("active");
   const [retryingStage, setRetryingStage] = useState<{jobId: string; stage: string} | null>(null);
   const [syncEnabled, setSyncEnabled] = useState<boolean>(false);
   // Lightweight green toast shown when an import is accepted into the job
@@ -2552,9 +2556,13 @@ export default function IngestionPage() {
     // Immediate fetch when sync is enabled and viewing jobs
     fetchJobsRef.current();
 
+    // 3s instead of 1s — 1Hz polling against a 3-stage aggregation
+    // pipeline made tab switching feel unresponsive on busy queues.
+    // Active-only default keeps the result small, and a 3s heartbeat
+    // is plenty for "is this still moving?" UX.
     const interval = setInterval(() => {
       fetchJobsRef.current();
-    }, 1000);
+    }, 3000);
 
     return () => clearInterval(interval);
   }, [hasInitialized, token, activeTab, syncEnabled]); // fetchJobsRef is stable
