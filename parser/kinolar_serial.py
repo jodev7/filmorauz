@@ -22,7 +22,26 @@ class KinolarSerialParser:
         logger.info(f"[KINOLAR SERIAL] parse start url={url}")
         resp = self.session.get(url, timeout=30)
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "lxml")
+        html_text = resp.text
+        soup = BeautifulSoup(html_text, "lxml")
+
+        # kinolar.tv injects the episode <a> list (with faylmovi.ru direct
+        # .mp4 hrefs) via JS after page load, mirroring uzmovi's rebuild.
+        # Probe the static DOM first; if it carries no qism/часть anchors
+        # AND no _qism.mp4 in #dispnone, swap in a headless-rendered copy.
+        def _has_episode_signal(s: BeautifulSoup, raw: str) -> bool:
+            for a in s.find_all("a", href=True):
+                t = (a.get_text(" ", strip=True) or "").lower()
+                if "qism" in t or "часть" in t or "episode" in t:
+                    return True
+            return "_qism.mp4" in raw.lower()
+
+        if not _has_episode_signal(soup, html_text):
+            rendered = self._render_with_playwright(url)
+            if rendered:
+                html_text = rendered
+                soup = BeautifulSoup(html_text, "lxml")
+                logger.info(f"[KINOLAR SERIAL] playwright fallback DOM len={len(html_text)}")
 
         title = ""
         title_el = soup.select_one("h1, .title, .film-title")
@@ -49,15 +68,18 @@ class KinolarSerialParser:
             description = clean_text(ogd.get("content", ""))
         
         year = 0
-        m_year = re.search(r"(19|20)\d{2}", title) or re.search(r"(19|20)\d{2}", resp.text[:6000])
+        m_year = re.search(r"(19|20)\d{2}", title) or re.search(r"(19|20)\d{2}", html_text[:6000])
         if m_year:
             year = int(m_year.group(0))
 
         parent_id = extract_source_id(url)
         grouped: Dict[tuple[int, int], Dict] = {}
 
-        episode_re = re.compile(r"^(\d+)\s*-\s*qism$", re.IGNORECASE)
-        season_ep_re = re.compile(r"^(?:(\d+)\s*-\s*fasl\s+)?(\d+)\s*-\s*qism$", re.IGNORECASE)
+        # JS-rendered anchor text on kinolar.tv now reads "1-qism | Часть 1"
+        # (and similar dual-locale labels), so the old `^...$` anchored regex
+        # missed every episode. Use .search() against a relaxed pattern.
+        episode_re = re.compile(r"\b(\d+)\s*-\s*qism\b", re.IGNORECASE)
+        season_ep_re = re.compile(r"\b(?:(\d+)\s*-\s*fasl\s+)?(\d+)\s*-\s*qism\b", re.IGNORECASE)
         seen_hrefs = set()
         ep_links = []
         
@@ -78,6 +100,27 @@ class KinolarSerialParser:
         for full_href, season, episode_no, label in ep_links:
             key = (season, episode_no)
             if key in grouped:
+                continue
+            # JS-rendered anchors on kinolar.tv now point straight at a
+            # direct .mp4 on faylmovi.ru (no per-episode HTML wrapper).
+            # When the href IS the playable URL, skip the subpage fetch —
+            # otherwise self.session.get would download the entire video.
+            direct_lower = full_href.lower()
+            if direct_lower.endswith((".mp4", ".m3u8", ".mpd", ".ism")):
+                grouped[key] = {
+                    "season": season,
+                    "episode": episode_no,
+                    "season_number": season,
+                    "episode_number": episode_no,
+                    "title": f"{episode_no}-qism",
+                    "episode_url": full_href,
+                    "detail_url": url,
+                    "source_episode_url": full_href,
+                    "source_id": canonical_episode_id(parent_id, season, episode_no),
+                    "video_url": full_href,
+                    "poster": poster,
+                    "quality_urls": {},
+                }
                 continue
             try:
                 logger.info(f"[KINOLAR SERIAL] fetching subpage S{season}E{episode_no} url={full_href}")
@@ -112,7 +155,7 @@ class KinolarSerialParser:
                 r"https?://[^\s\"'<>]+?_(\d+)_qism\.mp4", re.IGNORECASE
             )
             dispnone = soup.select_one("#dispnone")
-            search_text = dispnone.get_text("\n", strip=True) if dispnone else resp.text
+            search_text = dispnone.get_text("\n", strip=True) if dispnone else html_text
             seen_urls = set()
             for match in direct_url_re.finditer(search_text):
                 video_url = match.group(0)
@@ -166,3 +209,31 @@ class KinolarSerialParser:
             "episodes": episodes,
             "seasons": seasons,
         }
+    def _render_with_playwright(self, url: str) -> str:
+        """Headless-render the serial page; kinolar.tv injects the per-episode
+        <a> list and direct faylmovi.ru .mp4 URLs via JS, so a plain
+        requests.get can never see them.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.warning("[KINOLAR SERIAL] playwright not installed; skipping JS render fallback")
+            return ""
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+                ctx = browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    ),
+                )
+                page = ctx.new_page()
+                page.goto(url, wait_until="networkidle", timeout=45000)
+                page.wait_for_timeout(6000)
+                html = page.content()
+                browser.close()
+                return html
+        except Exception as e:
+            logger.error(f"[KINOLAR SERIAL] playwright render failed: {e}")
+            return ""
