@@ -124,11 +124,22 @@ class UzmoviSerialParser:
         logger.info(f"[uzmovi serial] source_id={source_id} title={title!r}")
 
         episode_candidates, source_counts = self._collect_episode_candidates(soup, resp.text, source_id)
-        
+
+        # uzmovi.net rebuild moved episode buttons into a JS-rendered block —
+        # the static HTML carries the page chrome but no /episode/<gid>/<ep>
+        # links. Fall back to a headless browser render, parse THAT DOM with
+        # the existing collector. Same trick the movie downloader uses.
+        if not episode_candidates:
+            rendered_html = self._render_with_playwright(url)
+            if rendered_html:
+                rsoup = BeautifulSoup(rendered_html, "lxml")
+                episode_candidates, source_counts = self._collect_episode_candidates(rsoup, rendered_html, source_id)
+                logger.info(f"[uzmovi serial] playwright-rendered: found episode buttons: {source_counts.get('visible', 0)}")
+
         # Deep Trace: Log extracted candidates
         for cand in episode_candidates:
              logger.debug(f"[UZMOVI SERIAL] Extracted candidate: identity={cand.get('identity')} title={cand.get('title')} url={cand.get('episode_url')}")
-        
+
         logger.info(f"[uzmovi serial] found episode buttons: {source_counts.get('visible', 0)}")
         if not episode_candidates:
             return {
@@ -817,6 +828,41 @@ class UzmoviSerialParser:
                 if expected not in by_season[season_no]:
                     missing.append(expected)
         return missing
+
+    def _render_with_playwright(self, url: str) -> str:
+        """Headless-render the serial page and return the final HTML.
+
+        uzmovi.net injects the episode-button block via JavaScript after
+        page load, so a plain requests.get can never see it. We share the
+        same Playwright path the movie downloader uses (no-sandbox for
+        root, settle for ~6s to let the player JS attach episode links).
+        Returns an empty string on any failure so the caller can fall
+        through to the standard "no episodes" error.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.warning("[uzmovi serial] playwright not installed; skipping JS render fallback")
+            return ""
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+                ctx = browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    ),
+                )
+                page = ctx.new_page()
+                page.goto(url, wait_until="networkidle", timeout=45000)
+                page.wait_for_timeout(6000)
+                html = page.content()
+                browser.close()
+                logger.info(f"[uzmovi serial] playwright rendered html_len={len(html)}")
+                return html
+        except Exception as e:
+            logger.error(f"[uzmovi serial] playwright render failed: {e}")
+            return ""
 
     def _get_with_retry(self, url: str, label: str = "fetch", attempts: int = 3, timeout: int = 45,
                         headers: Optional[Dict[str, str]] = None):
