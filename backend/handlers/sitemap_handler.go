@@ -269,9 +269,9 @@ func (h *SitemapHandler) GetSitemapEpisodes(c *gin.Context) {
 }
 
 // GetSitemapVideos serves the Google Video sitemap. One <video:video>
-// block per movie. Series episodes are intentionally omitted for now
-// because we don't have per-episode poster/duration in the sitemap
-// projection — they can be added by extending SitemapEpisodeRecord.
+// block per movie and one per episode (episode thumbnail falls back to
+// the series poster when absent — Google rejects entries with no
+// <video:thumbnail_loc>).
 func (h *SitemapHandler) GetSitemapVideos(c *gin.Context) {
 	movies, err := h.movieRepo.ListPublishedForSitemap()
 	if err != nil {
@@ -325,7 +325,86 @@ func (h *SitemapHandler) GetSitemapVideos(c *gin.Context) {
 			},
 		})
 	}
-	log.Printf("[sitemap-videos] generated entries=%d", len(set.URLs))
+	movieCount := len(set.URLs)
+
+	// Episodes: emit a <video:video> per episode. Falls back to the series
+	// poster when the episode has no thumbnail_url of its own — Google
+	// rejects entries that are missing the <video:thumbnail_loc> tag.
+	if seriesList, err := h.seriesRepo.ListPublishedForSitemap(); err == nil {
+		ids := make([]primitive.ObjectID, 0, len(seriesList))
+		seriesByID := make(map[primitive.ObjectID]repositories.SitemapSeriesRecord, len(seriesList))
+		for _, s := range seriesList {
+			ids = append(ids, s.ID)
+			seriesByID[s.ID] = s
+		}
+		seasons, _ := h.seriesRepo.GetSeasonsBySeriesIDs(ids)
+		seasonByID := make(map[primitive.ObjectID]repositories.SitemapSeasonRecord, len(seasons))
+		for _, season := range seasons {
+			seasonByID[season.ID] = season
+		}
+		episodes, _ := h.seriesRepo.GetEpisodesBySeriesIDs(ids)
+		for _, ep := range episodes {
+			series, sOK := seriesByID[ep.SeriesID]
+			season, snOK := seasonByID[ep.SeasonID]
+			if !sOK || !snOK {
+				continue
+			}
+			thumb := strings.TrimSpace(ep.ThumbnailURL)
+			if thumb == "" {
+				thumb = strings.TrimSpace(series.PosterURL)
+			}
+			if thumb == "" {
+				continue
+			}
+			thumb = absoluteMediaURL(thumb, h.baseSiteURL)
+
+			var loc, player string
+			if strings.TrimSpace(series.Slug) != "" && season.SeasonNumber > 0 && ep.EpisodeNumber > 0 {
+				loc = fmt.Sprintf("%s/series/%s/season/%d/episode/%d", h.baseSiteURL, series.Slug, season.SeasonNumber, ep.EpisodeNumber)
+				player = loc
+			} else if !ep.ID.IsZero() {
+				loc = fmt.Sprintf("%s/episode/%s", h.baseSiteURL, ep.ID.Hex())
+				player = loc
+			} else {
+				continue
+			}
+
+			title := strings.TrimSpace(ep.Title)
+			if title == "" {
+				seriesTitle := strings.TrimSpace(series.Title)
+				if seriesTitle == "" {
+					seriesTitle = series.Slug
+				}
+				title = fmt.Sprintf("%s — S%dE%d", seriesTitle, season.SeasonNumber, ep.EpisodeNumber)
+			}
+			desc := strings.TrimSpace(series.Description)
+			if desc == "" {
+				desc = title
+			}
+			if len(desc) > 2000 {
+				desc = desc[:2000]
+			}
+			pub := ep.CreatedAt
+			if pub.IsZero() {
+				pub = ep.UpdatedAt
+			}
+			set.URLs = append(set.URLs, videoSitemapURL{
+				Loc: loc,
+				Video: &videoSitemapV{
+					ThumbnailLoc:    thumb,
+					Title:           title,
+					Description:     desc,
+					PlayerLoc:       player,
+					Duration:        ep.Duration * 60,
+					PublicationDate: formatTime(pub),
+					FamilyFriendly:  "yes",
+					Live:            "no",
+				},
+			})
+		}
+	}
+
+	log.Printf("[sitemap-videos] generated entries=%d (movies=%d episodes=%d)", len(set.URLs), movieCount, len(set.URLs)-movieCount)
 	writeXML(c, set)
 }
 

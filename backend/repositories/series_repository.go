@@ -45,6 +45,10 @@ type SitemapEpisodeRecord struct {
 	SeasonID      primitive.ObjectID `bson:"season_id"`
 	EpisodeNumber int                `bson:"episode_number"`
 	UpdatedAt     time.Time          `bson:"updated_at"`
+	Title         string             `bson:"title,omitempty"`
+	ThumbnailURL  string             `bson:"thumbnail_url,omitempty"`
+	Duration      int                `bson:"duration,omitempty"`
+	CreatedAt     time.Time          `bson:"created_at,omitempty"`
 }
 
 func normalizeSeriesGenres(genres []string) []string {
@@ -251,6 +255,10 @@ func (r *SeriesRepository) GetEpisodesBySeriesIDs(seriesIDs []primitive.ObjectID
 			"season_id":      1,
 			"episode_number": 1,
 			"updated_at":     1,
+			"title":          1,
+			"thumbnail_url":  1,
+			"duration":       1,
+			"created_at":     1,
 		}).
 		SetSort(bson.D{
 			{Key: "series_id", Value: 1},
