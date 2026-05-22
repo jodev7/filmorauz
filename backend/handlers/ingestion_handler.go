@@ -1220,16 +1220,21 @@ func (h *IngestionHandler) UpdateJobProgress(c *gin.Context) {
 			update := bson.A{
 				bson.M{
 					"$set": bson.M{
-						"local_path":               resolvedPath,
-						"file_path":                resolvedPath,
-						"downloaded_file_path":     resolvedPath,
-						"status":                   models.IngestionStatusReadyToProcess,
-						"stage":                    "ready_to_process",
-						"progress":                 progressValue,
-						"updated_at":               now,
-						"error":                    "",
-						"steps.download":           true,
-						"steps.process":            false,
+						"local_path":           resolvedPath,
+						"file_path":            resolvedPath,
+						"downloaded_file_path": resolvedPath,
+						"status":               models.IngestionStatusReadyToProcess,
+						"stage":                "ready_to_process",
+						"progress":             progressValue,
+						"updated_at":           now,
+						"error":                "",
+						"steps.download":       true,
+						"steps.process":        false,
+						// Reset retry_count: a fresh download succeeded, so
+						// the processing claim filter (retry_count<3) must
+						// not skip this job because of prior download
+						// failures.
+						"retry_count":              0,
 						"download_finished_at":     bson.M{"$ifNull": bson.A{"$download_finished_at", now}},
 						"queued_for_processing_at": bson.M{"$ifNull": bson.A{"$queued_for_processing_at", now}},
 					},

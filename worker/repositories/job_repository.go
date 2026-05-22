@@ -1275,15 +1275,21 @@ func (r *JobRepository) TransitionToProcessing(ctx context.Context, id, localPat
 	update := bson.A{
 		bson.M{
 			"$set": bson.M{
-				"status":                   models.IngestionStatusReadyToProcess,
-				"stage":                    "ready_to_process",
-				"progress":                 100,
-				"local_path":               localPath,
-				"steps.download":           true,
-				"error":                    "",
-				"message":                  "Download complete but waiting for processing",
-				"worker_id":                "",
-				"updated_at":               now,
+				"status":         models.IngestionStatusReadyToProcess,
+				"stage":          "ready_to_process",
+				"progress":       100,
+				"local_path":     localPath,
+				"steps.download": true,
+				"error":          "",
+				"message":        "Download complete but waiting for processing",
+				"worker_id":      "",
+				"updated_at":     now,
+				// Reset retry_count so the processing claim filter
+				// (retry_count<3) doesn't skip jobs that succeeded on a
+				// later download attempt. Prior retries were about download
+				// failures, not processing — start the processing budget
+				// fresh now that we have a valid local_path.
+				"retry_count":              0,
 				"download_finished_at":     bson.M{"$ifNull": bson.A{"$download_finished_at", now}},
 				"queued_for_processing_at": bson.M{"$ifNull": bson.A{"$queued_for_processing_at", now}},
 			},
