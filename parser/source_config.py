@@ -9,16 +9,13 @@ SOURCES = {
     "uzmovi": {
         "base_url": "https://uzmovi.net",
         "search_paths": [
-            "/index.php",
             "/search",
-            "/",
         ],
-        "search_method": "GET",  # uzmovi.com → uzmovi.net 404s on POST; GET with query string works
-        "search_params": {
-            "do": "search",
-            "subaction": "search",
-        },
-        "search_param_key": "story",
+        # Real form on uzmovi.net: <form action="/search" method="get"><input name="q"></form>.
+        # Sending DLE-style params (do=search&subaction=search&story=) returns the homepage.
+        "search_method": "GET",
+        "search_params": {},
+        "search_param_key": "q",
     },
     "freekino": {
         "base_url": "https://freekino.net",

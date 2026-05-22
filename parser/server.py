@@ -3994,17 +3994,31 @@ class ParserHandler(BaseHTTPRequestHandler):
 
                 result = {"speech_segments": [], "face_frames": []}
 
-                # ── Whisper speech analysis (full video, chunked) ─────────────
+                # ── Whisper speech analysis ───────────────────────────────────
+                # Full-movie CPU transcription was taking 30–90+ min per job and
+                # stalling the pipeline at "creating_movie". Two changes:
+                #   1. Cache the loaded model on the handler class so the ~5s
+                #      model load isn't repeated for every call (3 concurrent
+                #      jobs each reloaded ~150MB into RAM).
+                #   2. Cap audio extraction to the first AI_AUDIO_LIMIT_SEC
+                #      seconds. Clip selection only needs *some* speech signal
+                #      to bias toward dialogue-rich moments; we don't need a
+                #      full transcript of a 2-hour film.
                 tmp_audio = None
+                AI_AUDIO_LIMIT_SEC = int(_os.environ.get("AI_AUDIO_LIMIT_SEC", "600"))
                 try:
                     import whisper as _whisper
                     tmp_audio = _tmp.mktemp(suffix=".wav")
-                    # Extract full audio — no duration limit
-                    _sp.run(
-                        ["ffmpeg", "-y", "-i", video_path, "-ac", "1", "-ar", "16000", tmp_audio],
-                        capture_output=True,
-                    )
-                    model = _whisper.load_model("base")
+                    ffmpeg_cmd = ["ffmpeg", "-y", "-i", video_path,
+                                  "-ac", "1", "-ar", "16000"]
+                    if AI_AUDIO_LIMIT_SEC > 0:
+                        ffmpeg_cmd += ["-t", str(AI_AUDIO_LIMIT_SEC)]
+                    ffmpeg_cmd.append(tmp_audio)
+                    _sp.run(ffmpeg_cmd, capture_output=True)
+                    model = getattr(ParserHandler, "_whisper_model", None)
+                    if model is None:
+                        model = _whisper.load_model("base")
+                        ParserHandler._whisper_model = model
                     wresult = model.transcribe(tmp_audio, fp16=False, verbose=False)
                     result["speech_segments"] = [
                         {"start": s["start"], "end": s["end"], "text": s["text"].strip()}
