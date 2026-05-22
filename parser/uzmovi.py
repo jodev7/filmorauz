@@ -1622,8 +1622,13 @@ class UzmoviParser(BaseParser):
                 invalid_rejected += 1
                 continue
             
-            # PROBE validation: ensure the URL is actually reachable and serves media
-            if not self._validate_video_url(url, referer=page_url):
+            # PROBE validation: ensure the URL is actually reachable and serves media.
+            # Skip the probe for URLs that already returned 200/206 inside the live
+            # Playwright session — uzdown.space signed URLs expire seconds after first
+            # use, so a fresh HEAD from outside the browser context always 403s/301s.
+            if media.get("verified"):
+                logger.info(f"[UZMOVI]   ACCEPTED (playwright-verified, probe skipped): {url[:100]}...")
+            elif not self._validate_video_url(url, referer=page_url):
                 logger.info(f"[UZMOVI]   REJECTED (probe failed): {url[:100]}... (type: {media.get('type', 'unknown')})")
                 invalid_rejected += 1
                 continue
@@ -1751,11 +1756,36 @@ class UzmoviParser(BaseParser):
             
             with sync_playwright() as p:
                 # Launch headless Chromium
-                browser = p.chromium.launch(headless=True)
+                browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
                 context = browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 )
                 page = context.new_page()
+
+                # Capture media URLs that ACTUALLY returned 200/206. These bypass
+                # the post-extraction HEAD probe in _dedupe_media_urls — uzdown.space
+                # signed URLs expire seconds after the browser uses them, so a
+                # subsequent HEAD from a fresh session gets 301/403 even though
+                # the URL was valid in real-time. Trusting the browser's own
+                # status code is the only reliable signal.
+                verified_urls: dict = {}
+
+                def _capture_network(resp):
+                    try:
+                        u = resp.url
+                        if resp.status not in (200, 206):
+                            return
+                        ul = u.lower()
+                        if not any(s in ul for s in (".m3u8", ".mpd", ".mp4", "uzdown")):
+                            return
+                        # Skip segment-level URLs (.m4s, .ts) — we want the manifest
+                        if ul.endswith((".m4s", ".ts")) or "seg-" in ul or "/seg/" in ul:
+                            return
+                        verified_urls[u] = resp.status
+                    except Exception:
+                        pass
+
+                page.on("response", _capture_network)
                 
                 # Navigate to the page - use domcontentloaded (NOT networkidle - uzmovi keeps connections alive)
                 if DEBUG:
@@ -1913,8 +1943,20 @@ class UzmoviParser(BaseParser):
                     if DEBUG:
                         logger.info(f"[UZMOVI] Error in JS runtime scan: {e}")
                 
+                # Promote network-verified URLs ahead of DOM-scraped ones so
+                # they survive deduplication and skip the offline HEAD probe.
+                for vurl in verified_urls:
+                    media_urls.insert(0, {
+                        "url": vurl,
+                        "quality": "auto",
+                        "type": classify_media_url(vurl),
+                        "verified": True,
+                    })
+                if verified_urls:
+                    logger.info(f"[UZMOVI] Playwright network: captured {len(verified_urls)} URLs that returned 200/206")
+
                 browser.close()
-            
+
             # Deduplicate
             media_urls = self._dedupe_media_urls(media_urls, page_url=url)
             
