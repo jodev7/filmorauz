@@ -296,7 +296,17 @@ func (p *Pipeline) ProcessJob(ctx context.Context, job *models.IngestionJob) err
 		jobID := job.ID.Hex()
 		err := p.processJobWithRecovery(ctx, job)
 		if err != nil {
-			// Ensure job is marked as failed on any error
+			// Shutdown / cancellation is transient — leave the job in its
+			// current status so RecoverStaleJobs requeues it on next worker
+			// startup. Marking it as failed here turns a clean restart into
+			// permanent data loss (which is exactly what bit the three
+			// asilmedia jobs during a 08:57 systemctl restart mid-clip-gen).
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+				log.Printf("[PIPELINE] job %s interrupted by shutdown (%v); leaving for recovery on next start", jobID, err)
+				panicChan <- err
+				return
+			}
+			// Ensure job is marked as failed on any other error
 			p.failJob(jobID, fmt.Sprintf("Pipeline failed: %v", err))
 			panicChan <- err
 			return
@@ -779,15 +789,27 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 	// Generate 12 promotional clips after successful video + MongoDB save.
 	// Clips are generated from the final processed movie (base_video.mp4).
 	var clipGenerationFailed bool
+	var clipInterrupted bool
 	log.Printf("[STAGE] clip_generation start — movie code=%s, folder=%s, processed_master=%s", movieResult.Code, canonicalFolderName, processedMasterPath)
 	log.Printf("[CHECKPOINT] clip_input_path: %s", processedMasterPath)
 	if movieResult != nil && movieResult.Code != "" {
 		if clipErr := p.generateClips(ctx, canonicalFolderName, movieResult.Code, movieResult, processedMasterPath, finalUploadsPath); clipErr != nil {
 			log.Printf("[CLIP] ERROR: Clip generation failed: %v", clipErr)
-			clipGenerationFailed = true
+			// Worker shutdown mid-clip is not a real clip failure — surface
+			// the ctx error so ProcessJob's shutdown path can leave the job
+			// in its current status for the next-start recovery, instead of
+			// permanently failing a movie that's otherwise fully ingested.
+			if errors.Is(clipErr, context.Canceled) || ctx.Err() != nil {
+				clipInterrupted = true
+			} else {
+				clipGenerationFailed = true
+			}
 		} else {
 			log.Printf("[STAGE] clip_generation end — clips generated from final movie")
 		}
+	}
+	if clipInterrupted {
+		return fmt.Errorf("clip generation interrupted by shutdown: %w", context.Canceled)
 	}
 	if movieResult != nil && movieResult.MovieID != nil {
 		clipsStatus := "completed"
