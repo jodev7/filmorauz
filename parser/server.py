@@ -348,42 +348,86 @@ def _run_uzmovi_browser_download(
 ):
     """Adapt download_uzmovi_video() to the shape smart_download() returns.
 
-    progress_state_cb is the existing (percent, downloaded, total, speed, eta)
-    callback that wires into DownloadState — we translate segment progress
-    into the same shape so the worker watchdog and admin UI see normal
-    progress updates.
+    Wires three progress channels so the worker watchdog never sees a stuck
+    job during the ~13s manifest fetch + per-segment download phase:
+      1) progress_state_cb — updates the in-memory DownloadState (admin UI).
+      2) downloader_service.progress — file-backed store the worker polls
+         via /progress/<job_id>; without this the watchdog kills the job at
+         90s because /progress returns "unknown".
+      3) report_progress_to_backend — direct push to the backend so even
+         a delayed worker poll sees activity in the DB's last_progress_at.
     """
     if not detail_url:
         return {"success": False, "file_path": "", "error": "uzmovi browser download requires detail_url (page URL)"}
 
+    import downloader_service as _ds  # noqa: F811
+
     output_path = os.path.join(DOWNLOAD_DIR, output_name)
     started = time.time()
 
-    def _seg_progress(done, total, bytes_done):
-        if not progress_state_cb:
-            return
-        percent = int((done * 100) / total) if total > 0 else 0
+    def _emit(percent, downloaded, total, message, *, status="downloading", stage="download"):
         elapsed = max(0.01, time.time() - started)
-        speed = bytes_done / elapsed
-        # Project bytes from segment count for ETA, since manifest doesn't
-        # carry per-segment byte counts.
-        projected_total = int(bytes_done * total / done) if done > 0 else bytes_done
-        eta = int(max(0, (projected_total - bytes_done) / speed)) if speed > 0 else 0
+        speed = downloaded / elapsed
+        eta = int(max(0, (total - downloaded) / speed)) if speed > 0 and total > 0 else 0
+
+        if progress_state_cb:
+            try:
+                progress_state_cb(percent, downloaded, total, speed, eta)
+            except Exception:
+                pass
         try:
-            progress_state_cb(percent, bytes_done, projected_total, speed, eta)
+            _ds.progress.update(job_id, {
+                "status": status,
+                "stage": stage,
+                "progress_percent": percent,
+                "downloaded_bytes": downloaded,
+                "total_bytes": total,
+                "speed_bytes_per_sec": speed,
+                "speed_mb_per_sec": speed / (1024 * 1024) if speed > 0 else 0.0,
+                "eta_seconds": eta,
+                "message": message,
+            })
         except Exception:
             pass
+        try:
+            _ds.report_progress_to_backend(job_id, {
+                "stage": stage,
+                "status": status,
+                "progress": percent,
+                "downloaded_bytes": downloaded,
+                "total_bytes": total,
+                "speed_mbps": speed / (1024 * 1024) if speed > 0 else 0.0,
+                "eta_seconds": eta,
+                "message": message,
+            })
+        except Exception:
+            pass
+
+    # Emit an immediate "starting" frame so the worker watchdog sees
+    # last_progress_at set well before the 90-second zero-byte timer.
+    _emit(0, 0, 0, "Launching headless browser…", status="downloading", stage="download")
+
+    def _seg_progress(done, total, bytes_done):
+        percent = int((done * 100) / total) if total > 0 else 0
+        # Manifest gives segment counts but no byte totals — project from
+        # the average segment size we've seen so far so ETA is realistic.
+        projected_total = int(bytes_done * total / done) if done > 0 else bytes_done
+        _emit(percent, bytes_done, projected_total, f"Downloading segment {done}/{total}")
 
     logger.info(f"[uzmovi-bd] start job_id={job_id} detail_url={detail_url[:120]} output={output_path}")
     try:
         result = download_uzmovi_video(detail_url=detail_url, output_path=output_path, progress_cb=_seg_progress)
     except Exception as e:
         logger.error(f"[uzmovi-bd] crash job_id={job_id}: {e}", exc_info=True)
+        _emit(0, 0, 0, f"crash: {e}", status="failed", stage="failed")
         return {"success": False, "file_path": "", "error": f"browser downloader crashed: {e}"}
 
     if not result.get("success"):
+        _emit(0, 0, 0, result.get("error") or "browser download failed", status="failed", stage="failed")
         return {"success": False, "file_path": "", "error": result.get("error") or "browser download failed"}
 
+    final_size = result.get("total_bytes", 0)
+    _emit(100, final_size, final_size, "Download complete", status="completed", stage="download")
     return {"success": True, "file_path": result.get("file_path", output_path), "type": "mp4"}
 
 
