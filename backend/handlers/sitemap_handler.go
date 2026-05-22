@@ -349,7 +349,16 @@ func (h *SitemapHandler) GetSitemapVideos(c *gin.Context) {
 			if !sOK || !snOK {
 				continue
 			}
+			// Episode thumbnails were populated by an older importer with a
+			// dead-domain placeholder (https://uzmovi.tv/images/ogimage.png —
+			// uzmovi.tv is offline, see worker/parser fix earlier today).
+			// Google rejects sitemap entries whose <video:thumbnail_loc>
+			// 404s, so treat any uzmovi.tv URL as empty and let the series
+			// poster carry the entry.
 			thumb := strings.TrimSpace(ep.ThumbnailURL)
+			if thumb != "" && strings.Contains(strings.ToLower(thumb), "uzmovi.tv/") {
+				thumb = ""
+			}
 			if thumb == "" {
 				thumb = strings.TrimSpace(series.PosterURL)
 			}
