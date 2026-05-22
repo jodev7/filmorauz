@@ -2452,7 +2452,6 @@ export default function IngestionPage() {
   const [currentFilter, setCurrentFilter] = useState<JobFilter>("all");
   const [retryingStage, setRetryingStage] = useState<{jobId: string; stage: string} | null>(null);
   const [syncEnabled, setSyncEnabled] = useState<boolean>(false);
-  const [isFetching, setIsFetching] = useState<boolean>(false);
   const [hasInitialized, setHasInitialized] = useState<boolean>(false);
   const isMounted = useRef(true);
 
@@ -2472,22 +2471,37 @@ export default function IngestionPage() {
     if (fetchJobsRef.current) fetchJobsRef.current(1, filter);
   }, []);
 
-  const fetchJobs = useCallback(async (page: number = currentPage, status: JobFilter = currentFilter) => {
-    if (!token || !isMounted.current || isFetching) return;
+  // Auto-refresh (1s interval) and pagination clicks both go through this
+  // callback. We read currentPage / currentFilter from refs instead of closure
+  // captures because the 1s interval would otherwise re-render with a stale
+  // page and stomp the user's manual page change a few hundred ms later. Same
+  // reason isFetching is dropped from the guard: a sync click during an
+  // in-flight auto-refresh was being silently dropped; the latest-result-wins
+  // pattern is fine here.
+  const currentPageRef = useRef(currentPage);
+  const currentFilterRef = useRef(currentFilter);
+  useEffect(() => { currentPageRef.current = currentPage; }, [currentPage]);
+  useEffect(() => { currentFilterRef.current = currentFilter; }, [currentFilter]);
 
-    setIsFetching(true);
+  const fetchJobs = useCallback(async (page?: number, status?: JobFilter) => {
+    if (!token || !isMounted.current) return;
+    const reqPage = page ?? currentPageRef.current;
+    const reqStatus = status ?? currentFilterRef.current;
+
     setLoadingJobs(true);
     try {
       const result = await getIngestionJobs(token, {
-        page,
+        page: reqPage,
         limit: pageSize,
-        status,
+        status: reqStatus,
       });
 
       const jobsData = Array.isArray(result.data) ? result.data : [];
       setTotalJobs(result.total || 0);
       setTotalPages(result.totalPages || 0);
-      setCurrentPage(result.page || page);
+      // Only sync currentPage from server response when this was an explicit
+      // request; otherwise the silent auto-refresh would also overwrite it.
+      if (page !== undefined) setCurrentPage(result.page || reqPage);
       setJobs(jobsData);
       if (result.status_counts) setStatusCounts(result.status_counts);
     } catch (err) {
@@ -2495,11 +2509,10 @@ export default function IngestionPage() {
       setJobs((prev) => (Array.isArray(prev) ? prev : []));
     } finally {
       if (isMounted.current) {
-        setIsFetching(false);
         setLoadingJobs(false);
       }
     }
-  }, [currentFilter, currentPage, token, isFetching, pageSize]);
+  }, [token, pageSize]);
 
   // Update fetchJobsRef
   useEffect(() => {
