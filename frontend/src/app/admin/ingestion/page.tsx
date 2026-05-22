@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { 
-  Search, Play, RefreshCw, CheckCircle, XCircle,
+  Search, Play, RefreshCw, CheckCircle, CheckCircle2, XCircle,
   Clock, Download, Upload, Settings, AlertTriangle, Loader2,
   ChevronLeft, ChevronRight, Film, Tv, Link, Plus, Youtube, RotateCcw,
   Power, ChevronDown, ChevronRight as ChevronRightIcon, Database, Trash2
@@ -2452,6 +2452,12 @@ export default function IngestionPage() {
   const [currentFilter, setCurrentFilter] = useState<JobFilter>("all");
   const [retryingStage, setRetryingStage] = useState<{jobId: string; stage: string} | null>(null);
   const [syncEnabled, setSyncEnabled] = useState<boolean>(false);
+  // Lightweight green toast shown when an import is accepted into the job
+  // queue. We don't switch tabs anymore — losing search results forced the
+  // user to re-pick the source and re-query, which was the whole reason
+  // they paginated through search in the first place.
+  const [importToast, setImportToast] = useState<string | null>(null);
+  const importToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [hasInitialized, setHasInitialized] = useState<boolean>(false);
   const isMounted = useRef(true);
 
@@ -2609,12 +2615,15 @@ export default function IngestionPage() {
   };
 
   const handleImportSuccess = () => {
-    setCurrentFilter("all");
-    setCurrentPage(1);
-    setActiveTab("jobs");
+    // Stay on the source tab so the user can keep importing from the same
+    // search results. Refresh jobs silently in the background and show a
+    // 2.5s green toast as confirmation.
     if (fetchJobsRef.current) {
-      fetchJobsRef.current(1, "all");
+      fetchJobsRef.current();
     }
+    setImportToast("Jobs ro'yxatiga qo'shildi");
+    if (importToastTimer.current) clearTimeout(importToastTimer.current);
+    importToastTimer.current = setTimeout(() => setImportToast(null), 2500);
   };
 
   if (!token) {
@@ -2629,6 +2638,18 @@ export default function IngestionPage() {
 
   return (
     <div className="min-h-screen bg-brand-dark text-white">
+      {/* Floating import-accepted confirmation. Positioned fixed so it
+          floats over any tab content without nudging layout. */}
+      {importToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed top-6 right-6 z-50 bg-emerald-600 text-white px-4 py-2.5 rounded-lg shadow-lg flex items-center gap-2 text-sm font-medium animate-in fade-in slide-in-from-top-2"
+        >
+          <CheckCircle2 className="w-4 h-4" />
+          {importToast}
+        </div>
+      )}
       <div className="max-w-7xl mx-auto px-4 py-8">
         <h1 className="text-3xl font-display mb-8">Import Movies</h1>
 
