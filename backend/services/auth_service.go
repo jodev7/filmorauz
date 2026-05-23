@@ -144,8 +144,10 @@ func (s *AuthService) CompleteAuthSession(req *models.AuthSessionRequest) (*mode
 
 	log.Printf("[AUTH] Auth session completed for user %d (%s), is_new=%v", req.TelegramID, user.FirstName, isNew)
 
-	// Update last login
+	// Update last login + last active (so the user counts toward DAU/WAU/MAU
+	// immediately, without waiting for the first presence heartbeat).
 	_ = s.userRepo.UpdateLastLogin(user.ID)
+	_ = s.userRepo.UpdateLastActive(user.ID)
 
 	return session, user, nil
 }

@@ -370,8 +370,19 @@ func (r *UserRepository) UpdateLastActive(userID primitive.ObjectID) error {
 	return err
 }
 
-// CountActiveSince returns the number of users whose last_active_at is >= since.
-// Falls back to last_login_at when last_active_at is missing (legacy users).
+// CountActiveSince returns the number of users active in the [since, now]
+// window. Activity is measured with a 3-step fallback so legacy users (who
+// predate the presence heartbeat system and may also be missing
+// last_login_at because they came in via the Telegram bot upsert path) still
+// contribute meaningful numbers:
+//
+//  1. last_active_at >= since   (heartbeat / login bumped it)
+//  2. last_active_at missing AND last_login_at >= since   (logged in but no heartbeat yet)
+//  3. both missing AND created_at >= since   (account itself is fresh — registration is activity)
+//
+// The chain is anchored on field absence (not "or"), so a stale account from
+// two years ago that never logged back in won't accidentally count toward
+// MAU just because its created_at is checked.
 func (r *UserRepository) CountActiveSince(since time.Time) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -382,6 +393,11 @@ func (r *UserRepository) CountActiveSince(since time.Time) (int64, error) {
 			{
 				"last_active_at": bson.M{"$exists": false},
 				"last_login_at":  bson.M{"$gte": since},
+			},
+			{
+				"last_active_at": bson.M{"$exists": false},
+				"last_login_at":  bson.M{"$exists": false},
+				"created_at":     bson.M{"$gte": since},
 			},
 		},
 	})
