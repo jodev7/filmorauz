@@ -2398,10 +2398,44 @@ class ParserHandler(BaseHTTPRequestHandler):
             logger.info(f"[PARSER] new download started — job_id={job_id}, url={safe_truncate(video_url, 60)}")
             if selected_quality:
                 logger.info(f"[download] job={job_id} source={source or 'unknown'} selected_quality={selected_quality}")
+            # force=1 is meant to recover stuck downloads — but if the
+            # existing download is still actively writing segments, blowing
+            # away its state spawns a SECOND background thread that races
+            # the first on the same .ts.tmp file. When one thread cleans up
+            # on success the other's sanity check fails ("ts buffer missing
+            # or empty"), the .mp4 from the winning thread is orphaned, and
+            # Mongo ends up marked failed for what was actually a successful
+            # download. Only honor force=1 when the existing download has
+            # been silent for STALL_THRESHOLD_SEC — otherwise treat it as a
+            # duplicate request.
+            STALL_THRESHOLD_SEC = 120
             if force and job_id:
-                logger.info(f"[PARSER] force restart requested — job_id={job_id}")
+                existing_state = get_active_download(job_id)
+                if existing_state and existing_state.status in ("starting", "downloading"):
+                    last_activity = time.time() - existing_state.last_progress_at
+                    if last_activity < STALL_THRESHOLD_SEC:
+                        logger.info(
+                            f"[PARSER] force=1 ignored — job_id={job_id} still active "
+                            f"(last_progress_at {last_activity:.0f}s ago, threshold={STALL_THRESHOLD_SEC}s)"
+                        )
+                        self._send_json({
+                            "success": True,
+                            "status": "already_running",
+                            "job_id": job_id,
+                            "progress_percent": existing_state.progress_percent,
+                            "downloaded_bytes": existing_state.downloaded_bytes,
+                            "total_bytes": existing_state.total_bytes,
+                            "message": "Download already in progress; force=1 ignored",
+                        })
+                        return
+                    logger.info(
+                        f"[PARSER] force=1 honored — job_id={job_id} stalled "
+                        f"({last_activity:.0f}s since last progress, threshold={STALL_THRESHOLD_SEC}s)"
+                    )
+                else:
+                    logger.info(f"[PARSER] force restart requested — job_id={job_id}")
                 clear_active_download(job_id)
-            
+
             if not video_url:
                 self._send_error("download_url empty after parser resolve")
                 return
@@ -4248,8 +4282,25 @@ def _cleanup_stale_state():
             except OSError:
                 pass
 
+    # Whisper temp WAVs (clip AI extracts audio to /tmp/tmpXXXXXX.wav). The
+    # finally-block in the AI pipeline normally unlinks them, but a killed or
+    # OOM-terminated process leaves them behind — and at ~300MB apiece they
+    # quietly chew through the disk. Sweep anything older than 1h.
+    try:
+        import glob as _glob
+        cutoff = _time.time() - 3600
+        for p in _glob.glob("/tmp/tmp*.wav"):
+            try:
+                if os.path.getmtime(p) < cutoff:
+                    os.remove(p)
+                    removed += 1
+            except OSError:
+                pass
+    except Exception as _e:
+        logger.warning(f"[STARTUP] whisper tmp sweep failed: {_e}")
+
     if removed:
-        logger.info(f"[STARTUP] Cleaned up {removed} stale download/progress file(s)")
+        logger.info(f"[STARTUP] Cleaned up {removed} stale download/progress/tmp file(s)")
 
 
 def run_server(host="0.0.0.0", port=8082):
