@@ -258,6 +258,13 @@ func (p *Pipeline) SweepOrphanDownloads(
 
 	for _, entry := range entries {
 		if entry.IsDir() {
+			// Subdirectories are skipped on purpose. N_m3u8DL-RE stages DASH/HLS
+			// segments in a per-download temp folder under this root; deleting
+			// one blindly would corrupt an in-flight download, and its folder
+			// name does not reliably map back to a job we can cross-check against
+			// the active set. N_m3u8DL removes its own temp dir on success
+			// (--del-after-done), so only hard-crash leftovers can linger — a
+			// rarer case left for a future, job-correlated dir sweep.
 			continue
 		}
 		name := entry.Name()
