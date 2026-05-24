@@ -104,11 +104,13 @@ func main() {
 
 	// Initialize repositories
 	jobRepo := worker_repositories.NewJobRepository(db, workerID)
-	deleteJobRepo := worker_repositories.NewDeleteJobRepository(db)
 
-	// Initialize deletion worker
-	deletionWorker := NewDeletionWorker(deleteJobRepo, pipeConfig.BackendURL)
-	go deletionWorker.Start(workerCtx)
+	// Content deletion is handled entirely in-process by the backend
+	// (startDeleteJobWorker) — it owns the B2 + Mongo + clip/IG cascade and
+	// reports progress for the admin UI. The old worker-side DeletionWorker
+	// called the backend admin cascade endpoint over HTTP without an auth token
+	// and was always rejected (401/404), so deletion never ran. Leaving it out
+	// also avoids a second processor racing the backend on delete_jobs.
 
 	// Log configuration
 	log.Printf("[CONFIG] Worker starting, commit=%s", getCommitHash())
@@ -250,15 +252,25 @@ func main() {
 		ticker := time.NewTicker(30 * time.Minute)
 		defer ticker.Stop()
 		runJanitorOnce := func() {
-			jobs, err := jobRepo.ListCompletedWithLocalArtifacts(workerCtx, 200)
+			completed, err := jobRepo.ListCompletedWithLocalArtifacts(workerCtx, 200)
 			if err != nil {
-				log.Printf("[CLEANUP] janitor: list error: %v", err)
-				return
+				log.Printf("[CLEANUP] janitor: list completed error: %v", err)
+				completed = nil
 			}
+			// Terminal-failed jobs (retry budget exhausted) also leave on-disk
+			// artifacts that won't be touched by any other code path. Mop
+			// those up in the same sweep so a failed bulk-import doesn't fill
+			// the disk indefinitely.
+			failed, err := jobRepo.ListTerminalFailedWithLocalArtifacts(workerCtx, 200)
+			if err != nil {
+				log.Printf("[CLEANUP] janitor: list failed error: %v", err)
+				failed = nil
+			}
+			jobs := append(completed, failed...)
 			if len(jobs) == 0 {
 				return
 			}
-			log.Printf("[CLEANUP] janitor: scanning %d completed jobs with local artifacts", len(jobs))
+			log.Printf("[CLEANUP] janitor: scanning jobs completed=%d terminal_failed=%d", len(completed), len(failed))
 			for _, j := range jobs {
 				actions, err := pipe.CleanupCompletedJobArtifacts(j)
 				if err != nil {
@@ -279,6 +291,41 @@ func main() {
 				return
 			case <-ticker.C:
 				runJanitorOnce()
+			}
+		}
+	}()
+
+	// Orphan-file sweep: every hour, walk parser/downloads and remove
+	// detritus that isn't tied to any active job — aria2c zombie markers,
+	// zero-byte download stubs, and stale MP4s whose job is gone or in a
+	// terminal state. This is the last-ditch defense against bulk-import
+	// runs filling the disk with files no code path ever owns.
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		runOrphanSweepOnce := func() {
+			active, err := jobRepo.ListActiveDownloadBasenames(workerCtx)
+			if err != nil {
+				log.Printf("[CLEANUP] orphan-sweep: list active error: %v", err)
+				return
+			}
+			deleted, bytesFreed := pipe.SweepOrphanDownloads(
+				active,
+				1*time.Hour,    // .aria2 markers
+				1*time.Hour,    // zero-byte .mp4
+				48*time.Hour,   // orphan .mp4 (no active job)
+			)
+			if deleted > 0 {
+				log.Printf("[CLEANUP] orphan-sweep: removed %d files, freed %d bytes", deleted, bytesFreed)
+			}
+		}
+		runOrphanSweepOnce()
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case <-ticker.C:
+				runOrphanSweepOnce()
 			}
 		}
 	}()

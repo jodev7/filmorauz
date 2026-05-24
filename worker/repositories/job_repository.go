@@ -448,6 +448,80 @@ func (r *JobRepository) ListCompletedWithLocalArtifacts(ctx context.Context, lim
 	return jobs, nil
 }
 
+// ListTerminalFailedWithLocalArtifacts returns jobs that have exhausted all
+// retries (status=failed/download_failed AND retry_count >= 3) but still
+// carry local files on disk. The cleanup janitor consumes this list so the
+// parser/downloads source MP4 and readyvideo staging dir don't pile up after
+// a job is permanently dead.
+func (r *JobRepository) ListTerminalFailedWithLocalArtifacts(ctx context.Context, limit int64) ([]*models.IngestionJob, error) {
+	filter := bson.M{
+		"status": bson.M{"$in": bson.A{
+			models.IngestionStatusFailed,
+			models.IngestionStatusDownloadFailed,
+		}},
+		"retry_count": bson.M{"$gte": 3},
+		"$or": []bson.M{
+			{"local_path": bson.M{"$exists": true, "$ne": ""}},
+			{"output_path": bson.M{"$exists": true, "$ne": ""}},
+		},
+	}
+	opts := options.Find().SetLimit(limit).SetSort(bson.M{"updated_at": -1})
+	cursor, err := r.collection.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var jobs []*models.IngestionJob
+	if err := cursor.All(ctx, &jobs); err != nil {
+		return nil, err
+	}
+	return jobs, nil
+}
+
+// ListActiveDownloadBasenames returns the set of basenames (e.g.
+// "6a1048b6fbd321b2b41f5b7f.mp4") that belong to jobs still in non-terminal
+// states. The orphan-file sweep uses this as an allowlist — anything in
+// parser/downloads/ NOT in this set is fair game for deletion after the
+// max-age threshold.
+func (r *JobRepository) ListActiveDownloadBasenames(ctx context.Context) (map[string]struct{}, error) {
+	filter := bson.M{
+		"status": bson.M{"$in": bson.A{
+			models.IngestionStatusQueued,
+			models.IngestionStatusDownloading,
+			models.IngestionStatusDownloaded,
+			models.IngestionStatusReadyToProcess,
+			models.IngestionStatusProcessing,
+			models.IngestionStatusUploading,
+			models.IngestionStatusParsing,
+			models.IngestionStatusEnrichingMetadata,
+			models.IngestionStatusCreatingMovie,
+			models.IngestionStatusSendingNotification,
+			models.IngestionStatusHLSProcessing,
+			models.IngestionStatusFinalizingStorage,
+		}},
+		"local_path": bson.M{"$exists": true, "$ne": ""},
+	}
+	cursor, err := r.collection.Find(ctx, filter, options.Find().SetProjection(bson.M{"local_path": 1}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	out := make(map[string]struct{})
+	for cursor.Next(ctx) {
+		var doc struct {
+			LocalPath string `bson:"local_path"`
+		}
+		if err := cursor.Decode(&doc); err != nil {
+			continue
+		}
+		if doc.LocalPath == "" {
+			continue
+		}
+		out[filepath.Base(doc.LocalPath)] = struct{}{}
+	}
+	return out, nil
+}
+
 func (r *JobRepository) RepairCompletedDownloads(ctx context.Context, downloadDir string) (int64, error) {
 	filter := bson.M{
 		"progress": bson.M{"$gte": 100},
