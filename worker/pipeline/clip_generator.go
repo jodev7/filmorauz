@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -53,6 +54,11 @@ type ClipInfo struct {
 	Duration    int    `json:"duration"`
 	Sequence    int    `json:"sequence"`
 	StorageType string `json:"storage_type"`
+
+	// AI-generated Instagram/Shorts caption (Gemini path only; empty otherwise).
+	Caption string `json:"caption,omitempty"`
+	// AI-generated hashtags (Gemini path only; each starts with '#').
+	Hashtags []string `json:"hashtags,omitempty"`
 }
 
 // clipTarget is a unified descriptor for "what are we clipping, and where do
@@ -125,6 +131,44 @@ type candidateMoment struct {
 	score       float64
 	reason      string
 	speechScore float64 // stored during scoring for dynamicDur at selection time
+
+	// Populated only on the Gemini "AI viral" path (see momentsFromGemini):
+	fromGemini bool
+	geminiSubs []geminiSub // accurate transcript for burnt-in subtitles
+	caption    string      // ready-to-post Instagram/Shorts caption
+	hashtags   []string    // suggested hashtags (each starts with '#')
+}
+
+// geminiSub is one transcript line returned by the parser /clip/gemini-analyze
+// endpoint, with an absolute (film-relative) start time in seconds.
+type geminiSub struct {
+	T    float64 `json:"t"`
+	Text string  `json:"text"`
+}
+
+type geminiClipSpec struct {
+	StartSec  float64     `json:"start_sec"`
+	EndSec    float64     `json:"end_sec"`
+	Reason    string      `json:"reason"`
+	Caption   string      `json:"caption"`
+	Hashtags  []string    `json:"hashtags"`
+	Subtitles []geminiSub `json:"subtitles"`
+}
+
+type geminiUsage struct {
+	AudioTokens  int `json:"audio_tokens"`
+	TextTokens   int `json:"text_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+}
+
+type geminiAnalyzeResp struct {
+	Clips     []geminiClipSpec `json:"clips"`
+	Usage     geminiUsage      `json:"usage"`
+	CostUSD   float64          `json:"cost_usd"`
+	Model     string           `json:"model"`
+	ErrorType string           `json:"error_type"`
+	Error     string           `json:"error"`
 }
 
 // AI analysis types — populated by parser /clip/analyze endpoint.
@@ -931,19 +975,79 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 		movieSlug = sanitizeSlug(movieResult.DisplayTitle)
 	}
 
+	// Overlay CTA word depends on content: animated movies say "Multfilm
+	// profilda!", everything else "Kino profilda!". Series use "Serial" (see
+	// generateEpisodeClips). The on-clip code label stays "Kino kodi".
+	bottomText := "Kino profilda\\!"
+	if p.movieIsAnimation(ctx, movieResult.MovieID) {
+		bottomText = "Multfilm profilda\\!"
+	}
+
 	target := clipTarget{
 		Kind:          "movie",
 		FilenameSlug:  movieSlug,
 		FolderSubpath: canonicalFolderName,
 		DisplayLabel:  fmt.Sprintf("Movie: %s (code: %s)", movieResult.DisplayTitle, movieCode),
 		TopText:       fmt.Sprintf("Kino kodi\\: %s", movieCode),
-		BottomText:    "Kino profilda\\!",
+		BottomText:    bottomText,
 		MovieID:       movieResult.MovieID,
 		MovieTitle:    movieResult.DisplayTitle,
 		MovieSlug:     movieResult.Slug,
 		MovieCode:     movieCode,
 	}
 	return p.generateClipsForTarget(ctx, target, processedMasterPath)
+}
+
+// movieIsAnimation reports whether the movie's genres mark it as an animated
+// film (multfilm). Best-effort: any lookup failure returns false so clips just
+// use the default "Kino" label.
+func (p *Pipeline) movieIsAnimation(ctx context.Context, movieID interface{}) bool {
+	if p.config.DB == nil || movieID == nil {
+		return false
+	}
+	var oid primitive.ObjectID
+	switch v := movieID.(type) {
+	case primitive.ObjectID:
+		oid = v
+	case string:
+		parsed, err := primitive.ObjectIDFromHex(v)
+		if err != nil {
+			return false
+		}
+		oid = parsed
+	default:
+		return false
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var doc bson.M
+	if err := p.config.DB.Collection("movies").FindOne(lookupCtx, bson.M{"_id": oid}).Decode(&doc); err != nil {
+		return false
+	}
+	animationGenres := []string{"multfilm", "multifilm", "animatsiya", "animation", "cartoon", "мультфильм", "анимация"}
+	for _, field := range []string{"genre", "genres_uz"} {
+		raw, ok := doc[field]
+		if !ok {
+			continue
+		}
+		arr, ok := raw.(bson.A)
+		if !ok {
+			continue
+		}
+		for _, g := range arr {
+			gs, ok := g.(string)
+			if !ok {
+				continue
+			}
+			gl := strings.ToLower(strings.TrimSpace(gs))
+			for _, ag := range animationGenres {
+				if strings.Contains(gl, ag) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // generateEpisodeClips is the serial-episode entry point. It matches the
@@ -1042,6 +1146,280 @@ func ffmpegEscapeDrawtext(s string) string {
 	return s
 }
 
+// clipSubtitlesEnabled reports whether burnt-in clip subtitles are turned on
+// via the CLIP_SUBTITLES env flag. Default OFF — see the call site for why.
+func clipSubtitlesEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CLIP_SUBTITLES"))) {
+	case "1", "true", "on", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+// clipAIViralEnabled reports whether AI (Gemini) viral clip selection is turned
+// on via the CLIP_AI_VIRAL env flag. Default OFF. When on, the worker asks the
+// parser to pick viral moments + captions + transcript; on any failure (quota
+// exhausted, parser down) it falls back to the heuristic clip generator.
+func clipAIViralEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CLIP_AI_VIRAL"))) {
+	case "1", "true", "on", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+// fetchGeminiClips calls the parser /clip/gemini-analyze endpoint. It returns
+// the parsed response on HTTP 200, or an error (quota/unavailable/other) so the
+// caller can fall back to heuristic clip detection.
+func (p *Pipeline) fetchGeminiClips(videoPath string, maxClips int) (*geminiAnalyzeResp, error) {
+	if p.config.ParserURL == "" {
+		return nil, fmt.Errorf("parser URL not configured")
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"video_path": videoPath,
+		"max_clips":  maxClips,
+	})
+	client := &http.Client{Timeout: 40 * time.Minute}
+	resp, err := client.Post(p.config.ParserURL+"/clip/gemini-analyze", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var data geminiAnalyzeResp
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, fmt.Errorf("decode gemini response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("gemini analyze status=%d type=%s: %s", resp.StatusCode, data.ErrorType, data.Error)
+	}
+	return &data, nil
+}
+
+// momentsFromGemini converts Gemini clip specs into candidateMoments carrying
+// the per-clip transcript + caption. Durations are clamped to the allowed
+// maximum; clips that fall outside the video are skipped.
+func momentsFromGemini(clips []geminiClipSpec, durationSec float64) []candidateMoment {
+	out := make([]candidateMoment, 0, len(clips))
+	for _, c := range clips {
+		st := c.StartSec
+		dur := c.EndSec - c.StartSec
+		if dur <= 0 {
+			continue
+		}
+		if dur > float64(maxClipSeconds) {
+			dur = float64(maxClipSeconds)
+		}
+		if st < 0 {
+			st = 0
+		}
+		if st >= durationSec {
+			continue
+		}
+		if st+dur > durationSec {
+			dur = durationSec - st
+		}
+		if dur < 1 {
+			continue
+		}
+		out = append(out, candidateMoment{
+			startSec:    st,
+			durationSec: dur,
+			reason:      "gemini_viral",
+			fromGemini:  true,
+			geminiSubs:  c.Subtitles,
+			caption:     strings.TrimSpace(c.Caption),
+			hashtags:    c.Hashtags,
+		})
+	}
+	return out
+}
+
+// buildGeminiASS renders a Gemini transcript (absolute film times) into an ASS
+// subtitle document for one clip window, rebased to the clip's local timeline.
+// Each line ends when the next begins (or at clip end). Style matches
+// buildClipASS via the shared clipSubtitleASSHeader.
+func buildGeminiASS(subs []geminiSub, startSec, clipDur float64) string {
+	if len(subs) == 0 || clipDur <= 0 {
+		return ""
+	}
+	sorted := append([]geminiSub(nil), subs...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].T < sorted[j].T })
+
+	var b strings.Builder
+	b.WriteString(clipSubtitleASSHeader)
+	count := 0
+	for i, s := range sorted {
+		text := assEscapeText(s.Text)
+		if text == "" {
+			continue
+		}
+		rs := s.T - startSec
+		var re float64
+		if i+1 < len(sorted) {
+			re = sorted[i+1].T - startSec
+		} else {
+			re = clipDur
+		}
+		if rs < 0 {
+			rs = 0
+		}
+		if rs >= clipDur {
+			continue
+		}
+		if re > clipDur {
+			re = clipDur
+		}
+		if re-rs < 0.3 {
+			re = rs + 0.3
+		}
+		fmt.Fprintf(&b, "Dialogue: 0,%s,%s,Default,,0,0,0,,%s\n", assTimestamp(rs), assTimestamp(re), text)
+		count++
+	}
+	if count == 0 {
+		return ""
+	}
+	return b.String()
+}
+
+// recordGeminiUsage writes one AI cost row into the clip_ai_usage collection so
+// the admin dashboard can show per-content and total spend. Best-effort: a
+// failure here never blocks clip generation.
+func (p *Pipeline) recordGeminiUsage(ctx context.Context, target clipTarget, resp *geminiAnalyzeResp) {
+	if p.config.DB == nil || resp == nil {
+		return
+	}
+	contentID := ""
+	title := ""
+	switch target.Kind {
+	case "movie":
+		if oid, ok := target.MovieID.(primitive.ObjectID); ok {
+			contentID = oid.Hex()
+		} else if s, ok := target.MovieID.(string); ok {
+			contentID = s
+		}
+		title = target.MovieTitle
+	case "series":
+		contentID = target.EpisodeID.Hex()
+		title = fmt.Sprintf("%s S%02dE%02d", target.SeriesTitle, target.SeasonNumber, target.EpisodeNumber)
+	}
+	doc := bson.M{
+		"_id":           primitive.NewObjectID(),
+		"content_kind":  target.Kind,
+		"content_id":    contentID,
+		"title":         title,
+		"model":         resp.Model,
+		"audio_tokens":  resp.Usage.AudioTokens,
+		"text_tokens":   resp.Usage.TextTokens,
+		"output_tokens": resp.Usage.OutputTokens,
+		"total_tokens":  resp.Usage.TotalTokens,
+		"cost_usd":      resp.CostUSD,
+		"clip_count":    len(resp.Clips),
+		"created_at":    time.Now(),
+	}
+	if _, err := p.config.DB.Collection("clip_ai_usage").InsertOne(ctx, doc); err != nil {
+		log.Printf("[CLIP-GEMINI] WARN: failed to record AI usage: %v", err)
+	} else {
+		log.Printf("[CLIP-GEMINI] recorded usage: $%.4f (%d tokens) for %s", resp.CostUSD, resp.Usage.TotalTokens, title)
+	}
+}
+
+// assTimestamp formats seconds as an ASS timecode: H:MM:SS.cc (centiseconds).
+func assTimestamp(sec float64) string {
+	if sec < 0 {
+		sec = 0
+	}
+	total := int(sec * 100.0) // centiseconds
+	cs := total % 100
+	total /= 100
+	s := total % 60
+	total /= 60
+	m := total % 60
+	h := total / 60
+	return fmt.Sprintf("%d:%02d:%02d.%02d", h, m, s, cs)
+}
+
+// assEscapeText escapes a transcript line for an ASS Dialogue field. Newlines
+// become the ASS hard-break "\N"; literal braces would otherwise open an
+// override block, so they are neutralised.
+func assEscapeText(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", `\N`)
+	s = strings.ReplaceAll(s, "{", "(")
+	s = strings.ReplaceAll(s, "}", ")")
+	return strings.TrimSpace(s)
+}
+
+// clipSubtitleASSHeader is the [Script Info] + [V4+ Styles] preamble for the
+// burnt-in clip subtitles. PlayResX/Y pin the ASS coordinate space to the
+// 1080×1920 Reels canvas so Fontsize and MarginV are true canvas pixels (no
+// original_size guesswork). The Default style is bold white with a thick black
+// outline, bottom-centred (Alignment=2) with MarginV=700 — placing the text in
+// the lower third of the centred movie frame, safely above the CTA at y=1300.
+const clipSubtitleASSHeader = `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Sans,54,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,3,1,2,60,60,700,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`
+
+// buildClipASS renders the Whisper speech segments that fall inside the clip
+// window [startSec, startSec+clipDur] into an ASS subtitle document, with
+// timecodes rebased to the clip's own timeline (clip starts at 0). Returns ""
+// if there is no usable speech in the window — the caller then skips burning
+// subs.
+//
+// Segments that straddle the window edges are clamped; very short fragments
+// (<0.2s of visible time) are dropped so single-word flickers don't appear.
+func buildClipASS(ai *aiVideoData, startSec, clipDur float64) string {
+	if ai == nil || len(ai.SpeechSegments) == 0 || clipDur <= 0 {
+		return ""
+	}
+	end := startSec + clipDur
+	var b strings.Builder
+	b.WriteString(clipSubtitleASSHeader)
+	count := 0
+	for _, seg := range ai.SpeechSegments {
+		text := assEscapeText(seg.Text)
+		if text == "" {
+			continue
+		}
+		// Overlap of the segment with the clip window.
+		s := max64(seg.Start, startSec)
+		e := min64(seg.End, end)
+		if e-s < 0.2 {
+			continue
+		}
+		// Rebase to the clip-local timeline.
+		fmt.Fprintf(&b, "Dialogue: 0,%s,%s,Default,,0,0,0,,%s\n",
+			assTimestamp(s-startSec), assTimestamp(e-startSec), text)
+		count++
+	}
+	if count == 0 {
+		return ""
+	}
+	return b.String()
+}
+
+// ffmpegEscapeSubtitlePath escapes a filesystem path for safe use inside the
+// ffmpeg subtitles= filter option. The filtergraph parser treats ':' and '\'
+// specially, and ''' terminates the quoted value.
+func ffmpegEscapeSubtitlePath(p string) string {
+	p = strings.ReplaceAll(p, `\`, `\\`)
+	p = strings.ReplaceAll(p, `:`, `\:`)
+	p = strings.ReplaceAll(p, `'`, `\'`)
+	return p
+}
+
 // generateClipsForTarget is the shared clip-production core used by both the
 // movie and serial-episode pipelines. It ffprobes the processed master,
 // runs AI + heuristic engagement scoring, generates ffmpeg overlay clips,
@@ -1116,20 +1494,44 @@ func (p *Pipeline) generateClipsForTarget(ctx context.Context, target clipTarget
 		log.Printf("[CLIP] WARNING: logo not found at %s, clips will not have logo", logoPath)
 	}
 
-	// AI analysis: Whisper speech + face detection via parser service.
-	// Runs concurrently with no blocking if parser is unavailable.
-	log.Printf("[CLIP-AI] Starting AI analysis via parser...")
-	aiData := p.fetchAIAnalysis(baseVideoPath, durationSec)
-	if aiData == nil {
-		log.Printf("[CLIP-AI] AI analysis unavailable — using audio/scene scoring only")
+	var aiData *aiVideoData
+	var moments []candidateMoment
+	geminiActive := false
+
+	// AI viral selection (Gemini) — opt-in via CLIP_AI_VIRAL. Gemini "hears" the
+	// whole film and returns the most viral moments + caption + an accurate
+	// Uzbek transcript per clip. On any failure (quota exhausted, parser down)
+	// we fall back to the heuristic detector below, so a run never breaks.
+	if clipAIViralEnabled() {
+		log.Printf("[CLIP-GEMINI] CLIP_AI_VIRAL on — requesting AI viral clips...")
+		gResp, gErr := p.fetchGeminiClips(baseVideoPath, clipCount)
+		if gErr != nil {
+			log.Printf("[CLIP-GEMINI] unavailable/failed — falling back to heuristic: %v", gErr)
+		} else if gResp != nil && len(gResp.Clips) > 0 {
+			moments = momentsFromGemini(gResp.Clips, durationSec)
+			if len(moments) > 0 {
+				geminiActive = true
+				p.recordGeminiUsage(ctx, target, gResp)
+				log.Printf("[CLIP-GEMINI] using %d AI viral clips (model=%s cost=$%.4f)", len(moments), gResp.Model, gResp.CostUSD)
+			}
+		} else {
+			log.Printf("[CLIP-GEMINI] returned no clips — falling back to heuristic")
+		}
 	}
 
-	// Smart moment detection with AI-enhanced viral scoring.
-	moments := p.detectEngagingMoments(baseVideoPath, durationSec, clipCount, aiData)
+	// Heuristic path: Whisper speech + face detection + audio/scene scoring.
+	if !geminiActive {
+		log.Printf("[CLIP-AI] Starting heuristic AI analysis via parser...")
+		aiData = p.fetchAIAnalysis(baseVideoPath, durationSec)
+		if aiData == nil {
+			log.Printf("[CLIP-AI] AI analysis unavailable — using audio/scene scoring only")
+		}
+		moments = p.detectEngagingMoments(baseVideoPath, durationSec, clipCount, aiData)
+	}
 	if len(moments) == 0 {
 		return fmt.Errorf("no valid clip moments found in video")
 	}
-	log.Printf("[CLIP] Starting clip generation for %d selected moments...", len(moments))
+	log.Printf("[CLIP] Starting clip generation for %d selected moments (gemini=%v)...", len(moments), geminiActive)
 
 	topText := target.TopText
 	bottomText := target.BottomText
@@ -1165,6 +1567,47 @@ func (p *Pipeline) generateClipsForTarget(ctx context.Context, target clipTarget
 		log.Printf("[CLIP] Generating clip %d/%d: start=%.1fs dur=%.1fs reason=%s -> %s",
 			i+1, len(moments), startSec, clipDur, moment.reason, outPath)
 
+		// Burn-in subtitles from the Whisper transcript for this clip window.
+		// This reuses the speech analysis already produced for moment scoring —
+		// no extra cost. subFilter ends with a trailing comma (or is "") so it
+		// can be spliced into the filter chain right after scale/pad.
+		//
+		// Gated behind the CLIP_SUBTITLES env flag (default OFF): local Whisper
+		// transcribes Uzbek poorly, so auto-burning subs would stamp mangled
+		// text onto every clip. Enable only once transcript quality is
+		// acceptable (e.g. a better model or a paid ASR backend).
+		// Subtitle source: Gemini-path clips always burn the high-quality Gemini
+		// transcript; heuristic-path clips burn the local Whisper transcript only
+		// when CLIP_SUBTITLES is enabled (local Uzbek ASR is rough).
+		var assDoc string
+		if moment.fromGemini {
+			assDoc = buildGeminiASS(moment.geminiSubs, startSec, clipDur)
+		} else if clipSubtitlesEnabled() {
+			assDoc = buildClipASS(aiData, startSec, clipDur)
+		}
+		subFilter := ""
+		var subPath string
+		if assDoc != "" {
+			if f, ferr := os.CreateTemp("", fmt.Sprintf("clip-sub-%d-*.ass", i+1)); ferr != nil {
+				log.Printf("[CLIP] WARN: clip %d subtitle temp create failed: %v", i+1, ferr)
+			} else {
+				subPath = f.Name()
+				if _, werr := f.WriteString(assDoc); werr != nil {
+					log.Printf("[CLIP] WARN: clip %d subtitle temp write failed: %v", i+1, werr)
+					f.Close()
+					os.Remove(subPath)
+					subPath = ""
+				} else {
+					f.Close()
+					subFilter = fmt.Sprintf("subtitles=filename='%s',", ffmpegEscapeSubtitlePath(subPath))
+					log.Printf("[CLIP] Clip %d: burning subtitles (%d bytes ASS)", i+1, len(assDoc))
+				}
+			}
+		}
+		if subPath != "" {
+			defer os.Remove(subPath)
+		}
+
 		// Build ffmpeg args.
 		// Key points:
 		//   -ss / -t before -i  → input-level seek + hard duration limit (fast, reliable)
@@ -1190,12 +1633,12 @@ func (p *Pipeline) generateClipsForTarget(ctx context.Context, target clipTarget
 			//                             leaving ~170px safe padding from bottom edge.
 			log.Printf("[CLIP] Layout: CTA y=1300, logo y=1390, canvas=1080×1920")
 			filterComplex := fmt.Sprintf(
-				"[0:v]scale=1080:-2,pad=1080:1920:0:(oh-ih)/2:color=black,"+
+				"[0:v]scale=1080:-2,pad=1080:1920:0:(oh-ih)/2:color=black,%s"+
 					"drawtext=text='%s':x=(w-text_w)/2:y=580:fontsize=48:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=8,"+
 					"drawtext=text='%s':x=(w-text_w)/2:y=1300:fontsize=44:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=8[vt];"+
 					"[1:v]scale=840:-1[logo];"+
 					"[vt][logo]overlay=x=(W-w)/2:y=1390:shortest=1[out]",
-				topText, bottomText,
+				subFilter, topText, bottomText,
 			)
 			args = []string{
 				"-y",
@@ -1218,10 +1661,10 @@ func (p *Pipeline) generateClipsForTarget(ctx context.Context, target clipTarget
 		} else {
 			// Same layout without logo: scale+pad to 1080×1920 with centered movie, text in dark bands.
 			textFilter := fmt.Sprintf(
-				"scale=1080:-2,pad=1080:1920:0:(oh-ih)/2:color=black,"+
+				"scale=1080:-2,pad=1080:1920:0:(oh-ih)/2:color=black,%s"+
 					"drawtext=text='%s':x=(w-text_w)/2:y=580:fontsize=48:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=8,"+
 					"drawtext=text='%s':x=(w-text_w)/2:y=1300:fontsize=44:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=8",
-				topText, bottomText,
+				subFilter, topText, bottomText,
 			)
 			args = []string{
 				"-y",
@@ -1299,6 +1742,8 @@ func (p *Pipeline) generateClipsForTarget(ctx context.Context, target clipTarget
 			Sequence:    i + 1,
 			ClipIndex:   i + 1,
 			StorageType: map[bool]string{true: "local", false: "b2"}[devMode],
+			Caption:     moment.caption,
+			Hashtags:    moment.hashtags,
 		}
 
 		switch target.Kind {
@@ -1470,6 +1915,8 @@ func (p *Pipeline) saveClipsToMongoDB(ctx context.Context, clips []ClipInfo) err
 				"clip_index":   clip.ClipIndex,
 				"sequence":     clip.Sequence,
 				"storage_type": clip.StorageType,
+				"caption":      clip.Caption,
+				"hashtags":     clip.Hashtags,
 				"created_at":   now,
 			})
 
@@ -1510,6 +1957,8 @@ func (p *Pipeline) saveClipsToMongoDB(ctx context.Context, clips []ClipInfo) err
 				"sequence":       clip.Sequence,
 				"source_type":    "series_episode",
 				"storage_type":   clip.StorageType,
+				"caption":        clip.Caption,
+				"hashtags":       clip.Hashtags,
 				"created_at":     now,
 			})
 

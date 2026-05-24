@@ -20,13 +20,38 @@ import (
 )
 
 type ClipHandler struct {
-	clipRepo   *repositories.ClipRepository
-	seriesRepo *repositories.SeriesRepository
-	parserURL  string
+	clipRepo    *repositories.ClipRepository
+	seriesRepo  *repositories.SeriesRepository
+	aiUsageRepo *repositories.ClipAIUsageRepository
+	parserURL   string
 }
 
-func NewClipHandler(clipRepo *repositories.ClipRepository, seriesRepo *repositories.SeriesRepository, parserURL string) *ClipHandler {
-	return &ClipHandler{clipRepo: clipRepo, seriesRepo: seriesRepo, parserURL: parserURL}
+func NewClipHandler(clipRepo *repositories.ClipRepository, seriesRepo *repositories.SeriesRepository, aiUsageRepo *repositories.ClipAIUsageRepository, parserURL string) *ClipHandler {
+	return &ClipHandler{clipRepo: clipRepo, seriesRepo: seriesRepo, aiUsageRepo: aiUsageRepo, parserURL: parserURL}
+}
+
+// AIUsage returns Gemini clip-generation spend for the admin dashboard:
+// the grand total plus a per-content (movie/episode) breakdown including a
+// derived cost-per-clip. Read-only — the worker writes clip_ai_usage.
+func (h *ClipHandler) AIUsage(c *gin.Context) {
+	limit, _ := strconv.ParseInt(c.DefaultQuery("limit", "200"), 10, 64)
+
+	totals, err := h.aiUsageRepo.Totals(c.Request.Context())
+	if err != nil {
+		log.Printf("[CLIP-AI-USAGE] totals failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load AI usage totals"})
+		return
+	}
+	items, err := h.aiUsageRepo.PerContent(c.Request.Context(), limit)
+	if err != nil {
+		log.Printf("[CLIP-AI-USAGE] per-content failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load AI usage breakdown"})
+		return
+	}
+	if items == nil {
+		items = []repositories.AIUsageItem{}
+	}
+	c.JSON(http.StatusOK, gin.H{"totals": totals, "items": items})
 }
 
 func (h *ClipHandler) ListClips(c *gin.Context) {
@@ -534,7 +559,9 @@ func (h *ClipHandler) UploadToInstagram(c *gin.Context) {
 		return
 	}
 
-	caption := services.BuildInstagramClipCaption(
+	caption := services.BuildClipCaptionAI(
+		clip.Caption,
+		clip.Hashtags,
 		services.ResolveInstagramClipCode(ctx, clip, h.seriesRepo),
 		services.IsSeriesClip(clip),
 	)

@@ -277,7 +277,8 @@ func main() {
 
 	// Clip repository and handler
 	clipRepo := repositories.NewClipRepository(db)
-	clipHandler := handlers.NewClipHandler(clipRepo, seriesRepo, parserURL)
+	clipAIUsageRepo := repositories.NewClipAIUsageRepository(db)
+	clipHandler := handlers.NewClipHandler(clipRepo, seriesRepo, clipAIUsageRepo, parserURL)
 
 	// B2 cleanup service — nil in DEV when credentials are not set; DeleteMovie
 	// then falls through to DB-only removal without aborting.
@@ -537,12 +538,18 @@ func executeInstagramSchedule(
 	// builder. Falls back to "movie" semantics if the load fails — keeps
 	// the publish moving rather than blocking on a transient DB hiccup.
 	isSeries := false
+	var aiCaption string
+	var aiHashtags []string
 	if clipRepo != nil {
 		if clip, err := clipRepo.FindByID(context.Background(), schedule.ClipID); err == nil && clip != nil {
 			isSeries = services.IsSeriesClip(clip)
+			aiCaption = clip.Caption
+			aiHashtags = clip.Hashtags
 		}
 	}
-	caption := services.BuildInstagramClipCaption(
+	caption := services.BuildClipCaptionAI(
+		aiCaption,
+		aiHashtags,
 		services.ResolveInstagramCodeByClipID(context.Background(), clipRepo, seriesRepo, schedule.ClipID, schedule.MovieCode),
 		isSeries,
 	)

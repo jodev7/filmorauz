@@ -352,6 +352,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		admin.GET("/clips/groups", clipHandler.ListClipGroups)
 		admin.GET("/clips/groups/debug", clipHandler.GetClipGroupsDebug)
 		admin.GET("/clips/genres", clipHandler.ListClipGenres)
+		admin.GET("/clips/ai-usage", clipHandler.AIUsage)
 		admin.GET("/clips", clipHandler.ListClips)
 		admin.GET("/clips/movie/:movieId", clipHandler.GetClipsByMovie)
 		admin.GET("/clips/:id/download", clipHandler.DownloadClip)

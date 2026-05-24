@@ -40,6 +40,12 @@ type Clip struct {
 	StorageType string    `bson:"storage_type" json:"storage_type"`
 	CreatedAt   time.Time `bson:"created_at" json:"created_at"`
 
+	// AI (Gemini) generated post text — populated only on the AI viral clip
+	// path. Caption is the catchy hook; Hashtags each start with '#'. Used
+	// directly as the Instagram caption (see BuildClipCaptionAI).
+	Caption  string   `bson:"caption,omitempty" json:"caption,omitempty"`
+	Hashtags []string `bson:"hashtags,omitempty" json:"hashtags,omitempty"`
+
 	// Instagram upload tracking (shared by movie and series clips — the
 	// existing per-clip upload flow works identically regardless of kind).
 	UploadedToInstagram       bool       `bson:"uploaded_to_instagram" json:"uploaded_to_instagram"`

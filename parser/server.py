@@ -31,6 +31,155 @@ import hashlib
 import requests
 
 
+# ── Gemini AI viral-clip analysis ────────────────────────────────────────────
+# These power the /clip/gemini-analyze endpoint. Gemini "hears" the whole film
+# audio and returns the most viral moments + an Uzbek caption + an accurate
+# Uzbek transcript per clip (used for burnt-in subtitles by the worker).
+
+class GeminiQuotaError(Exception):
+    """Raised when Gemini quota / billing is exhausted (HTTP 429 / RESOURCE_EXHAUSTED)."""
+
+
+class GeminiUnavailableError(Exception):
+    """Raised when Gemini is not configured or the SDK is missing."""
+
+
+# Per-1M-token prices for gemini-2.5-flash (USD). Overridable via env so a
+# pricing change or a model swap does not require a code change. Audio input is
+# billed at a higher rate than text; output covers both answer + thinking.
+def _gemini_prices():
+    return (
+        float(os.environ.get("GEMINI_PRICE_AUDIO_IN", "1.00")),
+        float(os.environ.get("GEMINI_PRICE_TEXT_IN", "0.30")),
+        float(os.environ.get("GEMINI_PRICE_OUT", "2.50")),
+    )
+
+
+def _gemini_cost_usd(usage):
+    """Compute USD cost from a Gemini usage_metadata object."""
+    audio_rate, text_rate, out_rate = _gemini_prices()
+    audio_tok = 0
+    text_tok = 0
+    for d in (getattr(usage, "prompt_tokens_details", None) or []):
+        modality = getattr(d, "modality", "") or ""
+        count = getattr(d, "token_count", 0) or 0
+        if str(modality).upper().endswith("AUDIO"):
+            audio_tok += count
+        else:
+            text_tok += count
+    prompt_total = getattr(usage, "prompt_token_count", 0) or 0
+    if audio_tok == 0 and text_tok == 0:
+        text_tok = prompt_total  # no modality breakdown — treat all as text
+    out_tok = (getattr(usage, "candidates_token_count", 0) or 0) + \
+              (getattr(usage, "thoughts_token_count", 0) or 0)
+    cost = (audio_tok * audio_rate + text_tok * text_rate + out_tok * out_rate) / 1_000_000.0
+    return round(cost, 6), {
+        "audio_tokens": audio_tok,
+        "text_tokens": text_tok,
+        "output_tokens": out_tok,
+        "total_tokens": getattr(usage, "total_token_count", 0) or 0,
+    }
+
+
+def gemini_analyze_clips(video_path, max_clips=12):
+    """Extract the film audio, send it to Gemini, and return viral clip specs.
+
+    Returns a dict: {clips:[...], usage:{...}, cost_usd:float, model:str}.
+    Raises GeminiQuotaError on quota exhaustion, GeminiUnavailableError if not
+    configured / SDK missing.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise GeminiUnavailableError("GEMINI_API_KEY not set")
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        raise GeminiUnavailableError("google-genai not installed")
+
+    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+
+    # Extract mono 16 kHz mp3 — small enough to upload quickly, plenty for ASR.
+    tmp_audio = None
+    uploaded = None
+    client = genai.Client(api_key=api_key)
+    try:
+        tmp_audio = video_path + ".gemini.mp3"
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000",
+             "-b:a", "48k", tmp_audio],
+            capture_output=True, check=True,
+        )
+
+        uploaded = client.files.upload(file=tmp_audio)
+        waited = 0
+        while getattr(uploaded.state, "name", "") == "PROCESSING" and waited < 120:
+            time.sleep(2); waited += 2
+            uploaded = client.files.get(name=uploaded.name)
+        if getattr(uploaded.state, "name", "") != "ACTIVE":
+            raise GeminiUnavailableError(f"uploaded file not ACTIVE: {uploaded.state}")
+
+        sub = types.Schema(type="OBJECT", properties={
+            "t": types.Schema(type="NUMBER"),
+            "text": types.Schema(type="STRING"),
+        }, required=["t", "text"])
+        clip = types.Schema(type="OBJECT", properties={
+            "start_sec": types.Schema(type="NUMBER"),
+            "end_sec": types.Schema(type="NUMBER"),
+            "reason": types.Schema(type="STRING"),
+            "caption": types.Schema(type="STRING"),
+            "hashtags": types.Schema(type="ARRAY", items=types.Schema(type="STRING")),
+            "subtitles": types.Schema(type="ARRAY", items=sub),
+        }, required=["start_sec", "end_sec", "reason", "caption", "hashtags", "subtitles"])
+        schema = types.Schema(type="ARRAY", items=clip)
+
+        prompt = (
+            "Sen o'zbek kino platformasi uchun viral Reels/Shorts muharririsan. "
+            "Bu o'zbek tiliga tarjima qilingan kino/serial/multfilmning to'liq audiosi. "
+            f"Eng viral {max_clips} ta lahzani top (kulgili, hissiy, kutilmagan, dramatik "
+            "yoki esda qoladigan iboralar). Har klip 25-55 soniya bo'lsin va gap "
+            "o'rtasidan kesilmasin. Har biri uchun: start_sec, end_sec, reason (nega "
+            "viral, qisqa o'zbekcha), caption (Reels uchun jozibali o'zbekcha sarlavha, "
+            "emoji bilan; hashtaglarni caption ichiga QO'YMA), hashtags (8-15 ta tegishli "
+            "hashtag, har biri '#' bilan boshlanadi, bo'shliqsiz; o'zbekcha + ommabop "
+            "Reels/Shorts teglari aralash, mas. #kino #uzbekkino #reels #shorts #film), "
+            "subtitles (aniq transkript, lotin alifbosida o' g' ', har gap "
+            "uchun mutlaq vaqt 't' soniyada)."
+        )
+
+        resp = client.models.generate_content(
+            model=model_name,
+            contents=[prompt, uploaded],
+            config=types.GenerateContentConfig(
+                temperature=0.4,
+                response_mime_type="application/json",
+                response_schema=schema,
+            ),
+        )
+        clips = json.loads(resp.text)
+        cost, usage = _gemini_cost_usd(resp.usage_metadata)
+        logger.info(f"[GEMINI] {len(clips)} clips, {usage['total_tokens']} tokens, ${cost:.4f} ({model_name})")
+        return {"clips": clips, "usage": usage, "cost_usd": cost, "model": model_name}
+    except (GeminiQuotaError, GeminiUnavailableError):
+        raise
+    except Exception as e:
+        msg = str(e)
+        if "RESOURCE_EXHAUSTED" in msg or "429" in msg or "quota" in msg.lower():
+            raise GeminiQuotaError(msg)
+        raise
+    finally:
+        if uploaded is not None:
+            try:
+                client.files.delete(name=uploaded.name)
+            except Exception:
+                pass
+        if tmp_audio and os.path.exists(tmp_audio):
+            try:
+                os.unlink(tmp_audio)
+            except Exception:
+                pass
+
+
 # Safe string truncation - never raises IndexError
 # Process start time used by /healthz to report parser process uptime.
 _PROCESS_START_TS = time.time()
@@ -4201,20 +4350,36 @@ class ParserHandler(BaseHTTPRequestHandler):
 
                 result = {"speech_segments": [], "face_frames": []}
 
-                # ── Whisper speech analysis ───────────────────────────────────
-                # Full-movie CPU transcription was taking 30–90+ min per job and
-                # stalling the pipeline at "creating_movie". Two changes:
-                #   1. Cache the loaded model on the handler class so the ~5s
-                #      model load isn't repeated for every call (3 concurrent
-                #      jobs each reloaded ~150MB into RAM).
-                #   2. Cap audio extraction to the first AI_AUDIO_LIMIT_SEC
-                #      seconds. Clip selection only needs *some* speech signal
-                #      to bias toward dialogue-rich moments; we don't need a
-                #      full transcript of a 2-hour film.
+                # ── Whisper speech analysis (faster-whisper, Uzbek) ───────────
+                # Uses faster-whisper (CTranslate2) instead of openai-whisper.
+                # Why:
+                #   • Forcing language="uz" stops auto-detect from misfiring on
+                #     dubbed (tarjima) audio, which used to be transcribed as
+                #     Turkish/Russian and produce garbage.
+                #   • int8 CPU inference is fast enough to transcribe the WHOLE
+                #     film, so the speech signal covers clips from anywhere in
+                #     the movie — not just the first 10 minutes.
+                #   • vad_filter skips music/silence, which both speeds the run
+                #     up and avoids Whisper hallucinating lyrics over scoring.
+                # Default model is "small": on a CPU it is fast enough (~0.4×
+                # realtime) and reliably emits segments. "medium" was measured
+                # at ~6× realtime AND produced 0 segments under int8 on the dev
+                # box, so it is opt-in only. Note: Uzbek transcription quality
+                # is still rough — these segments are used mainly for clip
+                # scoring; burnt-in subtitles stay gated behind CLIP_SUBTITLES
+                # in the worker.
+                # Tunables via env:
+                #   WHISPER_MODEL       model size (default "small")
+                #   WHISPER_LANGUAGE    forced language (default "uz"; blank ⇒ auto)
+                #   AI_AUDIO_LIMIT_SEC  optional cap in seconds (default 0 = full film)
+                # The loaded model is cached on the handler class (keyed by size)
+                # so concurrent jobs share one model in RAM.
                 tmp_audio = None
-                AI_AUDIO_LIMIT_SEC = int(_os.environ.get("AI_AUDIO_LIMIT_SEC", "600"))
+                AI_AUDIO_LIMIT_SEC = int(_os.environ.get("AI_AUDIO_LIMIT_SEC", "0"))
+                WHISPER_MODEL = _os.environ.get("WHISPER_MODEL", "small").strip() or "small"
+                WHISPER_LANGUAGE = _os.environ.get("WHISPER_LANGUAGE", "uz").strip() or None
                 try:
-                    import whisper as _whisper
+                    from faster_whisper import WhisperModel as _WhisperModel
                     tmp_audio = _tmp.mktemp(suffix=".wav")
                     ffmpeg_cmd = ["ffmpeg", "-y", "-i", video_path,
                                   "-ac", "1", "-ar", "16000"]
@@ -4222,18 +4387,36 @@ class ParserHandler(BaseHTTPRequestHandler):
                         ffmpeg_cmd += ["-t", str(AI_AUDIO_LIMIT_SEC)]
                     ffmpeg_cmd.append(tmp_audio)
                     _sp.run(ffmpeg_cmd, capture_output=True)
-                    model = getattr(ParserHandler, "_whisper_model", None)
+
+                    cache = getattr(ParserHandler, "_whisper_models", None)
+                    if cache is None:
+                        cache = {}
+                        ParserHandler._whisper_models = cache
+                    model = cache.get(WHISPER_MODEL)
                     if model is None:
-                        model = _whisper.load_model("base")
-                        ParserHandler._whisper_model = model
-                    wresult = model.transcribe(tmp_audio, fp16=False, verbose=False)
-                    result["speech_segments"] = [
-                        {"start": s["start"], "end": s["end"], "text": s["text"].strip()}
-                        for s in wresult.get("segments", [])
-                    ]
-                    logger.info(f"[CLIP-AI] speech segments: {len(result['speech_segments'])}")
+                        logger.info(f"[CLIP-AI] loading faster-whisper model={WHISPER_MODEL} (cpu/int8) — first load may download")
+                        model = _WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+                        cache[WHISPER_MODEL] = model
+
+                    segments, info = model.transcribe(
+                        tmp_audio,
+                        language=WHISPER_LANGUAGE,
+                        beam_size=5,
+                        vad_filter=True,
+                        vad_parameters={"min_silence_duration_ms": 500},
+                    )
+                    speech = []
+                    for s in segments:  # generator — iterating drives transcription
+                        text = (s.text or "").strip()
+                        if text:
+                            speech.append({"start": float(s.start), "end": float(s.end), "text": text})
+                    result["speech_segments"] = speech
+                    logger.info(
+                        f"[CLIP-AI] speech segments: {len(speech)} "
+                        f"(lang={info.language} p={info.language_probability:.2f} model={WHISPER_MODEL})"
+                    )
                 except ImportError:
-                    logger.warning("[CLIP-AI] whisper not installed — skipping speech analysis")
+                    logger.warning("[CLIP-AI] faster-whisper not installed — skipping speech analysis")
                 except Exception as e:
                     logger.warning(f"[CLIP-AI] whisper failed (skipping): {e}")
                 finally:
@@ -4291,6 +4474,37 @@ class ParserHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 logger.error(f"[CLIP-AI] analyze endpoint error: {e}", exc_info=True)
                 self._send_error(str(e), 500)
+            return
+
+        elif path == "/clip/gemini-analyze":
+            # AI viral-clip selection via Gemini. Sends the full film audio to
+            # gemini-2.5-flash and gets back the most viral moments (with
+            # start/end, a reason, a ready-to-post Uzbek caption, and an
+            # accurate Uzbek transcript per clip for burnt-in subtitles).
+            #
+            # Returns 200 with {clips, usage, model} on success. On quota /
+            # billing exhaustion returns 429 with {"error_type":"quota"} so the
+            # worker can fall back to the heuristic clip generator for the rest
+            # of the run instead of failing.
+            try:
+                import os as _os
+                body = self._read_json_body()
+                video_path = body.get("video_path", "")
+                if not video_path or not _os.path.exists(video_path):
+                    self._send_error("video_path not found", 400)
+                    return
+                max_clips = int(body.get("max_clips", 12))
+                result = gemini_analyze_clips(video_path, max_clips)
+                self._send_json(result, 200)
+            except GeminiQuotaError as e:
+                logger.warning(f"[GEMINI] quota/billing exhausted: {e}")
+                self._send_json({"error_type": "quota", "error": str(e)}, 429)
+            except GeminiUnavailableError as e:
+                logger.warning(f"[GEMINI] unavailable: {e}")
+                self._send_json({"error_type": "unavailable", "error": str(e)}, 503)
+            except Exception as e:
+                logger.error(f"[GEMINI] analyze error: {e}", exc_info=True)
+                self._send_json({"error_type": "error", "error": str(e)}, 500)
             return
 
         # 404 for unknown POST endpoints

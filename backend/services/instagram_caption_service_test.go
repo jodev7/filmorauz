@@ -29,6 +29,32 @@ func TestBuildInstagramClipCaptionSeries(t *testing.T) {
 	}
 }
 
+func TestBuildClipCaptionAIUsesGeminiText(t *testing.T) {
+	got := BuildClipCaptionAI(
+		"Bu sahna kuldiradi 😂",
+		[]string{"#kino", "uzbekkino", "#kino", " "},
+		"1234", false,
+	)
+	if !startsWith(got, "Bu sahna kuldiradi 😂") {
+		t.Fatalf("AI caption should lead with Gemini text, got: %q", got)
+	}
+	// hashtags normalized: '#' prepended, dupes/blanks dropped.
+	if !contains(got, "#uzbekkino") || !contains(got, "#kino") {
+		t.Fatalf("AI caption missing normalized hashtags, got: %q", got)
+	}
+	// "full Gemini": no code line / bot CTA.
+	if contains(got, "Kodi:") || contains(got, "bot orqali") {
+		t.Fatalf("AI caption should not include code line or CTA, got: %q", got)
+	}
+}
+
+func TestBuildClipCaptionAIFallsBackWhenEmpty(t *testing.T) {
+	got := BuildClipCaptionAI("", nil, "1234", false)
+	if !contains(got, "Kino Kodi: 1234") {
+		t.Fatalf("empty AI caption should fall back to static template, got: %q", got)
+	}
+}
+
 func startsWith(s, prefix string) bool { return len(s) >= len(prefix) && s[:len(prefix)] == prefix }
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {

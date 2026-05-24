@@ -3476,7 +3476,47 @@ export interface Clip {
   duration: number;
   sequence: number;
   storage_type: string;
+  caption?: string;
+  hashtags?: string[];
   created_at: string;
+}
+
+// AI (Gemini) clip-generation spend, surfaced in the admin dashboard.
+export interface ClipAIUsageTotals {
+  cost_usd: number;
+  total_tokens: number;
+  audio_tokens: number;
+  text_tokens: number;
+  output_tokens: number;
+  clip_count: number;
+  analyses: number;
+}
+
+export interface ClipAIUsageItem {
+  content_kind: string;
+  content_id: string;
+  title: string;
+  model: string;
+  cost_usd: number;
+  cost_per_clip: number;
+  total_tokens: number;
+  clip_count: number;
+  analyses: number;
+  last_analyzed: string;
+}
+
+export interface ClipAIUsageResponse {
+  totals: ClipAIUsageTotals;
+  items: ClipAIUsageItem[];
+}
+
+export async function adminGetClipAIUsage(token: string, limit = 200): Promise<ClipAIUsageResponse> {
+  const res = await fetch(`${API_URL}/admin/clips/ai-usage?limit=${limit}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch AI usage");
+  return res.json();
 }
 
 export async function adminGetClips(token: string, limit = 100): Promise<Clip[]> {
