@@ -52,10 +52,25 @@ func (r *DeleteJobRepository) GetByID(ctx context.Context, id primitive.ObjectID
 	return &job, err
 }
 
+// FindPending returns the in-flight (queued/deleting) delete job for a piece of
+// content, or (nil, nil) when none exists.
+//
+// Previously this returned (&job, err) unconditionally — so on ErrNoDocuments
+// callers that only checked `existing != nil` (the DeleteMovie / DeleteSeries
+// handlers) saw a non-nil zero-value job and rejected EVERY delete with "409
+// deletion job already in progress", before a job was ever created. That is why
+// the delete_jobs collection stayed empty and deletion never ran. Mirror the
+// FindByTelegramID (nil, nil) convention so a missing job is unambiguous.
 func (r *DeleteJobRepository) FindPending(ctx context.Context, contentID primitive.ObjectID) (*models.DeleteJob, error) {
 	var job models.DeleteJob
 	err := r.collection.FindOne(ctx, bson.M{"content_id": contentID, "status": bson.M{"$in": []string{"queued", "deleting"}}}).Decode(&job)
-	return &job, err
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &job, nil
 }
 
 func (r *DeleteJobRepository) Update(ctx context.Context, job *models.DeleteJob) error {
