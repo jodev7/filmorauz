@@ -97,6 +97,8 @@ interface Clip {
   duration: number;
   sequence: number;
   storage_type: string;
+  caption?: string;
+  hashtags?: string[];
   created_at: string;
   uploaded_to_instagram: boolean;
   instagram_upload_count: number;
@@ -145,6 +147,7 @@ interface PublishModal {
   selectedJobs: SelectedJob[];
   mode: UploadMode;
   scheduledFor: string;
+  caption: string; // editable Instagram caption (pre-filled from Gemini)
   results: JobResult[] | null;
   scheduledCreated: boolean;
 }
@@ -446,7 +449,19 @@ function getClipDisplayTitle(clip: Clip): string {
   return "Untitled clip";
 }
 
+// Composes the default Instagram caption for a clip. "Full Gemini": when the
+// clip carries an AI caption we use it + its hashtags verbatim; the admin can
+// still edit the result in the upload modal before publishing. Falls back to
+// the legacy code template for clips with no AI caption.
 function buildInstagramCaption(clip: Clip): string {
+  const aiCaption = clip.caption?.trim();
+  if (aiCaption) {
+    const tags = (clip.hashtags || [])
+      .map((h) => h.trim())
+      .filter(Boolean)
+      .map((h) => (h.startsWith("#") ? h : `#${h.replace(/^#+/, "")}`));
+    return tags.length > 0 ? `${aiCaption}\n\n${tags.join(" ")}` : aiCaption;
+  }
   const code = clip.movie_code?.trim() || "";
   return `🎬 Kinoni profildagi bot orqali toping!\n🔢 Kino Kodi: ${code}`;
 }
@@ -1378,6 +1393,7 @@ export default function AdminClipsPage() {
       selectedJobs: defaultJobs,
       mode: "now",
       scheduledFor: getNowTashkent(),
+      caption: buildInstagramCaption(clip),
       results: null,
       scheduledCreated: false,
     });
@@ -1415,13 +1431,13 @@ export default function AdminClipsPage() {
 
   const handleUploadNow = async () => {
     if (!token || !modal || modal.selectedJobs.length === 0) return;
-    const { clip, selectedJobs } = modal;
+    const { clip, selectedJobs, caption } = modal;
     setUploading((prev) => ({ ...prev, [clip.id]: true }));
     try {
       const res = await fetch(`${API}/admin/clips/${clip.id}/publish/now`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ jobs: selectedJobs }),
+        body: JSON.stringify({ jobs: selectedJobs, caption }),
       });
       const data = await res.json();
       setModal((prev) => (prev ? { ...prev, results: data.results || [] } : prev));
@@ -1437,7 +1453,7 @@ export default function AdminClipsPage() {
 
   const handleSchedule = async () => {
     if (!token || !modal || modal.selectedJobs.length === 0) return;
-    const { clip, selectedJobs, scheduledFor } = modal;
+    const { clip, selectedJobs, scheduledFor, caption } = modal;
     setUploading((prev) => ({ ...prev, [clip.id]: true }));
     try {
       const res = await fetch(`${API}/admin/clips/${clip.id}/publish/schedule`, {
@@ -1446,6 +1462,7 @@ export default function AdminClipsPage() {
         body: JSON.stringify({
           jobs: selectedJobs,
           scheduled_for: tashkentLocalToISO(scheduledFor),
+          caption,
         }),
       });
       const data = await res.json();
@@ -2170,7 +2187,7 @@ export default function AdminClipsPage() {
                   <div className="rounded-lg border border-brand-border bg-brand-dark/40 px-3 py-2 text-left">
                     <p className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Instagram caption</p>
                     <pre className="whitespace-pre-wrap text-xs text-gray-200 font-sans">
-                      {buildInstagramCaption(modal.clip)}
+                      {modal.caption}
                     </pre>
                   </div>
                 )}
@@ -2325,10 +2342,30 @@ export default function AdminClipsPage() {
 
                     {modal.selectedJobs.some((j) => j.platform === "instagram") && (
                       <div className="rounded-lg border border-brand-border bg-brand-dark/40 px-3 py-2">
-                        <p className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Instagram caption</p>
-                        <pre className="whitespace-pre-wrap text-xs text-gray-200 font-sans">
-                          {buildInstagramCaption(modal.clip)}
-                        </pre>
+                        <div className="flex items-center justify-between mb-1">
+                          <p className="text-[11px] uppercase tracking-wide text-gray-500">Instagram caption</p>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setModal((p) => (p ? { ...p, caption: buildInstagramCaption(p.clip) } : p))
+                            }
+                            className="text-[11px] text-gray-500 hover:text-white transition-colors"
+                          >
+                            AI matnini tiklash
+                          </button>
+                        </div>
+                        <textarea
+                          value={modal.caption}
+                          onChange={(e) =>
+                            setModal((p) => (p ? { ...p, caption: e.target.value } : p))
+                          }
+                          rows={6}
+                          placeholder="Instagram uchun caption..."
+                          className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-gray-200 text-xs focus:outline-none focus:border-pink-500 resize-y"
+                        />
+                        <p className="mt-1 text-[10px] text-gray-600">
+                          AI tomonidan yozilgan — yuklashdan oldin tahrirlashingiz mumkin.
+                        </p>
                       </div>
                     )}
 

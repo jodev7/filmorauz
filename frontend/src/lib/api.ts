@@ -3654,6 +3654,77 @@ export interface AdInput {
   player_enabled?: boolean;
 }
 
+// ── Expenses (superadmin) ──────────────────────────────────────────────────
+
+export interface Expense {
+  id: string;
+  category: string;
+  title: string;
+  amount_usd: number;
+  recurring: boolean;
+  note?: string;
+  incurred_at: string;
+  created_by?: string;
+  created_at: string;
+}
+
+export interface ExpenseCategoryTotal {
+  category: string;
+  amount_usd: number;
+  count: number;
+}
+
+export interface ExpenseSummary {
+  expenses: Expense[];
+  categories: ExpenseCategoryTotal[];
+  manual_total: number;
+  ai_clip_cost: number;
+  grand_total: number;
+}
+
+export async function adminGetExpenseSummary(token: string): Promise<ExpenseSummary> {
+  const res = await fetch(`${API_URL}/superadmin/expenses`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch expenses");
+  return res.json();
+}
+
+export async function adminCreateExpense(
+  token: string,
+  body: {
+    category: string;
+    title: string;
+    amount_usd: number;
+    recurring?: boolean;
+    note?: string;
+    incurred_at?: string;
+  }
+): Promise<Expense> {
+  const res = await fetch(`${API_URL}/superadmin/expenses`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to create expense");
+  }
+  return res.json();
+}
+
+export async function adminDeleteExpense(token: string, id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/superadmin/expenses/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to delete expense");
+  }
+}
+
 export async function adminListAds(token: string): Promise<Ad[]> {
   const res = await fetch(`${API_URL}/superadmin/ads`, {
     headers: authHeaders(token),
@@ -3792,7 +3863,9 @@ export async function uploadAdMedia(
   body.append("file", file);
   body.append("media_type", mediaType);
   // Do NOT set Content-Type — browser must set multipart/form-data with boundary automatically
-  const res = await fetch(`${API_URL}/admin/upload/ad-media`, {
+  // Superadmin-only: ad media upload lives under /superadmin/ads/upload so a
+  // regular admin cannot upload ad creatives even via direct API calls.
+  const res = await fetch(`${API_URL}/superadmin/ads/upload`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body,

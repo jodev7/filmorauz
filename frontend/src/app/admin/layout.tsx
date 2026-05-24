@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { Film, LayoutDashboard, List, LogOut, PlusCircle, Download, Users, FolderHeart, Folder, MessageSquare, Settings, Tv, Ban, History, MessageCircle, Video, Megaphone, Send, Lightbulb, Globe } from "lucide-react";
+import { Film, LayoutDashboard, List, LogOut, PlusCircle, Download, Users, FolderHeart, Folder, MessageSquare, Settings, Tv, Ban, History, MessageCircle, Video, Megaphone, Send, Lightbulb, Globe, Wallet } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
 export default function AdminLayout({
@@ -21,7 +21,8 @@ export default function AdminLayout({
 
   // Paths that require superadmin role specifically (backend enforces the
   // same via middleware.RequireSuperAdmin on /api/superadmin/*).
-  const isSuperAdminPath = pathname.startsWith("/admin/ads");
+  const isSuperAdminPath =
+    pathname.startsWith("/admin/ads") || pathname.startsWith("/admin/expenses");
 
   // Protect all /admin/* except /admin/login
   useEffect(() => {
@@ -83,6 +84,7 @@ export default function AdminLayout({
     { href: "/admin/comments/settings", icon: Settings, label: "Comment Settings" },
     ...(isSuperAdmin ? [
       { href: "/admin/ads", icon: Megaphone, label: "Ads" },
+      { href: "/admin/expenses", icon: Wallet, label: "Xarajatlar" },
     ] : []),
     ...(isAdmin ? [
       { href: "/admin/telegram-post", icon: Send, label: "Telegram Post" },

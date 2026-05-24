@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/filmorauz/backend/models"
@@ -84,6 +85,7 @@ func (h *PublishJobHandler) UploadNow(c *gin.Context) {
 			Platform    string `json:"platform"`
 			AccountName string `json:"account_name"`
 		} `json:"jobs"`
+		Caption string `json:"caption"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Jobs) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "jobs array is required"})
@@ -115,6 +117,10 @@ func (h *PublishJobHandler) UploadNow(c *gin.Context) {
 
 	for _, j := range req.Jobs {
 		clipCode := services.ResolveInstagramClipCode(ctx, clip, h.seriesRepo)
+		caption := strings.TrimSpace(req.Caption)
+		if caption == "" {
+			caption = services.BuildClipCaptionAI(clip.Caption, clip.Hashtags, clipCode, services.IsSeriesClip(clip))
+		}
 		job := &models.PublishJob{
 			ClipID:          clipID,
 			ClipURL:         clip.URL,
@@ -122,7 +128,7 @@ func (h *PublishJobHandler) UploadNow(c *gin.Context) {
 			MovieSlug:       clip.DisplaySlug(),
 			MovieCode:       clipCode,
 			ContentKind:     contentKindForClip(clip),
-			CaptionOverride: services.BuildClipCaptionAI(clip.Caption, clip.Hashtags, clipCode, services.IsSeriesClip(clip)),
+			CaptionOverride: caption,
 			Platform:        j.Platform,
 			AccountName:     j.AccountName,
 			CreatedBy:       createdBy,
@@ -192,6 +198,7 @@ func (h *PublishJobHandler) Schedule(c *gin.Context) {
 			AccountName string `json:"account_name"`
 		} `json:"jobs"`
 		ScheduledFor string `json:"scheduled_for"` // RFC3339
+		Caption      string `json:"caption"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Jobs) == 0 || req.ScheduledFor == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "jobs and scheduled_for are required"})
@@ -223,7 +230,10 @@ func (h *PublishJobHandler) Schedule(c *gin.Context) {
 
 	jobs := make([]*models.PublishJob, 0, len(req.Jobs))
 	scheduleCode := services.ResolveInstagramClipCode(ctx, clip, h.seriesRepo)
-	scheduleCaption := services.BuildClipCaptionAI(clip.Caption, clip.Hashtags, scheduleCode, services.IsSeriesClip(clip))
+	scheduleCaption := strings.TrimSpace(req.Caption)
+	if scheduleCaption == "" {
+		scheduleCaption = services.BuildClipCaptionAI(clip.Caption, clip.Hashtags, scheduleCode, services.IsSeriesClip(clip))
+	}
 	for _, j := range req.Jobs {
 		jobs = append(jobs, &models.PublishJob{
 			ClipID:          clipID,

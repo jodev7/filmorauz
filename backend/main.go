@@ -279,6 +279,8 @@ func main() {
 	clipRepo := repositories.NewClipRepository(db)
 	clipAIUsageRepo := repositories.NewClipAIUsageRepository(db)
 	clipHandler := handlers.NewClipHandler(clipRepo, seriesRepo, clipAIUsageRepo, parserURL)
+	expenseRepo := repositories.NewExpenseRepository(db)
+	expenseHandler := handlers.NewExpenseHandler(expenseRepo, clipAIUsageRepo)
 
 	// B2 cleanup service — nil in DEV when credentials are not set; DeleteMovie
 	// then falls through to DB-only removal without aborting.
@@ -345,7 +347,7 @@ func main() {
 	// Register routes
 	deleteJobHandler := handlers.NewDeleteJobHandler(repositories.NewDeleteJobRepository(db))
 
-	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler, deleteJobHandler)
+	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler, deleteJobHandler, expenseHandler)
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)
 	seoNotifier := buildSEONotifier(cfg, db)
