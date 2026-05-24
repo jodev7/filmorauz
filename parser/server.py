@@ -1027,8 +1027,27 @@ WORKER_URL = os.environ.get("WORKER_URL", "http://localhost:8083")
 BACKEND_URL = os.environ.get("BACKEND_URL", "")
 DOWNLOAD_CONCURRENCY = max(1, int(os.environ.get("DOWNLOAD_CONCURRENCY", "6")))
 DOWNLOAD_QUEUE_POLL_SECONDS = max(1, int(os.environ.get("DOWNLOAD_QUEUE_POLL_SECONDS", "5")))
+# Disk-pressure backpressure for the download queue. When the filesystem that
+# holds DOWNLOAD_DIR crosses this percentage, queue slots stop claiming new
+# jobs and leave them queued in the backend. Downloads resume automatically
+# once the cleanup/deletion worker frees space (completed jobs' temp + source
+# files removed). This prevents the "4 fresh downloads on top of 4 sources that
+# are still being processed" pile-up from filling the disk.
+DOWNLOAD_DISK_LIMIT_PCT = max(1, min(100, int(os.environ.get("DOWNLOAD_DISK_LIMIT_PCT", "80"))))
 _download_queue_started = False
 _download_queue_lock = threading.Lock()
+
+
+def _download_disk_percent() -> float:
+    """Used-space percentage of the filesystem that holds DOWNLOAD_DIR."""
+    try:
+        du = shutil.disk_usage(DOWNLOAD_DIR)
+        if du.total <= 0:
+            return 0.0
+        return du.used / du.total * 100.0
+    except OSError:
+        # If we cannot stat the disk, don't block downloads on a false reading.
+        return 0.0
 
 
 def _report_backend_failure(job_id: str, message: str):
@@ -1320,6 +1339,19 @@ def _download_queue_worker(slot: int, parser_base_url: str):
     claim_url = f"{BACKEND_URL}/api/ingestion/jobs/parser/claim"
     while True:
         if not BACKEND_URL:
+            time.sleep(DOWNLOAD_QUEUE_POLL_SECONDS)
+            continue
+
+        # Disk-pressure gate: never claim a new download while the disk is at
+        # or above the limit. Jobs stay queued in the backend and are picked up
+        # again once cleanup frees space, so the disk can't be overrun by new
+        # downloads stacking on top of sources that are still processing.
+        disk_pct = _download_disk_percent()
+        if disk_pct >= DOWNLOAD_DISK_LIMIT_PCT:
+            logger.warning(
+                f"[QUEUE] disk {disk_pct:.1f}% >= limit {DOWNLOAD_DISK_LIMIT_PCT}% — "
+                f"slot={slot} holding claims until cleanup frees space"
+            )
             time.sleep(DOWNLOAD_QUEUE_POLL_SECONDS)
             continue
 
