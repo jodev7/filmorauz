@@ -2411,7 +2411,19 @@ class ParserHandler(BaseHTTPRequestHandler):
             STALL_THRESHOLD_SEC = 120
             if force and job_id:
                 existing_state = get_active_download(job_id)
-                if existing_state and existing_state.status in ("starting", "downloading"):
+                # The worker switches to a different candidate (next quality
+                # tier / mirror) by re-issuing /download?force=1 with a NEW
+                # video_url. Treat a URL change as an explicit "abandon the old
+                # download" signal and always honor the restart — otherwise the
+                # stall guard below keeps serving the previous quality's
+                # download, the worker's bookkeeping drifts onto the new
+                # candidate, and the job silently lands on a lower tier (the
+                # asilmedia 2160p→360p cascade).
+                url_changed = bool(
+                    existing_state
+                    and (existing_state.video_url or "").strip() != (video_url or "").strip()
+                )
+                if existing_state and existing_state.status in ("starting", "downloading") and not url_changed:
                     last_activity = time.time() - existing_state.last_progress_at
                     if last_activity < STALL_THRESHOLD_SEC:
                         logger.info(
@@ -2431,6 +2443,11 @@ class ParserHandler(BaseHTTPRequestHandler):
                     logger.info(
                         f"[PARSER] force=1 honored — job_id={job_id} stalled "
                         f"({last_activity:.0f}s since last progress, threshold={STALL_THRESHOLD_SEC}s)"
+                    )
+                elif url_changed:
+                    logger.info(
+                        f"[PARSER] force=1 honored — job_id={job_id} video_url changed "
+                        f"(worker switched candidate); aborting previous download"
                     )
                 else:
                     logger.info(f"[PARSER] force restart requested — job_id={job_id}")

@@ -526,6 +526,14 @@ class DDownloaderIntegration:
             "--decryption-engine", "FFMPEG",
             "--decryption-binary-path", self._ffmpeg_path,
             "-mt",
+            # Without an explicit selector N_m3u8DL-RE does NOT auto-select
+            # (--auto-select defaults to False), so for a multi-rendition
+            # HLS/DASH manifest it falls back to the manifest's default/first
+            # track — which is why uzmovi .mpd imports landed at 360p even
+            # though the manifest carried 720p/1080p. Force best video + best
+            # audio so we always grab the top rendition the manifest offers.
+            "-sv", "best",
+            "-sa", "best",
             "-M", "format=mp4",
             "--log-level", "INFO",
         ]
