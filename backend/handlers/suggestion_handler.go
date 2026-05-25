@@ -174,6 +174,12 @@ func (h *SuggestionHandler) uploadImageToStorage(file multipart.File, filename, 
 		return "", "", err
 	}
 
+	// Convert JPEG/PNG to WebP before storage (GIFs pass through unchanged).
+	data, detectedType, err = maybeConvertImageToWebP(data, detectedType)
+	if err != nil {
+		return "", "", err
+	}
+
 	objectKey := buildFolderObjectKey("images/suggestions", "suggestion", filename, detectedType, ".jpg")
 	uploader := NewUploadHandler(nil, cfg)
 	imageURL, err := uploader.storeUploadedFile(objectKey, data, detectedType)

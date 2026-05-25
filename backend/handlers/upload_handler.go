@@ -155,6 +155,14 @@ func (h *UploadHandler) UploadProfileImage(c *gin.Context) {
 		return
 	}
 
+	// Convert JPEG/PNG avatars to WebP before storage (dev + prod).
+	fileBytes, contentType, err = maybeConvertImageToWebP(fileBytes, contentType)
+	if err != nil {
+		log.Printf("[PROFILE_UPLOAD] webp conversion failed: user_id=%s err=%v", userID.(string), err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to convert image to webp"})
+		return
+	}
+
 	objectKey := buildProfileImageObjectKey(userID.(string), header.Filename, contentType)
 	log.Printf("[PROFILE_UPLOAD] processing direct avatar upload: user_id=%s original=%q object_key=%q", userID.(string), header.Filename, objectKey)
 
@@ -397,7 +405,32 @@ func (h *UploadHandler) UploadMovieAssets(c *gin.Context) {
 	var savedURL string
 	objectKey := ""
 
-	if h.config.IsDev {
+	// Posters/backdrops: read bytes, convert JPEG/PNG to WebP, then store
+	// (same path for dev + prod). Only the .webp is ever persisted.
+	if fileType == "poster" || fileType == "backdrop" {
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
+			return
+		}
+		data, readErr := io.ReadAll(file)
+		if readErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
+			return
+		}
+		data, contentType, err = maybeConvertImageToWebP(data, contentType)
+		if err != nil {
+			log.Printf("[UPLOAD] movie asset webp conversion failed: type=%s err=%v", fileType, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to convert image to webp"})
+			return
+		}
+		objectKey = buildFolderObjectKey("images/"+fileType+"s", fileType, header.Filename, contentType, ".jpg")
+		savedURL, err = h.storeUploadedFile(objectKey, data, contentType)
+		if err != nil {
+			log.Printf("[UPLOAD] Error storing movie asset image: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
+			return
+		}
+	} else if h.config.IsDev {
 		savedURL, err = h.saveMovieAssetLocal(file, filename, fileType)
 		if err != nil {
 			log.Printf("[UPLOAD] Error saving movie asset locally: %v", err)
@@ -405,24 +438,7 @@ func (h *UploadHandler) UploadMovieAssets(c *gin.Context) {
 			return
 		}
 	} else {
-		if fileType == "poster" || fileType == "backdrop" {
-			if _, err := file.Seek(0, io.SeekStart); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
-				return
-			}
-			data, readErr := io.ReadAll(file)
-			if readErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
-				return
-			}
-			objectKey = "images/" + fileType + "s/" + filename
-			_, err = h.uploadBytesToB2(objectKey, data, contentType)
-			if err == nil {
-				savedURL = buildStoredMediaURL(h.config, objectKey, objectKey, "")
-			}
-		} else {
-			savedURL, err = h.saveToCDN(file, filename, "movies/"+fileType+"s")
-		}
+		savedURL, err = h.saveToCDN(file, filename, "movies/"+fileType+"s")
 		if err != nil {
 			log.Printf("[UPLOAD] Error saving movie asset to CDN: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
@@ -723,12 +739,40 @@ func (h *UploadHandler) UploadAdMedia(c *gin.Context) {
 		return
 	}
 
+	// Read the file once, then (for images) convert JPEG/PNG to WebP before
+	// storage. GIFs and videos pass through unchanged.
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
+		return
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, maxSize+1))
+	if readErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
+		return
+	}
+	if int64(len(data)) > maxSize {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", maxSize/1024/1024)})
+		return
+	}
+
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 	if ext == "" {
 		if mediaType == "image" {
 			ext = ".jpg"
 		} else {
 			ext = ".mp4"
+		}
+	}
+
+	if mediaType == "image" {
+		data, contentType, err = maybeConvertImageToWebP(data, contentType)
+		if err != nil {
+			log.Printf("[UPLOAD_AD] webp conversion failed: path=%q err=%v", header.Filename, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to convert image to webp"})
+			return
+		}
+		if contentType == "image/webp" {
+			ext = ".webp"
 		}
 	}
 
@@ -740,30 +784,8 @@ func (h *UploadHandler) UploadAdMedia(c *gin.Context) {
 
 	var savedURL string
 	if h.config.IsDev {
-		data, readErr := io.ReadAll(io.LimitReader(file, maxSize+1))
-		if readErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
-			return
-		}
-		if int64(len(data)) > maxSize {
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", maxSize/1024/1024)})
-			return
-		}
 		savedURL, err = h.saveBytesLocal(objectKey, data)
 	} else {
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
-			return
-		}
-		data, readErr := io.ReadAll(io.LimitReader(file, maxSize+1))
-		if readErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
-			return
-		}
-		if int64(len(data)) > maxSize {
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", maxSize/1024/1024)})
-			return
-		}
 		_, err = h.uploadBytesToB2(objectKey, data, contentType)
 		if err != nil {
 			log.Printf("[UPLOAD_AD] direct B2 upload failed: media_type=%s path=%q err=%v", mediaType, objectKey, err)
@@ -872,6 +894,14 @@ func (h *UploadHandler) UploadTelegramPostMedia(c *gin.Context) {
 	}
 	if contentType != "image/gif" && header.Size > maxSize {
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file too large (max 10MB)"})
+		return
+	}
+
+	// Convert JPEG/PNG to WebP before storage (GIFs pass through unchanged).
+	data, contentType, err = maybeConvertImageToWebP(data, contentType)
+	if err != nil {
+		log.Printf("[UPLOAD_TELEGRAM_POST] webp conversion failed: err=%v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to convert image to webp"})
 		return
 	}
 
@@ -997,15 +1027,9 @@ func (h *UploadHandler) UploadTemp(c *gin.Context) {
 	var fileKey string
 	isTempUpload := fileType == "video" || fileType == "temp_movie"
 
-	if h.config.IsDev {
-		savedURL, err = h.saveMovieAssetLocal(file, filename, fileType)
-		if err != nil {
-			log.Printf("[UPLOAD_TEMP] Error saving locally: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save file"})
-			return
-		}
-		fileKey = subDir + "/" + filename
-	} else if fileType == "poster" || fileType == "backdrop" {
+	if fileType == "poster" || fileType == "backdrop" {
+		// Posters/backdrops: read bytes, convert JPEG/PNG to WebP, then store
+		// (same path for dev + prod). Only the .webp is ever persisted.
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process file"})
 			return
@@ -1019,14 +1043,28 @@ func (h *UploadHandler) UploadTemp(c *gin.Context) {
 			c.JSON(status, gin.H{"error": readErr.Error()})
 			return
 		}
-		objectKey := buildFolderObjectKey("images/"+subDir, fileType, header.Filename, detectedType, ".jpg")
-		savedURL, err = h.uploadBytesToB2(objectKey, data, detectedType)
+		data, detectedType, err = maybeConvertImageToWebP(data, detectedType)
 		if err != nil {
-			log.Printf("[UPLOAD_TEMP] direct image upload failed: type=%s path=%q err=%v", fileType, objectKey, err)
+			log.Printf("[UPLOAD_TEMP] webp conversion failed: type=%s err=%v", fileType, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to convert image to webp"})
+			return
+		}
+		objectKey := buildFolderObjectKey("images/"+subDir, fileType, header.Filename, detectedType, ".jpg")
+		savedURL, err = h.storeUploadedFile(objectKey, data, detectedType)
+		if err != nil {
+			log.Printf("[UPLOAD_TEMP] image store failed: type=%s path=%q err=%v", fileType, objectKey, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload to storage"})
 			return
 		}
 		fileKey = objectKey
+	} else if h.config.IsDev {
+		savedURL, err = h.saveMovieAssetLocal(file, filename, fileType)
+		if err != nil {
+			log.Printf("[UPLOAD_TEMP] Error saving locally: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save file"})
+			return
+		}
+		fileKey = subDir + "/" + filename
 	} else {
 		workerURL := h.config.WorkerUploadURL
 		if workerURL == "" {

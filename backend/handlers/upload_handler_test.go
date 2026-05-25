@@ -20,6 +20,7 @@ import (
 
 func TestUploadTempUploadsPosterBackdropDirectlyToB2(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	stubWebPEncoder(t)
 
 	pngBytes := []byte{
 		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -335,6 +336,7 @@ func TestUploadProfileImageRejectsSniffedNonImage(t *testing.T) {
 
 func TestUploadProfileImageUploadsDirectlyToB2(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	stubWebPEncoder(t)
 
 	var uploadedFileName string
 	var savedProfileURL string
@@ -359,8 +361,12 @@ func TestUploadProfileImageUploadsDirectlyToB2(t *testing.T) {
 			if !strings.HasPrefix(uploadedFileName, "images%2Fprofile%2F507f1f77bcf86cd799439011_") {
 				t.Fatalf("uploaded file name = %q", uploadedFileName)
 			}
-			if r.Header.Get("Content-Type") != "image/png" {
+			// PNG avatars are converted to WebP before upload.
+			if r.Header.Get("Content-Type") != "image/webp" {
 				t.Fatalf("content type = %q", r.Header.Get("Content-Type"))
+			}
+			if !strings.HasSuffix(uploadedFileName, ".webp") {
+				t.Fatalf("uploaded file name = %q, want .webp suffix", uploadedFileName)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"fileId":"4_z","fileName":"` + uploadedFileName + `"}`))

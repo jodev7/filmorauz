@@ -75,15 +75,11 @@ func (h *UploadHandler) handleDirectUpload(c *gin.Context, spec uploadSpec) {
 	// Convert JPEG/PNG posters & backdrops to WebP before storage so only the
 	// smaller .webp ever lands in B2 (the original is never uploaded). A
 	// conversion failure is fatal — we do not silently store the original.
-	if isWebPConvertibleImage(contentType) {
-		webpData, convErr := convertToWebP(data)
-		if convErr != nil {
-			logSafeUploadError(spec.Label, header.Filename, convErr)
-			c.JSON(500, gin.H{"error": "failed to convert image to webp"})
-			return
-		}
-		data = webpData
-		contentType = "image/webp"
+	data, contentType, err = maybeConvertImageToWebP(data, contentType)
+	if err != nil {
+		logSafeUploadError(spec.Label, header.Filename, err)
+		c.JSON(500, gin.H{"error": "failed to convert image to webp"})
+		return
 	}
 
 	objectKey := buildFolderObjectKey(spec.Folder, spec.Label, header.Filename, contentType, spec.FallbackExt)

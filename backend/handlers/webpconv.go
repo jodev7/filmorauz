@@ -17,6 +17,11 @@ const webpQuality = 80
 // cwebpBinary is the name of the libwebp encoder binary. Overridable in tests.
 var cwebpBinary = "cwebp"
 
+// webpEncoder performs the actual JPEG/PNG → WebP byte conversion. It defaults
+// to the cwebp-backed implementation but can be swapped in tests to avoid a
+// hard dependency on the cwebp binary being installed.
+var webpEncoder = convertToWebP
+
 // isWebPConvertibleImage reports whether the given content type is an image we
 // convert to WebP. Animated GIFs are intentionally excluded (cwebp does not
 // handle animation; gif2webp would be required), as is image/webp itself
@@ -27,6 +32,23 @@ func isWebPConvertibleImage(contentType string) bool {
 		return true
 	}
 	return false
+}
+
+// maybeConvertImageToWebP converts JPEG/PNG image bytes to WebP. For any other
+// content type — including image/webp (already converted) and image/gif
+// (animation unsupported by cwebp) — it returns the input unchanged. When
+// conversion runs the returned content type is "image/webp". A conversion
+// failure is returned as an error so callers can fail the upload (no silent
+// fallback to the original format).
+func maybeConvertImageToWebP(data []byte, contentType string) ([]byte, string, error) {
+	if !isWebPConvertibleImage(contentType) {
+		return data, contentType, nil
+	}
+	out, err := webpEncoder(data)
+	if err != nil {
+		return nil, "", err
+	}
+	return out, "image/webp", nil
 }
 
 // convertToWebP encodes the given image bytes to lossy WebP using the cwebp
