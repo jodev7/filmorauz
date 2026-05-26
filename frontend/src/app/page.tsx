@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { ChevronRight, Flame, Clapperboard, Sparkles, Film } from "lucide-react";
+import { ChevronRight, Flame, Clapperboard, Sparkles, Film, Star, Layers } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MovieCarousel from "@/components/MovieCarousel";
@@ -11,6 +11,7 @@ import { getHomepageData } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
 
 const FeaturedCollectionsSection = dynamic(() => import("@/components/home/FeaturedCollectionsSection"));
+const ContinueWatchingRow = dynamic(() => import("@/components/home/ContinueWatchingRow"));
 const WebsiteAdSlot = dynamic(() => import("@/components/ads/WebsiteAdSlot"));
 
 // ISR: regenerate the homepage shell every 60s. User-specific sections (ads)
@@ -54,13 +55,14 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function HomePage() {
   const { t } = getTranslations("uz");
   const homepage = await getHomepageData();
-  const featured = homepage.featured_movies || [];
+  const topRated = homepage.top_rated || [];
   const recent = homepage.new_movies || [];
   const latestMovies = homepage.hero || [];
   const trending = homepage.trending || [];
   const featuredCollections = homepage.featured_collections || [];
   const seriesData = homepage.series || [];
   const genreChips = homepage.genres || [];
+  const genreRows = homepage.genre_rows || [];
 
   return (
     <>
@@ -83,6 +85,9 @@ export default async function HomePage() {
             ))}
           </div>
         </section>
+
+        {/* ── Continue Watching (logged-in users; self-hides when empty) ── */}
+        <ContinueWatchingRow />
 
         {/* ── Homepage Top Banner Ad — lazy; shared prefetch serves it ─ */}
         <div className="max-w-7xl mx-auto px-4 mt-8 mb-6">
@@ -167,13 +172,13 @@ export default async function HomePage() {
           <WebsiteAdSlot placement="homepage_inline_block_1" variant="inline" lazy />
         </div>
 
-        {/* ── Featured row ──────────────────────────────────── */}
-        {featured.length > 0 && (
+        {/* ── Top Rated ─────────────────────────────────────── */}
+        {topRated.length > 0 && (
           <section className="max-w-7xl mx-auto px-4 py-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Clapperboard size={20} className="text-orange-500" aria-hidden="true" />
-                {t("home.featuredMovies")}
+                <Star size={20} className="text-yellow-500" aria-hidden="true" />
+                Eng yuqori baholangan
               </h2>
               <Link
                 href="/movies"
@@ -182,9 +187,28 @@ export default async function HomePage() {
                 {t("common.seeAll")} <ChevronRight size={14} aria-hidden="true" />
               </Link>
             </div>
-            <MovieCarousel movies={featured} />
+            <MovieCarousel movies={topRated} />
           </section>
         )}
+
+        {/* ── Genre discovery rows ──────────────────────────── */}
+        {genreRows.map((row) => (
+          <section key={row.slug} className="max-w-7xl mx-auto px-4 py-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
+                <Layers size={20} className="text-orange-500" aria-hidden="true" />
+                {row.label}
+              </h2>
+              <Link
+                href={`/movies?genre=${row.slug}`}
+                className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-400 transition-colors"
+              >
+                {t("common.seeAll")} <ChevronRight size={14} aria-hidden="true" />
+              </Link>
+            </div>
+            <MovieCarousel movies={row.movies} />
+          </section>
+        ))}
 
         {/* Empty state */}
         {recent.length === 0 && (

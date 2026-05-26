@@ -106,14 +106,25 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 		newMovies = newMovies[:12]
 	}
 
-	featuredMovies := []models.Movie{}
-	if len(movies) > 1 {
-		featuredSubset := append([]models.Movie(nil), movies[1:]...)
-		if len(featuredSubset) > 6 {
-			featuredSubset = featuredSubset[:6]
-		}
-		featuredMovies = featuredSubset
+	// Top-rated row — genuinely distinct from "new movies" (which is just the
+	// most recent uploads). Ranked by audience rating, not recency.
+	topRated, err := h.movieService.ListTopRated(12)
+	if err != nil {
+		topRated = []models.Movie{}
 	}
+	for i := range topRated {
+		protectMovieMedia(&topRated[i])
+	}
+
+	// Genre discovery rows — surface a few popular genres as their own carousels
+	// so the homepage is more than recency-ordered lists. Empty genres are
+	// skipped so we never render a heading with no cards.
+	genreRowDefs := []struct{ label, slug string }{
+		{"Jangari", "action"},
+		{"Drama", "drama"},
+		{"Komediya", "comedy"},
+	}
+	genreRows := make([]gin.H, 0, len(genreRowDefs))
 
 	premiumMovies := make([]models.Movie, 0, 12)
 	for i := range movies {
@@ -167,6 +178,21 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 		return out
 	}
 
+	for _, def := range genreRowDefs {
+		genreMovies, gErr := h.movieService.ListByGenre(def.slug, 12)
+		if gErr != nil || len(genreMovies) == 0 {
+			continue
+		}
+		for i := range genreMovies {
+			protectMovieMedia(&genreMovies[i])
+		}
+		genreRows = append(genreRows, gin.H{
+			"label":  def.label,
+			"slug":   def.slug,
+			"movies": toMovieCardResponse(genreMovies),
+		})
+	}
+
 	seriesResponse := make([]gin.H, len(seriesPreview))
 	for i, series := range seriesPreview {
 		seriesResponse[i] = gin.H{
@@ -188,7 +214,8 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 		"new_movies":           toMovieCardResponse(newMovies),
 		"trending":             trendingResponse,
 		"premium_movies":       toMovieCardResponse(premiumMovies),
-		"featured_movies":      toMovieCardResponse(featuredMovies),
+		"top_rated":            toMovieCardResponse(topRated),
+		"genre_rows":           genreRows,
 		"featured_collections": featuredCollections,
 		"series":               seriesResponse,
 	})

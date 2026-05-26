@@ -31,8 +31,12 @@ function MovieCarouselImpl({ movies, priorityCount = 0 }: MovieCarouselProps) {
     const scrollElement = scrollRef.current;
     if (scrollElement) {
       scrollElement.addEventListener("scroll", checkScroll, { passive: true });
+      window.addEventListener("resize", checkScroll, { passive: true });
       checkScroll();
-      return () => scrollElement.removeEventListener("scroll", checkScroll);
+      return () => {
+        scrollElement.removeEventListener("scroll", checkScroll);
+        window.removeEventListener("resize", checkScroll);
+      };
     }
   }, [movies.length]);
 

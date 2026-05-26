@@ -132,13 +132,20 @@ export interface SeriesPreview {
   updated_at: string;
 }
 
+export interface GenreRow {
+  label: string;
+  slug: string;
+  movies: Movie[];
+}
+
 export interface HomepageResponse {
   hero: Movie[];
   genres: GenreChip[];
   new_movies: Movie[];
   trending: Movie[];
   premium_movies: Movie[];
-  featured_movies: Movie[];
+  top_rated: Movie[];
+  genre_rows: GenreRow[];
   featured_collections: Collection[];
   series: SeriesPreview[];
 }
@@ -314,7 +321,12 @@ export async function getHomepageData(): Promise<HomepageResponse> {
         updated_at: "",
       })),
       premium_movies: (json.premium_movies || []).map(mapHomepageMovie),
-      featured_movies: (json.featured_movies || []).map(mapHomepageMovie),
+      top_rated: (json.top_rated || []).map(mapHomepageMovie),
+      genre_rows: (json.genre_rows || []).map((row: any) => ({
+        label: row.label || "",
+        slug: row.slug || "",
+        movies: (row.movies || []).map(mapHomepageMovie),
+      })),
       featured_collections: json.featured_collections || [],
       series: (json.series || []).map((item: any) => ({
         id: item.id,
@@ -345,10 +357,46 @@ export async function getHomepageData(): Promise<HomepageResponse> {
       new_movies: [],
       trending: [],
       premium_movies: [],
-      featured_movies: [],
+      top_rated: [],
+      genre_rows: [],
       featured_collections: [],
       series: [],
     };
+  }
+}
+
+export interface ContinueWatchingItem {
+  movie_id?: string;
+  target_type: string;
+  target_id: string;
+  episode_id?: string;
+  title: string;
+  slug: string;
+  poster_url: string;
+  type?: string;
+  series_title?: string;
+  series_slug?: string;
+  season_number?: number;
+  episode_number?: number;
+  episode_title?: string;
+  last_position_sec: number;
+  duration_sec: number;
+  progress_percent: number;
+  last_watched_at: string;
+}
+
+// Fetch the logged-in user's continue-watching list. Requires a JWT.
+export async function getContinueWatching(token: string): Promise<ContinueWatchingItem[]> {
+  try {
+    const res = await fetch(`${API_URL}/user/continue-watching`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    return json.data || [];
+  } catch {
+    return [];
   }
 }
 
