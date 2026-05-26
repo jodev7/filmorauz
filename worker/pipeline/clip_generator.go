@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1181,7 +1182,17 @@ func (p *Pipeline) fetchGeminiClips(videoPath string, maxClips int) (*geminiAnal
 		"video_path": videoPath,
 		"max_clips":  maxClips,
 	})
-	client := &http.Client{Timeout: 40 * time.Minute}
+	// The transcript-anchored path transcribes the WHOLE film with Whisper
+	// before Gemini selects clips, which on CPU can take well over an hour for a
+	// feature-length movie. 40m used to cut that off and silently drop to the
+	// heuristic path. Default to a generous ceiling, tunable via env.
+	timeoutMin := 120
+	if v := os.Getenv("CLIP_GEMINI_TIMEOUT_MIN"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			timeoutMin = n
+		}
+	}
+	client := &http.Client{Timeout: time.Duration(timeoutMin) * time.Minute}
 	resp, err := client.Post(p.config.ParserURL+"/clip/gemini-analyze", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
@@ -1819,11 +1830,16 @@ func (p *Pipeline) generateClipsForTarget(ctx context.Context, target clipTarget
 	log.Printf("[CLIP] ===== UPLOAD END =====")
 
 	log.Printf("[CLIP] ===== MONGODB SAVE START =====")
-	log.Printf("[CLIP] Saving %d clip records to MongoDB...", len(generatedClips))
-
-	if err := p.saveClipsToMongoDB(ctx, generatedClips); err != nil {
-		log.Printf("[CLIP] ERROR: Failed to save clips to MongoDB: %v", err)
-		return fmt.Errorf("failed to save clips to MongoDB: %w", err)
+	// No DB wired (e.g. the manual render harness) → clips are already on disk;
+	// skip persistence cleanly instead of failing the whole run.
+	if p.config.DB == nil {
+		log.Printf("[CLIP] DB not configured — skipping clip persistence (%d clips left on disk)", len(generatedClips))
+	} else {
+		log.Printf("[CLIP] Saving %d clip records to MongoDB...", len(generatedClips))
+		if err := p.saveClipsToMongoDB(ctx, generatedClips); err != nil {
+			log.Printf("[CLIP] ERROR: Failed to save clips to MongoDB: %v", err)
+			return fmt.Errorf("failed to save clips to MongoDB: %w", err)
+		}
 	}
 
 	log.Printf("[CLIP] ===== MONGODB SAVE END =====")

@@ -162,6 +162,36 @@ def _gemini_generate_json(client, types, model_name, contents, schema,
     return json.loads(raw), resp.usage_metadata
 
 
+def _gemini_generate_json_retrying(client, types, model_name, contents, schema,
+                                   max_output_tokens, thinking_budget=0,
+                                   temperature=0.4, attempts=4):
+    """_gemini_generate_json with backoff on transient 429/503 (UNAVAILABLE).
+
+    Gemini intermittently returns 503 "high demand" or 429 rate limits. These
+    are transient, so retry with a short wait (honouring any retryDelay) rather
+    than letting the caller drop to a worse path. Non-transient errors and the
+    final attempt propagate unchanged.
+    """
+    for attempt in range(attempts):
+        try:
+            return _gemini_generate_json(
+                client, types, model_name, contents, schema,
+                max_output_tokens, thinking_budget, temperature,
+            )
+        except Exception as e:
+            msg = str(e)
+            transient = any(s in msg for s in ("RESOURCE_EXHAUSTED", "429", "503", "UNAVAILABLE"))
+            if not transient or attempt == attempts - 1:
+                raise
+            m = re.search(r"retry in ([0-9.]+)s|retryDelay['\"]?:\s*['\"]?([0-9.]+)", msg)
+            delay = float(next((g for g in (m.groups() if m else []) if g), 15.0)) + 2.0
+            logger.warning(
+                f"[GEMINI] transient error (attempt {attempt + 1}/{attempts}), "
+                f"waiting {delay:.0f}s: {msg[:90]}"
+            )
+            time.sleep(delay)
+
+
 # Distinctive fragments from the transcription prompt — if a "subtitle" line
 # contains one, the model echoed the instructions instead of transcribing
 # (happens when a window has no real speech), so we drop it.
@@ -426,7 +456,7 @@ def _gemini_select_from_transcript(client, types, model_name, segments, max_clip
         f"TRANSKRIPT:\n{transcript}"
     )
 
-    clips, usage_meta = _gemini_generate_json(
+    clips, usage_meta = _gemini_generate_json_retrying(
         client, types, model_name, [prompt], select_schema,
         max_output_tokens=24576, thinking_budget=8192, temperature=0.3,
     )
@@ -442,7 +472,8 @@ def _gemini_select_from_transcript(client, types, model_name, segments, max_clip
             valid.append(c)
     valid.sort(key=lambda c: float(c.get("start_sec", 0)))
     clips = valid[:max_clips]
-    logger.info(f"[GEMINI] transcript path selected {len(clips)} clips (raw={raw_count})")
+    _wins = [f"{float(c['start_sec']):.0f}-{float(c['end_sec']):.0f}" for c in clips]
+    logger.info(f"[GEMINI] transcript path selected {len(clips)} clips (raw={raw_count}) windows={_wins}")
     if not clips:
         raise GeminiUnavailableError("gemini returned no usable clips from transcript")
 
