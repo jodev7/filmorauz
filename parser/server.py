@@ -81,11 +81,139 @@ def _gemini_cost_usd(usage):
     }
 
 
-def gemini_analyze_clips(video_path, max_clips=12):
-    """Extract the film audio, send it to Gemini, and return viral clip specs.
+def _gemini_extract_audio(video_path, out_path, start=None, end=None):
+    """Extract mono 16 kHz mp3 from video_path, optionally a [start,end] slice.
 
-    Returns a dict: {clips:[...], usage:{...}, cost_usd:float, model:str}.
-    Raises GeminiQuotaError on quota exhaustion, GeminiUnavailableError if not
+    Small enough to upload quickly, plenty for ASR. Uses input-side seeking so
+    slicing a short window out of a multi-GB film is fast.
+    """
+    cmd = ["ffmpeg", "-y"]
+    if start is not None:
+        cmd += ["-ss", f"{max(0.0, float(start)):.3f}"]
+    if end is not None and start is not None:
+        cmd += ["-t", f"{max(0.1, float(end) - float(start)):.3f}"]
+    cmd += ["-i", video_path, "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", out_path]
+    subprocess.run(cmd, capture_output=True, check=True)
+
+
+def _gemini_upload_audio(client, audio_path, timeout=120):
+    """Upload an audio file to the Gemini File API and wait until ACTIVE."""
+    uploaded = client.files.upload(file=audio_path)
+    waited = 0
+    while getattr(uploaded.state, "name", "") == "PROCESSING" and waited < timeout:
+        time.sleep(2); waited += 2
+        uploaded = client.files.get(name=uploaded.name)
+    if getattr(uploaded.state, "name", "") != "ACTIVE":
+        raise GeminiUnavailableError(f"uploaded file not ACTIVE: {uploaded.state}")
+    return uploaded
+
+
+def _gemini_generate_json(client, types, model_name, contents, schema,
+                          max_output_tokens, thinking_budget=0, temperature=0.4):
+    """Run a structured-JSON Gemini call and return (parsed_obj, usage_metadata).
+
+    thinking_budget controls reasoning: 0 disables it (cheap, for mechanical
+    tasks like transcription), a positive value enables it (needed for the
+    nuanced viral-clip selection — with thinking off the model degenerates into
+    garbage). Thinking tokens count against max_output_tokens, so callers that
+    enable thinking must leave headroom for the answer. Non-STOP finishes (e.g.
+    MAX_TOKENS) raise a clear error instead of a cryptic JSON parse failure.
+    """
+    resp = client.models.generate_content(
+        model=model_name,
+        contents=contents,
+        config=types.GenerateContentConfig(
+            temperature=temperature,
+            response_mime_type="application/json",
+            response_schema=schema,
+            thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
+            max_output_tokens=max_output_tokens,
+        ),
+    )
+
+    finish_reason = None
+    try:
+        finish_reason = resp.candidates[0].finish_reason
+    except (AttributeError, IndexError, TypeError):
+        pass
+    if finish_reason is not None and str(finish_reason).split(".")[-1] not in ("STOP", "1"):
+        um = getattr(resp, "usage_metadata", None)
+        logger.warning(
+            "[GEMINI] non-STOP finish=%s usage: prompt=%s thoughts=%s candidates=%s total=%s text_len=%s",
+            finish_reason,
+            getattr(um, "prompt_token_count", None),
+            getattr(um, "thoughts_token_count", None),
+            getattr(um, "candidates_token_count", None),
+            getattr(um, "total_token_count", None),
+            len(resp.text or "") if resp is not None else 0,
+        )
+        raise GeminiUnavailableError(f"gemini did not finish cleanly (finish_reason={finish_reason})")
+
+    raw = (resp.text or "").strip()
+    if not raw:
+        raise GeminiUnavailableError("gemini returned empty response")
+    # Defensive: strip a ```json fence if the model adds one despite the
+    # application/json mime type.
+    if raw.startswith("```"):
+        raw = raw.strip("`")
+        if raw.lower().startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
+    return json.loads(raw), resp.usage_metadata
+
+
+# Distinctive fragments from the transcription prompt — if a "subtitle" line
+# contains one, the model echoed the instructions instead of transcribing
+# (happens when a window has no real speech), so we drop it.
+_SUBTITLE_ECHO_MARKERS = (
+    "transkript", "qisqa video", "klipning audiosi", "eshitilgan",
+    "o'ylab top", "bo'sh ro'yxat", "ko'rsatma", "lotin alifbo",
+)
+
+
+def _clean_subtitles(subs, start, end, absolute=False):
+    """Filter raw transcript lines for one clip window and return absolute times.
+
+    Drops empty lines and prompt-echo hallucinations, then clamps each line's
+    time into [start, end] (film seconds) and sorts. When absolute=False the
+    incoming 't' is clip-local (seconds from the window start) and is rebased to
+    absolute film seconds; when absolute=True it is already film-absolute.
+    """
+    start = float(start); end = float(end)
+    cleaned = []
+    for s in subs or []:
+        text = str(s.get("text", "") or "").strip()
+        if not text:
+            continue
+        low = text.lower()
+        if any(m in low for m in _SUBTITLE_ECHO_MARKERS):
+            continue
+        try:
+            t = float(s.get("t", 0))
+        except (TypeError, ValueError):
+            t = 0.0
+        abs_t = t if absolute else start + t
+        abs_t = min(max(abs_t, start), end)
+        cleaned.append({"t": round(abs_t, 3), "text": text})
+    cleaned.sort(key=lambda x: x["t"])
+    return cleaned
+
+
+def gemini_analyze_clips(video_path, max_clips=12, with_subtitles=True):
+    """Pick viral clips via Gemini, then transcribe each selected window.
+
+    Two stages keep every response small (the previous single-call design that
+    bundled full per-clip subtitles blew past the output-token cap and got
+    truncated):
+      1. Selection — send the full film audio, get back clip windows + caption
+         + hashtags (no subtitles, so the JSON stays tiny).
+      2. Transcription — for each selected window, send only that short audio
+         slice and get an accurate Uzbek transcript. Per-clip 't' values are
+         rebased to absolute film seconds so the worker's ASS builder works
+         unchanged.
+
+    Returns {clips:[...], usage:{...}, cost_usd:float, model:str}. Raises
+    GeminiQuotaError on quota exhaustion, GeminiUnavailableError if not
     configured / SDK missing.
     """
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
@@ -98,68 +226,214 @@ def gemini_analyze_clips(video_path, max_clips=12):
         raise GeminiUnavailableError("google-genai not installed")
 
     model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    want_subs = bool(with_subtitles)
 
-    # Extract mono 16 kHz mp3 — small enough to upload quickly, plenty for ASR.
-    tmp_audio = None
-    uploaded = None
     client = genai.Client(api_key=api_key)
+    tmp_files = []   # local audio temp files to clean up
+    uploads = []     # Gemini File API handles to delete
+
+    # Running cost/usage totals across stage 1 + every stage 2 call.
+    totals = {"audio_tokens": 0, "text_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    total_cost = 0.0
+
+    def _account(usage_meta):
+        nonlocal total_cost
+        cost, usage = _gemini_cost_usd(usage_meta)
+        total_cost += cost
+        for k in totals:
+            totals[k] += usage.get(k, 0)
+
     try:
-        tmp_audio = video_path + ".gemini.mp3"
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000",
-             "-b:a", "48k", tmp_audio],
-            capture_output=True, check=True,
-        )
+        # ── Stage 1: viral clip selection (no subtitles → small response) ──
+        full_audio = video_path + ".gemini.mp3"
+        tmp_files.append(full_audio)
+        _gemini_extract_audio(video_path, full_audio)
+        full_upload = _gemini_upload_audio(client, full_audio)
+        uploads.append(full_upload)
 
-        uploaded = client.files.upload(file=tmp_audio)
-        waited = 0
-        while getattr(uploaded.state, "name", "") == "PROCESSING" and waited < 120:
-            time.sleep(2); waited += 2
-            uploaded = client.files.get(name=uploaded.name)
-        if getattr(uploaded.state, "name", "") != "ACTIVE":
-            raise GeminiUnavailableError(f"uploaded file not ACTIVE: {uploaded.state}")
-
-        sub = types.Schema(type="OBJECT", properties={
-            "t": types.Schema(type="NUMBER"),
-            "text": types.Schema(type="STRING"),
-        }, required=["t", "text"])
-        clip = types.Schema(type="OBJECT", properties={
+        clip_schema = types.Schema(type="OBJECT", properties={
             "start_sec": types.Schema(type="NUMBER"),
             "end_sec": types.Schema(type="NUMBER"),
             "reason": types.Schema(type="STRING"),
             "caption": types.Schema(type="STRING"),
             "hashtags": types.Schema(type="ARRAY", items=types.Schema(type="STRING")),
-            "subtitles": types.Schema(type="ARRAY", items=sub),
-        }, required=["start_sec", "end_sec", "reason", "caption", "hashtags", "subtitles"])
-        schema = types.Schema(type="ARRAY", items=clip)
+        }, required=["start_sec", "end_sec", "reason", "caption", "hashtags"])
+        select_schema = types.Schema(type="ARRAY", items=clip_schema)
 
-        prompt = (
+        select_prompt = (
             "Sen o'zbek kino platformasi uchun viral Reels/Shorts muharririsan. "
-            "Bu o'zbek tiliga tarjima qilingan kino/serial/multfilmning to'liq audiosi. "
-            f"Eng viral {max_clips} ta lahzani top (kulgili, hissiy, kutilmagan, dramatik "
-            "yoki esda qoladigan iboralar). Har klip 25-55 soniya bo'lsin va gap "
-            "o'rtasidan kesilmasin. Har biri uchun: start_sec, end_sec, reason (nega "
-            "viral, qisqa o'zbekcha), caption (Reels uchun jozibali o'zbekcha sarlavha, "
-            "emoji bilan; hashtaglarni caption ichiga QO'YMA), hashtags (8-15 ta tegishli "
-            "hashtag, har biri '#' bilan boshlanadi, bo'shliqsiz; o'zbekcha + ommabop "
-            "Reels/Shorts teglari aralash, mas. #kino #uzbekkino #reels #shorts #film), "
-            "subtitles (aniq transkript, lotin alifbosida o' g' ', har gap "
-            "uchun mutlaq vaqt 't' soniyada)."
+            "Bu o'zbek tiliga tarjima qilingan kino/serial/multfilmning to'liq audiosi "
+            "(davomiyligi bir necha soat bo'lishi mumkin). Butun filmni tinglab, eng "
+            f"viral lahzalarni tanla.\n\n"
+            f"QAT'IY QOIDALAR:\n"
+            f"- AYNAN {max_clips} ta klip qaytar — ko'p ham, kam ham emas.\n"
+            "- Har klip 25-55 soniya davom etsin (end_sec - start_sec >= 25). "
+            "1-2 soniyalik bo'laklar BERMA — bu juda muhim.\n"
+            "- Kliplar bir-biridan uzoq, filmning turli joylaridan bo'lsin "
+            "(boshi, o'rtasi, oxiri). Ketma-ket 1 soniyali bo'laklarga BO'LMA.\n"
+            "- Klip mazmunan tugal sahna bo'lsin (kulgili, hissiy, kutilmagan, "
+            "dramatik yoki esda qoladigan), gap o'rtasidan kesilmasin.\n\n"
+            "Har klip uchun: start_sec va end_sec (audio boshidan mutlaq soniyada), "
+            "reason (nega viral, qisqa o'zbekcha), caption (Reels uchun jozibali "
+            "o'zbekcha sarlavha emoji bilan; bu sahnaning dialog matni EMAS, balki "
+            "e'tibor tortuvchi sarlavha; hashtaglarni ichiga QO'YMA), hashtags (8-15 ta, "
+            "har biri '#' bilan, bo'shliqsiz; mas. #kino #uzbekkino #reels #shorts #film). "
+            "Subtitr/transkript KERAK EMAS."
         )
 
-        resp = client.models.generate_content(
-            model=model_name,
-            contents=[prompt, uploaded],
-            config=types.GenerateContentConfig(
-                temperature=0.4,
-                response_mime_type="application/json",
-                response_schema=schema,
-            ),
+        # Selection is the quality-critical step — enable thinking. Thinking
+        # tokens share the output budget, so the ceiling must cover BOTH the
+        # reasoning and the JSON. A 24k cap previously starved the answer
+        # (thoughts 8k + candidates 16k hit the cap and truncated the JSON), so
+        # use the model's full 64k output ceiling — output tokens are cheap and
+        # this guarantees the selection JSON finishes cleanly.
+        clips, usage_meta = _gemini_generate_json(
+            client, types, model_name,
+            [select_prompt, full_upload], select_schema,
+            max_output_tokens=65536, thinking_budget=8192, temperature=0.2,
         )
-        clips = json.loads(resp.text)
-        cost, usage = _gemini_cost_usd(resp.usage_metadata)
-        logger.info(f"[GEMINI] {len(clips)} clips, {usage['total_tokens']} tokens, ${cost:.4f} ({model_name})")
-        return {"clips": clips, "usage": usage, "cost_usd": cost, "model": model_name}
+        _account(usage_meta)
+
+        # Guard against degenerate selections (e.g. dozens of 1-second windows):
+        # keep only clips of a sane length and cap to the requested count.
+        raw_count = len(clips) if isinstance(clips, list) else 0
+        valid = []
+        raw_windows = []
+        for c in clips if isinstance(clips, list) else []:
+            try:
+                s = float(c.get("start_sec", 0)); e = float(c.get("end_sec", 0))
+            except (TypeError, ValueError):
+                continue
+            raw_windows.append(f"{s:.1f}-{e:.1f}({e - s:.1f}s)")
+            if e - s >= 15.0:
+                valid.append(c)
+        logger.info(f"[GEMINI] stage1 raw windows: {raw_windows}")
+        valid.sort(key=lambda c: float(c.get("start_sec", 0)))
+        clips = valid[:max_clips]
+        logger.info(
+            f"[GEMINI] stage1 selected {len(clips)} usable clips "
+            f"(raw={raw_count}) ({model_name})"
+        )
+        if not clips:
+            raise GeminiUnavailableError("gemini returned no usable clips")
+
+        # Default every clip to no subtitles; stage 2 fills them in if enabled.
+        for c in clips:
+            c["subtitles"] = []
+
+        # ── Stage 2: batched transcription (ONE call for all clips) ──
+        # Send only the SELECTED clip windows' audio, not the whole film. Each
+        # window is uploaded as its own audio part in a single generate_content
+        # call, so the whole movie still costs just 2 Gemini requests regardless
+        # of clip count, but stage-2 input shrinks from the full-film audio
+        # (~325k tokens) to the sum of the short windows (~a few k tokens). That
+        # both slashes cost (~36%) and keeps stage 2 under the free tier's
+        # per-minute input-token limit (250k/min) that the full-film audio
+        # otherwise tripped right after stage 1.
+        if want_subs and clips:
+            sub_schema = types.Schema(type="ARRAY", items=types.Schema(type="OBJECT", properties={
+                "index": types.Schema(type="INTEGER"),
+                "subtitles": types.Schema(type="ARRAY", items=types.Schema(type="OBJECT", properties={
+                    "t": types.Schema(type="NUMBER"),
+                    "text": types.Schema(type="STRING"),
+                }, required=["t", "text"])),
+            }, required=["index", "subtitles"]))
+
+            # Extract + upload each selected window as a separate audio part.
+            window_parts = []   # parallel to clips; None if extraction failed
+            for i, c in enumerate(clips):
+                wpath = f"{video_path}.clip{i}.gemini.mp3"
+                try:
+                    _gemini_extract_audio(
+                        video_path, wpath,
+                        start=float(c["start_sec"]), end=float(c["end_sec"]),
+                    )
+                    tmp_files.append(wpath)
+                    wup = _gemini_upload_audio(client, wpath)
+                    uploads.append(wup)
+                    window_parts.append(wup)
+                except Exception as e:
+                    logger.warning(f"[GEMINI] stage2 window {i} extract/upload failed: {e}")
+                    window_parts.append(None)
+
+            # Build the multimodal request: prompt followed by the window audios,
+            # each tagged by index so the model maps transcripts back correctly.
+            contents = [None]   # placeholder for the prompt, filled in below
+            labels = []
+            for i, part in enumerate(window_parts):
+                if part is None:
+                    continue
+                dur = float(clips[i]["end_sec"]) - float(clips[i]["start_sec"])
+                labels.append(f"  index {i}: keyingi audio bo'lagi (~{dur:.0f} soniya)")
+                contents.append(f"--- index {i} audiosi ---")
+                contents.append(part)
+
+            sub_prompt = (
+                "Senga bir nechta qisqa audio bo'laklari berilgan — har biri kinodan "
+                "tanlangan bitta klip. HAR audio bo'lagi uchun, unda eshitilgan nutqni "
+                "so'zma-so'z transkript qil.\n\n"
+                f"Audio bo'laklari:\n" + "\n".join(labels) + "\n\n"
+                "Javob: har bo'lak uchun 'index' (yuqoridagi raqam) va 'subtitles' "
+                "ro'yxati. Har gap uchun: 't' = O'SHA AUDIO BO'LAGI BOSHIDAN soniya "
+                "(0 dan boshlanadi, mutlaq film vaqti EMAS), 'text' = aytilgan gap "
+                "(lotin alifbosida o'zbekcha, o' va g' harflari bilan). FAQAT haqiqatan "
+                "eshitilgan so'zlarni yoz; o'ylab topilgan matn QO'SHMA. Nutq bo'lmasa "
+                "bo'sh ro'yxat qaytar."
+            )
+            contents[0] = sub_prompt
+            try:
+                # Stage 1 sends the full-film audio, which on the free tier can
+                # alone exhaust the 250k input-tokens/minute quota. Stage 2's
+                # input is tiny now, so the only thing in its way is that
+                # per-minute window not having cleared yet — so on a 429 we read
+                # the server's retryDelay, wait, and retry. On a billed key the
+                # per-minute limit is far higher and this loop never trips.
+                groups = sub_usage = None
+                for attempt in range(3):
+                    try:
+                        groups, sub_usage = _gemini_generate_json(
+                            client, types, model_name,
+                            contents, sub_schema,
+                            max_output_tokens=32768,
+                        )
+                        break
+                    except Exception as e:
+                        msg = str(e)
+                        is_rate = "RESOURCE_EXHAUSTED" in msg or "429" in msg
+                        if not is_rate or attempt == 2:
+                            raise
+                        m = re.search(r"retry in ([0-9.]+)s|retryDelay['\"]?:\s*['\"]?([0-9.]+)", msg)
+                        delay = float(next((g for g in (m.groups() if m else []) if g), 35.0)) + 2.0
+                        logger.warning(f"[GEMINI] stage2 rate-limited, waiting {delay:.0f}s then retrying")
+                        time.sleep(delay)
+                _account(sub_usage)
+                try:
+                    _raw_counts = [len(g.get("subtitles", []) or []) for g in (groups or [])]
+                    logger.info(f"[GEMINI] stage2 raw groups={len(groups or [])} sub_counts={_raw_counts}")
+                except Exception:
+                    pass
+                for g in groups if isinstance(groups, list) else []:
+                    try:
+                        gi = int(g.get("index", -1))
+                    except (TypeError, ValueError):
+                        continue
+                    if 0 <= gi < len(clips):
+                        c = clips[gi]
+                        c["subtitles"] = _clean_subtitles(
+                            g.get("subtitles", []),
+                            float(c["start_sec"]), float(c["end_sec"]),
+                            absolute=False,
+                        )
+            except (GeminiQuotaError, GeminiUnavailableError):
+                raise
+            except Exception as e:
+                logger.warning(f"[GEMINI] stage2 batched transcript failed: {e}")
+
+        logger.info(
+            f"[GEMINI] done: {len(clips)} clips, {totals['total_tokens']} tokens, "
+            f"${total_cost:.4f} ({model_name})"
+        )
+        return {"clips": clips, "usage": totals, "cost_usd": round(total_cost, 6), "model": model_name}
     except (GeminiQuotaError, GeminiUnavailableError):
         raise
     except Exception as e:
@@ -168,16 +442,17 @@ def gemini_analyze_clips(video_path, max_clips=12):
             raise GeminiQuotaError(msg)
         raise
     finally:
-        if uploaded is not None:
+        for up in uploads:
             try:
-                client.files.delete(name=uploaded.name)
+                client.files.delete(name=up.name)
             except Exception:
                 pass
-        if tmp_audio and os.path.exists(tmp_audio):
-            try:
-                os.unlink(tmp_audio)
-            except Exception:
-                pass
+        for f in tmp_files:
+            if f and os.path.exists(f):
+                try:
+                    os.unlink(f)
+                except Exception:
+                    pass
 
 
 # Safe string truncation - never raises IndexError
@@ -4494,7 +4769,8 @@ class ParserHandler(BaseHTTPRequestHandler):
                     self._send_error("video_path not found", 400)
                     return
                 max_clips = int(body.get("max_clips", 12))
-                result = gemini_analyze_clips(video_path, max_clips)
+                with_subtitles = bool(body.get("subtitles", True))
+                result = gemini_analyze_clips(video_path, max_clips, with_subtitles)
                 self._send_json(result, 200)
             except GeminiQuotaError as e:
                 logger.warning(f"[GEMINI] quota/billing exhausted: {e}")
