@@ -101,11 +101,17 @@ export default async function CollectionDetailPage({ params }: Props) {
                     key={movie.id}
                     movie={{
                       id: movie.id,
+                      code: movie.code,
                       title: movie.title,
                       poster_url: movie.poster_url,
                       slug: movie.slug,
                       year: movie.year,
-                      genre: movie.genres,
+                      genre: movie.genre || movie.genres,
+                      duration: movie.duration,
+                      quality: movie.quality,
+                      rating_avg: movie.rating_avg,
+                      is_premium: movie.is_premium,
+                      created_at: movie.created_at,
                     } as any}
                   />
                 ))}
@@ -128,9 +134,10 @@ export default async function CollectionDetailPage({ params }: Props) {
                       poster_url: s.poster_url,
                       slug: s.slug,
                       year: s.year,
-                      genre: s.genres || s.genre,
+                      genre: s.genre || s.genres,
                       rating_avg: s.rating_avg,
                       quality: s.quality,
+                      is_premium: s.is_premium,
                     } as any}
                   />
                 ))}

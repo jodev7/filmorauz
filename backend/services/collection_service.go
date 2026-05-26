@@ -235,6 +235,7 @@ func (s *CollectionService) populateCollectionWithMovies(ctx context.Context, co
 			Quality:     m.Quality,
 			RatingAvg:   m.RatingAvg,
 			RatingCount: m.RatingCount,
+			IsPremium:   m.IsPremium,
 			CreatedAt:   m.CreatedAt.Format(time.RFC3339),
 		})
 	}
@@ -258,6 +259,7 @@ func (s *CollectionService) populateCollectionWithMovies(ctx context.Context, co
 				Quality:     sr.Quality,
 				RatingAvg:   sr.RatingAvg,
 				RatingCount: sr.RatingCount,
+				IsPremium:   sr.IsPremium,
 				CreatedAt:   sr.CreatedAt.Format(time.RFC3339),
 			})
 		}
