@@ -199,7 +199,179 @@ def _clean_subtitles(subs, start, end, absolute=False):
     return cleaned
 
 
+_WHISPER_CACHE = {}
+
+
+def _whisper_transcribe(video_path):
+    """Transcribe the whole film with faster-whisper → [{start,end,text}].
+
+    Returns [] if faster-whisper is unavailable or yields nothing. The segment
+    timestamps are real film seconds, which is the whole point: they anchor the
+    clip windows so Gemini never has to guess where a moment sits in the film.
+    """
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        logger.warning("[GEMINI] faster-whisper not installed — transcript path unavailable")
+        return []
+    model_size = os.environ.get("WHISPER_MODEL", "small").strip() or "small"
+    language = os.environ.get("WHISPER_LANGUAGE", "uz").strip() or None
+    wav = video_path + ".whisper.wav"
+    limit_sec = int(os.environ.get("AI_AUDIO_LIMIT_SEC", "0") or "0")
+    try:
+        ffmpeg_cmd = ["ffmpeg", "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000"]
+        if limit_sec > 0:
+            ffmpeg_cmd += ["-t", str(limit_sec)]
+        ffmpeg_cmd.append(wav)
+        subprocess.run(ffmpeg_cmd, capture_output=True, check=True)
+        model = _WHISPER_CACHE.get(model_size)
+        if model is None:
+            logger.info(f"[GEMINI] loading faster-whisper model={model_size} (cpu/int8)")
+            model = WhisperModel(model_size, device="cpu", compute_type="int8")
+            _WHISPER_CACHE[model_size] = model
+        segments, info = model.transcribe(
+            wav, language=language, beam_size=5, vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500},
+        )
+        out = []
+        for s in segments:  # generator — iterating drives transcription
+            text = (s.text or "").strip()
+            if text:
+                out.append({"start": float(s.start), "end": float(s.end), "text": text})
+        logger.info(
+            f"[GEMINI] whisper: {len(out)} segments "
+            f"(lang={info.language} p={info.language_probability:.2f} model={model_size})"
+        )
+        return out
+    except Exception as e:
+        logger.warning(f"[GEMINI] whisper transcription failed: {e}")
+        return []
+    finally:
+        if os.path.exists(wav):
+            try:
+                os.unlink(wav)
+            except Exception:
+                pass
+
+
+def _gemini_select_from_transcript(client, types, model_name, segments, max_clips):
+    """Pick viral clips from a timestamped transcript — one text-only Gemini call.
+
+    Sending the Whisper transcript (text, with real timestamps) instead of the
+    raw audio fixes the core failure of the audio path: the model selects
+    windows by referencing timestamps it is *given* rather than inventing them,
+    so the windows actually land on the scenes it describes. Subtitles come
+    straight from the Whisper segments inside each window — no second call. It
+    is also far cheaper (a few k text tokens vs ~325k audio tokens) and never
+    trips the per-minute input-token quota.
+    """
+    lines = [f"[{s['start']:.1f}-{s['end']:.1f}] {s['text']}" for s in segments]
+    transcript = "\n".join(lines)
+
+    clip_schema = types.Schema(type="OBJECT", properties={
+        "start_sec": types.Schema(type="NUMBER"),
+        "end_sec": types.Schema(type="NUMBER"),
+        "reason": types.Schema(type="STRING"),
+        "caption": types.Schema(type="STRING"),
+        "hashtags": types.Schema(type="ARRAY", items=types.Schema(type="STRING")),
+    }, required=["start_sec", "end_sec", "reason", "caption", "hashtags"])
+    select_schema = types.Schema(type="ARRAY", items=clip_schema)
+
+    prompt = (
+        "Sen o'zbek kino platformasi uchun viral Reels/Shorts muharririsan. "
+        "Quyida kino/serial/multfilmning o'zbekcha transkripti berilgan. Har qator "
+        "[boshlanish-tugash] soniya (filmdagi MUTLAQ vaqt) va o'sha oraliqda aytilgan "
+        "gapdan iborat. Transkriptni o'qib, eng viral lahzalarni tanla.\n\n"
+        f"QAT'IY QOIDALAR:\n"
+        f"- AYNAN {max_clips} ta klip qaytar — ko'p ham, kam ham emas.\n"
+        "- Har klip 25-55 soniya davom etsin (end_sec - start_sec >= 25).\n"
+        "- start_sec va end_sec QIYMATLARINI transkriptdagi [boshlanish-tugash] "
+        "belgilaridan ol — o'zingdan vaqt O'YLAB TOPMA. Klip bir nechta ketma-ket "
+        "qatorlarni qamrab olsin, gap o'rtasidan kesilmasin.\n"
+        "- Kliplar filmning turli joylaridan (boshi, o'rtasi, oxiri), bir-biriga "
+        "ustma-ust tushmasin.\n"
+        "- Klip mazmunan tugal, qiziqarli sahna bo'lsin (kulgili, hissiy, "
+        "dramatik yoki kutilmagan).\n\n"
+        "Har klip uchun: start_sec, end_sec (transkriptdagi mutlaq soniyalarda), "
+        "reason (nega viral, qisqa o'zbekcha), caption (Reels uchun jozibali "
+        "o'zbekcha sarlavha emoji bilan; dialog matni EMAS; hashtaglarni ichiga "
+        "QO'YMA), hashtags (8-15 ta, har biri '#' bilan, bo'shliqsiz).\n\n"
+        f"TRANSKRIPT:\n{transcript}"
+    )
+
+    clips, usage_meta = _gemini_generate_json(
+        client, types, model_name, [prompt], select_schema,
+        max_output_tokens=24576, thinking_budget=8192, temperature=0.3,
+    )
+
+    raw_count = len(clips) if isinstance(clips, list) else 0
+    valid = []
+    for c in clips if isinstance(clips, list) else []:
+        try:
+            s = float(c.get("start_sec", 0)); e = float(c.get("end_sec", 0))
+        except (TypeError, ValueError):
+            continue
+        if e - s >= 15.0:
+            valid.append(c)
+    valid.sort(key=lambda c: float(c.get("start_sec", 0)))
+    clips = valid[:max_clips]
+    logger.info(f"[GEMINI] transcript path selected {len(clips)} clips (raw={raw_count})")
+    if not clips:
+        raise GeminiUnavailableError("gemini returned no usable clips from transcript")
+
+    # Subtitles: the Whisper segments whose start falls inside the window.
+    for c in clips:
+        s0 = float(c["start_sec"]); e0 = float(c["end_sec"])
+        window_subs = [
+            {"t": seg["start"], "text": seg["text"]}
+            for seg in segments if s0 - 0.5 <= seg["start"] <= e0
+        ]
+        c["subtitles"] = _clean_subtitles(window_subs, s0, e0, absolute=True)
+
+    cost, usage = _gemini_cost_usd(usage_meta)
+    logger.info(
+        f"[GEMINI] done (transcript): {len(clips)} clips, {usage.get('total_tokens', 0)} "
+        f"tokens, ${cost:.4f} ({model_name})"
+    )
+    return {"clips": clips, "usage": usage, "cost_usd": round(cost, 6), "model": model_name}
+
+
 def gemini_analyze_clips(video_path, max_clips=12, with_subtitles=True):
+    """Pick viral clips, preferring the transcript-anchored path.
+
+    Whisper transcribes the film locally, then Gemini selects viral windows from
+    that timestamped transcript (text only) — accurate timestamps, cheap, and no
+    per-minute quota issues. If Whisper is unavailable or yields no speech we
+    fall back to the original audio-based two-stage path. Set
+    CLIP_GEMINI_TRANSCRIPT=0 to force the audio path.
+    """
+    if os.environ.get("CLIP_GEMINI_TRANSCRIPT", "1").strip() != "0":
+        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            raise GeminiUnavailableError("GEMINI_API_KEY not set")
+        try:
+            from google import genai
+            from google.genai import types
+        except ImportError:
+            raise GeminiUnavailableError("google-genai not installed")
+        model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+        segments = _whisper_transcribe(video_path)
+        if segments:
+            try:
+                client = genai.Client(api_key=api_key)
+                return _gemini_select_from_transcript(
+                    client, types, model_name, segments, max_clips,
+                )
+            except (GeminiQuotaError, GeminiUnavailableError):
+                raise
+            except Exception as e:
+                logger.warning(f"[GEMINI] transcript path failed ({e}); falling back to audio")
+        else:
+            logger.info("[GEMINI] no transcript segments — falling back to audio path")
+    return _gemini_analyze_clips_audio(video_path, max_clips, with_subtitles)
+
+
+def _gemini_analyze_clips_audio(video_path, max_clips=12, with_subtitles=True):
     """Pick viral clips via Gemini, then transcribe each selected window.
 
     Two stages keep every response small (the previous single-call design that
