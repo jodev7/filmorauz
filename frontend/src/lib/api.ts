@@ -303,7 +303,7 @@ export async function getHomepageData(): Promise<HomepageResponse> {
         title: item.title,
         slug: item.slug,
         poster_url: item.poster_url,
-        backdrop_url: item.poster_url,
+        backdrop_url: item.backdrop_url || item.poster_url,
         year: item.year,
         genre: item.genre || [],
         description: "",

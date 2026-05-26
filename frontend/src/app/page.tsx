@@ -7,6 +7,8 @@ import Footer from "@/components/Footer";
 import MovieCarousel from "@/components/MovieCarousel";
 import SeriesCarousel from "@/components/SeriesCarousel";
 import HeroCarousel from "@/components/home/HeroCarousel";
+import QuickActionsBar from "@/components/home/QuickActionsBar";
+import TrendingSpotlight from "@/components/home/TrendingSpotlight";
 import { getHomepageData } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
 
@@ -71,6 +73,9 @@ export default async function HomePage() {
         {/* ── Hero Carousel (Latest Movies) ─────────────────────── */}
         <HeroCarousel movies={latestMovies} />
 
+        {/* ── Quick section entry points (under hero) ──────────────── */}
+        <QuickActionsBar />
+
         {/* ── Genre Chips ──────────────────────────────────────────── */}
         <section className="max-w-7xl mx-auto px-4 mt-6 mb-4">
           <div className="flex gap-2.5 overflow-x-auto pb-2 scrollbar-hide">
@@ -113,8 +118,11 @@ export default async function HomePage() {
           </section>
         )}
 
-        {/* ── Trending ─────────────────────────────────────── */}
-        {trending.length > 0 && (
+        {/* ── Trending spotlight (#1) — landscape rhythm break ───── */}
+        {trending.length > 0 && <TrendingSpotlight movie={trending[0]} />}
+
+        {/* ── Trending (rest) ──────────────────────────────── */}
+        {trending.length > 1 && (
           <section className="max-w-7xl mx-auto px-4 py-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
@@ -122,7 +130,7 @@ export default async function HomePage() {
                 Mashhur
               </h2>
             </div>
-            <MovieCarousel movies={trending} />
+            <MovieCarousel movies={trending.slice(1)} />
           </section>
         )}
 

@@ -90,6 +90,7 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 			"title":           t.Movie.Title,
 			"slug":            t.Movie.Slug,
 			"poster_url":      protectMediaURL(t.Movie.PosterURL),
+			"backdrop_url":    protectMediaURL(t.Movie.BackdropURL),
 			"year":            t.Movie.Year,
 			"genre":           t.Movie.Genre,
 			"views_in_period": t.ViewsInPeriod,
@@ -161,11 +162,12 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 		out := make([]gin.H, len(list))
 		for i, movie := range list {
 			out[i] = gin.H{
-				"id":         movie.ID.Hex(),
-				"code":       movie.Code,
-				"title":      movie.Title,
-				"poster_url": movie.PosterURL,
-				"slug":       movie.Slug,
+				"id":           movie.ID.Hex(),
+				"code":         movie.Code,
+				"title":        movie.Title,
+				"poster_url":   movie.PosterURL,
+				"backdrop_url": movie.BackdropURL,
+				"slug":         movie.Slug,
 				"year":       movie.Year,
 				"genre":      movie.Genre,
 				"duration":   movie.Duration,
