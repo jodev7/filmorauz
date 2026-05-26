@@ -71,7 +71,9 @@ function SeriesCarouselImpl({ series }: SeriesCarouselProps) {
         style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
         {series.map((s) => (
-          <SeriesCard key={s.id} series={s} />
+          <div key={s.id} className="shrink-0 w-[140px] sm:w-[160px]">
+            <SeriesCard series={s} />
+          </div>
         ))}
       </div>
     </div>
