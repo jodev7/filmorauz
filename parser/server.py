@@ -410,8 +410,95 @@ def _whisper_transcribe(video_path):
                 pass
 
 
+def _detect_face_highlights(video_path, max_windows=8, win_sec=30.0):
+    """Find close-up/face-dense windows — a proxy for emotional, low-dialogue
+    scenes (e.g. a character watching messages and crying).
+
+    Samples downscaled frames at ~1 every 1.5s via ffmpeg (far faster than
+    decoding every frame), scores each by the largest detected face's relative
+    area, then returns up to max_windows non-overlapping high-score windows as
+    [{start,end,score}]. Returns [] if opencv is unavailable or no faces stand
+    out. These windows feed Gemini as visual candidates alongside the dialogue
+    transcript, so dialogue-sparse but visually powerful moments can be chosen.
+    """
+    try:
+        import cv2
+    except ImportError:
+        logger.warning("[GEMINI] opencv not installed — skipping face highlights")
+        return []
+    import tempfile
+    import glob
+    limit_sec = int(os.environ.get("AI_AUDIO_LIMIT_SEC", "0") or "0")
+    step = 1.5  # seconds between sampled frames
+    tmpdir = tempfile.mkdtemp(prefix="facehl_")
+    try:
+        cmd = ["ffmpeg", "-y", "-i", video_path]
+        if limit_sec > 0:
+            cmd += ["-t", str(limit_sec)]
+        cmd += ["-vf", f"fps=1/{step},scale=320:-1", os.path.join(tmpdir, "f_%06d.jpg")]
+        subprocess.run(cmd, capture_output=True, check=True)
+
+        cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+        frames = sorted(glob.glob(os.path.join(tmpdir, "f_*.jpg")))
+        if not frames:
+            return []
+        scores = []  # score[i] for time i*step
+        for fp in frames:
+            img = cv2.imread(fp)
+            if img is None:
+                scores.append(0.0)
+                continue
+            h, w = img.shape[:2]
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            faces = cascade.detectMultiScale(gray, 1.1, 4, minSize=(24, 24))
+            if len(faces) > 0:
+                fw, fh = max(faces, key=lambda f: f[2] * f[3])[2:4]
+                scores.append((fw * fh) / float(w * h))   # relative face area
+            else:
+                scores.append(0.0)
+
+        win = max(1, int(round(win_sec / step)))
+        # Sliding-window sum of face-area scores → density of close-up faces.
+        best = []
+        i = 0
+        while i + win <= len(scores):
+            s = sum(scores[i:i + win])
+            best.append((s, i))
+            i += 1
+        best.sort(reverse=True)
+        chosen = []
+        used = []
+        for s, i in best:
+            start = i * step
+            end = start + win_sec
+            if s <= 0:
+                continue
+            if any(not (end <= a or start >= b) for a, b in used):
+                continue  # overlaps an already-chosen window
+            used.append((start, end))
+            chosen.append({"start": round(start, 1), "end": round(end, 1), "score": round(s, 3)})
+            if len(chosen) >= max_windows:
+                break
+        chosen.sort(key=lambda c: c["start"])
+        logger.info(f"[GEMINI] face highlights: {len(chosen)} windows from {len(frames)} frames")
+        return chosen
+    except Exception as e:
+        logger.warning(f"[GEMINI] face highlight detection failed: {e}")
+        return []
+    finally:
+        try:
+            for fp in glob.glob(os.path.join(tmpdir, "*")):
+                os.unlink(fp)
+            os.rmdir(tmpdir)
+        except Exception:
+            pass
+
+
 def _gemini_select_from_transcript(client, types, model_name, segments, max_clips,
-                                   video_path=None, with_subtitles=True):
+                                   video_path=None, with_subtitles=True,
+                                   highlights=None):
     """Pick viral clips from a timestamped transcript — one text-only Gemini call.
 
     Sending the Whisper transcript (text, with real timestamps) instead of the
@@ -422,8 +509,33 @@ def _gemini_select_from_transcript(client, types, model_name, segments, max_clip
     is also far cheaper (a few k text tokens vs ~325k audio tokens) and never
     trips the per-minute input-token quota.
     """
-    lines = [f"[{s['start']:.1f}-{s['end']:.1f}] {s['text']}" for s in segments]
+    # Build the transcript, inserting markers for long dialogue-free gaps. Those
+    # gaps are often the visually/emotionally strongest scenes (action, score,
+    # silent crying) that a dialogue-only view would miss.
+    lines = []
+    GAP_MIN = 20.0
+    prev_end = None
+    for s in segments:
+        if prev_end is not None and s["start"] - prev_end >= GAP_MIN:
+            lines.append(
+                f"[VIZUAL/JIM ORALIQ: {prev_end:.0f}-{s['start']:.0f}s "
+                f"(~{s['start'] - prev_end:.0f}s, dialog yo'q)]"
+            )
+        lines.append(f"[{s['start']:.1f}-{s['end']:.1f}] {s['text']}")
+        prev_end = s["end"]
     transcript = "\n".join(lines)
+
+    # Visual highlight windows (close-up faces) — candidates even without dialogue.
+    hl_block = ""
+    if highlights:
+        hl_lines = "\n".join(
+            f"  {h['start']:.0f}-{h['end']:.0f}s (yaqin planli yuz(lar))"
+            for h in highlights
+        )
+        hl_block = (
+            "\n\nYUZ-YAQINPLAN OYNALARI (qahramonlarning yaqin planli, ehtimol "
+            "hissiy lahzalari — dialog kam bo'lishi mumkin):\n" + hl_lines
+        )
 
     clip_schema = types.Schema(type="OBJECT", properties={
         "start_sec": types.Schema(type="NUMBER"),
@@ -448,12 +560,18 @@ def _gemini_select_from_transcript(client, types, model_name, segments, max_clip
         "- Kliplar filmning turli joylaridan (boshi, o'rtasi, oxiri), bir-biriga "
         "ustma-ust tushmasin.\n"
         "- Klip mazmunan tugal, qiziqarli sahna bo'lsin (kulgili, hissiy, "
-        "dramatik yoki kutilmagan).\n\n"
-        "Har klip uchun: start_sec, end_sec (transkriptdagi mutlaq soniyalarda), "
+        "dramatik yoki kutilmagan).\n"
+        "- Faqat ko'p dialogli sahnalarni emas, KUCHLI HISSIY/VIZUAL lahzalarni "
+        "ham tanla: 'VIZUAL/JIM ORALIQ' belgilangan joylar va 'YUZ-YAQINPLAN' "
+        "oynalari ko'pincha eng ta'sirli (yig'lash, ayriliq, kulminatsiya) "
+        "sahnalardir — bularni ham nomzod sifatida jiddiy ko'rib chiq. Bunday "
+        "klip uchun start_sec/end_sec ni o'sha oraliq atrofidan ol.\n\n"
+        "Har klip uchun: start_sec, end_sec (mutlaq soniyalarda), "
         "reason (nega viral, qisqa o'zbekcha), caption (Reels uchun jozibali "
         "o'zbekcha sarlavha emoji bilan; dialog matni EMAS; hashtaglarni ichiga "
         "QO'YMA), hashtags (8-15 ta, har biri '#' bilan, bo'shliqsiz).\n\n"
         f"TRANSKRIPT:\n{transcript}"
+        f"{hl_block}"
     )
 
     clips, usage_meta = _gemini_generate_json_retrying(
@@ -540,9 +658,15 @@ def gemini_analyze_clips(video_path, max_clips=12, with_subtitles=True):
         if segments:
             try:
                 client = genai.Client(api_key=api_key)
+                # Visual highlights (close-up faces) give Gemini candidates for
+                # emotionally strong, low-dialogue scenes. Best-effort: [] is fine.
+                highlights = []
+                if os.environ.get("CLIP_FACE_HIGHLIGHTS", "1").strip() != "0":
+                    highlights = _detect_face_highlights(video_path)
                 return _gemini_select_from_transcript(
                     client, types, model_name, segments, max_clips,
                     video_path=video_path, with_subtitles=with_subtitles,
+                    highlights=highlights,
                 )
             except (GeminiQuotaError, GeminiUnavailableError):
                 raise
