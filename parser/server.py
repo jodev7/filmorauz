@@ -199,6 +199,132 @@ def _clean_subtitles(subs, start, end, absolute=False):
     return cleaned
 
 
+def _gemini_transcribe_clip_windows(client, types, model_name, video_path, clips,
+                                    keep_existing_if_empty=False):
+    """Transcribe each selected clip window's audio with Gemini (clean Uzbek).
+
+    Extracts each window, uploads them as separate parts in ONE call, and writes
+    the result into clips[i]["subtitles"] (rebased to absolute film seconds).
+    Returns the call's usage_metadata (or None if nothing was transcribed) so
+    the caller can account cost. Raises GeminiQuotaError on quota exhaustion
+    after retries; other failures propagate to the caller.
+
+    Gemini's transcription is markedly cleaner Uzbek than the local small Whisper
+    model, so the transcript path uses this to fill subtitle TEXT while Whisper
+    only anchors timestamps for selection. When keep_existing_if_empty=True a
+    clip's pre-existing subtitles (e.g. the Whisper fallback) are preserved if
+    Gemini returns nothing for that window.
+    """
+    tmp_files, uploads = [], []
+    try:
+        sub_schema = types.Schema(type="ARRAY", items=types.Schema(type="OBJECT", properties={
+            "index": types.Schema(type="INTEGER"),
+            "subtitles": types.Schema(type="ARRAY", items=types.Schema(type="OBJECT", properties={
+                "t": types.Schema(type="NUMBER"),
+                "text": types.Schema(type="STRING"),
+            }, required=["t", "text"])),
+        }, required=["index", "subtitles"]))
+
+        # Extract + upload each selected window as a separate audio part.
+        window_parts = []
+        for i, c in enumerate(clips):
+            wpath = f"{video_path}.clip{i}.gemini.mp3"
+            try:
+                _gemini_extract_audio(
+                    video_path, wpath,
+                    start=float(c["start_sec"]), end=float(c["end_sec"]),
+                )
+                tmp_files.append(wpath)
+                wup = _gemini_upload_audio(client, wpath)
+                uploads.append(wup)
+                window_parts.append(wup)
+            except Exception as e:
+                logger.warning(f"[GEMINI] clip window {i} extract/upload failed: {e}")
+                window_parts.append(None)
+
+        # Build the multimodal request: prompt followed by the window audios,
+        # each tagged by index so the model maps transcripts back correctly.
+        contents = [None]
+        labels = []
+        for i, part in enumerate(window_parts):
+            if part is None:
+                continue
+            dur = float(clips[i]["end_sec"]) - float(clips[i]["start_sec"])
+            labels.append(f"  index {i}: keyingi audio bo'lagi (~{dur:.0f} soniya)")
+            contents.append(f"--- index {i} audiosi ---")
+            contents.append(part)
+        if len(contents) == 1:   # nothing uploaded
+            return None
+
+        sub_prompt = (
+            "Senga bir nechta qisqa audio bo'laklari berilgan — har biri kinodan "
+            "tanlangan bitta klip. HAR audio bo'lagi uchun, unda eshitilgan nutqni "
+            "so'zma-so'z transkript qil.\n\n"
+            f"Audio bo'laklari:\n" + "\n".join(labels) + "\n\n"
+            "Javob: har bo'lak uchun 'index' (yuqoridagi raqam) va 'subtitles' "
+            "ro'yxati. Har gap uchun: 't' = O'SHA AUDIO BO'LAGI BOSHIDAN soniya "
+            "(0 dan boshlanadi, mutlaq film vaqti EMAS), 'text' = aytilgan gap "
+            "(lotin alifbosida o'zbekcha, o' va g' harflari bilan). FAQAT haqiqatan "
+            "eshitilgan so'zlarni yoz; o'ylab topilgan matn QO'SHMA. Nutq bo'lmasa "
+            "bo'sh ro'yxat qaytar."
+        )
+        contents[0] = sub_prompt
+
+        # Tiny input, but on the free tier a preceding full-audio/transcript call
+        # may still be inside the per-minute window — so honour the server's
+        # retryDelay on a 429 and retry. A billed key never trips this.
+        groups = usage = None
+        for attempt in range(3):
+            try:
+                groups, usage = _gemini_generate_json(
+                    client, types, model_name, contents, sub_schema,
+                    max_output_tokens=32768,
+                )
+                break
+            except Exception as e:
+                msg = str(e)
+                if not ("RESOURCE_EXHAUSTED" in msg or "429" in msg) or attempt == 2:
+                    raise
+                m = re.search(r"retry in ([0-9.]+)s|retryDelay['\"]?:\s*['\"]?([0-9.]+)", msg)
+                delay = float(next((g for g in (m.groups() if m else []) if g), 35.0)) + 2.0
+                logger.warning(f"[GEMINI] window transcription rate-limited, waiting {delay:.0f}s")
+                time.sleep(delay)
+
+        try:
+            _raw = [len(g.get("subtitles", []) or []) for g in (groups or [])]
+            logger.info(f"[GEMINI] window transcription groups={len(groups or [])} sub_counts={_raw}")
+        except Exception:
+            pass
+
+        for g in groups if isinstance(groups, list) else []:
+            try:
+                gi = int(g.get("index", -1))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= gi < len(clips):
+                c = clips[gi]
+                cleaned = _clean_subtitles(
+                    g.get("subtitles", []),
+                    float(c["start_sec"]), float(c["end_sec"]),
+                    absolute=False,
+                )
+                if cleaned or not keep_existing_if_empty:
+                    c["subtitles"] = cleaned
+        return usage
+    finally:
+        for up in uploads:
+            try:
+                client.files.delete(name=up.name)
+            except Exception:
+                pass
+        for f in tmp_files:
+            if f and os.path.exists(f):
+                try:
+                    os.unlink(f)
+                except Exception:
+                    pass
+
+
 _WHISPER_CACHE = {}
 
 
@@ -254,7 +380,8 @@ def _whisper_transcribe(video_path):
                 pass
 
 
-def _gemini_select_from_transcript(client, types, model_name, segments, max_clips):
+def _gemini_select_from_transcript(client, types, model_name, segments, max_clips,
+                                   video_path=None, with_subtitles=True):
     """Pick viral clips from a timestamped transcript — one text-only Gemini call.
 
     Sending the Whisper transcript (text, with real timestamps) instead of the
@@ -319,7 +446,8 @@ def _gemini_select_from_transcript(client, types, model_name, segments, max_clip
     if not clips:
         raise GeminiUnavailableError("gemini returned no usable clips from transcript")
 
-    # Subtitles: the Whisper segments whose start falls inside the window.
+    # Baseline subtitles from the Whisper segments inside each window. The
+    # local small model's Uzbek text is rough, so these are a fallback.
     for c in clips:
         s0 = float(c["start_sec"]); e0 = float(c["end_sec"])
         window_subs = [
@@ -328,7 +456,29 @@ def _gemini_select_from_transcript(client, types, model_name, segments, max_clip
         ]
         c["subtitles"] = _clean_subtitles(window_subs, s0, e0, absolute=True)
 
+    # Running totals start with the selection call.
     cost, usage = _gemini_cost_usd(usage_meta)
+
+    # Upgrade subtitle TEXT with Gemini: re-transcribe just the selected clip
+    # windows' audio. Gemini's Uzbek is far cleaner than small-model Whisper,
+    # while Whisper still anchored the timestamps for selection. Keep the
+    # Whisper fallback for any window Gemini returns nothing for.
+    if with_subtitles and video_path:
+        try:
+            sub_usage = _gemini_transcribe_clip_windows(
+                client, types, model_name, video_path, clips,
+                keep_existing_if_empty=True,
+            )
+            if sub_usage is not None:
+                c2, u2 = _gemini_cost_usd(sub_usage)
+                cost += c2
+                for k in usage:
+                    usage[k] = usage.get(k, 0) + u2.get(k, 0)
+        except (GeminiQuotaError, GeminiUnavailableError):
+            raise
+        except Exception as e:
+            logger.warning(f"[GEMINI] gemini window transcription failed, keeping whisper subs: {e}")
+
     logger.info(
         f"[GEMINI] done (transcript): {len(clips)} clips, {usage.get('total_tokens', 0)} "
         f"tokens, ${cost:.4f} ({model_name})"
@@ -361,6 +511,7 @@ def gemini_analyze_clips(video_path, max_clips=12, with_subtitles=True):
                 client = genai.Client(api_key=api_key)
                 return _gemini_select_from_transcript(
                     client, types, model_name, segments, max_clips,
+                    video_path=video_path, with_subtitles=with_subtitles,
                 )
             except (GeminiQuotaError, GeminiUnavailableError):
                 raise
@@ -493,109 +644,17 @@ def _gemini_analyze_clips_audio(video_path, max_clips=12, with_subtitles=True):
         for c in clips:
             c["subtitles"] = []
 
-        # ── Stage 2: batched transcription (ONE call for all clips) ──
-        # Send only the SELECTED clip windows' audio, not the whole film. Each
-        # window is uploaded as its own audio part in a single generate_content
-        # call, so the whole movie still costs just 2 Gemini requests regardless
-        # of clip count, but stage-2 input shrinks from the full-film audio
-        # (~325k tokens) to the sum of the short windows (~a few k tokens). That
-        # both slashes cost (~36%) and keeps stage 2 under the free tier's
-        # per-minute input-token limit (250k/min) that the full-film audio
-        # otherwise tripped right after stage 1.
+        # ── Stage 2: transcribe the selected clip windows (ONE call) ──
+        # Shared with the transcript path: extracts only the selected windows'
+        # audio (~a few k tokens, not the ~325k full-film bomb), one call, with
+        # 429 backoff. Cleans up its own temp files/uploads.
         if want_subs and clips:
-            sub_schema = types.Schema(type="ARRAY", items=types.Schema(type="OBJECT", properties={
-                "index": types.Schema(type="INTEGER"),
-                "subtitles": types.Schema(type="ARRAY", items=types.Schema(type="OBJECT", properties={
-                    "t": types.Schema(type="NUMBER"),
-                    "text": types.Schema(type="STRING"),
-                }, required=["t", "text"])),
-            }, required=["index", "subtitles"]))
-
-            # Extract + upload each selected window as a separate audio part.
-            window_parts = []   # parallel to clips; None if extraction failed
-            for i, c in enumerate(clips):
-                wpath = f"{video_path}.clip{i}.gemini.mp3"
-                try:
-                    _gemini_extract_audio(
-                        video_path, wpath,
-                        start=float(c["start_sec"]), end=float(c["end_sec"]),
-                    )
-                    tmp_files.append(wpath)
-                    wup = _gemini_upload_audio(client, wpath)
-                    uploads.append(wup)
-                    window_parts.append(wup)
-                except Exception as e:
-                    logger.warning(f"[GEMINI] stage2 window {i} extract/upload failed: {e}")
-                    window_parts.append(None)
-
-            # Build the multimodal request: prompt followed by the window audios,
-            # each tagged by index so the model maps transcripts back correctly.
-            contents = [None]   # placeholder for the prompt, filled in below
-            labels = []
-            for i, part in enumerate(window_parts):
-                if part is None:
-                    continue
-                dur = float(clips[i]["end_sec"]) - float(clips[i]["start_sec"])
-                labels.append(f"  index {i}: keyingi audio bo'lagi (~{dur:.0f} soniya)")
-                contents.append(f"--- index {i} audiosi ---")
-                contents.append(part)
-
-            sub_prompt = (
-                "Senga bir nechta qisqa audio bo'laklari berilgan — har biri kinodan "
-                "tanlangan bitta klip. HAR audio bo'lagi uchun, unda eshitilgan nutqni "
-                "so'zma-so'z transkript qil.\n\n"
-                f"Audio bo'laklari:\n" + "\n".join(labels) + "\n\n"
-                "Javob: har bo'lak uchun 'index' (yuqoridagi raqam) va 'subtitles' "
-                "ro'yxati. Har gap uchun: 't' = O'SHA AUDIO BO'LAGI BOSHIDAN soniya "
-                "(0 dan boshlanadi, mutlaq film vaqti EMAS), 'text' = aytilgan gap "
-                "(lotin alifbosida o'zbekcha, o' va g' harflari bilan). FAQAT haqiqatan "
-                "eshitilgan so'zlarni yoz; o'ylab topilgan matn QO'SHMA. Nutq bo'lmasa "
-                "bo'sh ro'yxat qaytar."
-            )
-            contents[0] = sub_prompt
             try:
-                # Stage 1 sends the full-film audio, which on the free tier can
-                # alone exhaust the 250k input-tokens/minute quota. Stage 2's
-                # input is tiny now, so the only thing in its way is that
-                # per-minute window not having cleared yet — so on a 429 we read
-                # the server's retryDelay, wait, and retry. On a billed key the
-                # per-minute limit is far higher and this loop never trips.
-                groups = sub_usage = None
-                for attempt in range(3):
-                    try:
-                        groups, sub_usage = _gemini_generate_json(
-                            client, types, model_name,
-                            contents, sub_schema,
-                            max_output_tokens=32768,
-                        )
-                        break
-                    except Exception as e:
-                        msg = str(e)
-                        is_rate = "RESOURCE_EXHAUSTED" in msg or "429" in msg
-                        if not is_rate or attempt == 2:
-                            raise
-                        m = re.search(r"retry in ([0-9.]+)s|retryDelay['\"]?:\s*['\"]?([0-9.]+)", msg)
-                        delay = float(next((g for g in (m.groups() if m else []) if g), 35.0)) + 2.0
-                        logger.warning(f"[GEMINI] stage2 rate-limited, waiting {delay:.0f}s then retrying")
-                        time.sleep(delay)
-                _account(sub_usage)
-                try:
-                    _raw_counts = [len(g.get("subtitles", []) or []) for g in (groups or [])]
-                    logger.info(f"[GEMINI] stage2 raw groups={len(groups or [])} sub_counts={_raw_counts}")
-                except Exception:
-                    pass
-                for g in groups if isinstance(groups, list) else []:
-                    try:
-                        gi = int(g.get("index", -1))
-                    except (TypeError, ValueError):
-                        continue
-                    if 0 <= gi < len(clips):
-                        c = clips[gi]
-                        c["subtitles"] = _clean_subtitles(
-                            g.get("subtitles", []),
-                            float(c["start_sec"]), float(c["end_sec"]),
-                            absolute=False,
-                        )
+                sub_usage = _gemini_transcribe_clip_windows(
+                    client, types, model_name, video_path, clips,
+                )
+                if sub_usage is not None:
+                    _account(sub_usage)
             except (GeminiQuotaError, GeminiUnavailableError):
                 raise
             except Exception as e:
