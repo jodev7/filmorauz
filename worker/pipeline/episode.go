@@ -94,6 +94,16 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	log.Printf("[EPISODE] b2_root=%s/%s master_b2_key=%s/%s/%s", B2VideoRootSerials, folderName, B2VideoRootSerials, folderName, MasterPlaylistName)
 	log.Printf("[EPISODE] streamingURL=%s", streamingURL)
 
+	// Persist the uploaded (B2/CDN in prod) master URL onto the job. The
+	// serial finalizer reads job.master_playlist_url to set each Episode's
+	// video_url — without this it stays the local working-dir path written
+	// by UpdateQualityInfo during processing, which is the "episode video_url
+	// is local" bug. The movie pipeline already does the equivalent.
+	job.MasterPlaylistURL = streamingURL
+	if err := p.jobRepo.UpdateMasterPlaylistURL(ctx, jobID, streamingURL); err != nil {
+		log.Printf("[EPISODE] WARNING: UpdateMasterPlaylistURL: %v", err)
+	}
+
 	mode := p.config.StorageConfig.Mode
 	outputMode := "development"
 	finalPath := streamingURL

@@ -1211,6 +1211,25 @@ func (r *JobRepository) UpdateFinalOutputPath(ctx context.Context, id, finalPath
 	return err
 }
 
+// UpdateMasterPlaylistURL persists the final playable master playlist URL
+// (the B2/CDN streaming URL in prod) onto the job. The serial finalizer reads
+// this field to set each Episode's video_url, so it MUST hold the uploaded
+// URL — not the local working-dir path that UpdateQualityInfo writes earlier
+// during processing.
+func (r *JobRepository) UpdateMasterPlaylistURL(ctx context.Context, id, url string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid id")
+	}
+	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
+		"$set": bson.M{
+			"master_playlist_url": url,
+			"updated_at":          time.Now(),
+		},
+	})
+	return err
+}
+
 // UpdateStep marks a pipeline step as completed
 func (r *JobRepository) UpdateStep(ctx context.Context, id string, step string) error {
 	objID, err := primitive.ObjectIDFromHex(id)
