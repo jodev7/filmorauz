@@ -317,7 +317,7 @@ func (h *SitemapHandler) GetSitemapVideos(c *gin.Context) {
 				ThumbnailLoc:    poster,
 				Title:           title,
 				Description:     desc,
-				PlayerLoc:       h.baseSiteURL + "/watch/" + m.Slug,
+				PlayerLoc:       h.baseSiteURL + "/movies/" + m.Slug + "?play=1",
 				Duration:        m.Duration * 60,
 				PublicationDate: formatTime(pub),
 				FamilyFriendly:  "yes",

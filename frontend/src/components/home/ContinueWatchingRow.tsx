@@ -12,7 +12,7 @@ function resumeHref(item: ContinueWatchingItem): string {
     const id = item.episode_id || item.target_id;
     return id ? `/episode/${id}` : "#";
   }
-  return item.slug ? `/watch/${item.slug}` : "#";
+  return item.slug ? `/movies/${item.slug}?play=1` : "#";
 }
 
 function itemLabel(item: ContinueWatchingItem): string {

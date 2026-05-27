@@ -220,6 +220,13 @@ interface WatchPageClientProps {
     previousEpisode?: (EpisodeLink & { href?: string }) | null;
     nextEpisode?: (EpisodeLink & { href?: string }) | null;
   };
+  // embedded=true renders only the player experience (player, overlay ad,
+  // resume prompt, premium lock, inline ad) without the standalone-page
+  // chrome — the top bar, the duplicate title/description/meta block, and the
+  // recommendations row. Used when the player lives inside the movie detail
+  // page, which already shows that metadata. Episodes use the full (false)
+  // layout.
+  embedded?: boolean;
 }
 
 function RecommendationsRow({ movies }: { movies: Movie[] }) {
@@ -272,6 +279,7 @@ export default function WatchPageClient({
   movie,
   progressTargetId: progressTargetIdProp,
   episodeNavigation,
+  embedded = false,
 }: WatchPageClientProps) {
   if (!movie) {
     return (
@@ -421,13 +429,15 @@ export default function WatchPageClient({
     }
   }, [user, token, progressTargetId]);
 
-  // Fetch recommendations
+  // Fetch recommendations — skipped when embedded (the movie page already
+  // renders its own recommendations server-side).
   useEffect(() => {
+    if (embedded) return;
     getRecommendations(movie.id, 12)
       .then(setRecommendations)
       .catch(console.error)
       .finally(() => setIsLoadingRecommendations(false));
-  }, [movie.id]);
+  }, [movie.id, embedded]);
 
   const persistProgress = useCallback((force: boolean = false) => {
     if (!user || !token || !progressTargetId) return;
@@ -617,53 +627,57 @@ export default function WatchPageClient({
   };
 
   return (
-    <div className="pt-20 sm:pt-24 min-h-screen">
-      {/* Minimal top bar */}
-      <div className="h-[env(safe-area-inset-top)]" />
-      <div className="bg-brand-dark/95 backdrop-blur-sm border-b border-brand-border px-3 sm:px-4 py-2 sm:py-3 flex items-center gap-3 sm:gap-4">
-        <Link
-          href={backHref}
-          className="flex items-center gap-1.5 text-xs sm:text-sm text-gray-400 hover:text-white transition-colors"
-        >
-          <ChevronLeft size={18} />
-          <span className="hidden sm:inline">Orqaga</span>
-        </Link>
-        <div className="h-4 sm:h-5 w-px bg-brand-border" />
-        <h1 className="font-display text-sm sm:text-xl text-white tracking-wide truncate max-w-[200px] sm:max-w-none">
-          {localizedTitle}
-        </h1>
-        <div className="flex items-center gap-3 sm:gap-4 ml-auto text-xs text-gray-500 shrink-0">
-          {movie.year && (
-            <span className="flex items-center gap-1">
-              <Calendar size={12} />
-              <span className="hidden sm:inline">{movie.year}</span>
-            </span>
-          )}
-          {movie.duration > 0 && (
-            <span className="flex items-center gap-1">
-              <Clock size={12} />
-              {formatDuration(movie.duration)}
-            </span>
-          )}
-          {movie.quality && (
-            <span className="text-brand-red font-bold">{movie.quality}</span>
-          )}
-          {movie && (() => {
-            const isEp = (movie as unknown as { type?: string }).type === "episode";
-            const cid = isEp ? (progressTargetIdProp || movie.id) : movie.id;
-            return (
-              <WatchTogetherButton
-                contentType={isEp ? "episode" : "movie"}
-                contentID={cid}
-                className="flex items-center gap-1.5 px-2 py-1.5 sm:px-3 bg-brand-card border border-brand-border hover:border-brand-red rounded-md text-[11px] sm:text-xs text-white transition-colors whitespace-nowrap"
-              />
-            );
-          })()}
-        </div>
-      </div>
+    <div className={embedded ? "" : "pt-20 sm:pt-24 min-h-screen"}>
+      {/* Minimal top bar — standalone page only */}
+      {!embedded && (
+        <>
+          <div className="h-[env(safe-area-inset-top)]" />
+          <div className="bg-brand-dark/95 backdrop-blur-sm border-b border-brand-border px-3 sm:px-4 py-2 sm:py-3 flex items-center gap-3 sm:gap-4">
+            <Link
+              href={backHref}
+              className="flex items-center gap-1.5 text-xs sm:text-sm text-gray-400 hover:text-white transition-colors"
+            >
+              <ChevronLeft size={18} />
+              <span className="hidden sm:inline">Orqaga</span>
+            </Link>
+            <div className="h-4 sm:h-5 w-px bg-brand-border" />
+            <h1 className="font-display text-sm sm:text-xl text-white tracking-wide truncate max-w-[200px] sm:max-w-none">
+              {localizedTitle}
+            </h1>
+            <div className="flex items-center gap-3 sm:gap-4 ml-auto text-xs text-gray-500 shrink-0">
+              {movie.year && (
+                <span className="flex items-center gap-1">
+                  <Calendar size={12} />
+                  <span className="hidden sm:inline">{movie.year}</span>
+                </span>
+              )}
+              {movie.duration > 0 && (
+                <span className="flex items-center gap-1">
+                  <Clock size={12} />
+                  {formatDuration(movie.duration)}
+                </span>
+              )}
+              {movie.quality && (
+                <span className="text-brand-red font-bold">{movie.quality}</span>
+              )}
+              {movie && (() => {
+                const isEp = (movie as unknown as { type?: string }).type === "episode";
+                const cid = isEp ? (progressTargetIdProp || movie.id) : movie.id;
+                return (
+                  <WatchTogetherButton
+                    contentType={isEp ? "episode" : "movie"}
+                    contentID={cid}
+                    className="flex items-center gap-1.5 px-2 py-1.5 sm:px-3 bg-brand-card border border-brand-border hover:border-brand-red rounded-md text-[11px] sm:text-xs text-white transition-colors whitespace-nowrap"
+                  />
+                );
+              })()}
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Player and content */}
-      <div className="max-w-6xl mx-auto px-3 sm:px-4 pt-4 sm:pt-6 pb-6 sm:pb-8">
+      <div className={embedded ? "" : "max-w-6xl mx-auto px-3 sm:px-4 pt-4 sm:pt-6 pb-6 sm:pb-8"}>
         {/* Premium access control */}
         {isMoviePremium(movie) && !isUserPremium(user) ? (
           <div className="relative aspect-video rounded-xl overflow-hidden bg-brand-dark">
@@ -830,6 +844,7 @@ export default function WatchPageClient({
           </div>
         )}
 
+        {!embedded && (
         <div className="mt-4 sm:mt-6 flex flex-col md:flex-row gap-4 sm:gap-6">
           <div className="flex-1">
             <h2 className="font-display text-2xl sm:text-3xl text-white tracking-wide mb-2">
@@ -900,14 +915,15 @@ export default function WatchPageClient({
             )}
           </div>
         </div>
+        )}
 
         {/* Watch page inline block ad */}
         <div className="max-w-7xl mx-auto px-4 mt-6 mb-4">
           <WebsiteAdSlot placement="watch_page_inline_block" variant="inline" />
         </div>
 
-        {/* Recommendations */}
-        {!isLoadingRecommendations && recommendations.length > 0 && (
+        {/* Recommendations — standalone page only (movie page has its own) */}
+        {!embedded && !isLoadingRecommendations && recommendations.length > 0 && (
           <RecommendationsRow movies={recommendations} />
         )}
       </div>

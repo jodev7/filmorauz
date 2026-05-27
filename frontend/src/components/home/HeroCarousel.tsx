@@ -105,7 +105,7 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
                   {/* Buttons & Meta */}
                   <div className="flex items-center gap-3 flex-wrap">
                     <Link
-                      href={`/watch/${movie.slug}`}
+                      href={`/movies/${movie.slug}?play=1`}
                       className="flex items-center gap-2 bg-brand-red hover:bg-orange-700 text-white font-semibold px-5 py-2.5 rounded-lg transition-colors text-sm"
                       aria-label={`Ko'rish: ${movie.title}`}
                     >
