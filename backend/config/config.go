@@ -48,6 +48,11 @@ type Config struct {
 	TelegramChannels        []string // loaded from TELEGRAM_CHANNELS env (comma-separated)
 	TelegramSerialsChannel  string   // loaded from TELEGRAM_SERIALS_CHANNEL env
 
+	// RedisURL enables cross-instance watch-room fan-out (Redis pub/sub +
+	// shared state). Empty → single-instance in-memory mode (dev default).
+	// Format: redis://[:password@]host:port[/db]
+	RedisURL string
+
 	// SEO / search-engine notification settings.
 	SEONotifyEnabled              bool
 	IndexNowKey                   string
@@ -103,6 +108,7 @@ func Load() *Config {
 		WorkerUploadURL:         getEnv("WORKER_UPLOAD_URL", ""),
 		TelegramChannels:        parseTelegramChannels(getEnv("TELEGRAM_CHANNELS", "")),
 		TelegramSerialsChannel:  getEnv("TELEGRAM_SERIALS_CHANNEL", ""),
+		RedisURL:                strings.TrimSpace(getEnv("REDIS_URL", "")),
 
 		SEONotifyEnabled:              strings.EqualFold(strings.TrimSpace(getEnv("SEO_NOTIFY_ENABLED", "true")), "true"),
 		IndexNowKey:                   strings.TrimSpace(getEnv("INDEXNOW_KEY", "")),

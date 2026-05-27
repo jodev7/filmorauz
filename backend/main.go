@@ -210,9 +210,21 @@ func main() {
 	banAppealRepo := repositories.NewBanAppealRepository(db)
 	banAppealHandler := handlers.NewBanAppealHandler(banAppealRepo, banHistoryRepo, userRepo, notificationService)
 
-	// Watch-room repository, hub, handler
+	// Watch-room repository, hub, handler. With REDIS_URL set the hub runs in
+	// cluster mode (Redis pub/sub + shared state) so multiple instances can
+	// share a room; without it, single-instance in-memory.
 	watchRoomRepo := repositories.NewWatchRoomRepository(db)
-	watchRoomHub := services.NewWatchRoomHub(watchRoomRepo)
+	var roomBus *services.RoomBus
+	if cfg.RedisURL != "" {
+		rb, err := services.NewRoomBus(cfg.RedisURL)
+		if err != nil {
+			log.Printf("WARNING: REDIS_URL set but Redis unreachable (%v) — watch-rooms fall back to single-instance mode", err)
+		} else {
+			roomBus = rb
+			log.Println("Watch-rooms: cluster mode enabled (Redis)")
+		}
+	}
+	watchRoomHub := services.NewWatchRoomHub(watchRoomRepo, roomBus)
 	watchRoomHub.StartHeartbeat()
 	watchRoomHandler := handlers.NewWatchRoomHandler(watchRoomRepo, userRepo, movieRepo, seriesRepo, notificationService, watchRoomHub)
 

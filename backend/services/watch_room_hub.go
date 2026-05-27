@@ -49,9 +49,9 @@ type HubRoom struct {
 	OwnerID    primitive.ObjectID
 	MaxMembers int
 
-	Position         float64
-	IsPlaying        bool
-	LastStateUpdate  time.Time
+	Position        float64
+	IsPlaying       bool
+	LastStateUpdate time.Time
 	// hostDisconnectDeadline is set when the host drops; clients use it to
 	// render the "Host qaytmoqda… (mm:ss qoldi)" countdown. Zero when the
 	// host is currently connected.
@@ -81,6 +81,8 @@ type HubRoom struct {
 	// without reconnecting. Cancelled if the host re-joins in time.
 	hostGraceTimer *time.Timer
 	closed         bool
+	// busCancel tears down this room's Redis subscription (cluster mode only).
+	busCancel func()
 }
 
 // Scaling thresholds.
@@ -104,14 +106,19 @@ const (
 // its own mutex for member/state mutation.
 type WatchRoomHub struct {
 	repo *repositories.WatchRoomRepository
+	// bus is the cross-instance backbone. Nil → single-instance in-memory.
+	bus *RoomBus
 
 	mu    sync.RWMutex
 	rooms map[primitive.ObjectID]*HubRoom
 }
 
-func NewWatchRoomHub(repo *repositories.WatchRoomRepository) *WatchRoomHub {
+// NewWatchRoomHub builds the hub. Pass a non-nil bus to run in cluster mode
+// (Redis pub/sub + shared state); nil keeps the legacy single-instance path.
+func NewWatchRoomHub(repo *repositories.WatchRoomRepository, bus *RoomBus) *WatchRoomHub {
 	return &WatchRoomHub{
 		repo:  repo,
+		bus:   bus,
 		rooms: make(map[primitive.ObjectID]*HubRoom),
 	}
 }
@@ -147,6 +154,37 @@ func (h *WatchRoomHub) GetOrLoadRoom(ctx context.Context, roomID primitive.Objec
 		lastChat:        make(map[primitive.ObjectID]time.Time),
 	}
 	h.rooms[roomID] = rm
+	// Cluster mode: subscribe to this room's Redis channel and fan every
+	// inbound envelope out to our local connections.
+	if h.bus != nil {
+		cancel, ch := h.bus.Subscribe(roomID.Hex())
+		rm.busCancel = cancel
+		go func() {
+			for env := range ch {
+				// Intercept control messages (e.g. __kick) before they reach
+				// clients; everything else is fanned out verbatim.
+				var probe struct {
+					Type    string `json:"type"`
+					Payload struct {
+						UserID string `json:"user_id"`
+					} `json:"payload"`
+				}
+				if json.Unmarshal(env.Raw, &probe) == nil {
+					switch probe.Type {
+					case "__kick":
+						if uid, err := primitive.ObjectIDFromHex(probe.Payload.UserID); err == nil {
+							h.localKick(rm, uid)
+						}
+						continue
+					case "__close":
+						h.closeLocalOnly(rm, "closed")
+						return
+					}
+				}
+				h.localBroadcastRaw(rm, env.Raw, env.ExceptUser)
+			}
+		}()
+	}
 	return rm, nil
 }
 
@@ -179,6 +217,21 @@ func (h *WatchRoomHub) AddClient(rm *HubRoom, c *HubClient) error {
 		hostReconnected = true
 	}
 	rm.mu.Unlock()
+
+	// Cluster mode: register this connection in the shared presence counter
+	// and roster so every instance's count/roster reflects it.
+	if h.bus != nil {
+		h.bus.IncrPresence(rm.ID.Hex())
+		if member, mErr := json.Marshal(map[string]any{
+			"user_id":     c.UserID.Hex(),
+			"user_name":   c.UserName,
+			"user_avatar": c.UserAvatar,
+			"is_host":     c.IsHost,
+		}); mErr == nil {
+			h.bus.AddRosterMember(rm.ID.Hex(), c.UserID.Hex(), member)
+		}
+	}
+
 	if hostReconnected {
 		h.broadcast(rm, hubMessage{Type: "host_reconnected", Payload: map[string]any{}}, nil)
 	}
@@ -194,36 +247,59 @@ func (h *WatchRoomHub) AddClient(rm *HubRoom, c *HubClient) error {
 	// pure waste. Those clients render the count from state_sync and pull
 	// the roster page-by-page over REST.
 	if !rm.presenceMode {
-		rm.mu.Lock()
-		snapshot := make([]map[string]any, 0, len(rm.clients))
-		for cc := range rm.clients {
-			snapshot = append(snapshot, map[string]any{
-				"user_id":     cc.UserID.Hex(),
-				"user_name":   cc.UserName,
-				"user_avatar": cc.UserAvatar,
-				"is_host":     cc.IsHost,
-			})
+		var snapshot []map[string]any
+		if h.bus != nil {
+			// Cluster: roster is shared in Redis, so the snapshot is complete
+			// even when members are spread across instances.
+			for _, raw := range h.bus.Roster(rm.ID.Hex()) {
+				var m map[string]any
+				if json.Unmarshal(raw, &m) == nil {
+					snapshot = append(snapshot, m)
+				}
+			}
+		} else {
+			rm.mu.Lock()
+			snapshot = make([]map[string]any, 0, len(rm.clients))
+			for cc := range rm.clients {
+				snapshot = append(snapshot, map[string]any{
+					"user_id":     cc.UserID.Hex(),
+					"user_name":   cc.UserName,
+					"user_avatar": cc.UserAvatar,
+					"is_host":     cc.IsHost,
+				})
+			}
+			rm.mu.Unlock()
 		}
-		rm.mu.Unlock()
 		h.sendTo(c, hubMessage{Type: "member_snapshot", Payload: map[string]any{"members": snapshot}})
 	}
 
-	// Replay the in-memory chat history so a (re)joining client sees the
-	// recent conversation. Sent only to the newcomer.
-	rm.mu.Lock()
-	history := make([]map[string]any, 0, len(rm.recentMessages))
-	for _, m := range rm.recentMessages {
-		history = append(history, map[string]any{
-			"user_id":     m.UserID.Hex(),
-			"user_name":   m.UserName,
-			"user_avatar": m.UserAvatar,
-			"kind":        m.Kind,
-			"text":        m.Text,
-			"emoji":       m.Emoji,
-			"created_at":  m.CreatedAt,
-		})
+	// Replay the chat history so a (re)joining client sees the recent
+	// conversation. Cluster mode reads the shared Redis ring; otherwise the
+	// in-memory buffer. Sent only to the newcomer.
+	var history []map[string]any
+	if h.bus != nil {
+		for _, raw := range h.bus.RecentChat(rm.ID.Hex()) {
+			var m map[string]any
+			if json.Unmarshal(raw, &m) == nil {
+				history = append(history, m)
+			}
+		}
+	} else {
+		rm.mu.Lock()
+		history = make([]map[string]any, 0, len(rm.recentMessages))
+		for _, m := range rm.recentMessages {
+			history = append(history, map[string]any{
+				"user_id":     m.UserID.Hex(),
+				"user_name":   m.UserName,
+				"user_avatar": m.UserAvatar,
+				"kind":        m.Kind,
+				"text":        m.Text,
+				"emoji":       m.Emoji,
+				"created_at":  m.CreatedAt,
+			})
+		}
+		rm.mu.Unlock()
 	}
-	rm.mu.Unlock()
 	if len(history) > 0 {
 		h.sendTo(c, hubMessage{Type: "chat_history", Payload: map[string]any{"messages": history}})
 	}
@@ -256,12 +332,30 @@ func (h *WatchRoomHub) RemoveClient(rm *HubRoom, c *HubClient) {
 	close(c.send)
 	delete(rm.lastChat, c.UserID)
 	isHostGone := c.IsHost && !rm.hasHostLocked()
+	// Does this user still have another local connection? If so, keep them
+	// in the shared roster (multi-tab).
+	sameUserStillHere := false
+	for cc := range rm.clients {
+		if cc.UserID == c.UserID {
+			sameUserStillHere = true
+			break
+		}
+	}
 	rm.mu.Unlock()
+
+	// Cluster mode: drop one presence count, and the roster entry once the
+	// user has no remaining local connection.
+	if h.bus != nil {
+		h.bus.DecrPresence(rm.ID.Hex())
+		if !sameUserStillHere {
+			h.bus.RemoveRosterMember(rm.ID.Hex(), c.UserID.Hex())
+		}
+	}
 
 	// Per-member leave events only in small rooms.
 	if !rm.presenceMode {
 		h.broadcast(rm, hubMessage{
-			Type: "member_left",
+			Type:    "member_left",
 			Payload: map[string]any{"user_id": c.UserID.Hex()},
 		}, nil)
 	}
@@ -287,7 +381,7 @@ func (h *WatchRoomHub) RemoveClient(rm *HubRoom, c *HubClient) {
 			h.broadcast(rm, hubMessage{
 				Type: "host_disconnected",
 				Payload: map[string]any{
-					"deadline_ms":    deadline.UnixMilli(),
+					"deadline_ms":   deadline.UnixMilli(),
 					"grace_seconds": int(HostDisconnectGrace.Seconds()),
 				},
 			}, nil)
@@ -302,6 +396,29 @@ func (h *WatchRoomHub) RemoveClient(rm *HubRoom, c *HubClient) {
 			h.CloseRoom(rm, "empty")
 		}
 	}
+}
+
+// recordChat buffers one chat/emoji entry for replay on rejoin. In cluster
+// mode it pushes the canonical chat-history payload onto the shared Redis
+// ring (so a join on any instance replays it); otherwise it appends to the
+// in-memory ring. Never touches Mongo.
+func (h *WatchRoomHub) recordChat(rm *HubRoom, m models.WatchRoomMessage) {
+	if h.bus != nil {
+		payload, err := json.Marshal(map[string]any{
+			"user_id":     m.UserID.Hex(),
+			"user_name":   m.UserName,
+			"user_avatar": m.UserAvatar,
+			"kind":        m.Kind,
+			"text":        m.Text,
+			"emoji":       m.Emoji,
+			"created_at":  m.CreatedAt,
+		})
+		if err == nil {
+			h.bus.PushChat(rm.ID.Hex(), payload, chatBufferSize)
+		}
+		return
+	}
+	rm.appendMessage(m)
 }
 
 // appendMessage adds one entry to the room's in-memory chat ring buffer,
@@ -377,13 +494,19 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 			return
 		}
 		rm.LastStateUpdate = now
+		pos, playing, asOf := rm.Position, rm.IsPlaying, now.UnixMilli()
 		rm.mu.Unlock()
+		// Cluster mode: write the authoritative head to Redis so other
+		// instances (and fresh joiners anywhere) read the correct position.
+		if h.bus != nil {
+			h.bus.SetPlayback(rm.ID.Hex(), pos, playing, asOf)
+		}
 		// Persist async — don't block the broadcast.
 		go func(roomID primitive.ObjectID, pos float64, playing bool) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			_ = h.repo.UpdatePlaybackState(ctx, roomID, pos, playing)
-		}(rm.ID, rm.Position, rm.IsPlaying)
+		}(rm.ID, pos, playing)
 		h.broadcastState(rm, nil)
 
 	case "chat_send":
@@ -416,20 +539,19 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 			Emoji:      p.Emoji,
 			CreatedAt:  time.Now(),
 		}
-		// In-memory only — no DB write. Buffered for replay on rejoin.
-		rm.appendMessage(entry)
-		h.broadcast(rm, hubMessage{
-			Type: "chat_message",
-			Payload: map[string]any{
-				"user_id":     c.UserID.Hex(),
-				"user_name":   c.UserName,
-				"user_avatar": c.UserAvatar,
-				"kind":        entry.Kind,
-				"text":        entry.Text,
-				"emoji":       entry.Emoji,
-				"created_at":  entry.CreatedAt,
-			},
-		}, nil)
+		// Never persisted to Mongo — buffered for replay on rejoin (shared
+		// Redis ring in cluster mode, in-memory slice otherwise).
+		chatPayload := map[string]any{
+			"user_id":     c.UserID.Hex(),
+			"user_name":   c.UserName,
+			"user_avatar": c.UserAvatar,
+			"kind":        entry.Kind,
+			"text":        entry.Text,
+			"emoji":       entry.Emoji,
+			"created_at":  entry.CreatedAt,
+		}
+		h.recordChat(rm, entry)
+		h.broadcast(rm, hubMessage{Type: "chat_message", Payload: chatPayload}, nil)
 
 	case "typing":
 		// Lightweight ephemeral broadcast — never persisted. Suppressed in
@@ -473,8 +595,8 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 			Emoji:      p.Emoji,
 			CreatedAt:  time.Now(),
 		}
-		// In-memory only — no DB write. Buffered for replay on rejoin.
-		rm.appendMessage(entry)
+		// Buffered for replay on rejoin (as an emoji chat entry).
+		h.recordChat(rm, entry)
 		h.broadcast(rm, hubMessage{
 			Type: "reaction",
 			Payload: map[string]any{
@@ -570,6 +692,23 @@ func (h *WatchRoomHub) BroadcastEpisodeChange(rm *HubRoom, episodeID, episodeTit
 // notifies the rest of the members. The kicked side sees a "kicked" event
 // and the WS closes immediately after.
 func (h *WatchRoomHub) KickUser(rm *HubRoom, userID primitive.ObjectID) {
+	// Disconnect the target's connections on this instance.
+	h.localKick(rm, userID)
+	// Cluster mode: the target may be connected to another instance — tell
+	// every instance to drop their local copies too.
+	if h.bus != nil {
+		ctrl, _ := json.Marshal(hubMessage{Type: "__kick", Payload: map[string]any{"user_id": userID.Hex()}})
+		h.bus.Publish(rm.ID.Hex(), ctrl, "")
+	}
+	h.broadcast(rm, hubMessage{
+		Type:    "member_left",
+		Payload: map[string]any{"user_id": userID.Hex(), "kicked": true},
+	}, nil)
+}
+
+// localKick closes this instance's connections for userID (non-host only),
+// sending them a "kicked" frame first.
+func (h *WatchRoomHub) localKick(rm *HubRoom, userID primitive.ObjectID) {
 	rm.mu.Lock()
 	targets := make([]*HubClient, 0)
 	for c := range rm.clients {
@@ -578,18 +717,11 @@ func (h *WatchRoomHub) KickUser(rm *HubRoom, userID primitive.ObjectID) {
 		}
 	}
 	rm.mu.Unlock()
-	if len(targets) == 0 {
-		return
-	}
 	payload, _ := json.Marshal(hubMessage{Type: "kicked", Payload: map[string]any{"reason": "host kicked"}})
 	for _, c := range targets {
 		_ = c.Conn.WriteMessage(websocket.TextMessage, payload)
 		_ = c.Conn.Close()
 	}
-	h.broadcast(rm, hubMessage{
-		Type: "member_left",
-		Payload: map[string]any{"user_id": userID.Hex(), "kicked": true},
-	}, nil)
 }
 
 // SnapshotMembers returns the current member list — used by the admin REST
@@ -615,30 +747,59 @@ func (h *WatchRoomHub) SnapshotMembers(roomID primitive.ObjectID) []map[string]a
 	return out
 }
 
+// MemberCount returns the cluster-wide live member count (Redis presence) in
+// cluster mode, or this instance's local count otherwise. Used by the room
+// listing handlers.
+func (h *WatchRoomHub) MemberCount(roomID primitive.ObjectID) int {
+	if h.bus != nil {
+		return h.bus.GetPresence(roomID.Hex())
+	}
+	return len(h.SnapshotMembers(roomID))
+}
+
 // SnapshotMembersPage returns a slice of the roster plus the total live
 // member count — used by the paginated roster REST endpoint that powers the
 // virtualized member list in large/premiere rooms. Hosts are surfaced first
 // so they're always visible on the first page.
 func (h *WatchRoomHub) SnapshotMembersPage(roomID primitive.ObjectID, offset, limit int) ([]map[string]any, int) {
-	h.mu.RLock()
-	rm, ok := h.rooms[roomID]
-	h.mu.RUnlock()
-	if !ok {
-		return []map[string]any{}, 0
-	}
-	rm.mu.Lock()
-	all := make([]*HubClient, 0, len(rm.clients))
-	for c := range rm.clients {
-		all = append(all, c)
-	}
-	rm.mu.Unlock()
-
-	// Hosts first, then stable-ish by user id so pages don't reshuffle wildly.
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].IsHost != all[j].IsHost {
-			return all[i].IsHost
+	// Build the full roster as a list of maps. Cluster mode reads the shared
+	// Redis roster (so any instance answers completely); otherwise it reads
+	// this instance's local connections.
+	var all []map[string]any
+	if h.bus != nil {
+		for _, raw := range h.bus.Roster(roomID.Hex()) {
+			var m map[string]any
+			if json.Unmarshal(raw, &m) == nil {
+				all = append(all, m)
+			}
 		}
-		return all[i].UserID.Hex() < all[j].UserID.Hex()
+	} else {
+		h.mu.RLock()
+		rm, ok := h.rooms[roomID]
+		h.mu.RUnlock()
+		if !ok {
+			return []map[string]any{}, 0
+		}
+		rm.mu.Lock()
+		for c := range rm.clients {
+			all = append(all, map[string]any{
+				"user_id":     c.UserID.Hex(),
+				"user_name":   c.UserName,
+				"user_avatar": c.UserAvatar,
+				"is_host":     c.IsHost,
+			})
+		}
+		rm.mu.Unlock()
+	}
+
+	isHost := func(m map[string]any) bool { v, _ := m["is_host"].(bool); return v }
+	uid := func(m map[string]any) string { v, _ := m["user_id"].(string); return v }
+	// Hosts first, then stable by user id so pages don't reshuffle wildly.
+	sort.Slice(all, func(i, j int) bool {
+		if isHost(all[i]) != isHost(all[j]) {
+			return isHost(all[i])
+		}
+		return uid(all[i]) < uid(all[j])
 	})
 
 	total := len(all)
@@ -652,24 +813,42 @@ func (h *WatchRoomHub) SnapshotMembersPage(roomID primitive.ObjectID, offset, li
 	if limit <= 0 || end > total {
 		end = total
 	}
-	out := make([]map[string]any, 0, end-offset)
-	for _, c := range all[offset:end] {
-		out = append(out, map[string]any{
-			"user_id":     c.UserID.Hex(),
-			"user_name":   c.UserName,
-			"user_avatar": c.UserAvatar,
-			"is_host":     c.IsHost,
-		})
-	}
-	return out, total
+	return all[offset:end], total
 }
 
-// CloseRoom kicks every client and marks the room closed in Mongo.
+// CloseRoom tears the room down everywhere and marks it closed in Mongo.
+// In cluster mode it first tells peer instances to drop their local copies,
+// then performs the one-time Mongo close + Redis cleanup here.
 func (h *WatchRoomHub) CloseRoom(rm *HubRoom, reason string) {
+	// Tell peers to tear down their local connections + subscription.
+	if h.bus != nil {
+		ctrl, _ := json.Marshal(hubMessage{Type: "__close", Payload: map[string]any{"reason": reason}})
+		h.bus.Publish(rm.ID.Hex(), ctrl, "")
+	}
+	if !h.closeLocalOnly(rm, reason) {
+		// Someone already tore it down — don't double-persist/clean.
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = h.repo.CloseRoom(ctx, rm.ID)
+	// Chat/state/presence/roster live only in memory or Redis — wipe the
+	// Redis keys (in-memory is GC'd with the HubRoom).
+	if h.bus != nil {
+		h.bus.Cleanup(rm.ID.Hex())
+	}
+	log.Printf("[hub] room=%s closed reason=%s", rm.ID.Hex(), reason)
+}
+
+// closeLocalOnly drops this instance's connections + subscription for the
+// room and removes it from the local map. Idempotent — returns true only on
+// the call that actually performed the teardown. Does NOT touch Mongo/Redis.
+func (h *WatchRoomHub) closeLocalOnly(rm *HubRoom, reason string) bool {
 	rm.mu.Lock()
 	if rm.closed {
 		rm.mu.Unlock()
-		return
+		return false
 	}
 	rm.closed = true
 	clients := make([]*HubClient, 0, len(rm.clients))
@@ -683,17 +862,13 @@ func (h *WatchRoomHub) CloseRoom(rm *HubRoom, reason string) {
 		_ = c.Conn.WriteMessage(websocket.TextMessage, payload)
 		_ = c.Conn.Close()
 	}
-
+	if rm.busCancel != nil {
+		rm.busCancel()
+	}
 	h.mu.Lock()
 	delete(h.rooms, rm.ID)
 	h.mu.Unlock()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_ = h.repo.CloseRoom(ctx, rm.ID)
-	// Chat lives only in the in-memory ring buffer, which is GC'd along with
-	// this HubRoom — nothing to wipe in the DB.
-	log.Printf("[hub] room=%s closed reason=%s", rm.ID.Hex(), reason)
+	return true
 }
 
 // ── broadcast helpers ─────────────────────────────────────────────────────
@@ -705,44 +880,88 @@ func (h *WatchRoomHub) CloseRoom(rm *HubRoom, reason string) {
 // to the OLD position every heartbeat — visible as the "last segment
 // loops forever" bug on every non-host viewer.
 func (h *WatchRoomHub) sendState(rm *HubRoom, c *HubClient) {
-	rm.mu.Lock()
+	pos, playing, asOf := h.playbackState(rm)
 	state := hubMessage{
 		Type: "state_sync",
 		Payload: map[string]any{
-			"position":     rm.Position,
-			"is_playing":   rm.IsPlaying,
-			"as_of_ms":     rm.LastStateUpdate.UnixMilli(),
-			"member_count": len(rm.clients),
+			"position":     pos,
+			"is_playing":   playing,
+			"as_of_ms":     asOf,
+			"member_count": h.memberCount(rm),
 		},
 	}
-	rm.mu.Unlock()
 	h.sendTo(c, state)
 }
 
-func (h *WatchRoomHub) broadcastState(rm *HubRoom, except *HubClient) {
-	rm.mu.Lock()
-	state := hubMessage{
+// stateMsg builds a state_sync message from the room's authoritative head.
+func (h *WatchRoomHub) stateMsg(rm *HubRoom) hubMessage {
+	pos, playing, asOf := h.playbackState(rm)
+	return hubMessage{
 		Type: "state_sync",
 		Payload: map[string]any{
-			"position":     rm.Position,
-			"is_playing":   rm.IsPlaying,
-			"as_of_ms":     rm.LastStateUpdate.UnixMilli(),
-			"member_count": len(rm.clients),
+			"position":     pos,
+			"is_playing":   playing,
+			"as_of_ms":     asOf,
+			"member_count": h.memberCount(rm),
 		},
 	}
-	rm.mu.Unlock()
-	h.broadcast(rm, state, except)
 }
 
+// broadcastState publishes a state_sync cluster-wide (used after host actions).
+func (h *WatchRoomHub) broadcastState(rm *HubRoom, except *HubClient) {
+	h.broadcast(rm, h.stateMsg(rm), except)
+}
+
+// playbackState returns the authoritative head — from Redis in cluster mode
+// (so any instance is correct), else from this room's in-memory fields.
+func (h *WatchRoomHub) playbackState(rm *HubRoom) (position float64, isPlaying bool, asOfMs int64) {
+	if h.bus != nil {
+		if pos, playing, asOf, ok := h.bus.GetPlayback(rm.ID.Hex()); ok {
+			return pos, playing, asOf
+		}
+	}
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	return rm.Position, rm.IsPlaying, rm.LastStateUpdate.UnixMilli()
+}
+
+// memberCount is the cluster-wide live count in bus mode, else the local one.
+func (h *WatchRoomHub) memberCount(rm *HubRoom) int {
+	if h.bus != nil {
+		return h.bus.GetPresence(rm.ID.Hex())
+	}
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	return len(rm.clients)
+}
+
+// broadcast delivers msg to every member of the room. In cluster mode it
+// publishes to Redis (the per-room subscriber on every instance, including
+// this one, then fans it out locally — so we do NOT also send locally here).
+// In single-instance mode it fans out to local connections directly.
 func (h *WatchRoomHub) broadcast(rm *HubRoom, msg hubMessage, except *HubClient) {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return
 	}
+	exceptUser := ""
+	if except != nil {
+		exceptUser = except.UserID.Hex()
+	}
+	if h.bus != nil {
+		h.bus.Publish(rm.ID.Hex(), data, exceptUser)
+		return
+	}
+	h.localBroadcastRaw(rm, data, exceptUser)
+}
+
+// localBroadcastRaw fans an already-marshalled frame out to this instance's
+// connections, skipping every connection owned by exceptUser (empty = none).
+func (h *WatchRoomHub) localBroadcastRaw(rm *HubRoom, data []byte, exceptUser string) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	for c := range rm.clients {
-		if c == except {
+		if exceptUser != "" && c.UserID.Hex() == exceptUser {
 			continue
 		}
 		select {
@@ -852,7 +1071,16 @@ func (h *WatchRoomHub) StartHeartbeat() {
 			}
 			h.mu.RUnlock()
 			for _, rm := range rooms {
-				h.broadcastState(rm, nil)
+				// Heartbeat fans out to LOCAL clients only. In cluster mode
+				// every instance runs its own heartbeat, so publishing here
+				// would duplicate the frame across the whole fleet; instead
+				// each instance reads the shared head (Redis) and pushes it
+				// to the connections it owns.
+				data, err := json.Marshal(h.stateMsg(rm))
+				if err != nil {
+					continue
+				}
+				h.localBroadcastRaw(rm, data, "")
 			}
 		}
 	}()

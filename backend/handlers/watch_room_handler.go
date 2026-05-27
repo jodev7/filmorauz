@@ -22,10 +22,10 @@ import (
 
 // Free-tier limits. Premium accounts bypass both.
 const (
-	freeRoomsPerDay  = 3
-	freeMaxMembers   = 2
+	freeRoomsPerDay   = 3
+	freeMaxMembers    = 2
 	premiumMaxMembers = 20
-	roomTTL          = 12 * time.Hour
+	roomTTL           = 12 * time.Hour
 	// Invite links expire fast on purpose — every "Taklif yuborish" click
 	// generates a fresh one, so a stale notification card can't be reused
 	// after 10 minutes. Same TTL for free and premium hosts.
@@ -34,13 +34,13 @@ const (
 )
 
 type WatchRoomHandler struct {
-	repo                 *repositories.WatchRoomRepository
-	userRepo             *repositories.UserRepository
-	movieRepo            *repositories.MovieRepository
-	seriesRepo           *repositories.SeriesRepository
-	notificationService  *services.NotificationService
-	hub                  *services.WatchRoomHub
-	upgrader             websocket.Upgrader
+	repo                *repositories.WatchRoomRepository
+	userRepo            *repositories.UserRepository
+	movieRepo           *repositories.MovieRepository
+	seriesRepo          *repositories.SeriesRepository
+	notificationService *services.NotificationService
+	hub                 *services.WatchRoomHub
+	upgrader            websocket.Upgrader
 }
 
 func NewWatchRoomHandler(
@@ -83,7 +83,7 @@ func (h *WatchRoomHandler) CreateRoom(c *gin.Context) {
 	var body struct {
 		ContentType string `json:"content_type" binding:"required"` // movie | episode | series
 		ContentID   string `json:"content_id" binding:"required"`
-		Visibility  string `json:"visibility"` // public | private (default private)
+		Visibility  string `json:"visibility"`  // public | private (default private)
 		MaxMembers  int    `json:"max_members"` // requested cap; capped server-side by plan
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -123,9 +123,9 @@ func (h *WatchRoomHandler) CreateRoom(c *gin.Context) {
 	// the "active room" pill in the navbar would have ambiguous targets.
 	if existing, err := h.repo.FindActiveByOwner(ctx, userID); err == nil && existing != nil {
 		c.JSON(http.StatusConflict, gin.H{
-			"error":           "you already have an open room",
-			"active_room_id":  existing.ID.Hex(),
-			"detail":          "close your current room before opening a new one",
+			"error":          "you already have an open room",
+			"active_room_id": existing.ID.Hex(),
+			"detail":         "close your current room before opening a new one",
 		})
 		return
 	}
@@ -171,10 +171,10 @@ func (h *WatchRoomHandler) CreateRoom(c *gin.Context) {
 
 	now := time.Now()
 	room := &models.WatchRoom{
-		OwnerID:         userID,
-		OwnerName:       resolveDisplayName(user),
-		OwnerAvatar:     resolveAvatarURL(user),
-		OwnerIsPremium:  isPremium,
+		OwnerID:             userID,
+		OwnerName:           resolveDisplayName(user),
+		OwnerAvatar:         resolveAvatarURL(user),
+		OwnerIsPremium:      isPremium,
 		ContentType:         body.ContentType,
 		ContentID:           contentID,
 		ContentTitle:        title,
@@ -184,15 +184,15 @@ func (h *WatchRoomHandler) CreateRoom(c *gin.Context) {
 		SeasonID:            seasonID,
 		CurrentEpisodeID:    currentEpID,
 		CurrentEpisodeTitle: currentEpTitle,
-		Visibility:      body.Visibility,
-		MaxMembers:      maxMembers,
-		PositionSeconds: 0,
-		IsPlaying:       false,
-		LastStateUpdate: now,
-		Status:          "active",
-		CreatedAt:       now,
-		UpdatedAt:       now,
-		ExpiresAt:       now.Add(roomTTL),
+		Visibility:          body.Visibility,
+		MaxMembers:          maxMembers,
+		PositionSeconds:     0,
+		IsPlaying:           false,
+		LastStateUpdate:     now,
+		Status:              "active",
+		CreatedAt:           now,
+		UpdatedAt:           now,
+		ExpiresAt:           now.Add(roomTTL),
 	}
 	if err := h.repo.CreateRoom(ctx, room); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create room"})
@@ -392,7 +392,7 @@ func (h *WatchRoomHandler) ListPublicRoomsHandler(c *gin.Context) {
 	}
 	out := make([]row, 0, len(rooms))
 	for _, rm := range rooms {
-		mc := len(h.hub.SnapshotMembers(rm.ID))
+		mc := h.hub.MemberCount(rm.ID)
 		out = append(out, row{WatchRoom: rm, MemberCount: mc})
 	}
 	c.JSON(http.StatusOK, gin.H{"items": out})
@@ -414,7 +414,7 @@ func (h *WatchRoomHandler) ListFeaturedRoomsHandler(c *gin.Context) {
 	}
 	out := make([]row, 0, len(rooms))
 	for _, rm := range rooms {
-		mc := len(h.hub.SnapshotMembers(rm.ID))
+		mc := h.hub.MemberCount(rm.ID)
 		out = append(out, row{WatchRoom: rm, MemberCount: mc})
 	}
 	c.JSON(http.StatusOK, gin.H{"items": out})
