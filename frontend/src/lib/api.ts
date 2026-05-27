@@ -4276,6 +4276,24 @@ export async function listPublicRooms(): Promise<{ items: PublicRoomListItem[] }
   return res.json();
 }
 
+export interface RoomMemberItem {
+  user_id: string;
+  user_name: string;
+  user_avatar?: string;
+  is_host: boolean;
+}
+
+// Paginated live roster — backs the virtualized member list in large rooms.
+export async function listRoomMembers(
+  roomID: string,
+  offset: number,
+  limit: number,
+): Promise<{ items: RoomMemberItem[]; total: number; offset: number; limit: number }> {
+  const res = await fetch(`${API_URL}/rooms/${roomID}/members?offset=${offset}&limit=${limit}`);
+  if (!res.ok) throw new Error("Failed to load members");
+  return res.json();
+}
+
 // Pinned premiere rooms shown at the top of the /rooms page.
 export async function listFeaturedRooms(): Promise<{ items: PublicRoomListItem[] }> {
   const res = await fetch(`${API_URL}/rooms/featured`);

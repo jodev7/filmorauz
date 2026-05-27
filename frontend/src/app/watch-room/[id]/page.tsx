@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import RoomPlayer from "@/components/watch-room/RoomPlayer";
+import MemberList from "@/components/watch-room/MemberList";
 import {
   getWatchRoom,
   createRoomInvite,
@@ -919,37 +920,13 @@ export default function WatchRoomPage() {
             <div className="flex items-center gap-2 text-sm font-medium">
               <Users className="w-4 h-4" /> A'zolar ({displayMemberCount})
             </div>
-            <ul className="mt-2 space-y-1 max-h-40 overflow-y-auto">
-              {memberList.length === 0 && (
-                <li className="text-xs text-gray-500">Hozircha sizdan boshqa hech kim yo&apos;q</li>
-              )}
-              {memberList.map((m) => (
-                <li key={m.userID} className="flex items-center gap-2 text-sm">
-                  {m.userAvatar ? (
-                    <MediaImage
-                      src={m.userAvatar}
-                      alt={m.userName}
-                      className="w-6 h-6 rounded-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-6 h-6 rounded-full bg-brand-dark flex items-center justify-center text-xs">
-                      {m.userName.slice(0, 1)}
-                    </div>
-                  )}
-                  <span className="truncate flex-1">{m.userName || "Foydalanuvchi"}</span>
-                  {m.isHost && <Crown className="w-3 h-3 text-yellow-400 shrink-0" />}
-                  {isHost && !m.isHost && (
-                    <button
-                      onClick={() => handleKick(m.userID)}
-                      className="p-1 text-red-400 hover:bg-red-500/10 rounded"
-                      title="Chiqarish"
-                    >
-                      <UserX className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <MemberList
+              roomID={roomID}
+              totalCount={displayMemberCount}
+              wsMembers={memberList}
+              isHost={isHost}
+              onKick={handleKick}
+            />
           </div>
 
           {/* Chat — always visible */}
