@@ -609,10 +609,9 @@ func (h *WatchRoomHandler) CloseRoomEndpoint(c *gin.Context) {
 		h.hub.CloseRoom(hubRoom, "host_closed")
 	} else {
 		// No hub instance (no one ever connected) — close the row
-		// directly so it doesn't linger as active. Still wipe any chat
-		// rows that may exist (host could have created+chatted+reloaded).
+		// directly so it doesn't linger as active. No chat to wipe: chat
+		// is in-memory only and a room with no hub never buffered any.
 		_ = h.repo.CloseRoom(ctx, id)
-		_, _ = h.repo.DeleteRoomMessages(ctx, id)
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -705,22 +704,8 @@ func (h *WatchRoomHandler) CreateInvite(c *gin.Context) {
 	c.JSON(http.StatusCreated, inv)
 }
 
-// GET /api/rooms/:id/messages — replay chat history.
-func (h *WatchRoomHandler) ListMessages(c *gin.Context) {
-	id, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	msgs, err := h.repo.ListRoomMessages(ctx, id, 200)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "list failed"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"items": msgs})
-}
+// Chat history is no longer a REST endpoint — it's replayed over the
+// WebSocket via a "chat_history" event on join (see the hub's AddClient).
 
 // GET /ws/rooms/:id — WebSocket upgrade. Auth via token query string
 // (cookies/headers don't survive the cross-origin browser → ws:// hop the

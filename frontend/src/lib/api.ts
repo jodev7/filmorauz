@@ -4207,18 +4207,6 @@ export interface WatchRoomInvite {
   created_at: string;
 }
 
-export interface WatchRoomMessage {
-  id: string;
-  room_id: string;
-  user_id: string;
-  user_name?: string;
-  user_avatar?: string;
-  kind: "text" | "emoji";
-  text?: string;
-  emoji?: string;
-  created_at: string;
-}
-
 export async function createWatchRoom(
   token: string,
   input: {
@@ -4402,12 +4390,6 @@ export async function createRoomInvite(
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { error?: string }).error || "Failed to create invite");
   }
-  return res.json();
-}
-
-export async function listRoomMessages(roomID: string): Promise<{ items: WatchRoomMessage[] }> {
-  const res = await fetch(`${API_URL}/rooms/${roomID}/messages`);
-  if (!res.ok) throw new Error("Failed to list messages");
   return res.json();
 }
 

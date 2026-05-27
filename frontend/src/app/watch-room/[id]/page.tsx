@@ -6,7 +6,6 @@ import { useAuth } from "@/lib/auth-context";
 import RoomPlayer from "@/components/watch-room/RoomPlayer";
 import {
   getWatchRoom,
-  listRoomMessages,
   createRoomInvite,
   searchRoomUsers,
   getProtectedMediaAccess,
@@ -14,7 +13,6 @@ import {
   closeWatchRoom,
   updateRoomTheme,
   WatchRoom,
-  WatchRoomMessage,
   RoomUserResult,
 } from "@/lib/api";
 import { getSeriesEpisodesByID, SeasonWithEpisodes } from "@/lib/series-api";
@@ -216,23 +214,8 @@ export default function WatchRoomPage() {
             setVideoSrc(resolved);
           }
         }
-        const msgs = await listRoomMessages(roomID).catch(() => ({ items: [] as WatchRoomMessage[] }));
-        if (!cancelled) {
-          // Backend returns {items: null} when there are no messages yet —
-          // guard against the null before calling .map().
-          const items = msgs.items || [];
-          setChat(
-            items.map((m) => ({
-              userID: m.user_id,
-              userName: m.user_name || "",
-              userAvatar: m.user_avatar,
-              kind: m.kind,
-              text: m.text,
-              emoji: m.emoji,
-              createdAt: m.created_at,
-            })),
-          );
-        }
+        // Chat history is no longer fetched over REST — the hub replays the
+        // in-memory ring buffer as a "chat_history" WS event on join.
       } catch (e) {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : "Failed to load room");
       }
@@ -299,6 +282,11 @@ export default function WatchRoomPage() {
     const isHost = isHostRef.current;
     if (e.type === "chat") {
       appendChat(e.chat);
+    } else if (e.type === "chat_history") {
+      // Replace the chat with the replayed buffer (oldest-first), keeping
+      // at most the same 300-entry cap as the live append path.
+      const msgs = e.messages.length > 300 ? e.messages.slice(e.messages.length - 300) : e.messages;
+      setChat(msgs);
     } else if (e.type === "member_snapshot") {
       const map: Record<string, RoomMember> = {};
       for (const m of e.members) map[m.userID] = m;

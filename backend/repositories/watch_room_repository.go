@@ -12,18 +12,16 @@ import (
 )
 
 type WatchRoomRepository struct {
-	rooms    *mongo.Collection
-	invites  *mongo.Collection
-	messages *mongo.Collection
-	stats    *mongo.Collection
+	rooms   *mongo.Collection
+	invites *mongo.Collection
+	stats   *mongo.Collection
 }
 
 func NewWatchRoomRepository(db *mongo.Database) *WatchRoomRepository {
 	r := &WatchRoomRepository{
-		rooms:    db.Collection("watch_rooms"),
-		invites:  db.Collection("watch_room_invites"),
-		messages: db.Collection("watch_room_messages"),
-		stats:    db.Collection("watch_room_stats"),
+		rooms:   db.Collection("watch_rooms"),
+		invites: db.Collection("watch_room_invites"),
+		stats:   db.Collection("watch_room_stats"),
 	}
 	r.ensureIndexes(context.Background())
 	// Bootstrap the stats doc from whatever rows already exist in the
@@ -84,14 +82,10 @@ func (r *WatchRoomRepository) ensureIndexes(ctx context.Context) {
 		{Keys: bson.D{{Key: "room_id", Value: 1}}},
 		{Keys: bson.D{{Key: "expires_at", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
 	})
-	_, _ = r.messages.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "room_id", Value: 1}, {Key: "created_at", Value: 1}},
-	})
 }
 
 func (r *WatchRoomRepository) RoomsCollection() *mongo.Collection { return r.rooms }
 func (r *WatchRoomRepository) InvitesCollection() *mongo.Collection { return r.invites }
-func (r *WatchRoomRepository) MessagesCollection() *mongo.Collection { return r.messages }
 
 // ── Rooms ──────────────────────────────────────────────────────────────────
 
@@ -399,47 +393,6 @@ func (r *WatchRoomRepository) IncrementInviteUses(ctx context.Context, code stri
 	return err
 }
 
-// ── Messages ───────────────────────────────────────────────────────────────
-
-func (r *WatchRoomRepository) CreateMessage(ctx context.Context, msg *models.WatchRoomMessage) error {
-	res, err := r.messages.InsertOne(ctx, msg)
-	if err != nil {
-		return err
-	}
-	msg.ID = res.InsertedID.(primitive.ObjectID)
-	return nil
-}
-
-func (r *WatchRoomRepository) ListRoomMessages(ctx context.Context, roomID primitive.ObjectID, limit int) ([]models.WatchRoomMessage, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 200
-	}
-	cursor, err := r.messages.Find(ctx,
-		bson.M{"room_id": roomID},
-		options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}}).SetLimit(int64(limit)),
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer cursor.Close(ctx)
-	var msgs []models.WatchRoomMessage
-	if err := cursor.All(ctx, &msgs); err != nil {
-		return nil, err
-	}
-	// Return chronological order (oldest first).
-	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
-		msgs[i], msgs[j] = msgs[j], msgs[i]
-	}
-	return msgs, nil
-}
-
-// DeleteRoomMessages wipes every chat row for a room. Called from
-// CloseRoom (manual close + 5-min host-disconnect grace expiry) so a
-// long-lived deployment doesn't accumulate dead-room chat forever.
-func (r *WatchRoomRepository) DeleteRoomMessages(ctx context.Context, roomID primitive.ObjectID) (int64, error) {
-	res, err := r.messages.DeleteMany(ctx, bson.M{"room_id": roomID})
-	if err != nil {
-		return 0, err
-	}
-	return res.DeletedCount, nil
-}
+// Chat messages are intentionally NOT persisted — they live only in the
+// hub's in-memory ring buffer (see services/watch_room_hub.go) and vanish
+// when the room closes.

@@ -81,8 +81,9 @@ type WatchRoomInvite struct {
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 }
 
-// WatchRoomMessage is one chat/emoji entry inside a room. Persisted only for
-// premium-host rooms (free hosts get session-only chat).
+// WatchRoomMessage is one chat/emoji entry inside a room. NOT persisted to
+// Mongo — it's used as the payload shape for the hub's in-memory chat ring
+// buffer and the WebSocket chat events. Chat history dies with the room.
 type WatchRoomMessage struct {
 	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	RoomID    primitive.ObjectID `bson:"room_id" json:"room_id"`

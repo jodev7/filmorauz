@@ -21,6 +21,13 @@ var _ = primitive.NilObjectID // keep primitive imported even if every direct us
 // briefly should be able to walk back in and resume.
 const HostDisconnectGrace = 5 * time.Minute
 
+// chatBufferSize is how many of the most-recent chat/emoji entries each room
+// keeps in memory. Chat is NOT persisted to Mongo — this in-memory ring is
+// the only history. A user who leaves and rejoins a still-open room replays
+// these on entry; once the room closes the buffer is GC'd with the HubRoom
+// and the conversation is gone for good (by design).
+const chatBufferSize = 100
+
 // HubClient is a single websocket connection inside a room. One per browser
 // tab; the same user may have multiple clients (multi-device).
 type HubClient struct {
@@ -50,6 +57,9 @@ type HubRoom struct {
 
 	mu      sync.Mutex
 	clients map[*HubClient]struct{}
+	// recentMessages is the in-memory chat ring buffer (last chatBufferSize
+	// entries). Guarded by mu. Never persisted.
+	recentMessages []models.WatchRoomMessage
 	// hostGraceTimer fires when the host has been gone for HostDisconnectGrace
 	// without reconnecting. Cancelled if the host re-joins in time.
 	hostGraceTimer *time.Timer
@@ -156,6 +166,26 @@ func (h *WatchRoomHub) AddClient(rm *HubRoom, c *HubClient) error {
 	rm.mu.Unlock()
 	h.sendTo(c, hubMessage{Type: "member_snapshot", Payload: map[string]any{"members": snapshot}})
 
+	// Replay the in-memory chat history so a (re)joining client sees the
+	// recent conversation. Sent only to the newcomer.
+	rm.mu.Lock()
+	history := make([]map[string]any, 0, len(rm.recentMessages))
+	for _, m := range rm.recentMessages {
+		history = append(history, map[string]any{
+			"user_id":     m.UserID.Hex(),
+			"user_name":   m.UserName,
+			"user_avatar": m.UserAvatar,
+			"kind":        m.Kind,
+			"text":        m.Text,
+			"emoji":       m.Emoji,
+			"created_at":  m.CreatedAt,
+		})
+	}
+	rm.mu.Unlock()
+	if len(history) > 0 {
+		h.sendTo(c, hubMessage{Type: "chat_history", Payload: map[string]any{"messages": history}})
+	}
+
 	// Then announce the new client to everyone else.
 	h.broadcast(rm, hubMessage{
 		Type: "member_joined",
@@ -216,6 +246,18 @@ func (h *WatchRoomHub) RemoveClient(rm *HubRoom, c *HubClient) {
 			h.CloseRoom(rm, "empty")
 		}
 	}
+}
+
+// appendMessage adds one entry to the room's in-memory chat ring buffer,
+// trimming the oldest once it exceeds chatBufferSize. Safe to call without
+// holding rm.mu — it locks internally.
+func (rm *HubRoom) appendMessage(m models.WatchRoomMessage) {
+	rm.mu.Lock()
+	rm.recentMessages = append(rm.recentMessages, m)
+	if len(rm.recentMessages) > chatBufferSize {
+		rm.recentMessages = rm.recentMessages[len(rm.recentMessages)-chatBufferSize:]
+	}
+	rm.mu.Unlock()
 }
 
 func (rm *HubRoom) hasHostLocked() bool {
@@ -283,7 +325,7 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 		if p.Kind != "text" && p.Kind != "emoji" {
 			p.Kind = "text"
 		}
-		entry := &models.WatchRoomMessage{
+		entry := models.WatchRoomMessage{
 			RoomID:     rm.ID,
 			UserID:     c.UserID,
 			UserName:   c.UserName,
@@ -293,12 +335,8 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 			Emoji:      p.Emoji,
 			CreatedAt:  time.Now(),
 		}
-		// Persist (best-effort).
-		go func(m *models.WatchRoomMessage) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = h.repo.CreateMessage(ctx, m)
-		}(entry)
+		// In-memory only — no DB write. Buffered for replay on rejoin.
+		rm.appendMessage(entry)
 		h.broadcast(rm, hubMessage{
 			Type: "chat_message",
 			Payload: map[string]any{
@@ -337,7 +375,7 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 		if p.Emoji == "" {
 			return
 		}
-		entry := &models.WatchRoomMessage{
+		entry := models.WatchRoomMessage{
 			RoomID:     rm.ID,
 			UserID:     c.UserID,
 			UserName:   c.UserName,
@@ -346,11 +384,8 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 			Emoji:      p.Emoji,
 			CreatedAt:  time.Now(),
 		}
-		go func(m *models.WatchRoomMessage) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = h.repo.CreateMessage(ctx, m)
-		}(entry)
+		// In-memory only — no DB write. Buffered for replay on rejoin.
+		rm.appendMessage(entry)
 		h.broadcast(rm, hubMessage{
 			Type: "reaction",
 			Payload: map[string]any{
@@ -518,14 +553,8 @@ func (h *WatchRoomHub) CloseRoom(rm *HubRoom, reason string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = h.repo.CloseRoom(ctx, rm.ID)
-	// Wipe the chat rows on close (manual close, host-disconnect grace
-	// expiry, or "empty room" teardown). Without this, the messages
-	// collection grows forever in proportion to total rooms ever opened.
-	if deleted, err := h.repo.DeleteRoomMessages(ctx, rm.ID); err != nil {
-		log.Printf("[hub] room=%s delete messages failed: %v", rm.ID.Hex(), err)
-	} else if deleted > 0 {
-		log.Printf("[hub] room=%s deleted %d chat messages on close", rm.ID.Hex(), deleted)
-	}
+	// Chat lives only in the in-memory ring buffer, which is GC'd along with
+	// this HubRoom — nothing to wipe in the DB.
 	log.Printf("[hub] room=%s closed reason=%s", rm.ID.Hex(), reason)
 }
 

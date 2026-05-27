@@ -42,6 +42,7 @@ export type RoomTyping = {
 export type RoomEvent =
   | { type: "state"; state: RoomSyncState }
   | { type: "chat"; chat: RoomChatEntry }
+  | { type: "chat_history"; messages: RoomChatEntry[] }
   | { type: "member_snapshot"; members: RoomMember[] }
   | { type: "member_joined"; member: RoomMember }
   | { type: "member_left"; userID: string; kicked?: boolean }
@@ -155,6 +156,22 @@ export function useRoomSocket(
             },
           });
           break;
+        case "chat_history": {
+          const arr = Array.isArray(p.messages) ? (p.messages as Array<Record<string, unknown>>) : [];
+          pushEvent({
+            type: "chat_history",
+            messages: arr.map((m) => ({
+              userID: String(m.user_id || ""),
+              userName: String(m.user_name || ""),
+              userAvatar: typeof m.user_avatar === "string" ? m.user_avatar : undefined,
+              kind: (m.kind as "text" | "emoji") || "text",
+              text: typeof m.text === "string" ? m.text : undefined,
+              emoji: typeof m.emoji === "string" ? m.emoji : undefined,
+              createdAt: String(m.created_at || new Date().toISOString()),
+            })),
+          });
+          break;
+        }
         case "member_snapshot": {
           const arr = Array.isArray(p.members) ? (p.members as Array<Record<string, unknown>>) : [];
           pushEvent({
