@@ -187,3 +187,87 @@ sudo sysctl -p
   yoki TTL tugamaguncha xotirada turadi. Premyeralar kam bo'lgani uchun bu muammo emas.
 - Redis **bitta nuqtada xatolik** bo'lmasligi uchun prodda Redis Sentinel yoki
   managed Redis (masalan Upstash/ElastiCache) tavsiya etiladi.
+
+---
+
+## VPS'da ketma-ket bajarish tartibi (checklist)
+
+Noldan cluster rejimgacha — qadamma-qadam. Har qadamdan keyin tekshiruvi ham bor.
+`<...>` joylarni o'zingiznikiga almashtiring.
+
+### 0. Tayyorgarlik
+- [ ] VPS'ga SSH bilan kiring: `ssh <user>@<server-ip>`
+- [ ] Kodning oxirgi versiyasini torting: `cd /opt/filmorauz && git pull`
+- [ ] Mongo va domen/nginx allaqachon ishlayotganini tasdiqlang (eski deploy).
+
+### 1. Redis o'rnatish
+```bash
+sudo apt update && sudo apt install -y redis-server
+sudo systemctl enable --now redis-server
+redis-cli ping            # => PONG  (shu chiqsa, Redis tayyor)
+```
+- [ ] `/etc/redis/redis.conf`ni yuqoridagi "Redis o'rnatish" bo'limidagidek sozlang
+  (`maxmemory 512mb`, `maxmemory-policy allkeys-lru`, `save ""`, `appendonly no`,
+  `bind 127.0.0.1`).
+- [ ] `sudo systemctl restart redis-server` va yana `redis-cli ping`.
+
+### 2. Backendni build qilish
+```bash
+cd /opt/filmorauz/backend
+go build -o server .
+```
+- [ ] Xatosiz `server` fayli paydo bo'ldi.
+
+### 3. `.env`ga REDIS_URL qo'shish
+```bash
+echo 'REDIS_URL=redis://127.0.0.1:6379/0' >> /opt/filmorauz/backend/.env
+```
+- [ ] (Parol qo'ygan bo'lsangiz: `redis://:<parol>@127.0.0.1:6379/0`)
+
+### 4. Bitta instansni sinab ko'rish (cluster log'ini tekshirish)
+```bash
+cd /opt/filmorauz/backend && ./server
+```
+- [ ] Log'da `Watch-rooms: cluster mode enabled (Redis)` chiqishi kerak.
+- [ ] Chiqmasa — `REDIS_URL` yoki Redis ulanishini tekshiring (fallback log'i chiqadi).
+- [ ] Ctrl+C bilan to'xtating (keyingi qadamda systemd orqali ishga tushiramiz).
+
+### 5. systemd template o'rnatish (bir nechta instans)
+- [ ] Yuqoridagi `filmorauz-backend@.service` faylini
+  `/etc/systemd/system/filmorauz-backend@.service` ga joylang
+  (`ExecStart` yo'li `server` fayliga, `LimitNOFILE=200000`).
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now filmorauz-backend@8080
+sudo systemctl enable --now filmorauz-backend@8081
+sudo systemctl enable --now filmorauz-backend@8082
+```
+- [ ] Har birini tekshiring: `sudo systemctl status filmorauz-backend@8080`
+- [ ] Log: `journalctl -u filmorauz-backend@8080 -f` — "cluster mode enabled" bo'lsin.
+
+### 6. ulimit / sysctl limitlarini ko'tarish
+- [ ] `/etc/sysctl.conf`ga `fs.file-max`, `net.core.somaxconn`,
+  `net.ipv4.tcp_max_syn_backlog` qo'shing → `sudo sysctl -p`
+- [ ] systemd unit'da `LimitNOFILE=200000` borligini tasdiqlang (5-qadam).
+
+### 7. nginx — load balancer + WebSocket + sticky
+- [ ] `/etc/nginx/conf.d/filmorauz.conf`da `upstream` blokiga `ip_hash` va 3 instans
+  (8080/8081/8082) qo'shing.
+- [ ] `/ws/` location'ida `Upgrade`/`Connection` header'lari va uzun `proxy_read_timeout`
+  borligini tasdiqlang.
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### 8. Yakuniy tekshiruv (cluster ishlayaptimi?)
+- [ ] Admin panelidan bitta premyera room oching.
+- [ ] Ikki xil qurilma/IP'dan kiring (turli instanslarga tushishi uchun).
+- [ ] Birida chat yozing → ikkinchisida darhol ko'rinsin (Redis pub/sub).
+- [ ] `redis-cli monitor` bilan `wr:bcast:*`, `wr:presence:*`, `wr:chat:*`,
+  `wr:roster:*` kalitlarining harakatini kuzating.
+- [ ] A'zolar soni ikkala instansda ham bir xil (cluster-wide presence) ko'rinsin.
+
+### 9. Orqaga qaytarish (rollback) kerak bo'lsa
+- [ ] `.env`dan `REDIS_URL` qatorini olib tashlang (yoki izohga oling) va instanslarni
+  restart qiling — tizim avtomatik **single-instance** rejimga qaytadi, hech narsa
+  buzilmaydi. Redis'ni to'xtatish ham yetarli (kod fallback qiladi).
