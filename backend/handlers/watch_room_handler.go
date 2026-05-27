@@ -201,6 +201,117 @@ func (h *WatchRoomHandler) CreateRoom(c *gin.Context) {
 	c.JSON(http.StatusCreated, room)
 }
 
+// AdminCreateRoom creates a pinned "premiere" room. Admin/superadmin only.
+// Unlike the user CreateRoom it bypasses the free/premium quota, the
+// single-active-room-per-owner limit, and the plan member cap.
+// POST /api/admin/rooms
+func (h *WatchRoomHandler) AdminCreateRoom(c *gin.Context) {
+	userIDRaw, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "auth required"})
+		return
+	}
+	userIDHex, _ := userIDRaw.(string)
+	userID, err := primitive.ObjectIDFromHex(userIDHex)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user id"})
+		return
+	}
+
+	var body struct {
+		ContentType      string `json:"content_type" binding:"required"` // movie | episode | series
+		ContentID        string `json:"content_id" binding:"required"`
+		MaxMembers       int    `json:"max_members"`
+		PinPriority      int    `json:"pin_priority"`
+		ScheduledStartAt string `json:"scheduled_start_at"` // RFC3339, optional
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if body.ContentType != "movie" && body.ContentType != "episode" && body.ContentType != "series" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "content_type must be movie, episode or series"})
+		return
+	}
+	contentID, err := primitive.ObjectIDFromHex(body.ContentID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid content_id"})
+		return
+	}
+
+	// Default premiere capacity; clamp to a sane window.
+	maxMembers := body.MaxMembers
+	if maxMembers <= 0 {
+		maxMembers = 5000
+	}
+	if maxMembers < 2 {
+		maxMembers = 2
+	}
+	if maxMembers > 10000 {
+		maxMembers = 10000
+	}
+
+	var scheduledStart time.Time
+	if s := strings.TrimSpace(body.ScheduledStartAt); s != "" {
+		t, perr := time.Parse(time.RFC3339, s)
+		if perr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "scheduled_start_at must be RFC3339"})
+			return
+		}
+		scheduledStart = t
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	user, err := h.userRepo.FindByID(userID.Hex())
+	if err != nil || user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		return
+	}
+
+	title, poster, slug, seriesID, seasonID, currentEpID, currentEpTitle, err := h.resolveContent(body.ContentType, contentID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "content not found"})
+		return
+	}
+
+	now := time.Now()
+	room := &models.WatchRoom{
+		OwnerID:             userID,
+		OwnerName:           resolveDisplayName(user),
+		OwnerAvatar:         resolveAvatarURL(user),
+		OwnerIsPremium:      user.IsPremiumActive(),
+		ContentType:         body.ContentType,
+		ContentID:           contentID,
+		ContentTitle:        title,
+		ContentPoster:       poster,
+		ContentSlug:         slug,
+		SeriesID:            seriesID,
+		SeasonID:            seasonID,
+		CurrentEpisodeID:    currentEpID,
+		CurrentEpisodeTitle: currentEpTitle,
+		Visibility:          "public", // premieres are always public
+		MaxMembers:          maxMembers,
+		Kind:                "premiere",
+		IsFeatured:          true,
+		PinPriority:         body.PinPriority,
+		ScheduledStartAt:    scheduledStart,
+		PositionSeconds:     0,
+		IsPlaying:           false,
+		LastStateUpdate:     now,
+		Status:              "active",
+		CreatedAt:           now,
+		UpdatedAt:           now,
+		ExpiresAt:           now.Add(roomTTL),
+	}
+	if err := h.repo.CreateRoom(ctx, room); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create room"})
+		return
+	}
+	c.JSON(http.StatusCreated, room)
+}
+
 func (h *WatchRoomHandler) resolveContent(ct string, id primitive.ObjectID) (title, poster, slug string, seriesID, seasonID, currentEpisodeID primitive.ObjectID, currentEpisodeTitle string, err error) {
 	switch ct {
 	case "movie":
@@ -275,6 +386,28 @@ func (h *WatchRoomHandler) ListPublicRoomsHandler(c *gin.Context) {
 	// Attach a live member-count snapshot from the hub. Falls back to 0
 	// when the room exists in Mongo but isn't currently held by the hub
 	// (no one connected). That's fine — listing should still work.
+	type row struct {
+		models.WatchRoom
+		MemberCount int `json:"member_count"`
+	}
+	out := make([]row, 0, len(rooms))
+	for _, rm := range rooms {
+		mc := len(h.hub.SnapshotMembers(rm.ID))
+		out = append(out, row{WatchRoom: rm, MemberCount: mc})
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out})
+}
+
+// GET /api/rooms/featured — pinned premiere rooms for the top of the /rooms
+// page. Same shape as the public list (room + live member_count).
+func (h *WatchRoomHandler) ListFeaturedRoomsHandler(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rooms, err := h.repo.ListFeaturedRooms(ctx, 20)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "list failed"})
+		return
+	}
 	type row struct {
 		models.WatchRoom
 		MemberCount int `json:"member_count"`

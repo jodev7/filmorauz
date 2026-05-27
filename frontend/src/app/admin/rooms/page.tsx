@@ -2,10 +2,35 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { adminListWatchRooms, adminGetRoomStats, AdminRoomSnapshot, AdminRoomStats } from "@/lib/api";
+import {
+  adminListWatchRooms,
+  adminGetRoomStats,
+  adminCreatePremiereRoom,
+  searchMovies,
+  AdminRoomSnapshot,
+  AdminRoomStats,
+  Movie,
+} from "@/lib/api";
+import { getSeries, Series } from "@/lib/series-api";
 import MediaImage from "@/components/ui/MediaImage";
-import { Loader2, Users, Crown, RefreshCw, Video, Tv, Activity, XCircle, Layers, Calendar } from "lucide-react";
+import {
+  Loader2,
+  Users,
+  Crown,
+  RefreshCw,
+  Video,
+  Tv,
+  Activity,
+  XCircle,
+  Layers,
+  Calendar,
+  Sparkles,
+  Plus,
+  Search,
+  X,
+} from "lucide-react";
 
 export default function AdminRoomsPage() {
   const { token } = useAuth();
@@ -63,6 +88,8 @@ export default function AdminRoomsPage() {
             <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} /> Yangilash
           </button>
         </div>
+
+        <CreatePremiereForm token={token} onCreated={() => load(false)} />
 
         {stats && (
           <>
@@ -239,6 +266,226 @@ export default function AdminRoomsPage() {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+type PickedContent = { type: "movie" | "series"; id: string; title: string; poster?: string };
+
+function CreatePremiereForm({
+  token,
+  onCreated,
+}: {
+  token: string | null;
+  onCreated: () => void;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [contentType, setContentType] = useState<"movie" | "series">("movie");
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<PickedContent[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [picked, setPicked] = useState<PickedContent | null>(null);
+  const [maxMembers, setMaxMembers] = useState(5000);
+  const [pinPriority, setPinPriority] = useState(0);
+  const [scheduledAt, setScheduledAt] = useState(""); // datetime-local value
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState("");
+
+  // Debounced search across movies or series.
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setResults([]);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        if (contentType === "movie") {
+          const movies: Movie[] = await searchMovies(q);
+          if (!cancelled)
+            setResults(
+              movies.slice(0, 8).map((m) => ({ type: "movie", id: m.id, title: m.title, poster: m.poster_url })),
+            );
+        } else {
+          const res = await getSeries(1, 50);
+          const filtered = (res.data || []).filter((s: Series) =>
+            s.title.toLowerCase().includes(q.toLowerCase()),
+          );
+          if (!cancelled)
+            setResults(
+              filtered.slice(0, 8).map((s) => ({ type: "series", id: s.id, title: s.title, poster: s.poster_url })),
+            );
+        }
+      } catch {
+        if (!cancelled) setResults([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query, contentType]);
+
+  const submit = async () => {
+    if (!token || !picked) return;
+    setSubmitting(true);
+    setFormError("");
+    try {
+      const room = await adminCreatePremiereRoom(token, {
+        content_type: picked.type,
+        content_id: picked.id,
+        max_members: maxMembers,
+        pin_priority: pinPriority,
+        scheduled_start_at: scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
+      });
+      onCreated();
+      router.push(`/watch-room/${room.id}`);
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Yaratishda xato");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="mb-6 px-4 py-2.5 rounded-xl bg-gradient-to-r from-yellow-500/20 to-brand-red/20 border border-yellow-500/30 flex items-center gap-2 text-sm font-medium hover:border-yellow-500/60"
+      >
+        <Sparkles className="w-4 h-4 text-yellow-400" /> Premyera room yaratish
+      </button>
+    );
+  }
+
+  return (
+    <div className="mb-6 bg-brand-card border border-yellow-500/30 rounded-xl p-4">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-medium flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-yellow-400" /> Yangi premyera room
+        </h3>
+        <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-white">
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+
+      {/* Content type toggle */}
+      <div className="flex gap-2 mb-3">
+        {(["movie", "series"] as const).map((ct) => (
+          <button
+            key={ct}
+            onClick={() => {
+              setContentType(ct);
+              setResults([]);
+              setPicked(null);
+            }}
+            className={`px-3 py-1.5 rounded-lg text-sm flex items-center gap-1.5 border ${
+              contentType === ct
+                ? "border-brand-red bg-brand-red/10 text-white"
+                : "border-brand-border text-gray-400"
+            }`}
+          >
+            {ct === "movie" ? <Video className="w-4 h-4" /> : <Tv className="w-4 h-4" />}
+            {ct === "movie" ? "Kino" : "Serial"}
+          </button>
+        ))}
+      </div>
+
+      {/* Picked content or search */}
+      {picked ? (
+        <div className="flex items-center gap-3 mb-3 p-2 bg-brand-dark rounded-lg">
+          {picked.poster && (
+            <MediaImage src={picked.poster} alt={picked.title} className="w-10 h-14 rounded object-cover" />
+          )}
+          <span className="flex-1 truncate text-sm">{picked.title}</span>
+          <button onClick={() => setPicked(null)} className="text-gray-400 hover:text-white text-xs">
+            O&apos;zgartirish
+          </button>
+        </div>
+      ) : (
+        <div className="relative mb-3">
+          <div className="flex items-center gap-2 px-3 py-2 bg-brand-dark border border-brand-border rounded-lg">
+            <Search className="w-4 h-4 text-gray-500" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={contentType === "movie" ? "Kino qidirish..." : "Serial qidirish..."}
+              className="flex-1 bg-transparent outline-none text-sm"
+            />
+            {searching && <Loader2 className="w-4 h-4 animate-spin text-gray-500" />}
+          </div>
+          {results.length > 0 && (
+            <ul className="absolute z-10 left-0 right-0 mt-1 bg-brand-card border border-brand-border rounded-lg max-h-64 overflow-y-auto">
+              {results.map((r) => (
+                <li key={r.id}>
+                  <button
+                    onClick={() => {
+                      setPicked(r);
+                      setQuery("");
+                      setResults([]);
+                    }}
+                    className="w-full flex items-center gap-2 p-2 hover:bg-brand-dark text-left"
+                  >
+                    {r.poster && (
+                      <MediaImage src={r.poster} alt={r.title} className="w-8 h-11 rounded object-cover" />
+                    )}
+                    <span className="truncate text-sm">{r.title}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* Settings */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+        <label className="text-xs text-gray-400">
+          Maksimal a&apos;zo
+          <input
+            type="number"
+            value={maxMembers}
+            onChange={(e) => setMaxMembers(Number(e.target.value))}
+            min={2}
+            max={10000}
+            className="mt-1 w-full px-2 py-1.5 bg-brand-dark border border-brand-border rounded-lg text-sm text-white"
+          />
+        </label>
+        <label className="text-xs text-gray-400">
+          Pin ustuvorligi
+          <input
+            type="number"
+            value={pinPriority}
+            onChange={(e) => setPinPriority(Number(e.target.value))}
+            className="mt-1 w-full px-2 py-1.5 bg-brand-dark border border-brand-border rounded-lg text-sm text-white"
+          />
+        </label>
+        <label className="text-xs text-gray-400">
+          Boshlanish vaqti (ixtiyoriy)
+          <input
+            type="datetime-local"
+            value={scheduledAt}
+            onChange={(e) => setScheduledAt(e.target.value)}
+            className="mt-1 w-full px-2 py-1.5 bg-brand-dark border border-brand-border rounded-lg text-sm text-white"
+          />
+        </label>
+      </div>
+
+      {formError && <p className="text-red-400 text-sm mb-2">{formError}</p>}
+
+      <button
+        onClick={submit}
+        disabled={!picked || submitting}
+        className="px-4 py-2 rounded-lg bg-brand-red hover:bg-red-700 disabled:bg-brand-dark disabled:text-gray-500 text-white text-sm font-medium flex items-center gap-2"
+      >
+        {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+        Premyera ochish
+      </button>
     </div>
   );
 }

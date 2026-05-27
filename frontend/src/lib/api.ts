@@ -4184,6 +4184,10 @@ export interface WatchRoom {
   theme?: { from?: string; to?: string };
   visibility: RoomVisibility;
   max_members: number;
+  kind?: "normal" | "premiere";
+  is_featured?: boolean;
+  pin_priority?: number;
+  scheduled_start_at?: string;
   position_seconds: number;
   is_playing: boolean;
   last_state_update: string;
@@ -4269,6 +4273,36 @@ export async function closeWatchRoom(token: string, roomID: string): Promise<voi
 export async function listPublicRooms(): Promise<{ items: PublicRoomListItem[] }> {
   const res = await fetch(`${API_URL}/rooms/public`);
   if (!res.ok) throw new Error("Failed to load public rooms");
+  return res.json();
+}
+
+// Pinned premiere rooms shown at the top of the /rooms page.
+export async function listFeaturedRooms(): Promise<{ items: PublicRoomListItem[] }> {
+  const res = await fetch(`${API_URL}/rooms/featured`);
+  if (!res.ok) throw new Error("Failed to load featured rooms");
+  return res.json();
+}
+
+// Admin/superadmin-only: create a pinned premiere room.
+export async function adminCreatePremiereRoom(
+  token: string,
+  input: {
+    content_type: "movie" | "episode" | "series";
+    content_id: string;
+    max_members?: number;
+    pin_priority?: number;
+    scheduled_start_at?: string; // RFC3339
+  },
+): Promise<WatchRoom> {
+  const res = await fetch(`${API_URL}/admin/rooms`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Failed to create premiere room");
+  }
   return res.json();
 }
 

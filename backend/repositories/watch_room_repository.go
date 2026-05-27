@@ -76,6 +76,8 @@ func (r *WatchRoomRepository) ensureIndexes(ctx context.Context) {
 		{Keys: bson.D{{Key: "owner_id", Value: 1}, {Key: "created_at", Value: -1}}},
 		{Keys: bson.D{{Key: "visibility", Value: 1}, {Key: "status", Value: 1}, {Key: "updated_at", Value: -1}}},
 		{Keys: bson.D{{Key: "status", Value: 1}, {Key: "created_at", Value: -1}}},
+		// Pinned-premiere listing: active featured rooms by priority.
+		{Keys: bson.D{{Key: "is_featured", Value: 1}, {Key: "status", Value: 1}, {Key: "pin_priority", Value: -1}}},
 	})
 	_, _ = r.invites.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "code", Value: 1}}, Options: options.Index().SetUnique(true)},
@@ -349,14 +351,39 @@ func (r *WatchRoomRepository) GetRoomStats(ctx context.Context) (RoomStats, erro
 	return s, nil
 }
 
-// ListPublicRooms returns active public rooms ordered by most-recent activity.
+// ListPublicRooms returns active public, non-featured rooms ordered by
+// most-recent activity. Featured (premiere) rooms are excluded here so they
+// don't double up — they have their own pinned section via ListFeaturedRooms.
 func (r *WatchRoomRepository) ListPublicRooms(ctx context.Context, limit int) ([]models.WatchRoom, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 30
 	}
 	cursor, err := r.rooms.Find(ctx,
-		bson.M{"visibility": "public", "status": "active"},
+		bson.M{"visibility": "public", "status": "active", "is_featured": bson.M{"$ne": true}},
 		options.Find().SetSort(bson.D{{Key: "updated_at", Value: -1}}).SetLimit(int64(limit)),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var rooms []models.WatchRoom
+	if err := cursor.All(ctx, &rooms); err != nil {
+		return nil, err
+	}
+	return rooms, nil
+}
+
+// ListFeaturedRooms returns active featured (premiere) rooms, pinned-first:
+// highest pin_priority, then most recently scheduled/created.
+func (r *WatchRoomRepository) ListFeaturedRooms(ctx context.Context, limit int) ([]models.WatchRoom, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	cursor, err := r.rooms.Find(ctx,
+		bson.M{"status": "active", "is_featured": true},
+		options.Find().
+			SetSort(bson.D{{Key: "pin_priority", Value: -1}, {Key: "scheduled_start_at", Value: 1}, {Key: "created_at", Value: -1}}).
+			SetLimit(int64(limit)),
 	)
 	if err != nil {
 		return nil, err
