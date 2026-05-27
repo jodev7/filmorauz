@@ -405,6 +405,14 @@ export default function WatchRoomPage() {
         emoji: e.reaction.emoji,
         createdAt: new Date(e.reaction.ts).toISOString(),
       });
+    } else if (e.type === "chat_rate_limited") {
+      appendChat({
+        userID: "system",
+        userName: "system",
+        kind: "text",
+        text: `Sekinroq yozing — har ${Math.round(e.intervalMs / 1000)} soniyada bitta xabar.`,
+        createdAt: new Date().toISOString(),
+      });
     }
   }, [appendChat, token]);
 
@@ -679,6 +687,9 @@ export default function WatchRoomPage() {
 
   const memberList = Object.values(members);
   const typingNames = Object.values(typingUsers);
+  // In large/premiere rooms the per-member roster isn't pushed over WS, so
+  // `members` stays sparse — the authoritative live count rides on state_sync.
+  const displayMemberCount = Math.max(memberList.length, state?.memberCount ?? 0);
 
   return (
     <div
@@ -812,7 +823,7 @@ export default function WatchRoomPage() {
               className="flex-1 px-3 py-2 bg-brand-card border border-brand-border rounded-lg text-sm flex items-center justify-center gap-2"
             >
               <Users className="w-4 h-4" />
-              A'zolar ({memberList.length})
+              A'zolar ({displayMemberCount})
             </button>
             {isHost && (
               <button
@@ -906,7 +917,7 @@ export default function WatchRoomPage() {
           {/* Members panel — collapsed on mobile unless toggled */}
           <div className={`${showMembers ? "block" : "hidden"} lg:block bg-brand-card border border-brand-border rounded-xl p-3`}>
             <div className="flex items-center gap-2 text-sm font-medium">
-              <Users className="w-4 h-4" /> A'zolar ({memberList.length})
+              <Users className="w-4 h-4" /> A'zolar ({displayMemberCount})
             </div>
             <ul className="mt-2 space-y-1 max-h-40 overflow-y-auto">
               {memberList.length === 0 && (

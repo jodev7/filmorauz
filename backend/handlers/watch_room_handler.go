@@ -840,6 +840,24 @@ func (h *WatchRoomHandler) CreateInvite(c *gin.Context) {
 // Chat history is no longer a REST endpoint — it's replayed over the
 // WebSocket via a "chat_history" event on join (see the hub's AddClient).
 
+// GET /api/rooms/:id/members?offset=&limit= — paginated live roster.
+// Used by the virtualized member list in large/premiere rooms, where the
+// full roster is no longer pushed over the WebSocket.
+func (h *WatchRoomHandler) ListRoomMembers(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	offset, _ := strconv.Atoi(c.Query("offset"))
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	members, total := h.hub.SnapshotMembersPage(id, offset, limit)
+	c.JSON(http.StatusOK, gin.H{"items": members, "total": total, "offset": offset, "limit": limit})
+}
+
 // GET /ws/rooms/:id — WebSocket upgrade. Auth via token query string
 // (cookies/headers don't survive the cross-origin browser → ws:// hop the
 // same way they do for fetch).

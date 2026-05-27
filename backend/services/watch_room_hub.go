@@ -1,9 +1,11 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -55,16 +57,47 @@ type HubRoom struct {
 	// host is currently connected.
 	HostDisconnectDeadline time.Time
 
+	// presenceMode is on for large/premiere rooms. In this mode the hub
+	// stops broadcasting per-member join/left events and the full member
+	// snapshot (which would be O(N) per churn at thousands of viewers) —
+	// clients track the live count via state_sync.member_count and fetch the
+	// roster over REST instead.
+	presenceMode bool
+	// keepAlive is on for premiere rooms: the room is NOT torn down when it
+	// empties or the host (admin) disconnects. The timeline keeps advancing
+	// (guests extrapolate from as_of_ms) until the admin explicitly closes
+	// it or it expires.
+	keepAlive bool
+
 	mu      sync.Mutex
 	clients map[*HubClient]struct{}
 	// recentMessages is the in-memory chat ring buffer (last chatBufferSize
 	// entries). Guarded by mu. Never persisted.
 	recentMessages []models.WatchRoomMessage
+	// lastChat throttles chat in presenceMode rooms: one message per user per
+	// chatSlowModeInterval. Guarded by mu.
+	lastChat map[primitive.ObjectID]time.Time
 	// hostGraceTimer fires when the host has been gone for HostDisconnectGrace
 	// without reconnecting. Cancelled if the host re-joins in time.
 	hostGraceTimer *time.Timer
 	closed         bool
 }
+
+// Scaling thresholds.
+const (
+	// largeRoomThreshold is the member-capacity above which a room switches
+	// to presenceMode (aggregate count instead of per-member events).
+	largeRoomThreshold = 50
+	// chatSlowModeInterval is the minimum gap between two chat messages from
+	// the same user in a presenceMode room.
+	chatSlowModeInterval = 2 * time.Second
+	// writeFlushInterval is how often each client's write pump coalesces
+	// queued messages into a single batched frame.
+	writeFlushInterval = 200 * time.Millisecond
+	// writeBatchMax bounds a single batch so a burst can't build an unbounded
+	// frame or stall latency — flush early once this many messages queue up.
+	writeBatchMax = 64
+)
 
 // WatchRoomHub multiplexes every active room. Methods are safe to call from
 // any goroutine — the rooms map is protected by mu, and each HubRoom has
@@ -108,7 +141,10 @@ func (h *WatchRoomHub) GetOrLoadRoom(ctx context.Context, roomID primitive.Objec
 		Position:        persisted.PositionSeconds,
 		IsPlaying:       persisted.IsPlaying,
 		LastStateUpdate: persisted.LastStateUpdate,
+		presenceMode:    persisted.Kind == "premiere" || persisted.MaxMembers > largeRoomThreshold,
+		keepAlive:       persisted.Kind == "premiere",
 		clients:         make(map[*HubClient]struct{}),
+		lastChat:        make(map[primitive.ObjectID]time.Time),
 	}
 	h.rooms[roomID] = rm
 	return rm, nil
@@ -153,18 +189,24 @@ func (h *WatchRoomHub) AddClient(rm *HubRoom, c *HubClient) error {
 	// Send a snapshot of every current member (including the just-joined
 	// client themselves) so the client UI has the full roster on entry,
 	// without waiting for someone else to (re)join.
-	rm.mu.Lock()
-	snapshot := make([]map[string]any, 0, len(rm.clients))
-	for cc := range rm.clients {
-		snapshot = append(snapshot, map[string]any{
-			"user_id":     cc.UserID.Hex(),
-			"user_name":   cc.UserName,
-			"user_avatar": cc.UserAvatar,
-			"is_host":     cc.IsHost,
-		})
+	//
+	// presenceMode rooms skip this: a 5000-entry snapshot on every join is
+	// pure waste. Those clients render the count from state_sync and pull
+	// the roster page-by-page over REST.
+	if !rm.presenceMode {
+		rm.mu.Lock()
+		snapshot := make([]map[string]any, 0, len(rm.clients))
+		for cc := range rm.clients {
+			snapshot = append(snapshot, map[string]any{
+				"user_id":     cc.UserID.Hex(),
+				"user_name":   cc.UserName,
+				"user_avatar": cc.UserAvatar,
+				"is_host":     cc.IsHost,
+			})
+		}
+		rm.mu.Unlock()
+		h.sendTo(c, hubMessage{Type: "member_snapshot", Payload: map[string]any{"members": snapshot}})
 	}
-	rm.mu.Unlock()
-	h.sendTo(c, hubMessage{Type: "member_snapshot", Payload: map[string]any{"members": snapshot}})
 
 	// Replay the in-memory chat history so a (re)joining client sees the
 	// recent conversation. Sent only to the newcomer.
@@ -186,16 +228,19 @@ func (h *WatchRoomHub) AddClient(rm *HubRoom, c *HubClient) error {
 		h.sendTo(c, hubMessage{Type: "chat_history", Payload: map[string]any{"messages": history}})
 	}
 
-	// Then announce the new client to everyone else.
-	h.broadcast(rm, hubMessage{
-		Type: "member_joined",
-		Payload: map[string]any{
-			"user_id":     c.UserID.Hex(),
-			"user_name":   c.UserName,
-			"user_avatar": c.UserAvatar,
-			"is_host":     c.IsHost,
-		},
-	}, c)
+	// Then announce the new client to everyone else — small rooms only.
+	// presenceMode rooms rely on the periodic state_sync member_count.
+	if !rm.presenceMode {
+		h.broadcast(rm, hubMessage{
+			Type: "member_joined",
+			Payload: map[string]any{
+				"user_id":     c.UserID.Hex(),
+				"user_name":   c.UserName,
+				"user_avatar": c.UserAvatar,
+				"is_host":     c.IsHost,
+			},
+		}, c)
+	}
 	return nil
 }
 
@@ -209,13 +254,24 @@ func (h *WatchRoomHub) RemoveClient(rm *HubRoom, c *HubClient) {
 	}
 	delete(rm.clients, c)
 	close(c.send)
+	delete(rm.lastChat, c.UserID)
 	isHostGone := c.IsHost && !rm.hasHostLocked()
 	rm.mu.Unlock()
 
-	h.broadcast(rm, hubMessage{
-		Type: "member_left",
-		Payload: map[string]any{"user_id": c.UserID.Hex()},
-	}, nil)
+	// Per-member leave events only in small rooms.
+	if !rm.presenceMode {
+		h.broadcast(rm, hubMessage{
+			Type: "member_left",
+			Payload: map[string]any{"user_id": c.UserID.Hex()},
+		}, nil)
+	}
+
+	// Premiere rooms are never torn down by churn — they keep running
+	// (timeline advances via extrapolation) until the admin closes them
+	// or they expire. No host-grace, no empty-teardown.
+	if rm.keepAlive {
+		return
+	}
 
 	if isHostGone {
 		rm.mu.Lock()
@@ -258,6 +314,23 @@ func (rm *HubRoom) appendMessage(m models.WatchRoomMessage) {
 		rm.recentMessages = rm.recentMessages[len(rm.recentMessages)-chatBufferSize:]
 	}
 	rm.mu.Unlock()
+}
+
+// allowChat enforces slow-mode in presenceMode rooms: at most one chat/
+// reaction per user per chatSlowModeInterval. Small rooms are unthrottled.
+// Returns true if the message is allowed (and records the timestamp).
+func (rm *HubRoom) allowChat(userID primitive.ObjectID) bool {
+	if !rm.presenceMode {
+		return true
+	}
+	now := time.Now()
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if last, ok := rm.lastChat[userID]; ok && now.Sub(last) < chatSlowModeInterval {
+		return false
+	}
+	rm.lastChat[userID] = now
+	return true
 }
 
 func (rm *HubRoom) hasHostLocked() bool {
@@ -325,6 +398,14 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 		if p.Kind != "text" && p.Kind != "emoji" {
 			p.Kind = "text"
 		}
+		// Slow-mode in large/premiere rooms — drop and notify the sender.
+		if !rm.allowChat(c.UserID) {
+			h.sendTo(c, hubMessage{
+				Type:    "chat_rate_limited",
+				Payload: map[string]any{"interval_ms": chatSlowModeInterval.Milliseconds()},
+			})
+			return
+		}
 		entry := models.WatchRoomMessage{
 			RoomID:     rm.ID,
 			UserID:     c.UserID,
@@ -351,7 +432,11 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 		}, nil)
 
 	case "typing":
-		// Lightweight ephemeral broadcast — never persisted.
+		// Lightweight ephemeral broadcast — never persisted. Suppressed in
+		// presenceMode: thousands of typing toggles would drown the channel.
+		if rm.presenceMode {
+			return
+		}
 		var p struct {
 			IsTyping bool `json:"is_typing"`
 		}
@@ -373,6 +458,10 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 		}
 		_ = decodePayload(msg.Payload, &p)
 		if p.Emoji == "" {
+			return
+		}
+		// Reactions share the chat slow-mode budget in presenceMode rooms.
+		if !rm.allowChat(c.UserID) {
 			return
 		}
 		entry := models.WatchRoomMessage{
@@ -526,6 +615,55 @@ func (h *WatchRoomHub) SnapshotMembers(roomID primitive.ObjectID) []map[string]a
 	return out
 }
 
+// SnapshotMembersPage returns a slice of the roster plus the total live
+// member count — used by the paginated roster REST endpoint that powers the
+// virtualized member list in large/premiere rooms. Hosts are surfaced first
+// so they're always visible on the first page.
+func (h *WatchRoomHub) SnapshotMembersPage(roomID primitive.ObjectID, offset, limit int) ([]map[string]any, int) {
+	h.mu.RLock()
+	rm, ok := h.rooms[roomID]
+	h.mu.RUnlock()
+	if !ok {
+		return []map[string]any{}, 0
+	}
+	rm.mu.Lock()
+	all := make([]*HubClient, 0, len(rm.clients))
+	for c := range rm.clients {
+		all = append(all, c)
+	}
+	rm.mu.Unlock()
+
+	// Hosts first, then stable-ish by user id so pages don't reshuffle wildly.
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].IsHost != all[j].IsHost {
+			return all[i].IsHost
+		}
+		return all[i].UserID.Hex() < all[j].UserID.Hex()
+	})
+
+	total := len(all)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	end := offset + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+	out := make([]map[string]any, 0, end-offset)
+	for _, c := range all[offset:end] {
+		out = append(out, map[string]any{
+			"user_id":     c.UserID.Hex(),
+			"user_name":   c.UserName,
+			"user_avatar": c.UserAvatar,
+			"is_host":     c.IsHost,
+		})
+	}
+	return out, total
+}
+
 // CloseRoom kicks every client and marks the room closed in Mongo.
 func (h *WatchRoomHub) CloseRoom(rm *HubRoom, reason string) {
 	rm.mu.Lock()
@@ -586,9 +724,10 @@ func (h *WatchRoomHub) broadcastState(rm *HubRoom, except *HubClient) {
 	state := hubMessage{
 		Type: "state_sync",
 		Payload: map[string]any{
-			"position":   rm.Position,
-			"is_playing": rm.IsPlaying,
-			"as_of_ms":   rm.LastStateUpdate.UnixMilli(),
+			"position":     rm.Position,
+			"is_playing":   rm.IsPlaying,
+			"as_of_ms":     rm.LastStateUpdate.UnixMilli(),
+			"member_count": len(rm.clients),
 		},
 	}
 	rm.mu.Unlock()
@@ -628,14 +767,68 @@ func (h *WatchRoomHub) sendTo(c *HubClient, msg hubMessage) {
 
 // ── connection pumps ──────────────────────────────────────────────────────
 
+// writePump drains a client's send channel and writes to the socket. To keep
+// fan-out cheap at thousands of viewers it COALESCES queued messages into one
+// batched frame every writeFlushInterval (or sooner once writeBatchMax
+// queue up) instead of one syscall per message. A batch of N messages is sent
+// as a single {"type":"batch","payload":{"messages":[<raw>,...]}} envelope;
+// a lone message is sent as-is. The client unwraps "batch" and dispatches
+// each inner message in order.
 func (h *WatchRoomHub) writePump(c *HubClient) {
 	defer c.Conn.Close()
-	for msg := range c.send {
+	ticker := time.NewTicker(writeFlushInterval)
+	defer ticker.Stop()
+
+	pending := make([][]byte, 0, writeBatchMax)
+	flush := func() bool {
+		if len(pending) == 0 {
+			return true
+		}
 		_ = c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := c.Conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-			return
+		var frame []byte
+		if len(pending) == 1 {
+			frame = pending[0]
+		} else {
+			frame = encodeBatch(pending)
+		}
+		pending = pending[:0]
+		return c.Conn.WriteMessage(websocket.TextMessage, frame) == nil
+	}
+
+	for {
+		select {
+		case msg, ok := <-c.send:
+			if !ok {
+				flush()
+				return
+			}
+			pending = append(pending, msg)
+			if len(pending) >= writeBatchMax {
+				if !flush() {
+					return
+				}
+			}
+		case <-ticker.C:
+			if !flush() {
+				return
+			}
 		}
 	}
+}
+
+// encodeBatch wraps several already-marshalled messages into one envelope
+// frame without re-parsing them: {"type":"batch","payload":{"messages":[…]}}.
+func encodeBatch(msgs [][]byte) []byte {
+	var b bytes.Buffer
+	b.WriteString(`{"type":"batch","payload":{"messages":[`)
+	for i, m := range msgs {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.Write(m)
+	}
+	b.WriteString(`]}}`)
+	return b.Bytes()
 }
 
 // ── periodic heartbeat ────────────────────────────────────────────────────

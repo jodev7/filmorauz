@@ -39,6 +39,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	api.GET("/rooms/public", watchRoomHandler.ListPublicRoomsHandler)
 	api.GET("/rooms/featured", watchRoomHandler.ListFeaturedRoomsHandler)
 	api.GET("/rooms/:id", watchRoomHandler.GetRoom)
+	api.GET("/rooms/:id/members", watchRoomHandler.ListRoomMembers)
 	// User search used by the in-room invite UI — auth-required.
 	api.GET("/rooms/users/search",
 		middleware.RequireAuth(authService),
