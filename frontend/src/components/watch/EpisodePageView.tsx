@@ -57,6 +57,8 @@ export default function EpisodePageView({ data }: EpisodePageViewProps) {
       <WatchPageClient
         movie={movieData as any}
         progressTargetId={episode.id}
+        seriesSeasons={series.seasons}
+        seriesSlugForModal={series.series.slug}
         episodeNavigation={{
           previousEpisode: previousEpisode
             ? {

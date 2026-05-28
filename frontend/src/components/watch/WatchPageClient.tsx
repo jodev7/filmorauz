@@ -15,7 +15,9 @@ import { logger } from "@/lib/logger";
 import { isMoviePremium, isUserPremium, PremiumLockOverlay, PremiumButton } from "@/components/PremiumComponents";
 import { getLocalizedTitle, getLocalizedDescription, getLocalizedGenres, getLocalizedCountry } from "@/lib/localization";
 import { formatDuration } from "@/lib/movie-utils";
-import type { EpisodeLink } from "@/lib/series-api";
+import type { EpisodeLink, SeasonWithEpisodes } from "@/lib/series-api";
+import { buildBestEpisodePath } from "@/lib/content-routes";
+import { X } from "lucide-react";
 import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
 
@@ -220,6 +222,8 @@ interface WatchPageClientProps {
     previousEpisode?: (EpisodeLink & { href?: string }) | null;
     nextEpisode?: (EpisodeLink & { href?: string }) | null;
   };
+  seriesSeasons?: SeasonWithEpisodes[];
+  seriesSlugForModal?: string;
   // embedded=true renders only the player experience (player, overlay ad,
   // resume prompt, premium lock, inline ad) without the standalone-page
   // chrome — the top bar, the duplicate title/description/meta block, and the
@@ -280,6 +284,8 @@ export default function WatchPageClient({
   progressTargetId: progressTargetIdProp,
   episodeNavigation,
   embedded = false,
+  seriesSeasons,
+  seriesSlugForModal,
 }: WatchPageClientProps) {
   if (!movie) {
     return (
@@ -301,6 +307,7 @@ export default function WatchPageClient({
   const [resumePromptVisible, setResumePromptVisible] = useState(false);
   const [selectedStartPosition, setSelectedStartPosition] = useState(0);
   const [viewCount, setViewCount] = useState(movie.views ?? 0);
+  const [episodesModalOpen, setEpisodesModalOpen] = useState(false);
   const [resolvedPlaybackUrl, setResolvedPlaybackUrl] = useState<string | null>(null);
   const [playbackAccessError, setPlaybackAccessError] = useState<string | null>(null);
   const [autoNextCountdown, setAutoNextCountdown] = useState(5);
@@ -769,8 +776,13 @@ export default function WatchPageClient({
                       : undefined
                   }
                   seriesButtonUrl={
-                    movie.type === "episode" && movie.series_slug
+                    movie.type === "episode" && movie.series_slug && !(seriesSeasons && seriesSeasons.length > 0)
                       ? `/series/${movie.series_slug}`
+                      : undefined
+                  }
+                  onSeriesButtonClick={
+                    movie.type === "episode" && seriesSeasons && seriesSeasons.length > 0
+                      ? () => setEpisodesModalOpen(true)
                       : undefined
                   }
                 />
@@ -926,6 +938,126 @@ export default function WatchPageClient({
         {!embedded && !isLoadingRecommendations && recommendations.length > 0 && (
           <RecommendationsRow movies={recommendations} />
         )}
+      </div>
+      {episodesModalOpen && seriesSeasons && seriesSeasons.length > 0 && (
+        <EpisodesModal
+          seasons={seriesSeasons}
+          currentEpisodeId={String(movie.id)}
+          seriesSlug={seriesSlugForModal || movie.series_slug}
+          onClose={() => setEpisodesModalOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function EpisodesModal({
+  seasons,
+  currentEpisodeId,
+  seriesSlug,
+  onClose,
+}: {
+  seasons: SeasonWithEpisodes[];
+  currentEpisodeId: string;
+  seriesSlug?: string;
+  onClose: () => void;
+}) {
+  const initialSeasonIdx = (() => {
+    const idx = seasons.findIndex((s) =>
+      s.episodes.some((ep) => String(ep.id) === currentEpisodeId)
+    );
+    return idx >= 0 ? idx : 0;
+  })();
+  const [activeIdx, setActiveIdx] = useState(initialSeasonIdx);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose]);
+
+  const active = seasons[activeIdx];
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-6"
+      onClick={onClose}
+    >
+      <div
+        className="relative w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-brand-border bg-brand-card shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-brand-border">
+          <h3 className="font-display text-lg text-white">Sezonlar va qismlar</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-full text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
+            aria-label="Yopish"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        {seasons.length > 1 && (
+          <div className="flex gap-2 overflow-x-auto px-5 py-3 border-b border-brand-border">
+            {seasons.map((s, idx) => (
+              <button
+                key={s.season.id}
+                type="button"
+                onClick={() => setActiveIdx(idx)}
+                className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                  idx === activeIdx
+                    ? "bg-brand-red text-white"
+                    : "bg-white/5 text-gray-300 hover:bg-white/10"
+                }`}
+              >
+                {s.season.season_number}-mavsum
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="overflow-y-auto px-3 sm:px-5 py-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {active?.episodes.map((ep) => {
+            const isCurrent = String(ep.id) === currentEpisodeId;
+            const href = buildBestEpisodePath({
+              episodeId: ep.id,
+              seriesSlug,
+              seasonNumber: active.season.season_number,
+              episodeNumber: ep.episode_number,
+            });
+            return (
+              <Link
+                key={ep.id}
+                href={href}
+                onClick={onClose}
+                className={`flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors ${
+                  isCurrent
+                    ? "border-brand-red bg-brand-red/10 text-white"
+                    : "border-brand-border bg-white/[0.02] text-gray-200 hover:bg-white/[0.06] hover:text-white"
+                }`}
+              >
+                <span className="shrink-0 w-9 text-center text-sm font-semibold tabular-nums">
+                  {ep.episode_number}
+                </span>
+                <span className="truncate text-sm">
+                  {ep.title || `${ep.episode_number}-qism`}
+                </span>
+              </Link>
+            );
+          })}
+          {(!active || active.episodes.length === 0) && (
+            <p className="col-span-full text-center text-sm text-gray-400 py-6">
+              Qismlar topilmadi
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -13,6 +13,15 @@
   box-sizing: border-box;
 }
 
+::selection {
+  background: var(--brand-red);
+  color: #ffffff;
+}
+::-moz-selection {
+  background: var(--brand-red);
+  color: #ffffff;
+}
+
 html {
   scroll-behavior: smooth;
 }
