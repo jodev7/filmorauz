@@ -2772,9 +2772,16 @@ export default function IngestionPage() {
           />
         )}
         {activeTab === "kinolar" && (
-          <CatalogTab 
-            source={SOURCES[5]} 
-            token={token} 
+          <CatalogTab
+            source={SOURCES[5]}
+            token={token}
+            onImportSuccess={handleImportSuccess}
+          />
+        )}
+        {activeTab === "uzbeklar" && (
+          <CatalogTab
+            source={SOURCES[6]}
+            token={token}
             onImportSuccess={handleImportSuccess}
           />
         )}
