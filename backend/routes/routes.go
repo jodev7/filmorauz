@@ -304,7 +304,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		admin.POST("/ingestion/jobs/:id/retry", ingestionHandler.RetryIngestionJob)
 		admin.DELETE("/ingestion/jobs/:id", ingestionHandler.DeleteIngestionJob)
 		admin.DELETE("/ingestion/series/:slug", ingestionHandler.DeleteIngestionSeries)
-		admin.POST("/series/:slug/regenerate-clips", ingestionHandler.RegenerateSeriesClips)
+		admin.POST("/ingestion/series/:slug/regenerate-clips", ingestionHandler.RegenerateSeriesClips)
 
 		// Site-wide announcements (modal popup)
 		admin.GET("/announcements", announcementHandler.AdminList)
