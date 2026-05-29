@@ -123,17 +123,21 @@ def download_uzmovi_video(
             return _failure("manifest not captured (page may not have a player or signing was reworked)",
                             started, segments_total, segments_done, bytes_done)
 
-        # Prefer the highest-bandwidth variant. HLS master playlists have
-        # #EXT-X-STREAM-INF lines with BANDWIDTH= attributes; media playlists
-        # have #EXTINF lines and TS segments. If we captured a master we
-        # parse it and fetch its top variant; otherwise we score each
-        # captured media playlist by its highest TS segment size hint
-        # (URLs encode the quality, e.g. ".../720p/seg.ts") with a fallback
-        # to the most recently captured one.
+        # uzmovi pages typically embed multiple .mpd URLs (one per quality)
+        # in player config, <source> tags, or inline scripts — but the
+        # player only requests one of them on cold start. Grab every .mpd
+        # URL we can find in the DOM/scripts and probe each to pick the
+        # one with the largest first segment (a strong proxy for bitrate).
+        dom_urls = _collect_mpd_urls_from_dom(page)
+        for u, _ in captured_manifests:
+            if u not in dom_urls:
+                dom_urls.append(u)
+        logger.info(f"[uzmovi-bd] candidate .mpd urls in page+captured: {len(dom_urls)}")
+
         manifest_url, manifest_body = _pick_best_manifest(
-            captured_manifests, page
+            captured_manifests, dom_urls, page
         )
-        logger.info(f"[uzmovi-bd] picked manifest={manifest_url[:120]} from {len(captured_manifests)} captured")
+        logger.info(f"[uzmovi-bd] picked manifest={manifest_url[:120]}")
 
         base = urllib.parse.urlsplit(manifest_url)
         host = f"{base.scheme}://{base.netloc}"
@@ -289,57 +293,138 @@ def _parse_master_variants(master_url: str, master_body: str):
     return variants
 
 
-def _pick_best_manifest(captured, page):
-    """Given a list of (url, body) tuples captured during page load, return
-    the (url, body) of the highest-quality media playlist we can identify.
+_DOM_MPD_SCAN_JS = r"""
+() => {
+  const urls = new Set();
+  document.querySelectorAll('source').forEach(s => {
+    if (s.src && /\.mpd/i.test(s.src)) urls.add(s.src);
+    const ds = s.getAttribute('data-src') || s.getAttribute('data-file');
+    if (ds && /\.mpd/i.test(ds)) urls.add(ds);
+  });
+  document.querySelectorAll('video').forEach(v => {
+    if (v.src && /\.mpd/i.test(v.src)) urls.add(v.src);
+  });
+  const html = document.documentElement.outerHTML;
+  const re = /https?:\/\/[^"'\s<>\\]+\.mpd[^"'\s<>\\]*/g;
+  let m;
+  while ((m = re.exec(html)) !== null) urls.add(m[0]);
+  return Array.from(urls);
+}
+"""
+
+
+def _collect_mpd_urls_from_dom(page) -> list:
+    try:
+        urls = page.evaluate(_DOM_MPD_SCAN_JS) or []
+        return [u for u in urls if isinstance(u, str)]
+    except Exception as e:
+        logger.warning(f"[uzmovi-bd] DOM scan failed: {e}")
+        return []
+
+
+def _fetch_manifest(page, url: str):
+    """Fetch an HLS manifest via the browser context (cookies + headers
+    preserved). Returns (status, text) or (None, None) on error."""
+    try:
+        resp = page.context.request.get(url, timeout=20000)
+        if resp.status != 200:
+            return resp.status, None
+        return 200, resp.text()
+    except Exception as e:
+        logger.warning(f"[uzmovi-bd] manifest fetch failed url={url[:120]} err={e}")
+        return None, None
+
+
+def _first_segment_url(manifest_url: str, manifest_body: str):
+    base = urllib.parse.urlsplit(manifest_url)
+    host = f"{base.scheme}://{base.netloc}"
+    for line in manifest_body.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("http"):
+            return line
+        if line.startswith("/"):
+            return host + urllib.parse.quote(line, safe="/")
+        return urllib.parse.urljoin(manifest_url, line)
+    return None
+
+
+def _probe_first_segment_size(page, seg_url: str) -> int:
+    """Return Content-Length of a segment, or 0. We use a ranged GET because
+    some CDNs do not implement HEAD; the first 1 byte gives us
+    Content-Range and is cheap."""
+    try:
+        resp = page.context.request.get(seg_url, headers={"Range": "bytes=0-0"}, timeout=15000)
+        if resp.status not in (200, 206):
+            return 0
+        cr = resp.headers.get("content-range") or resp.headers.get("Content-Range")
+        if cr and "/" in cr:
+            tail = cr.split("/")[-1].strip()
+            if tail.isdigit():
+                return int(tail)
+        cl = resp.headers.get("content-length") or resp.headers.get("Content-Length")
+        if cl and cl.isdigit():
+            return int(cl)
+    except Exception as e:
+        logger.warning(f"[uzmovi-bd] segment probe failed url={seg_url[:120]} err={e}")
+    return 0
+
+
+def _pick_best_manifest(captured, dom_urls, page):
+    """Pick the highest-quality media playlist.
 
     Strategy:
-    1) If any master playlist was captured, parse its variants and pick the
-       one with the highest BANDWIDTH. If that variant body is also among
-       the captured items, return it directly; otherwise fetch it via the
-       browser's authenticated context.
-    2) Otherwise, fall back to a simple URL heuristic: look for a quality
-       token (1080, 720, 480, 360) in the captured URLs and prefer the
-       highest. If none matches, use the most recently captured manifest.
+    1) If any captured manifest is an HLS master, use the highest-BANDWIDTH
+       variant from it.
+    2) Otherwise, probe every candidate .mpd URL (from the page DOM plus
+       what the player captured), fetch its manifest, look at the first
+       segment's reported size, and pick the URL whose first segment is
+       largest. Higher bitrate ⇒ larger segments at fixed duration, so
+       this reliably distinguishes 480p from 720p/1080p.
+    3) Fall back to the most recently captured manifest if probing fails.
     """
-    masters = [(u, b) for (u, b) in captured if _looks_like_master(b)]
     by_url = {u: b for (u, b) in captured}
 
+    masters = [(u, b) for (u, b) in captured if _looks_like_master(b)]
     if masters:
-        # Use the latest master in case the player loaded several.
         master_url, master_body = masters[-1]
         variants = _parse_master_variants(master_url, master_body)
         if variants:
             variants.sort(key=lambda v: (v[0], v[1]), reverse=True)
             best_bw, best_h, best_url = variants[0]
             logger.info(f"[uzmovi-bd] master had {len(variants)} variants; "
-                        f"picked bandwidth={best_bw} height={best_h} url={best_url[:120]}")
+                        f"picked bandwidth={best_bw} height={best_h}")
             if best_url in by_url:
                 return best_url, by_url[best_url]
-            # Fetch the chosen variant with the page's cookies/headers.
-            try:
-                resp = page.context.request.get(best_url)
-                if resp.status == 200:
-                    return best_url, resp.text()
-                logger.warning(f"[uzmovi-bd] best variant fetch status={resp.status}; falling back")
-            except Exception as e:
-                logger.warning(f"[uzmovi-bd] best variant fetch error: {e}")
+            status, body = _fetch_manifest(page, best_url)
+            if body:
+                return best_url, body
 
-    quality_order = [("1080", 4), ("720", 3), ("480", 2), ("360", 1)]
     scored = []
-    for u, b in captured:
-        if _looks_like_master(b):
+    for url in dom_urls:
+        if url in by_url:
+            body = by_url[url]
+        else:
+            status, body = _fetch_manifest(page, url)
+            if not body:
+                logger.info(f"[uzmovi-bd] candidate skipped url={url[:120]} status={status}")
+                continue
+            if _looks_like_master(body):
+                logger.info(f"[uzmovi-bd] candidate is a master; deferring")
+                continue
+        seg = _first_segment_url(url, body)
+        if not seg:
             continue
-        score = 0
-        ul = u.lower()
-        for token, weight in quality_order:
-            if token in ul:
-                score = weight
-                break
-        scored.append((score, u, b))
+        size = _probe_first_segment_size(page, seg)
+        logger.info(f"[uzmovi-bd] candidate probe url={url[:80]} first_seg_size={size}")
+        scored.append((size, url, body))
+
     if scored:
         scored.sort(key=lambda x: x[0], reverse=True)
-        return scored[0][1], scored[0][2]
+        best_size, best_url, best_body = scored[0]
+        logger.info(f"[uzmovi-bd] selected best by first_seg_size={best_size} url={best_url[:120]}")
+        return best_url, best_body
 
     return captured[-1]
 
