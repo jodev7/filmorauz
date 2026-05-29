@@ -93,13 +93,41 @@ def download_uzmovi_video(
         # ABR cold start. We now keep all of them so we can deliberately
         # pick the highest-bitrate variant below.
         captured_manifests = []  # list of (url, body)
+        # Every .mpd URL we see referenced anywhere — direct request URLs
+        # and any XHR/HTML/JSON response bodies that contain mpd links.
+        # Used as a wider candidate pool than the manifests the player
+        # actually loaded.
+        seen_mpd_refs = set()
+        _mpd_url_re = re.compile(r"https?://[^\s\"'<>\\]+\.mpd[^\s\"'<>\\]*")
 
         def _on_response(resp):
             try:
                 u = resp.url
                 if resp.status != 200:
                     return
-                if "uzdown" not in u or ".mpd" not in u.lower():
+                lower_u = u.lower()
+                if ".mpd" in lower_u:
+                    seen_mpd_refs.add(u)
+                if "uzdown" not in lower_u or ".mpd" not in lower_u:
+                    # Still scan smaller text bodies for embedded .mpd refs
+                    try:
+                        ct = (resp.headers or {}).get("content-type", "").lower()
+                    except Exception:
+                        ct = ""
+                    if not any(t in ct for t in ("json", "html", "javascript", "text")):
+                        return
+                    try:
+                        body = resp.body()
+                    except Exception:
+                        return
+                    if not body or len(body) > 4_000_000:
+                        return
+                    try:
+                        txt = body.decode("utf-8", errors="ignore")
+                    except Exception:
+                        return
+                    for m in _mpd_url_re.findall(txt):
+                        seen_mpd_refs.add(m)
                     return
                 body = resp.body()
                 txt = body.decode("utf-8", errors="ignore")
@@ -132,7 +160,13 @@ def download_uzmovi_video(
         for u, _ in captured_manifests:
             if u not in dom_urls:
                 dom_urls.append(u)
-        logger.info(f"[uzmovi-bd] candidate .mpd urls in page+captured: {len(dom_urls)}")
+        for u in seen_mpd_refs:
+            if u not in dom_urls:
+                dom_urls.append(u)
+        logger.info(f"[uzmovi-bd] candidate .mpd urls (dom={len(_collect_mpd_urls_from_dom(page))}, "
+                    f"captured={len(captured_manifests)}, refs={len(seen_mpd_refs)}, total={len(dom_urls)})")
+        for u in dom_urls[:10]:
+            logger.info(f"[uzmovi-bd]   candidate: {u[:160]}")
 
         manifest_url, manifest_body = _pick_best_manifest(
             captured_manifests, dom_urls, page
