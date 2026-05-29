@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -415,7 +416,7 @@ func (h *IngestionHandler) pollSerialParserJob(
 			if msg == "" {
 				msg = "parser serial extraction failed"
 			}
-			return payload, createdCount, series, len(seenSeasons), fmt.Errorf(msg)
+			return payload, createdCount, series, len(seenSeasons), errors.New(msg)
 		default:
 			select {
 			case <-ctx.Done():
@@ -449,7 +450,7 @@ func fetchSerialAsyncStatus(endpoint string) (parserSerialAsyncStatus, error) {
 		if msg == "" {
 			msg = fmt.Sprintf("parser async status failed (HTTP %d)", resp.StatusCode)
 		}
-		return parserSerialAsyncStatus{}, fmt.Errorf(msg)
+		return parserSerialAsyncStatus{}, errors.New(msg)
 	}
 	return status, nil
 }
