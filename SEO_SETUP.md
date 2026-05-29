@@ -292,4 +292,4 @@ curl https://filmorauz.net/robots.txt
 
 ssh root@144.91.79.0
   cd /opt/filmorauz/parser
-  ./venv/bin/python ig_login.py filmora_extra
+  ./venv/bin/python ig_login.py Content
