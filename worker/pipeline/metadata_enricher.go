@@ -248,22 +248,31 @@ func (e *MetadataEnricher) searchAndEnrich(ctx context.Context, title string, ye
 		return nil, nil
 	}
 
-	// Use the first result
-	first := result.Results[0]
-
-	// If we have a match but title is very different, validate it's the right movie
-	if !e.isSimilarTitle(title, first.Title) && year > 0 && first.Year != year {
-		log.Printf("[METADATA] First result doesn't match (title=%s, year=%d vs expected year=%d), trying to find better match",
-			first.Title, first.Year, year)
-
-		// Try to find a better match
-		for _, r := range result.Results {
-			if e.isSimilarTitle(title, r.Title) && (r.Year == year || r.Year == 0) {
-				first = r
-				break
-			}
+	// The parser /search endpoint is a fuzzy site search: its first result is
+	// frequently an unrelated movie (e.g. searching "Dastur ..." returned
+	// "Otamning bezovta ruhi ..."). The authoritative title already came from
+	// /details, so we must only accept a search result whose title actually
+	// matches — otherwise we'd overwrite the movie identity with a different
+	// film. Pick the first result that matches by title (and year, when known).
+	matchIdx := -1
+	for i := range result.Results {
+		r := result.Results[i]
+		if e.isSimilarTitle(title, r.Title) && (year == 0 || r.Year == 0 || r.Year == year) {
+			matchIdx = i
+			break
 		}
 	}
+
+	if matchIdx < 0 {
+		// No confident match. Do NOT hijack the title with an unrelated hit —
+		// return nil so the caller falls back to parser /details metadata,
+		// which preserves the correct title.
+		log.Printf("[METADATA] No search result matched title=%q year=%d (first candidate=%q year=%d); discarding fuzzy search result to preserve original title",
+			title, year, result.Results[0].Title, result.Results[0].Year)
+		return nil, nil
+	}
+
+	first := result.Results[matchIdx]
 
 	return &models.EnrichedMetadata{
 		Title:          first.Title,
