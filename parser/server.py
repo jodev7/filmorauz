@@ -1025,12 +1025,14 @@ from freekino import FreekinoParser
 from asilmedia import AsilmediaParser
 from kinolar import KinolarParser
 from kinochilar import KinochilarParser
+from uzbeklar import UzbeklarParser
 from uzmedia import UzmediaParser
 from asilmedia_serial import AsilmediaSerialParser
 from freekino_serial import FreekinoSerialParser
 from uzmovi_serial import UzmoviSerialParser
 from kinochilar_serial import KinochilarSerialParser
 from kinolar_serial import KinolarSerialParser
+from uzbeklar_serial import UzbeklarSerialParser
 from uzmedia_serial import UzmediaSerialParser
 from downloader_service import DownloaderService, _validate_download_target, report_progress_to_backend
 from uzmovi_browser_downloader import download_uzmovi_video
@@ -1065,7 +1067,7 @@ N_M3U8DL_BINARY = require_binary()
 logger.info(f"[SERVER] N_m3u8DL-RE binary confirmed: {N_M3U8DL_BINARY}")
 
 # Available sources (including manual which doesn't need a parser)
-AVAILABLE_SOURCES = ["uzmovi", "freekino", "asilmedia", "kinolar", "kinochilar", "uzmedia", "manual"]
+AVAILABLE_SOURCES = ["uzmovi", "freekino", "asilmedia", "kinolar", "kinochilar", "uzbeklar", "uzmedia", "manual"]
 
 # Initialize parsers (manual source doesn't have a parser - it receives direct URLs)
 PARSERS = {
@@ -1074,6 +1076,7 @@ PARSERS = {
     "asilmedia": AsilmediaParser(),
     "kinolar": KinolarParser(),
     "kinochilar": KinochilarParser(),
+    "uzbeklar": UzbeklarParser(),
     "uzmedia": UzmediaParser(),
 }
 
@@ -1085,6 +1088,7 @@ SERIAL_PARSERS = {
     "uzmovi": UzmoviSerialParser(),
     "kinochilar": KinochilarSerialParser(),
     "kinolar": KinolarSerialParser(),
+    "uzbeklar": UzbeklarSerialParser(),
     "uzmedia": UzmediaSerialParser(),
 }
 
@@ -1102,6 +1106,8 @@ def _detect_serial_provider(url: str) -> str:
         return "kinochilar"
     if "kinolar." in u:
         return "kinolar"
+    if "uzbeklar." in u:
+        return "uzbeklar"
     if "uzmedia." in u:
         return "uzmedia"
     return ""

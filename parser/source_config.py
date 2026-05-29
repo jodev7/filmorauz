@@ -73,6 +73,19 @@ SOURCES = {
         },
         "search_param_key": "story",
     },
+    "uzbeklar": {
+        "base_url": "https://uzbeklar.biz",
+        "search_paths": [
+            "/",
+            "/index.php?do=search",
+        ],
+        "search_method": "POST",
+        "search_params": {
+            "do": "search",
+            "subaction": "search",
+        },
+        "search_param_key": "story",
+    },
     "uzmedia": {
         "base_url": "https://uzmedia.tv",
         "search_paths": [

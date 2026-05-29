@@ -460,6 +460,7 @@ const SOURCES = [
   { id: "kinochilar", name: "Kinochilar", url: "kinochilar.com", icon: Film },
   { id: "uzmedia", name: "Uzmedia", url: "uzmedia.tv", icon: Film },
   { id: "kinolar", name: "Kinolar", url: "kinolar.tv", icon: Film },
+  { id: "uzbeklar", name: "Uzbeklar", url: "uzbeklar.biz", icon: Film },
   { id: "manual", name: "Manual", url: "", icon: Link },
 ];
 
