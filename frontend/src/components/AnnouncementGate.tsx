@@ -54,11 +54,21 @@ export default function AnnouncementGate() {
   const current = items.find((a) => !dismissed.includes(a.id));
   if (!current) return null;
 
-  const handleClose = () => {
-    if (!current.dismissible) return;
+  const dismissNow = () => {
     const next = Array.from(new Set([...dismissed, current.id]));
     setDismissed(next);
     persistDismissed(next);
+  };
+
+  const handleClose = () => {
+    if (!current.dismissible) return;
+    dismissNow();
+  };
+
+  // Clicking the link counts as acknowledgement — close the modal and
+  // remember it so it does not pop up again on later navigations.
+  const handleLinkClick = () => {
+    dismissNow();
   };
 
   const hasLink = !!current.link_url;
@@ -105,6 +115,7 @@ export default function AnnouncementGate() {
                 href={current.link_url}
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={handleLinkClick}
                 className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-medium transition-colors"
               >
                 {current.link_label || "Batafsil"}
