@@ -204,6 +204,150 @@ class UzbeklarParser(BaseParser):
         )
 
     # ------------------------------------------------------------------
+    # Catalog browsing (admin ingestion "click a source" view)
+    # ------------------------------------------------------------------
+    def list_categories(self) -> List[Dict[str, str]]:
+        """Genre/section links scraped from the uzbeklar.biz sidebar nav.
+
+        The admin ingestion UI calls this when a source is selected; without
+        it the "click a source" view falls through to an empty fallback."""
+        cats: List[Dict[str, str]] = []
+        try:
+            resp = self.session.get(self.BASE_URL + "/", timeout=30)
+            resp.raise_for_status()
+        except Exception as e:
+            logger.warning(f"[UZBEKLAR] list_categories fetch failed: {e}")
+            return cats
+        soup = BeautifulSoup(resp.text, "lxml")
+        seen: set[str] = set()
+        for a in soup.select(".side-nav a, .nav-menu a"):
+            href = (a.get("href") or "").strip()
+            name = clean_text(a.get_text())
+            if not href or not name:
+                continue
+            url = normalize_url(href, self.BASE_URL)
+            # Skip individual posts, on-page anchors, and the bare homepage.
+            if "#" in url or _DETAIL_URL_RE.match(url):
+                continue
+            if url.rstrip("/") == self.BASE_URL.rstrip("/"):
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            slug = url.rstrip("/").split("/")[-1]
+            cats.append({"name": name, "url": url, "slug": slug})
+        logger.info(f"[UZBEKLAR] list_categories: {len(cats)} categories")
+        return cats
+
+    def list_catalog(self, page: int = 1, limit: int = 20, type_filter: str = "", category_url: str = "") -> Dict[str, Any]:
+        """List movie/serial cards from a listing page.
+
+        uzbeklar.biz paginates every listing as `<base>/page/<N>/`; the homepage,
+        genre pages (`/movies/<genre>/`) and the serial section (`/serial/`) all
+        render the same `.short-item` cards we parse for search."""
+        page = max(1, int(page or 1))
+
+        if category_url:
+            base = normalize_url(category_url, self.BASE_URL).rstrip("/")
+        elif type_filter == "serial":
+            base = self.BASE_URL.rstrip("/") + "/serial"
+        else:
+            base = self.BASE_URL.rstrip("/")
+
+        url = (base + "/") if page == 1 else f"{base}/page/{page}/"
+        logger.info(f"[UZBEKLAR] list_catalog: fetching {url} (type={type_filter!r})")
+        try:
+            resp = self.session.get(url, timeout=30)
+            resp.raise_for_status()
+        except Exception as e:
+            logger.warning(f"[UZBEKLAR] list_catalog fetch failed for {url}: {e}")
+            return {"items": [], "page": page, "limit": limit, "total": 0, "total_pages": 0, "has_more": False}
+
+        soup = BeautifulSoup(resp.text, "lxml")
+        cards = soup.select(".short-item")
+        is_serial_listing = type_filter == "serial" or "serial" in (category_url or "").lower()
+
+        items: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for card in cards:
+            item = self._extract_catalog_card(card, is_serial_listing)
+            if item and item["detail_url"] not in seen:
+                seen.add(item["detail_url"])
+                items.append(item)
+
+        if type_filter == "movie":
+            items = [it for it in items if it.get("type") != "serial"]
+        elif type_filter == "serial":
+            items = [it for it in items if it.get("type") == "serial"]
+
+        logger.info(f"[UZBEKLAR] list_catalog: {len(items)} items from page {page}")
+
+        has_more = False
+        pager = soup.select_one(".navigation, .pagination, .pages, .pnavi, .page-nav, .navi")
+        if pager:
+            for a in pager.select("a"):
+                href = a.get("href", "")
+                text = a.get_text(strip=True).lower()
+                if f"/page/{page + 1}" in href or "keyingi" in text or "next" in text or "»" in text or "›" in text:
+                    has_more = True
+                    break
+        if not has_more and len(cards) >= 20:
+            has_more = True
+
+        return {
+            "items": items,
+            "page": page,
+            "limit": limit,
+            "total": len(items),
+            "total_pages": page + (1 if has_more else 0),
+            "has_more": has_more,
+        }
+
+    def _extract_catalog_card(self, card, is_serial_listing: bool) -> Optional[Dict[str, Any]]:
+        """Extract one catalog item from a `.short-item` card."""
+        a = card.select_one("a.short-title") or card.select_one("a.short-img")
+        if not a:
+            return None
+        href = (a.get("href") or "").strip()
+        if not href:
+            return None
+        detail_url = normalize_url(href, self.BASE_URL)
+        m = _DETAIL_URL_RE.match(detail_url)
+        if not m:
+            return None
+        source_id = m.group(1)
+
+        title = clean_text((card.select_one("a.short-title") or a).get_text())
+        if not title:
+            return None
+
+        poster = ""
+        img = card.select_one("a.short-img img, img.poster, img.xfieldimage, img")
+        if img:
+            src = img.get("data-src") or img.get("data-original") or img.get("src", "")
+            if src:
+                poster = normalize_url(src, self.BASE_URL)
+
+        year = 0
+        label = card.select_one(".short-label22, .short-label")
+        if label:
+            year = extract_year(label.get_text()) or 0
+        if not year:
+            year = extract_year(card.get_text()) or 0
+
+        return {
+            "source_id": source_id,
+            "title": title,
+            "year": year,
+            "type": "serial" if is_serial_listing else "movie",
+            "poster": poster,
+            "description": "",
+            "genres": [],
+            "detail_url": detail_url,
+            "quality": "",
+        }
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
     @staticmethod
