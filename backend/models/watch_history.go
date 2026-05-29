@@ -47,23 +47,24 @@ type WatchProgressResponse struct {
 
 // ContinueWatchingItem represents a continue watching item for frontend
 type ContinueWatchingItem struct {
-	MovieID         string    `json:"movie_id,omitempty"`
-	TargetType      string    `json:"target_type"`
-	TargetID        string    `json:"target_id"`
-	EpisodeID       string    `json:"episode_id,omitempty"`
-	Title           string    `json:"title"`
-	Slug            string    `json:"slug"`
-	PosterURL       string    `json:"poster_url"`
-	Type            string    `json:"type,omitempty"`
-	SeriesTitle     string    `json:"series_title,omitempty"`
-	SeriesSlug      string    `json:"series_slug,omitempty"`
-	SeasonNumber    int       `json:"season_number,omitempty"`
-	EpisodeNumber   int       `json:"episode_number,omitempty"`
-	EpisodeTitle    string    `json:"episode_title,omitempty"`
-	LastPositionSec int64     `json:"last_position_sec"`
-	DurationSec     int64     `json:"duration_sec"`
-	ProgressPercent float64   `json:"progress_percent"`
-	LastWatchedAt   time.Time `json:"last_watched_at"`
+	MovieID         string    `bson:"movie_id" json:"movie_id,omitempty"`
+	TargetType      string    `bson:"target_type" json:"target_type"`
+	TargetID        string    `bson:"target_id" json:"target_id"`
+	EpisodeID       string    `bson:"episode_id" json:"episode_id,omitempty"`
+	Title           string    `bson:"title" json:"title"`
+	Slug            string    `bson:"slug" json:"slug"`
+	PosterURL       string    `bson:"poster_url" json:"poster_url"`
+	Quality         string    `bson:"quality" json:"quality,omitempty"`
+	Type            string    `bson:"type" json:"type,omitempty"`
+	SeriesTitle     string    `bson:"series_title" json:"series_title,omitempty"`
+	SeriesSlug      string    `bson:"series_slug" json:"series_slug,omitempty"`
+	SeasonNumber    int       `bson:"season_number" json:"season_number,omitempty"`
+	EpisodeNumber   int       `bson:"episode_number" json:"episode_number,omitempty"`
+	EpisodeTitle    string    `bson:"episode_title" json:"episode_title,omitempty"`
+	LastPositionSec int64     `bson:"last_position_sec" json:"last_position_sec"`
+	DurationSec     int64     `bson:"duration_sec" json:"duration_sec"`
+	ProgressPercent float64   `bson:"progress_percent" json:"progress_percent"`
+	LastWatchedAt   time.Time `bson:"last_watched_at" json:"last_watched_at"`
 }
 
 // WatchHistoryListItem represents watch history enriched for frontend display.
