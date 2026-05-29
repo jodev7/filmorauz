@@ -929,6 +929,20 @@ def _filter_reachable_candidates(candidate_dicts: list) -> list:
             if not url or kind not in ("mp4", "direct_mp4", "direct_download"):
                 ok.append(item)
                 continue
+            def _confirm_with_get(probe_url: str) -> bool:
+                # Some CDNs (asilmedia's fayllar1.ru) reject or hang HEAD even
+                # for existing files. Confirm by ranged GET — fetch a single
+                # byte and check the status. 200/206 = real, 404/403/410 = gone.
+                try:
+                    req2 = urllib.request.Request(probe_url, method="GET",
+                        headers={"User-Agent": "Mozilla/5.0", "Accept": "*/*", "Range": "bytes=0-0"})
+                    with urllib.request.urlopen(req2, timeout=8) as resp2:
+                        return 200 <= resp2.status < 400
+                except urllib.error.HTTPError as he:
+                    return he.code not in (403, 404, 410)
+                except Exception:
+                    return True  # network noise — give the candidate the benefit of doubt
+
             try:
                 req = urllib.request.Request(url, method="HEAD",
                     headers={"User-Agent": "Mozilla/5.0", "Accept": "*/*"})
@@ -942,11 +956,20 @@ def _filter_reachable_candidates(candidate_dicts: list) -> list:
                 if e.code in (403, 404, 410):
                     logger.info(f"[quality] candidate skipped HEAD {e.code} url={url[:120]}")
                     continue
-                ok.append(item)
+                # Other HTTP error — confirm with GET
+                if _confirm_with_get(url):
+                    ok.append(item)
+                else:
+                    logger.info(f"[quality] candidate skipped GET-confirm dead url={url[:120]}")
             except Exception as e:
-                # network glitch — don't punish the candidate
-                logger.info(f"[quality] probe error url={url[:80]} err={e}; keeping")
-                ok.append(item)
+                # HEAD failed at network level (timeout, TLS handshake, etc.).
+                # Don't trust the URL just because HEAD couldn't get a verdict;
+                # confirm with a ranged GET before keeping it.
+                if _confirm_with_get(url):
+                    logger.info(f"[quality] probe HEAD failed but GET ok; keeping url={url[:80]}")
+                    ok.append(item)
+                else:
+                    logger.info(f"[quality] candidate skipped HEAD err={e} + GET dead url={url[:120]}")
         # If everything got dropped (e.g. all servers down), return the
         # original list so the caller can still try its preferred URL.
         return ok if ok else candidate_dicts
