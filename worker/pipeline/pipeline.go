@@ -476,6 +476,13 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 		return p.processEpisodeJob(ctx, job)
 	}
 
+	// Clip-only jobs are enqueued by the backend serial finalizer once the
+	// Episode row exists. They re-download the HLS via ffmpeg and run the
+	// standard episode clip generator with EpisodeID populated.
+	if job.ContentType == "clip_only" {
+		return p.processClipOnlyJob(ctx, job)
+	}
+
 	// CRITICAL: Create safe variables for metadata fields to prevent nil pointer access
 	// These will be used throughout the processing instead of direct job.Metadata.* access
 	title := "video"

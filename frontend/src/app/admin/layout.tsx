@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { Film, LayoutDashboard, List, LogOut, PlusCircle, Download, Users, FolderHeart, Folder, MessageSquare, Settings, Tv, Ban, History, MessageCircle, Video, Megaphone, Send, Lightbulb, Globe, Wallet } from "lucide-react";
+import { Film, LayoutDashboard, List, LogOut, PlusCircle, Download, Users, FolderHeart, Folder, MessageSquare, Settings, Tv, Ban, History, MessageCircle, Video, Megaphone, Send, Lightbulb, Globe, Wallet, Bell } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
 export default function AdminLayout({
@@ -85,6 +85,7 @@ export default function AdminLayout({
     ...(isSuperAdmin ? [
       { href: "/admin/ads", icon: Megaphone, label: "Ads" },
       { href: "/admin/expenses", icon: Wallet, label: "Xarajatlar" },
+      { href: "/admin/announcements", icon: Bell, label: "E'lonlar" },
     ] : []),
     ...(isAdmin ? [
       { href: "/admin/telegram-post", icon: Send, label: "Telegram Post" },

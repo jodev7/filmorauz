@@ -4,14 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/filmorauz/backend/models"
+	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // terminalEpisodeStatuses are the IngestionJob statuses that count as "done"
@@ -203,6 +205,12 @@ func (h *IngestionHandler) finalizeOneSerialParent(ctx context.Context, parent *
 			},
 		})
 
+		// Enqueue a clip_only IngestionJob. The episode-level worker run skipped
+		// clip generation because the Episode row did not exist yet; now that it
+		// does, the worker can re-pull the HLS and produce clips with the right
+		// EpisodeID linkage.
+		h.enqueueClipOnlyJob(ctx, parentID, series, season.ID, episode, &c)
+
 		insertedEpisodes++
 	}
 
@@ -227,6 +235,138 @@ func (h *IngestionHandler) finalizeOneSerialParent(ctx context.Context, parent *
 	log.Printf("[serial finalize] parent=%s done — series=%s episodes=%d failed=%d",
 		parentHex, series.Slug, insertedEpisodes, failed)
 	return nil
+}
+
+// enqueueClipOnlyJob creates a queued IngestionJob with ContentType="clip_only"
+// so the worker can pull the episode's HLS down and run the clip generator now
+// that the Episode row exists. Safe to call multiple times — duplicates are
+// prevented by a unique (source, source_id) suffix derived from the original
+// episode job. Failures are logged and swallowed: clip generation is a
+// best-effort enrichment, not a hard requirement for serial finalization.
+func (h *IngestionHandler) enqueueClipOnlyJob(
+	ctx context.Context,
+	parentID primitive.ObjectID,
+	series *models.Series,
+	seasonID primitive.ObjectID,
+	episode *models.Episode,
+	episodeJob *models.IngestionJob,
+) {
+	if episode == nil || episodeJob == nil {
+		return
+	}
+	master := strings.TrimSpace(episodeJob.MasterPlaylistURL)
+	if master == "" {
+		return
+	}
+
+	source := episodeJob.Source
+	if source == "" {
+		source = "clip_only"
+	}
+	clipSourceID := fmt.Sprintf("%s:clip", episodeJob.SourceID)
+
+	if existing, err := h.jobRepo.GetBySourceAndID(ctx, source, clipSourceID); err == nil && existing != nil {
+		return
+	}
+
+	job := &models.IngestionJob{
+		Title:             fmt.Sprintf("Clips: %s S%02dE%02d", series.Title, episodeJob.SeasonNumber, episodeJob.EpisodeNumber),
+		Source:            source,
+		SourceID:          clipSourceID,
+		Status:            models.IngestionStatusReadyToProcess,
+		Stage:             string(models.IngestionStatusReadyToProcess),
+		Progress:          0,
+		Steps:             models.JobSteps{Download: true},
+		Logs:              []models.IngestionLog{},
+		ContentType:       "clip_only",
+		SeriesID:          series.ID,
+		SeasonID:          seasonID,
+		EpisodeID:         episode.ID,
+		SeriesSlug:        series.Slug,
+		SeasonNumber:      episodeJob.SeasonNumber,
+		EpisodeNumber:     episodeJob.EpisodeNumber,
+		EpisodeTitle:      episodeJob.EpisodeTitle,
+		EpisodePosterURL:  episodeJob.EpisodePosterURL,
+		MasterPlaylistURL: master,
+		// LocalPath is set to the master URL so ClaimNextProcessingJob's
+		// "local_path != \"\"" filter accepts the job. The worker dispatcher
+		// branches on ContentType before touching the filesystem.
+		LocalPath:   master,
+		ParentJobID: parentID,
+	}
+	if err := h.jobRepo.Create(ctx, job); err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return
+		}
+		log.Printf("[serial finalize] enqueue clip_only failed series=%s S%02dE%02d: %v",
+			series.Slug, episodeJob.SeasonNumber, episodeJob.EpisodeNumber, err)
+		return
+	}
+	log.Printf("[serial finalize] enqueued clip_only job=%s series=%s S%02dE%02d",
+		job.ID.Hex(), series.Slug, episodeJob.SeasonNumber, episodeJob.EpisodeNumber)
+}
+
+// RegenerateSeriesClips backfills clip_only jobs for every episode of a
+// series that already has a master playlist URL. Use this to recover serials
+// that were imported before the deferred-DB clip path existed.
+//
+// POST /api/admin/series/:slug/regenerate-clips
+func (h *IngestionHandler) RegenerateSeriesClips(c *gin.Context) {
+	slug := strings.TrimSpace(c.Param("slug"))
+	if slug == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing slug"})
+		return
+	}
+	series, err := h.seriesRepo.GetBySlug(slug)
+	if err != nil || series == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "series not found"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
+	seasons, err := h.seriesRepo.GetSeasonsBySeriesID(series.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	enqueued := 0
+	skipped := 0
+	for _, season := range seasons {
+		episodes, err := h.seriesRepo.GetEpisodesBySeasonID(season.ID)
+		if err != nil {
+			log.Printf("[regenerate clips] series=%s season=%d list episodes: %v", slug, season.SeasonNumber, err)
+			continue
+		}
+		for i := range episodes {
+			ep := &episodes[i]
+			master := strings.TrimSpace(ep.VideoURL)
+			if master == "" {
+				skipped++
+				continue
+			}
+			synthJob := &models.IngestionJob{
+				Source:            "regenerate_clips",
+				SourceID:          fmt.Sprintf("%s:s%02de%02d", series.Slug, season.SeasonNumber, ep.EpisodeNumber),
+				SeasonNumber:      season.SeasonNumber,
+				EpisodeNumber:     ep.EpisodeNumber,
+				EpisodeTitle:      ep.Title,
+				EpisodePosterURL:  ep.ThumbnailURL,
+				MasterPlaylistURL: master,
+			}
+			h.enqueueClipOnlyJob(ctx, primitive.NilObjectID, series, season.ID, ep, synthJob)
+			enqueued++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"series":   series.Slug,
+		"enqueued": enqueued,
+		"skipped":  skipped,
+		"message":  fmt.Sprintf("queued %d clip_only jobs (%d episodes had no video_url)", enqueued, skipped),
+	})
 }
 
 func (h *IngestionHandler) markParentFinalizedFailed(ctx context.Context, parentID primitive.ObjectID, failedCount int) error {

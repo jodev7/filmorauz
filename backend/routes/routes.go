@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler, contentHandler *handlers.ContentHandler, systemHandler *handlers.SystemHandler, deleteJobHandler *handlers.DeleteJobHandler, expenseHandler *handlers.ExpenseHandler) {
+func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler, contentHandler *handlers.ContentHandler, systemHandler *handlers.SystemHandler, deleteJobHandler *handlers.DeleteJobHandler, expenseHandler *handlers.ExpenseHandler, announcementHandler *handlers.AnnouncementHandler) {
 	r.GET("/sitemap.xml", sitemapHandler.GetSitemapIndex)
 	r.GET("/sitemap-static.xml", sitemapHandler.GetSitemapStatic)
 	r.GET("/sitemap-genres.xml", sitemapHandler.GetSitemapGenres)
@@ -239,6 +239,9 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	// Public movie code lookup (for Telegram bot)
 	api.GET("/public/movies/code/:code", movieHandler.GetMovieByCode)
 
+	// Public active announcements (site-wide modal)
+	api.GET("/announcements/active", announcementHandler.GetActive)
+
 	// Ingestion routes (public for admin UI - auth handled separately)
 	api.GET("/ingestion/search", ingestionHandler.SearchSource)
 	api.GET("/ingestion/details", ingestionHandler.GetMovieDetails)
@@ -301,6 +304,14 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		admin.POST("/ingestion/jobs/:id/retry", ingestionHandler.RetryIngestionJob)
 		admin.DELETE("/ingestion/jobs/:id", ingestionHandler.DeleteIngestionJob)
 		admin.DELETE("/ingestion/series/:slug", ingestionHandler.DeleteIngestionSeries)
+		admin.POST("/series/:slug/regenerate-clips", ingestionHandler.RegenerateSeriesClips)
+
+		// Site-wide announcements (modal popup)
+		admin.GET("/announcements", announcementHandler.AdminList)
+		admin.POST("/announcements", announcementHandler.AdminCreate)
+		admin.GET("/announcements/:id", announcementHandler.AdminGet)
+		admin.PATCH("/announcements/:id", announcementHandler.AdminUpdate)
+		admin.DELETE("/announcements/:id", announcementHandler.AdminDelete)
 		// Manual import from direct video URL
 		admin.POST("/ingestion/manual", ingestionHandler.CreateManualJob)
 		// Import from catalog

@@ -9,6 +9,7 @@ import BanGuardWrapper from "@/components/BanGuardWrapper";
 import FixedBottomAd from "@/components/ads/FixedBottomAd";
 import InAppBrowserBanner from "@/components/InAppBrowserBanner";
 import PresencePinger from "@/components/PresencePinger";
+import AnnouncementGate from "@/components/AnnouncementGate";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 const GA_MEASUREMENT_ID = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID || "G-EJ1VL229GK";
@@ -159,6 +160,7 @@ export default function RootLayout({
                 <InAppBrowserBanner />
                 {children}
                 <FixedBottomAd placement="website_fixed_bottom" />
+                <AnnouncementGate />
               </BanGuardWrapper>
             </AdSlotProvider>
           </I18nProvider>

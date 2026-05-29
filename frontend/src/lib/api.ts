@@ -4751,3 +4751,83 @@ export async function getAdminSystemStatus(token: string): Promise<{ hosts: Syst
   if (!res.ok) throw new Error("Failed to fetch system status");
   return res.json();
 }
+
+// ── Announcements (site-wide modal) ─────────────────────────────────────
+
+export interface Announcement {
+  id: string;
+  title: string;
+  body: string;
+  link_url?: string;
+  link_label?: string;
+  starts_at: string;
+  ends_at: string;
+  dismissible: boolean;
+  is_active: boolean;
+  priority: number;
+  created_at: string;
+  updated_at: string;
+  created_by_name?: string;
+}
+
+export async function getActiveAnnouncements(): Promise<Announcement[]> {
+  try {
+    const res = await fetch(`${API_URL}/announcements/active`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const j = await res.json();
+    return j.items || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function adminListAnnouncements(token: string): Promise<Announcement[]> {
+  const res = await fetch(`${API_URL}/admin/announcements`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to list announcements");
+  const j = await res.json();
+  return j.items || [];
+}
+
+export interface AnnouncementInput {
+  title: string;
+  body: string;
+  link_url: string;
+  link_label: string;
+  starts_at: string;
+  ends_at: string;
+  dismissible: boolean;
+  is_active: boolean;
+  priority: number;
+}
+
+export async function adminCreateAnnouncement(token: string, input: AnnouncementInput): Promise<Announcement> {
+  const res = await fetch(`${API_URL}/admin/announcements`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Failed to create");
+  return res.json();
+}
+
+export async function adminUpdateAnnouncement(token: string, id: string, input: AnnouncementInput): Promise<Announcement> {
+  const res = await fetch(`${API_URL}/admin/announcements/${id}`, {
+    method: "PATCH",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Failed to update");
+  return res.json();
+}
+
+export async function adminDeleteAnnouncement(token: string, id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/announcements/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error("Failed to delete");
+}
+

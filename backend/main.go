@@ -294,6 +294,9 @@ func main() {
 	expenseRepo := repositories.NewExpenseRepository(db)
 	expenseHandler := handlers.NewExpenseHandler(expenseRepo, clipAIUsageRepo)
 
+	announcementRepo := repositories.NewAnnouncementRepository(db)
+	announcementHandler := handlers.NewAnnouncementHandler(announcementRepo, userRepo)
+
 	// B2 cleanup service — nil in DEV when credentials are not set; DeleteMovie
 	// then falls through to DB-only removal without aborting.
 	b2Cleanup := services.NewB2CleanupService(services.B2CleanupConfig{
@@ -359,7 +362,7 @@ func main() {
 	// Register routes
 	deleteJobHandler := handlers.NewDeleteJobHandler(repositories.NewDeleteJobRepository(db))
 
-	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler, deleteJobHandler, expenseHandler)
+	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler, deleteJobHandler, expenseHandler, announcementHandler)
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)
 	seoNotifier := buildSEONotifier(cfg, db)
