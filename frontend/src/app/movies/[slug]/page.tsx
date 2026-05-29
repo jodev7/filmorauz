@@ -4,7 +4,7 @@ import dynamicImport from "next/dynamic";
 import { notFound } from "next/navigation";
 import Script from "next/script";
 import Link from "next/link";
-import { Play, Clock, Calendar, Globe, ChevronLeft } from "lucide-react";
+import { Clock, Calendar, Globe, ChevronLeft } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MediaImage from "@/components/MediaImage";
@@ -12,6 +12,9 @@ import MoviePoster from "@/components/MoviePoster";
 import MovieCode from "@/components/MovieCode";
 import MovieCarousel from "@/components/MovieCarousel";
 import WatchButton from "@/components/WatchButton";
+import WatchTogetherButton from "@/components/WatchTogetherButton";
+import MovieWatchSection from "@/components/MovieWatchSection";
+import { WatchPlayerProvider } from "@/lib/watch-player-context";
 import { isMoviePremium, PremiumBadge } from "@/components/PremiumComponents";
 import { getMovie, getRecommendations } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
@@ -36,6 +39,7 @@ const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot
 
 interface Props {
   params: { slug: string };
+  searchParams?: { play?: string };
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -100,8 +104,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   }
 }
 
-export default async function MovieDetailPage({ params }: Props) {
+export default async function MovieDetailPage({ params, searchParams }: Props) {
   const { slug } = params;
+  const autoOpenPlayer = searchParams?.play === "1";
   const { t } = getTranslations("uz");
 
   let movie;
@@ -174,7 +179,7 @@ export default async function MovieDetailPage({ params }: Props) {
     quality: movie.quality,
     potentialAction: {
       "@type": "WatchAction",
-      target: `${SITE_URL}/watch/${slug}`,
+      target: `${movieUrl}?play=1`,
     },
   };
   if (movie.rating_count && movie.rating_count > 0 && movie.rating_avg) {
@@ -196,7 +201,7 @@ export default async function MovieDetailPage({ params }: Props) {
     description: localizedDescription || buildContentDescription(localizedTitle, movie.year),
     thumbnailUrl: [pickSeoImage(movie.poster_url, movie.backdrop_url)],
     uploadDate: movie.created_at || (movie.year ? `${movie.year}-01-01` : undefined),
-    contentUrl: `${SITE_URL}/watch/${slug}`,
+    contentUrl: `${movieUrl}?play=1`,
     embedUrl: movieUrl,
     duration: movie.duration ? `PT${movie.duration}M` : undefined,
     inLanguage: "uz",
@@ -225,6 +230,7 @@ export default async function MovieDetailPage({ params }: Props) {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(videoJsonLd) }}
       />
       <Navbar />
+      <WatchPlayerProvider initialOpen={autoOpenPlayer}>
       <main className="min-h-screen">
         {/* Backdrop hero */}
         <div className="relative h-[50vh] sm:h-[55vh] min-h-[300px] sm:min-h-[380px]">
@@ -320,7 +326,13 @@ export default async function MovieDetailPage({ params }: Props) {
                   movieTitle={localizedTitle}
                   isPremium={isMoviePremium(movie)}
                 />
-                
+
+                <WatchTogetherButton
+                  contentType="movie"
+                  contentID={movie.id}
+                  className="inline-flex items-center gap-1.5 px-4 py-3 bg-brand-card border border-brand-border hover:border-brand-red rounded-xl text-sm text-white transition-colors"
+                />
+
                 <ShareButton
                   movieId={movie.id}
                   movieTitle={localizedTitle}
@@ -338,6 +350,11 @@ export default async function MovieDetailPage({ params }: Props) {
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Inline player — opens here when "Tomosha qilish" is clicked */}
+        <div className="mt-6">
+          <MovieWatchSection movie={movie} />
         </div>
 
         <div className="max-w-7xl mx-auto px-4 mt-8 mb-6">
@@ -359,6 +376,7 @@ export default async function MovieDetailPage({ params }: Props) {
           <Comments movieId={movie.id} />
         </section>
       </main>
+      </WatchPlayerProvider>
       <Footer />
     </>
   );

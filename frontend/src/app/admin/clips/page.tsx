@@ -97,6 +97,8 @@ interface Clip {
   duration: number;
   sequence: number;
   storage_type: string;
+  caption?: string;
+  hashtags?: string[];
   created_at: string;
   uploaded_to_instagram: boolean;
   instagram_upload_count: number;
@@ -145,6 +147,7 @@ interface PublishModal {
   selectedJobs: SelectedJob[];
   mode: UploadMode;
   scheduledFor: string;
+  caption: string; // editable Instagram caption (pre-filled from Gemini)
   results: JobResult[] | null;
   scheduledCreated: boolean;
 }
@@ -446,7 +449,19 @@ function getClipDisplayTitle(clip: Clip): string {
   return "Untitled clip";
 }
 
+// Composes the default Instagram caption for a clip. "Full Gemini": when the
+// clip carries an AI caption we use it + its hashtags verbatim; the admin can
+// still edit the result in the upload modal before publishing. Falls back to
+// the legacy code template for clips with no AI caption.
 function buildInstagramCaption(clip: Clip): string {
+  const aiCaption = clip.caption?.trim();
+  if (aiCaption) {
+    const tags = (clip.hashtags || [])
+      .map((h) => h.trim())
+      .filter(Boolean)
+      .map((h) => (h.startsWith("#") ? h : `#${h.replace(/^#+/, "")}`));
+    return tags.length > 0 ? `${aiCaption}\n\n${tags.join(" ")}` : aiCaption;
+  }
   const code = clip.movie_code?.trim() || "";
   return `🎬 Kinoni profildagi bot orqali toping!\n🔢 Kino Kodi: ${code}`;
 }
@@ -877,6 +892,144 @@ function ClipFilterBar(props: ClipFilterBarProps) {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
+// ─── AI (Gemini) cost panel ───────────────────────────────────────────────────
+// Shows total Gemini clip-generation spend plus a per-content breakdown
+// (cost per movie/episode and a derived cost-per-clip). Reads the read-only
+// /admin/clips/ai-usage endpoint backed by the clip_ai_usage collection.
+
+interface AICostTotals {
+  cost_usd: number;
+  total_tokens: number;
+  clip_count: number;
+  analyses: number;
+}
+interface AICostItem {
+  content_kind: string;
+  content_id: string;
+  title: string;
+  model: string;
+  cost_usd: number;
+  cost_per_clip: number;
+  total_tokens: number;
+  clip_count: number;
+  analyses: number;
+  last_analyzed: string;
+}
+
+function fmtUSD(n: number): string {
+  return "$" + (n || 0).toFixed(n < 1 ? 4 : 2);
+}
+
+function ClipAICostPanel({ token }: { token: string | null }) {
+  const [totals, setTotals] = useState<AICostTotals | null>(null);
+  const [items, setItems] = useState<AICostItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!token) return;
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch(`${API}/admin/clips/ai-usage`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error("failed");
+        const data = await res.json();
+        if (!alive) return;
+        setTotals(data.totals || null);
+        setItems(Array.isArray(data.items) ? data.items : []);
+      } catch {
+        if (alive) setItems([]);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [token]);
+
+  if (loading) {
+    return (
+      <div className="mb-6 flex items-center gap-2 text-gray-500 text-sm">
+        <Loader2 size={14} className="animate-spin" /> AI xarajatlari yuklanmoqda...
+      </div>
+    );
+  }
+  if (!totals || totals.analyses === 0) return null;
+
+  return (
+    <div className="mb-6 bg-brand-card border border-brand-border rounded-xl overflow-hidden">
+      <div className="flex flex-wrap items-center gap-x-8 gap-y-3 p-4 sm:p-5">
+        <div>
+          <p className="text-xs text-gray-500">AI umumiy xarajat</p>
+          <p className="text-2xl font-bold text-emerald-400">{fmtUSD(totals.cost_usd)}</p>
+        </div>
+        <div>
+          <p className="text-xs text-gray-500">Tahlillar</p>
+          <p className="text-lg font-semibold text-white">{totals.analyses}</p>
+        </div>
+        <div>
+          <p className="text-xs text-gray-500">Kliplar</p>
+          <p className="text-lg font-semibold text-white">{totals.clip_count}</p>
+        </div>
+        <div>
+          <p className="text-xs text-gray-500">Tokenlar</p>
+          <p className="text-lg font-semibold text-white">{totals.total_tokens.toLocaleString()}</p>
+        </div>
+        <div>
+          <p className="text-xs text-gray-500">O&apos;rtacha / klip</p>
+          <p className="text-lg font-semibold text-white">
+            {fmtUSD(totals.clip_count > 0 ? totals.cost_usd / totals.clip_count : 0)}
+          </p>
+        </div>
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-brand-border text-xs text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
+        >
+          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          Tafsilotlar ({items.length})
+        </button>
+      </div>
+
+      {open && (
+        <div className="border-t border-brand-border overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-gray-500 border-b border-brand-border">
+                <th className="px-4 py-2 font-medium">Nomi</th>
+                <th className="px-4 py-2 font-medium">Turi</th>
+                <th className="px-4 py-2 font-medium text-right">Xarajat</th>
+                <th className="px-4 py-2 font-medium text-right">Kliplar</th>
+                <th className="px-4 py-2 font-medium text-right">Klip narxi</th>
+                <th className="px-4 py-2 font-medium text-right">Tokenlar</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((it) => (
+                <tr key={`${it.content_kind}:${it.content_id}`} className="border-b border-brand-border/50 last:border-0">
+                  <td className="px-4 py-2 text-white max-w-[260px] truncate" title={it.title}>
+                    {it.title || "—"}
+                  </td>
+                  <td className="px-4 py-2 text-gray-400">
+                    {it.content_kind === "series" ? "Serial" : "Kino"}
+                  </td>
+                  <td className="px-4 py-2 text-right text-emerald-400 font-medium">{fmtUSD(it.cost_usd)}</td>
+                  <td className="px-4 py-2 text-right text-gray-300">{it.clip_count}</td>
+                  <td className="px-4 py-2 text-right text-gray-400">{fmtUSD(it.cost_per_clip)}</td>
+                  <td className="px-4 py-2 text-right text-gray-400">{it.total_tokens.toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AdminClipsPage() {
   const { token } = useAuth();
   const groupsPageLimit = 10;
@@ -1240,6 +1393,7 @@ export default function AdminClipsPage() {
       selectedJobs: defaultJobs,
       mode: "now",
       scheduledFor: getNowTashkent(),
+      caption: buildInstagramCaption(clip),
       results: null,
       scheduledCreated: false,
     });
@@ -1277,13 +1431,13 @@ export default function AdminClipsPage() {
 
   const handleUploadNow = async () => {
     if (!token || !modal || modal.selectedJobs.length === 0) return;
-    const { clip, selectedJobs } = modal;
+    const { clip, selectedJobs, caption } = modal;
     setUploading((prev) => ({ ...prev, [clip.id]: true }));
     try {
       const res = await fetch(`${API}/admin/clips/${clip.id}/publish/now`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ jobs: selectedJobs }),
+        body: JSON.stringify({ jobs: selectedJobs, caption }),
       });
       const data = await res.json();
       setModal((prev) => (prev ? { ...prev, results: data.results || [] } : prev));
@@ -1299,7 +1453,7 @@ export default function AdminClipsPage() {
 
   const handleSchedule = async () => {
     if (!token || !modal || modal.selectedJobs.length === 0) return;
-    const { clip, selectedJobs, scheduledFor } = modal;
+    const { clip, selectedJobs, scheduledFor, caption } = modal;
     setUploading((prev) => ({ ...prev, [clip.id]: true }));
     try {
       const res = await fetch(`${API}/admin/clips/${clip.id}/publish/schedule`, {
@@ -1308,6 +1462,7 @@ export default function AdminClipsPage() {
         body: JSON.stringify({
           jobs: selectedJobs,
           scheduled_for: tashkentLocalToISO(scheduledFor),
+          caption,
         }),
       });
       const data = await res.json();
@@ -1464,6 +1619,9 @@ export default function AdminClipsPage() {
           </div>
         )}
       </div>
+
+      {/* ── AI (Gemini) clip-generation spend summary */}
+      <ClipAICostPanel token={token} />
 
       {/* ── Filter bar: tabs + search + genre + account + sort + only-unposted */}
       <ClipFilterBar
@@ -2029,7 +2187,7 @@ export default function AdminClipsPage() {
                   <div className="rounded-lg border border-brand-border bg-brand-dark/40 px-3 py-2 text-left">
                     <p className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Instagram caption</p>
                     <pre className="whitespace-pre-wrap text-xs text-gray-200 font-sans">
-                      {buildInstagramCaption(modal.clip)}
+                      {modal.caption}
                     </pre>
                   </div>
                 )}
@@ -2184,10 +2342,30 @@ export default function AdminClipsPage() {
 
                     {modal.selectedJobs.some((j) => j.platform === "instagram") && (
                       <div className="rounded-lg border border-brand-border bg-brand-dark/40 px-3 py-2">
-                        <p className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Instagram caption</p>
-                        <pre className="whitespace-pre-wrap text-xs text-gray-200 font-sans">
-                          {buildInstagramCaption(modal.clip)}
-                        </pre>
+                        <div className="flex items-center justify-between mb-1">
+                          <p className="text-[11px] uppercase tracking-wide text-gray-500">Instagram caption</p>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setModal((p) => (p ? { ...p, caption: buildInstagramCaption(p.clip) } : p))
+                            }
+                            className="text-[11px] text-gray-500 hover:text-white transition-colors"
+                          >
+                            AI matnini tiklash
+                          </button>
+                        </div>
+                        <textarea
+                          value={modal.caption}
+                          onChange={(e) =>
+                            setModal((p) => (p ? { ...p, caption: e.target.value } : p))
+                          }
+                          rows={6}
+                          placeholder="Instagram uchun caption..."
+                          className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-gray-200 text-xs focus:outline-none focus:border-pink-500 resize-y"
+                        />
+                        <p className="mt-1 text-[10px] text-gray-600">
+                          AI tomonidan yozilgan — yuklashdan oldin tahrirlashingiz mumkin.
+                        </p>
                       </div>
                     )}
 

@@ -15,7 +15,9 @@ import { logger } from "@/lib/logger";
 import { isMoviePremium, isUserPremium, PremiumLockOverlay, PremiumButton } from "@/components/PremiumComponents";
 import { getLocalizedTitle, getLocalizedDescription, getLocalizedGenres, getLocalizedCountry } from "@/lib/localization";
 import { formatDuration } from "@/lib/movie-utils";
-import type { EpisodeLink } from "@/lib/series-api";
+import type { EpisodeLink, SeasonWithEpisodes } from "@/lib/series-api";
+import { buildBestEpisodePath } from "@/lib/content-routes";
+import { X } from "lucide-react";
 import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
 
@@ -220,6 +222,15 @@ interface WatchPageClientProps {
     previousEpisode?: (EpisodeLink & { href?: string }) | null;
     nextEpisode?: (EpisodeLink & { href?: string }) | null;
   };
+  seriesSeasons?: SeasonWithEpisodes[];
+  seriesSlugForModal?: string;
+  // embedded=true renders only the player experience (player, overlay ad,
+  // resume prompt, premium lock, inline ad) without the standalone-page
+  // chrome — the top bar, the duplicate title/description/meta block, and the
+  // recommendations row. Used when the player lives inside the movie detail
+  // page, which already shows that metadata. Episodes use the full (false)
+  // layout.
+  embedded?: boolean;
 }
 
 function RecommendationsRow({ movies }: { movies: Movie[] }) {
@@ -272,6 +283,9 @@ export default function WatchPageClient({
   movie,
   progressTargetId: progressTargetIdProp,
   episodeNavigation,
+  embedded = false,
+  seriesSeasons,
+  seriesSlugForModal,
 }: WatchPageClientProps) {
   if (!movie) {
     return (
@@ -293,6 +307,7 @@ export default function WatchPageClient({
   const [resumePromptVisible, setResumePromptVisible] = useState(false);
   const [selectedStartPosition, setSelectedStartPosition] = useState(0);
   const [viewCount, setViewCount] = useState(movie.views ?? 0);
+  const [episodesModalOpen, setEpisodesModalOpen] = useState(false);
   const [resolvedPlaybackUrl, setResolvedPlaybackUrl] = useState<string | null>(null);
   const [playbackAccessError, setPlaybackAccessError] = useState<string | null>(null);
   const [autoNextCountdown, setAutoNextCountdown] = useState(5);
@@ -421,13 +436,15 @@ export default function WatchPageClient({
     }
   }, [user, token, progressTargetId]);
 
-  // Fetch recommendations
+  // Fetch recommendations — skipped when embedded (the movie page already
+  // renders its own recommendations server-side).
   useEffect(() => {
+    if (embedded) return;
     getRecommendations(movie.id, 12)
       .then(setRecommendations)
       .catch(console.error)
       .finally(() => setIsLoadingRecommendations(false));
-  }, [movie.id]);
+  }, [movie.id, embedded]);
 
   const persistProgress = useCallback((force: boolean = false) => {
     if (!user || !token || !progressTargetId) return;
@@ -617,53 +634,57 @@ export default function WatchPageClient({
   };
 
   return (
-    <div className="pt-20 sm:pt-24 min-h-screen">
-      {/* Minimal top bar */}
-      <div className="h-[env(safe-area-inset-top)]" />
-      <div className="bg-brand-dark/95 backdrop-blur-sm border-b border-brand-border px-3 sm:px-4 py-2 sm:py-3 flex items-center gap-3 sm:gap-4">
-        <Link
-          href={backHref}
-          className="flex items-center gap-1.5 text-xs sm:text-sm text-gray-400 hover:text-white transition-colors"
-        >
-          <ChevronLeft size={18} />
-          <span className="hidden sm:inline">Orqaga</span>
-        </Link>
-        <div className="h-4 sm:h-5 w-px bg-brand-border" />
-        <h1 className="font-display text-sm sm:text-xl text-white tracking-wide truncate max-w-[200px] sm:max-w-none">
-          {localizedTitle}
-        </h1>
-        <div className="flex items-center gap-3 sm:gap-4 ml-auto text-xs text-gray-500 shrink-0">
-          {movie.year && (
-            <span className="flex items-center gap-1">
-              <Calendar size={12} />
-              <span className="hidden sm:inline">{movie.year}</span>
-            </span>
-          )}
-          {movie.duration > 0 && (
-            <span className="flex items-center gap-1">
-              <Clock size={12} />
-              {formatDuration(movie.duration)}
-            </span>
-          )}
-          {movie.quality && (
-            <span className="text-brand-red font-bold">{movie.quality}</span>
-          )}
-          {movie && (() => {
-            const isEp = (movie as unknown as { type?: string }).type === "episode";
-            const cid = isEp ? (progressTargetIdProp || movie.id) : movie.id;
-            return (
-              <WatchTogetherButton
-                contentType={isEp ? "episode" : "movie"}
-                contentID={cid}
-                className="flex items-center gap-1.5 px-2 py-1.5 sm:px-3 bg-brand-card border border-brand-border hover:border-brand-red rounded-md text-[11px] sm:text-xs text-white transition-colors whitespace-nowrap"
-              />
-            );
-          })()}
-        </div>
-      </div>
+    <div className={embedded ? "" : "pt-20 sm:pt-24 min-h-screen"}>
+      {/* Minimal top bar — standalone page only */}
+      {!embedded && (
+        <>
+          <div className="h-[env(safe-area-inset-top)]" />
+          <div className="bg-brand-dark/95 backdrop-blur-sm border-b border-brand-border px-3 sm:px-4 py-2 sm:py-3 flex items-center gap-3 sm:gap-4">
+            <Link
+              href={backHref}
+              className="flex items-center gap-1.5 text-xs sm:text-sm text-gray-400 hover:text-white transition-colors"
+            >
+              <ChevronLeft size={18} />
+              <span className="hidden sm:inline">Orqaga</span>
+            </Link>
+            <div className="h-4 sm:h-5 w-px bg-brand-border" />
+            <h1 className="font-display text-sm sm:text-xl text-white tracking-wide truncate max-w-[200px] sm:max-w-none">
+              {localizedTitle}
+            </h1>
+            <div className="flex items-center gap-3 sm:gap-4 ml-auto text-xs text-gray-500 shrink-0">
+              {movie.year && (
+                <span className="flex items-center gap-1">
+                  <Calendar size={12} />
+                  <span className="hidden sm:inline">{movie.year}</span>
+                </span>
+              )}
+              {movie.duration > 0 && (
+                <span className="flex items-center gap-1">
+                  <Clock size={12} />
+                  {formatDuration(movie.duration)}
+                </span>
+              )}
+              {movie.quality && (
+                <span className="text-brand-red font-bold">{movie.quality}</span>
+              )}
+              {movie && (() => {
+                const isEp = (movie as unknown as { type?: string }).type === "episode";
+                const cid = isEp ? (progressTargetIdProp || movie.id) : movie.id;
+                return (
+                  <WatchTogetherButton
+                    contentType={isEp ? "episode" : "movie"}
+                    contentID={cid}
+                    className="flex items-center gap-1.5 px-2 py-1.5 sm:px-3 bg-brand-card border border-brand-border hover:border-brand-red rounded-md text-[11px] sm:text-xs text-white transition-colors whitespace-nowrap"
+                  />
+                );
+              })()}
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Player and content */}
-      <div className="max-w-6xl mx-auto px-3 sm:px-4 pt-4 sm:pt-6 pb-6 sm:pb-8">
+      <div className={embedded ? "" : "max-w-6xl mx-auto px-3 sm:px-4 pt-4 sm:pt-6 pb-6 sm:pb-8"}>
         {/* Premium access control */}
         {isMoviePremium(movie) && !isUserPremium(user) ? (
           <div className="relative aspect-video rounded-xl overflow-hidden bg-brand-dark">
@@ -755,8 +776,13 @@ export default function WatchPageClient({
                       : undefined
                   }
                   seriesButtonUrl={
-                    movie.type === "episode" && movie.series_slug
+                    movie.type === "episode" && movie.series_slug && !(seriesSeasons && seriesSeasons.length > 0)
                       ? `/series/${movie.series_slug}`
+                      : undefined
+                  }
+                  onSeriesButtonClick={
+                    movie.type === "episode" && seriesSeasons && seriesSeasons.length > 0
+                      ? () => setEpisodesModalOpen(true)
                       : undefined
                   }
                 />
@@ -830,6 +856,7 @@ export default function WatchPageClient({
           </div>
         )}
 
+        {!embedded && (
         <div className="mt-4 sm:mt-6 flex flex-col md:flex-row gap-4 sm:gap-6">
           <div className="flex-1">
             <h2 className="font-display text-2xl sm:text-3xl text-white tracking-wide mb-2">
@@ -900,16 +927,137 @@ export default function WatchPageClient({
             )}
           </div>
         </div>
+        )}
 
         {/* Watch page inline block ad */}
         <div className="max-w-7xl mx-auto px-4 mt-6 mb-4">
           <WebsiteAdSlot placement="watch_page_inline_block" variant="inline" />
         </div>
 
-        {/* Recommendations */}
-        {!isLoadingRecommendations && recommendations.length > 0 && (
+        {/* Recommendations — standalone page only (movie page has its own) */}
+        {!embedded && !isLoadingRecommendations && recommendations.length > 0 && (
           <RecommendationsRow movies={recommendations} />
         )}
+      </div>
+      {episodesModalOpen && seriesSeasons && seriesSeasons.length > 0 && (
+        <EpisodesModal
+          seasons={seriesSeasons}
+          currentEpisodeId={String(movie.id)}
+          seriesSlug={seriesSlugForModal || movie.series_slug}
+          onClose={() => setEpisodesModalOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function EpisodesModal({
+  seasons,
+  currentEpisodeId,
+  seriesSlug,
+  onClose,
+}: {
+  seasons: SeasonWithEpisodes[];
+  currentEpisodeId: string;
+  seriesSlug?: string;
+  onClose: () => void;
+}) {
+  const initialSeasonIdx = (() => {
+    const idx = seasons.findIndex((s) =>
+      s.episodes.some((ep) => String(ep.id) === currentEpisodeId)
+    );
+    return idx >= 0 ? idx : 0;
+  })();
+  const [activeIdx, setActiveIdx] = useState(initialSeasonIdx);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose]);
+
+  const active = seasons[activeIdx];
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-6"
+      onClick={onClose}
+    >
+      <div
+        className="relative w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-brand-border bg-brand-card shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-brand-border">
+          <h3 className="font-display text-lg text-white">Sezonlar va qismlar</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-full text-gray-300 hover:text-white hover:bg-white/10 transition-colors"
+            aria-label="Yopish"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        {seasons.length > 1 && (
+          <div className="flex gap-2 overflow-x-auto px-5 py-3 border-b border-brand-border">
+            {seasons.map((s, idx) => (
+              <button
+                key={s.season.id}
+                type="button"
+                onClick={() => setActiveIdx(idx)}
+                className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                  idx === activeIdx
+                    ? "bg-brand-red text-white"
+                    : "bg-white/5 text-gray-300 hover:bg-white/10"
+                }`}
+              >
+                {s.season.season_number}-mavsum
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="overflow-y-auto px-3 sm:px-5 py-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {active?.episodes.map((ep) => {
+            const isCurrent = String(ep.id) === currentEpisodeId;
+            const href = buildBestEpisodePath({
+              episodeId: ep.id,
+              seriesSlug,
+              seasonNumber: active.season.season_number,
+              episodeNumber: ep.episode_number,
+            });
+            return (
+              <Link
+                key={ep.id}
+                href={href}
+                onClick={onClose}
+                className={`flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors ${
+                  isCurrent
+                    ? "border-brand-red bg-brand-red/10 text-white"
+                    : "border-brand-border bg-white/[0.02] text-gray-200 hover:bg-white/[0.06] hover:text-white"
+                }`}
+              >
+                <span className="shrink-0 w-9 text-center text-sm font-semibold tabular-nums">
+                  {ep.episode_number}
+                </span>
+                <span className="truncate text-sm">
+                  {ep.title || `${ep.episode_number}-qism`}
+                </span>
+              </Link>
+            );
+          })}
+          {(!active || active.episodes.length === 0) && (
+            <p className="col-span-full text-center text-sm text-gray-400 py-6">
+              Qismlar topilmadi
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );

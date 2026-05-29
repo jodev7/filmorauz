@@ -7,6 +7,9 @@ export type RoomSyncState = {
   position: number;
   isPlaying: boolean;
   asOfMs: number;
+  // Live member count, sent on every state_sync. Authoritative for
+  // large/premiere rooms where the per-member roster isn't pushed over WS.
+  memberCount?: number;
 };
 
 export type RoomMember = {
@@ -42,6 +45,7 @@ export type RoomTyping = {
 export type RoomEvent =
   | { type: "state"; state: RoomSyncState }
   | { type: "chat"; chat: RoomChatEntry }
+  | { type: "chat_history"; messages: RoomChatEntry[] }
   | { type: "member_snapshot"; members: RoomMember[] }
   | { type: "member_joined"; member: RoomMember }
   | { type: "member_left"; userID: string; kicked?: boolean }
@@ -54,6 +58,7 @@ export type RoomEvent =
   | { type: "episode_change"; episodeID: string; episodeTitle: string }
   | { type: "episode_request"; userID: string; userName: string; targetEpisodeID?: string; reason: string }
   | { type: "theme_change"; from: string; to: string }
+  | { type: "chat_rate_limited"; intervalMs: number }
   | { type: "error"; message: string };
 
 export type UseRoomSocketResult = {
@@ -122,13 +127,11 @@ export function useRoomSocket(
     ws.onerror = () => {
       // onclose fires next, handle reconnect there.
     };
-    ws.onmessage = (evt) => {
-      let msg: { type?: string; payload?: Record<string, unknown> } = {};
-      try {
-        msg = JSON.parse(evt.data);
-      } catch {
-        return;
-      }
+    // dispatch handles one decoded hub message. The backend may also send a
+    // {type:"batch",payload:{messages:[...]}} envelope coalescing several
+    // messages into one frame — onmessage unwraps it and calls dispatch per
+    // inner message.
+    const dispatch = (msg: { type?: string; payload?: Record<string, unknown> }) => {
       const p = msg.payload || {};
       switch (msg.type) {
         case "state_sync": {
@@ -136,6 +139,7 @@ export function useRoomSocket(
             position: Number(p.position) || 0,
             isPlaying: Boolean(p.is_playing),
             asOfMs: Number(p.as_of_ms) || Date.now(),
+            memberCount: p.member_count != null ? Number(p.member_count) : undefined,
           };
           setState(next);
           pushEvent({ type: "state", state: next });
@@ -155,6 +159,22 @@ export function useRoomSocket(
             },
           });
           break;
+        case "chat_history": {
+          const arr = Array.isArray(p.messages) ? (p.messages as Array<Record<string, unknown>>) : [];
+          pushEvent({
+            type: "chat_history",
+            messages: arr.map((m) => ({
+              userID: String(m.user_id || ""),
+              userName: String(m.user_name || ""),
+              userAvatar: typeof m.user_avatar === "string" ? m.user_avatar : undefined,
+              kind: (m.kind as "text" | "emoji") || "text",
+              text: typeof m.text === "string" ? m.text : undefined,
+              emoji: typeof m.emoji === "string" ? m.emoji : undefined,
+              createdAt: String(m.created_at || new Date().toISOString()),
+            })),
+          });
+          break;
+        }
         case "member_snapshot": {
           const arr = Array.isArray(p.members) ? (p.members as Array<Record<string, unknown>>) : [];
           pushEvent({
@@ -250,10 +270,30 @@ export function useRoomSocket(
             to: String(p.to || ""),
           });
           break;
+        case "chat_rate_limited":
+          pushEvent({ type: "chat_rate_limited", intervalMs: Number(p.interval_ms) || 2000 });
+          break;
         case "error":
           pushEvent({ type: "error", message: String(p.error || "") });
           break;
       }
+    };
+
+    ws.onmessage = (evt) => {
+      let msg: { type?: string; payload?: Record<string, unknown> } = {};
+      try {
+        msg = JSON.parse(evt.data);
+      } catch {
+        return;
+      }
+      if (msg.type === "batch") {
+        const arr = Array.isArray(msg.payload?.messages)
+          ? (msg.payload!.messages as Array<{ type?: string; payload?: Record<string, unknown> }>)
+          : [];
+        for (const inner of arr) dispatch(inner);
+        return;
+      }
+      dispatch(msg);
     };
   }, [roomID, token, inviteCode, pushEvent]);
 

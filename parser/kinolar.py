@@ -284,7 +284,90 @@ class KinolarParser(BaseParser):
             return match.group(1).replace(".html", "")
         return ""
 
+    def _resolve_serial_episode(self, url: str, source_id: str, season_no: int, episode_no: int) -> Optional[MovieDetails]:
+        """
+        Resolve a single serial episode's direct video URL.
+
+        kinolar.tv serial pages carry the episode list (with faylmovi.ru direct
+        .mp4 hrefs) instead of a single movie iframe. The serial parser already
+        knows how to extract that list, so we reuse it and pick the episode that
+        matches (season_no, episode_no). Returns None if the episode can't be
+        located, letting the caller fall back to the generic movie path.
+        """
+        try:
+            # Lazy import — kinolar_serial imports KinolarParser, so importing
+            # it at module load would create a circular import.
+            from kinolar_serial import KinolarSerialParser
+
+            serial = KinolarSerialParser()
+            result = serial.parse(url)
+            episodes = result.get("episodes", []) if isinstance(result, dict) else []
+            if not episodes:
+                logger.warning(f"[KINOLAR] serial parse returned no episodes for {url}")
+                return None
+
+            match = next(
+                (
+                    e for e in episodes
+                    if int(e.get("season_number", e.get("season", 1))) == season_no
+                    and int(e.get("episode_number", e.get("episode", 0))) == episode_no
+                ),
+                None,
+            )
+            if match is None:
+                logger.warning(
+                    f"[KINOLAR] episode S{season_no:02d}E{episode_no:02d} not found "
+                    f"among {len(episodes)} parsed episodes for {url}"
+                )
+                return None
+
+            video_url = (match.get("video_url") or "").strip()
+            if not video_url:
+                logger.warning(
+                    f"[KINOLAR] episode S{season_no:02d}E{episode_no:02d} has empty video_url"
+                )
+                return None
+
+            video_type = "mp4" if video_url.lower().split("?")[0].endswith(".mp4") else "direct"
+            logger.info(
+                f"[KINOLAR] resolved serial episode S{season_no:02d}E{episode_no:02d} -> {video_url[:90]}"
+            )
+            return MovieDetails(
+                title=match.get("title", "") or result.get("title", ""),
+                description=result.get("description", ""),
+                poster=match.get("poster", "") or result.get("poster", ""),
+                backdrop=result.get("backdrop", ""),
+                year=result.get("year", 0) or 0,
+                genres=[],
+                country="",
+                duration=0,
+                video_page_url=url,
+                video_urls=[{"url": video_url, "type": video_type, "quality": "unknown"}],
+                source_id=source_id,
+                source=self.source_name,
+            )
+        except Exception as e:
+            logger.error(f"[KINOLAR] serial episode resolve error: {e}")
+            return None
+
     def get_details(self, url: str, source_id: str, is_serial: bool = False, episode_id: str = "") -> MovieDetails:
+        # Serial-episode jobs arrive here with a canonical episode source_id
+        # ("<parent>:sNNeMM"). The generic movie path below only knows how to
+        # find a single iframe, so it returns no video_url for serial pages —
+        # which is exactly why every "Uber uchun jang" episode failed with
+        # "download_url empty after parser resolve". Detect the episode marker
+        # and resolve that episode's direct video URL via the serial parser.
+        import re as _re
+        ep_match = _re.search(r":s(\d+)e(\d+)$", source_id or "")
+        if ep_match:
+            resolved = self._resolve_serial_episode(
+                url, source_id, int(ep_match.group(1)), int(ep_match.group(2))
+            )
+            if resolved is not None:
+                return resolved
+            # Fall through to the generic path only if serial resolution
+            # produced nothing — better a shot at an iframe than a hard fail.
+
         try:
             response = self.session.get(url, timeout=30, verify=False)
             soup = BeautifulSoup(response.text, "lxml")

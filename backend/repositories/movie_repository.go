@@ -671,6 +671,101 @@ func (r *MovieRepository) List(genre string, page, limit int) ([]models.Movie, i
 	return movies, total, nil
 }
 
+// ListTopRated returns published movies sorted by rating, highest first.
+// Only movies with at least one rating are considered so the row reflects
+// genuine audience scores rather than unrated catalogue padding.
+func (r *MovieRepository) ListTopRated(limit int) ([]models.Movie, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if limit < 1 || limit > 50 {
+		limit = 12
+	}
+
+	filter := bson.M{
+		"$and": []bson.M{
+			{"$or": []bson.M{
+				{"is_published": true},
+				{"is_published": bson.M{"$exists": false}},
+			}},
+			{"rating_count": bson.M{"$gt": 0}},
+		},
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "rating_avg", Value: -1}, {Key: "rating_count", Value: -1}}).
+		SetLimit(int64(limit))
+
+	cursor, err := r.col.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("find top rated movies: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var rawDocs []bson.M
+	if err := cursor.All(ctx, &rawDocs); err != nil {
+		return nil, fmt.Errorf("decode top rated movies: %w", err)
+	}
+
+	movies := make([]models.Movie, 0, len(rawDocs))
+	for _, doc := range rawDocs {
+		movie, err := normalizeMovieFromBSON(doc)
+		if err != nil {
+			continue
+		}
+		movies = append(movies, *movie)
+	}
+	return movies, nil
+}
+
+// ListByGenre returns published movies for a single genre, newest first.
+func (r *MovieRepository) ListByGenre(genre string, limit int) ([]models.Movie, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if normalized := normalizeGenreValues([]string{genre}); len(normalized) > 0 {
+		genre = normalized[0]
+	} else {
+		return []models.Movie{}, nil
+	}
+	if limit < 1 || limit > 50 {
+		limit = 12
+	}
+
+	filter := bson.M{
+		"$or": []bson.M{
+			{"is_published": true},
+			{"is_published": bson.M{"$exists": false}},
+		},
+		"genre": bson.M{"$in": []string{genre}},
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "updated_at", Value: -1}, {Key: "created_at", Value: -1}}).
+		SetLimit(int64(limit))
+
+	cursor, err := r.col.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("find movies by genre: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var rawDocs []bson.M
+	if err := cursor.All(ctx, &rawDocs); err != nil {
+		return nil, fmt.Errorf("decode movies by genre: %w", err)
+	}
+
+	movies := make([]models.Movie, 0, len(rawDocs))
+	for _, doc := range rawDocs {
+		movie, err := normalizeMovieFromBSON(doc)
+		if err != nil {
+			continue
+		}
+		movies = append(movies, *movie)
+	}
+	return movies, nil
+}
+
 // FindBySlug returns a single movie by slug
 func (r *MovieRepository) FindBySlug(slug string) (*models.Movie, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

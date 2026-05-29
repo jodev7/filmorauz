@@ -37,6 +37,20 @@ type WatchRoom struct {
 	Visibility string            `bson:"visibility" json:"visibility"` // "public" | "private"
 	MaxMembers int               `bson:"max_members" json:"max_members"`
 
+	// Kind distinguishes admin-created "premiere" rooms from ordinary
+	// user-hosted rooms. Premiere rooms are pinned at the top of the /rooms
+	// page (like a film premiere) and bypass the free/premium member caps.
+	//   "normal"   — user-hosted room (default).
+	//   "premiere" — admin/superadmin-hosted featured room.
+	Kind string `bson:"kind,omitempty" json:"kind,omitempty"`
+	// IsFeatured pins the room to the top of the public rooms listing.
+	IsFeatured bool `bson:"is_featured,omitempty" json:"is_featured,omitempty"`
+	// PinPriority orders featured rooms among themselves — higher floats up.
+	PinPriority int `bson:"pin_priority,omitempty" json:"pin_priority,omitempty"`
+	// ScheduledStartAt drives the "premyera boshlanishiga ... qoldi"
+	// countdown on the rooms page. Zero means "already live / no schedule".
+	ScheduledStartAt time.Time `bson:"scheduled_start_at,omitempty" json:"scheduled_start_at,omitempty"`
+
 	// Playback state — broadcast verbatim to guests over WS.
 	PositionSeconds  float64   `bson:"position_seconds" json:"position_seconds"`
 	IsPlaying        bool      `bson:"is_playing" json:"is_playing"`
@@ -81,8 +95,9 @@ type WatchRoomInvite struct {
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 }
 
-// WatchRoomMessage is one chat/emoji entry inside a room. Persisted only for
-// premium-host rooms (free hosts get session-only chat).
+// WatchRoomMessage is one chat/emoji entry inside a room. NOT persisted to
+// Mongo — it's used as the payload shape for the hub's in-memory chat ring
+// buffer and the WebSocket chat events. Chat history dies with the room.
 type WatchRoomMessage struct {
 	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	RoomID    primitive.ObjectID `bson:"room_id" json:"room_id"`

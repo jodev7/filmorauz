@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler, contentHandler *handlers.ContentHandler, systemHandler *handlers.SystemHandler) {
+func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler, contentHandler *handlers.ContentHandler, systemHandler *handlers.SystemHandler, deleteJobHandler *handlers.DeleteJobHandler, expenseHandler *handlers.ExpenseHandler) {
 	r.GET("/sitemap.xml", sitemapHandler.GetSitemapIndex)
 	r.GET("/sitemap-static.xml", sitemapHandler.GetSitemapStatic)
 	r.GET("/sitemap-genres.xml", sitemapHandler.GetSitemapGenres)
@@ -37,8 +37,9 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 
 	// ── Watch rooms (private-invite only) ────────────────────────────
 	api.GET("/rooms/public", watchRoomHandler.ListPublicRoomsHandler)
+	api.GET("/rooms/featured", watchRoomHandler.ListFeaturedRoomsHandler)
 	api.GET("/rooms/:id", watchRoomHandler.GetRoom)
-	api.GET("/rooms/:id/messages", watchRoomHandler.ListMessages)
+	api.GET("/rooms/:id/members", watchRoomHandler.ListRoomMembers)
 	// User search used by the in-room invite UI — auth-required.
 	api.GET("/rooms/users/search",
 		middleware.RequireAuth(authService),
@@ -275,7 +276,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		admin.POST("/upload/series-poster", uploadHandler.UploadSeriesPoster)
 		admin.POST("/upload/series-backdrop", uploadHandler.UploadSeriesBackdrop)
 		admin.POST("/upload/collection-poster", uploadHandler.UploadCollectionPoster)
-		admin.POST("/upload/ad-media", uploadHandler.UploadAdMedia)
+		// Ad media upload is superadmin-only (see /superadmin/ads/upload).
 		admin.POST("/upload/telegram-post-media", uploadHandler.UploadTelegramPostMedia)
 
 		// Proxy upload to B2 (avoids CORS issue with direct browser upload)
@@ -287,6 +288,9 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		admin.PUT("/movies/:id", movieHandler.UpdateMovie)
 		admin.DELETE("/movies/:id", movieHandler.DeleteMovie)
 		admin.PATCH("/movies/:id/approve", movieHandler.ApproveMovie)
+
+		// Delete-job status polling — drives the admin DeleteProgressModal.
+		admin.GET("/delete-jobs/:id", deleteJobHandler.GetJob)
 		admin.PATCH("/movies/:id/reject", movieHandler.RejectMovie)
 
 		// Ingestion job management
@@ -307,6 +311,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 
 		// Watch rooms (admin overview)
 		admin.GET("/rooms", watchRoomHandler.AdminListRooms)
+		admin.POST("/rooms", watchRoomHandler.AdminCreateRoom)
 		admin.GET("/rooms/stats", watchRoomHandler.AdminRoomsStats)
 
 		// Live activity stats (online users + DAU/WAU/MAU)
@@ -349,6 +354,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		admin.GET("/clips/groups", clipHandler.ListClipGroups)
 		admin.GET("/clips/groups/debug", clipHandler.GetClipGroupsDebug)
 		admin.GET("/clips/genres", clipHandler.ListClipGenres)
+		admin.GET("/clips/ai-usage", clipHandler.AIUsage)
 		admin.GET("/clips", clipHandler.ListClips)
 		admin.GET("/clips/movie/:movieId", clipHandler.GetClipsByMovie)
 		admin.GET("/clips/:id/download", clipHandler.DownloadClip)
@@ -513,6 +519,11 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		superadmin.POST("/ads/upload", uploadHandler.UploadAdMedia)
 		superadmin.POST("/ads/:id/send-telegram", adHandler.SendTelegramAd)
 		superadmin.GET("/ads/:id/delivery", adHandler.GetAdDelivery)
+
+		// Project expenses (manual entries + combined cost dashboard)
+		superadmin.GET("/expenses", expenseHandler.Summary)
+		superadmin.POST("/expenses", expenseHandler.Create)
+		superadmin.DELETE("/expenses/:id", expenseHandler.Delete)
 	}
 
 	// Superadmin-only wallet management

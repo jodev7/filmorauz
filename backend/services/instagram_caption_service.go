@@ -51,6 +51,42 @@ func BuildInstagramClipCaption(code string, isSeries bool) string {
 	return fmt.Sprintf("%s\n%s\n\n%s", lead, fmt.Sprintf(codeLine, strings.TrimSpace(code)), tags)
 }
 
+// BuildClipCaptionAI builds the Instagram caption from the AI (Gemini)
+// generated caption + hashtags. The product decision is "full Gemini": the
+// AI caption is the post body and the AI hashtags are appended verbatim — no
+// code line or bot CTA. When the clip carries no AI caption (legacy / non-AI
+// clips) we fall back to the static template so a post never goes out blank.
+func BuildClipCaptionAI(caption string, hashtags []string, code string, isSeries bool) string {
+	body := strings.TrimSpace(caption)
+	if body == "" {
+		return BuildInstagramClipCaption(code, isSeries)
+	}
+
+	// Normalize hashtags: trim, ensure a leading '#', drop blanks/dupes.
+	seen := make(map[string]struct{}, len(hashtags))
+	tags := make([]string, 0, len(hashtags))
+	for _, h := range hashtags {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			continue
+		}
+		if !strings.HasPrefix(h, "#") {
+			h = "#" + strings.TrimLeft(h, "#")
+		}
+		key := strings.ToLower(h)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		tags = append(tags, h)
+	}
+
+	if len(tags) == 0 {
+		return body
+	}
+	return fmt.Sprintf("%s\n\n%s", body, strings.Join(tags, " "))
+}
+
 // ResolveInstagramClipCode applies the code-selection rules for clip posts:
 // movie clips use movie.code; series clips use series.code; if the clip-level
 // code is missing we fall back to the parent series code when available.

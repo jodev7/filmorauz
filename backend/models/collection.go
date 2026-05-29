@@ -60,6 +60,7 @@ type SeriesBasic struct {
 	Quality     string   `json:"quality"`
 	RatingAvg   float64  `json:"rating_avg"`
 	RatingCount int64    `json:"rating_count"`
+	IsPremium   bool     `json:"is_premium"`
 	CreatedAt   string   `json:"created_at"`
 }
 
@@ -77,5 +78,6 @@ type MovieBasic struct {
 	Quality     string   `json:"quality"`
 	RatingAvg   float64  `json:"rating_avg"`
 	RatingCount int64    `json:"rating_count"`
+	IsPremium   bool     `json:"is_premium"`
 	CreatedAt   string   `json:"created_at"`
 }

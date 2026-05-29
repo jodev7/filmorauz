@@ -4,9 +4,9 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import RoomPlayer from "@/components/watch-room/RoomPlayer";
+import MemberList from "@/components/watch-room/MemberList";
 import {
   getWatchRoom,
-  listRoomMessages,
   createRoomInvite,
   searchRoomUsers,
   getProtectedMediaAccess,
@@ -14,7 +14,6 @@ import {
   closeWatchRoom,
   updateRoomTheme,
   WatchRoom,
-  WatchRoomMessage,
   RoomUserResult,
 } from "@/lib/api";
 import { getSeriesEpisodesByID, SeasonWithEpisodes } from "@/lib/series-api";
@@ -216,23 +215,8 @@ export default function WatchRoomPage() {
             setVideoSrc(resolved);
           }
         }
-        const msgs = await listRoomMessages(roomID).catch(() => ({ items: [] as WatchRoomMessage[] }));
-        if (!cancelled) {
-          // Backend returns {items: null} when there are no messages yet —
-          // guard against the null before calling .map().
-          const items = msgs.items || [];
-          setChat(
-            items.map((m) => ({
-              userID: m.user_id,
-              userName: m.user_name || "",
-              userAvatar: m.user_avatar,
-              kind: m.kind,
-              text: m.text,
-              emoji: m.emoji,
-              createdAt: m.created_at,
-            })),
-          );
-        }
+        // Chat history is no longer fetched over REST — the hub replays the
+        // in-memory ring buffer as a "chat_history" WS event on join.
       } catch (e) {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : "Failed to load room");
       }
@@ -299,6 +283,11 @@ export default function WatchRoomPage() {
     const isHost = isHostRef.current;
     if (e.type === "chat") {
       appendChat(e.chat);
+    } else if (e.type === "chat_history") {
+      // Replace the chat with the replayed buffer (oldest-first), keeping
+      // at most the same 300-entry cap as the live append path.
+      const msgs = e.messages.length > 300 ? e.messages.slice(e.messages.length - 300) : e.messages;
+      setChat(msgs);
     } else if (e.type === "member_snapshot") {
       const map: Record<string, RoomMember> = {};
       for (const m of e.members) map[m.userID] = m;
@@ -416,6 +405,14 @@ export default function WatchRoomPage() {
         kind: "emoji",
         emoji: e.reaction.emoji,
         createdAt: new Date(e.reaction.ts).toISOString(),
+      });
+    } else if (e.type === "chat_rate_limited") {
+      appendChat({
+        userID: "system",
+        userName: "system",
+        kind: "text",
+        text: `Sekinroq yozing — har ${Math.round(e.intervalMs / 1000)} soniyada bitta xabar.`,
+        createdAt: new Date().toISOString(),
       });
     }
   }, [appendChat, token]);
@@ -691,6 +688,9 @@ export default function WatchRoomPage() {
 
   const memberList = Object.values(members);
   const typingNames = Object.values(typingUsers);
+  // In large/premiere rooms the per-member roster isn't pushed over WS, so
+  // `members` stays sparse — the authoritative live count rides on state_sync.
+  const displayMemberCount = Math.max(memberList.length, state?.memberCount ?? 0);
 
   return (
     <div
@@ -824,7 +824,7 @@ export default function WatchRoomPage() {
               className="flex-1 px-3 py-2 bg-brand-card border border-brand-border rounded-lg text-sm flex items-center justify-center gap-2"
             >
               <Users className="w-4 h-4" />
-              A'zolar ({memberList.length})
+              A'zolar ({displayMemberCount})
             </button>
             {isHost && (
               <button
@@ -918,39 +918,15 @@ export default function WatchRoomPage() {
           {/* Members panel — collapsed on mobile unless toggled */}
           <div className={`${showMembers ? "block" : "hidden"} lg:block bg-brand-card border border-brand-border rounded-xl p-3`}>
             <div className="flex items-center gap-2 text-sm font-medium">
-              <Users className="w-4 h-4" /> A'zolar ({memberList.length})
+              <Users className="w-4 h-4" /> A'zolar ({displayMemberCount})
             </div>
-            <ul className="mt-2 space-y-1 max-h-40 overflow-y-auto">
-              {memberList.length === 0 && (
-                <li className="text-xs text-gray-500">Hozircha sizdan boshqa hech kim yo&apos;q</li>
-              )}
-              {memberList.map((m) => (
-                <li key={m.userID} className="flex items-center gap-2 text-sm">
-                  {m.userAvatar ? (
-                    <MediaImage
-                      src={m.userAvatar}
-                      alt={m.userName}
-                      className="w-6 h-6 rounded-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-6 h-6 rounded-full bg-brand-dark flex items-center justify-center text-xs">
-                      {m.userName.slice(0, 1)}
-                    </div>
-                  )}
-                  <span className="truncate flex-1">{m.userName || "Foydalanuvchi"}</span>
-                  {m.isHost && <Crown className="w-3 h-3 text-yellow-400 shrink-0" />}
-                  {isHost && !m.isHost && (
-                    <button
-                      onClick={() => handleKick(m.userID)}
-                      className="p-1 text-red-400 hover:bg-red-500/10 rounded"
-                      title="Chiqarish"
-                    >
-                      <UserX className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <MemberList
+              roomID={roomID}
+              totalCount={displayMemberCount}
+              wsMembers={memberList}
+              isHost={isHost}
+              onKick={handleKick}
+            />
           </div>
 
           {/* Chat — always visible */}

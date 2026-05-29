@@ -29,5 +29,10 @@ ddownloader>=0.1.0
 playwright>=1.40.0
 
 # AI clip analysis (optional — used in /clip/analyze endpoint)
-openai-whisper>=20231117
+# faster-whisper (CTranslate2) replaces openai-whisper: better Uzbek accuracy
+# with the `medium` model, fast enough on CPU (int8) to transcribe whole films.
+faster-whisper>=1.0.0
 opencv-python-headless>=4.8.0
+
+# AI viral clip selection (used in /clip/gemini-analyze endpoint)
+google-genai>=1.0.0

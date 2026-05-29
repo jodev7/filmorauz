@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/filmorauz/worker/models"
 )
@@ -175,8 +176,13 @@ func (p *Pipeline) CleanupCompletedJobArtifacts(job *models.IngestionJob) ([]str
 		return nil, fmt.Errorf("nil job")
 	}
 	jobID := job.ID.Hex()
-	if job.Status != models.IngestionStatusCompleted {
-		return nil, fmt.Errorf("job %s status=%s, refusing to clean (only completed jobs are cleanable)", jobID, job.Status)
+	// Allow cleanup for completed jobs OR jobs that have permanently failed
+	// (retry budget exhausted — they won't be retried, so their on-disk
+	// artifacts are dead weight). Anything else is refused.
+	terminalFailed := (job.Status == models.IngestionStatusFailed ||
+		job.Status == models.IngestionStatusDownloadFailed) && job.RetryCount >= 3
+	if job.Status != models.IngestionStatusCompleted && !terminalFailed {
+		return nil, fmt.Errorf("job %s status=%s retry=%d, refusing to clean (only completed or terminally-failed jobs are cleanable)", jobID, job.Status, job.RetryCount)
 	}
 	mode := strings.ToLower(strings.TrimSpace(p.config.StorageConfig.Mode))
 	if !(mode == "prod" || mode == "production") {
@@ -218,4 +224,87 @@ func (p *Pipeline) CleanupCompletedJobArtifacts(job *models.IngestionJob) ([]str
 		actions = append(actions, "nothing to clean (paths empty or already gone)")
 	}
 	return actions, nil
+}
+
+// SweepOrphanDownloads walks parser/downloads and removes:
+//   - any *.aria2 marker older than ariaMaxAge (aborted aria2c session)
+//   - any zero-byte *.mp4 older than zeroMaxAge (failed download stub)
+//   - any *.mp4 older than orphanMaxAge whose basename is NOT in
+//     activeBasenames (job either gone from Mongo or in a terminal state)
+//
+// Always honors the allowlist guard via safeRemove. Returns the count of
+// deleted entries and the cumulative bytes freed (best-effort).
+func (p *Pipeline) SweepOrphanDownloads(
+	activeBasenames map[string]struct{},
+	ariaMaxAge, zeroMaxAge, orphanMaxAge time.Duration,
+) (deleted int, bytesFreed int64) {
+	allow := p.cleanupAllowlist()
+	root := allow.ParserDownloads
+	if root == "" {
+		log.Printf("[CLEANUP] orphan-sweep SKIP reason=no_downloads_root")
+		return 0, 0
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		log.Printf("[CLEANUP] orphan-sweep readdir failed root=%s err=%v", root, err)
+		return 0, 0
+	}
+	now := time.Now()
+	mode := strings.ToLower(strings.TrimSpace(p.config.StorageConfig.Mode))
+	if !(mode == "prod" || mode == "production") {
+		// Dev mode: don't touch any files, the local stream layer may need them.
+		return 0, 0
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			// Subdirectories are skipped on purpose. N_m3u8DL-RE stages DASH/HLS
+			// segments in a per-download temp folder under this root; deleting
+			// one blindly would corrupt an in-flight download, and its folder
+			// name does not reliably map back to a job we can cross-check against
+			// the active set. N_m3u8DL removes its own temp dir on success
+			// (--del-after-done), so only hard-crash leftovers can linger — a
+			// rarer case left for a future, job-correlated dir sweep.
+			continue
+		}
+		name := entry.Name()
+		full := filepath.Join(root, name)
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		age := now.Sub(info.ModTime())
+		size := info.Size()
+
+		shouldDelete := false
+		reason := ""
+		switch {
+		case strings.HasSuffix(name, ".aria2") && age > ariaMaxAge:
+			shouldDelete = true
+			reason = "aria2_zombie"
+		case strings.HasSuffix(name, ".mp4") && size == 0 && age > zeroMaxAge:
+			shouldDelete = true
+			reason = "zero_byte"
+		case strings.HasSuffix(name, ".mp4") && age > orphanMaxAge:
+			if _, active := activeBasenames[name]; !active {
+				shouldDelete = true
+				reason = "orphan_no_active_job"
+			}
+		}
+		if !shouldDelete {
+			continue
+		}
+		log.Printf("[CLEANUP] orphan-sweep candidate name=%s size=%d age=%s reason=%s",
+			name, size, age.Round(time.Second), reason)
+		safeRemove("orphan-sweep", reason, full, root)
+		// safeRemove logs success/failure; assume success if file is gone.
+		if _, statErr := os.Stat(full); os.IsNotExist(statErr) {
+			deleted++
+			bytesFreed += size
+		}
+	}
+	if deleted > 0 {
+		log.Printf("[CLEANUP] orphan-sweep done deleted=%d bytes_freed=%d", deleted, bytesFreed)
+	}
+	return deleted, bytesFreed
 }

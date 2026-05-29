@@ -132,13 +132,20 @@ export interface SeriesPreview {
   updated_at: string;
 }
 
+export interface GenreRow {
+  label: string;
+  slug: string;
+  movies: Movie[];
+}
+
 export interface HomepageResponse {
   hero: Movie[];
   genres: GenreChip[];
   new_movies: Movie[];
   trending: Movie[];
   premium_movies: Movie[];
-  featured_movies: Movie[];
+  top_rated: Movie[];
+  genre_rows: GenreRow[];
   featured_collections: Collection[];
   series: SeriesPreview[];
 }
@@ -296,7 +303,7 @@ export async function getHomepageData(): Promise<HomepageResponse> {
         title: item.title,
         slug: item.slug,
         poster_url: item.poster_url,
-        backdrop_url: item.poster_url,
+        backdrop_url: item.backdrop_url || item.poster_url,
         year: item.year,
         genre: item.genre || [],
         description: "",
@@ -314,7 +321,12 @@ export async function getHomepageData(): Promise<HomepageResponse> {
         updated_at: "",
       })),
       premium_movies: (json.premium_movies || []).map(mapHomepageMovie),
-      featured_movies: (json.featured_movies || []).map(mapHomepageMovie),
+      top_rated: (json.top_rated || []).map(mapHomepageMovie),
+      genre_rows: (json.genre_rows || []).map((row: any) => ({
+        label: row.label || "",
+        slug: row.slug || "",
+        movies: (row.movies || []).map(mapHomepageMovie),
+      })),
       featured_collections: json.featured_collections || [],
       series: (json.series || []).map((item: any) => ({
         id: item.id,
@@ -345,10 +357,46 @@ export async function getHomepageData(): Promise<HomepageResponse> {
       new_movies: [],
       trending: [],
       premium_movies: [],
-      featured_movies: [],
+      top_rated: [],
+      genre_rows: [],
       featured_collections: [],
       series: [],
     };
+  }
+}
+
+export interface ContinueWatchingItem {
+  movie_id?: string;
+  target_type: string;
+  target_id: string;
+  episode_id?: string;
+  title: string;
+  slug: string;
+  poster_url: string;
+  type?: string;
+  series_title?: string;
+  series_slug?: string;
+  season_number?: number;
+  episode_number?: number;
+  episode_title?: string;
+  last_position_sec: number;
+  duration_sec: number;
+  progress_percent: number;
+  last_watched_at: string;
+}
+
+// Fetch the logged-in user's continue-watching list. Requires a JWT.
+export async function getContinueWatching(token: string): Promise<ContinueWatchingItem[]> {
+  try {
+    const res = await fetch(`${API_URL}/user/continue-watching`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    return json.data || [];
+  } catch {
+    return [];
   }
 }
 
@@ -3476,7 +3524,47 @@ export interface Clip {
   duration: number;
   sequence: number;
   storage_type: string;
+  caption?: string;
+  hashtags?: string[];
   created_at: string;
+}
+
+// AI (Gemini) clip-generation spend, surfaced in the admin dashboard.
+export interface ClipAIUsageTotals {
+  cost_usd: number;
+  total_tokens: number;
+  audio_tokens: number;
+  text_tokens: number;
+  output_tokens: number;
+  clip_count: number;
+  analyses: number;
+}
+
+export interface ClipAIUsageItem {
+  content_kind: string;
+  content_id: string;
+  title: string;
+  model: string;
+  cost_usd: number;
+  cost_per_clip: number;
+  total_tokens: number;
+  clip_count: number;
+  analyses: number;
+  last_analyzed: string;
+}
+
+export interface ClipAIUsageResponse {
+  totals: ClipAIUsageTotals;
+  items: ClipAIUsageItem[];
+}
+
+export async function adminGetClipAIUsage(token: string, limit = 200): Promise<ClipAIUsageResponse> {
+  const res = await fetch(`${API_URL}/admin/clips/ai-usage?limit=${limit}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch AI usage");
+  return res.json();
 }
 
 export async function adminGetClips(token: string, limit = 100): Promise<Clip[]> {
@@ -3612,6 +3700,77 @@ export interface AdInput {
   telegram_bot_chat_ids?: number[];
   telegram_channel_enabled?: boolean;
   player_enabled?: boolean;
+}
+
+// ── Expenses (superadmin) ──────────────────────────────────────────────────
+
+export interface Expense {
+  id: string;
+  category: string;
+  title: string;
+  amount_usd: number;
+  recurring: boolean;
+  note?: string;
+  incurred_at: string;
+  created_by?: string;
+  created_at: string;
+}
+
+export interface ExpenseCategoryTotal {
+  category: string;
+  amount_usd: number;
+  count: number;
+}
+
+export interface ExpenseSummary {
+  expenses: Expense[];
+  categories: ExpenseCategoryTotal[];
+  manual_total: number;
+  ai_clip_cost: number;
+  grand_total: number;
+}
+
+export async function adminGetExpenseSummary(token: string): Promise<ExpenseSummary> {
+  const res = await fetch(`${API_URL}/superadmin/expenses`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch expenses");
+  return res.json();
+}
+
+export async function adminCreateExpense(
+  token: string,
+  body: {
+    category: string;
+    title: string;
+    amount_usd: number;
+    recurring?: boolean;
+    note?: string;
+    incurred_at?: string;
+  }
+): Promise<Expense> {
+  const res = await fetch(`${API_URL}/superadmin/expenses`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to create expense");
+  }
+  return res.json();
+}
+
+export async function adminDeleteExpense(token: string, id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/superadmin/expenses/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to delete expense");
+  }
 }
 
 export async function adminListAds(token: string): Promise<Ad[]> {
@@ -3752,7 +3911,9 @@ export async function uploadAdMedia(
   body.append("file", file);
   body.append("media_type", mediaType);
   // Do NOT set Content-Type — browser must set multipart/form-data with boundary automatically
-  const res = await fetch(`${API_URL}/admin/upload/ad-media`, {
+  // Superadmin-only: ad media upload lives under /superadmin/ads/upload so a
+  // regular admin cannot upload ad creatives even via direct API calls.
+  const res = await fetch(`${API_URL}/superadmin/ads/upload`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body,
@@ -4023,6 +4184,10 @@ export interface WatchRoom {
   theme?: { from?: string; to?: string };
   visibility: RoomVisibility;
   max_members: number;
+  kind?: "normal" | "premiere";
+  is_featured?: boolean;
+  pin_priority?: number;
+  scheduled_start_at?: string;
   position_seconds: number;
   is_playing: boolean;
   last_state_update: string;
@@ -4043,18 +4208,6 @@ export interface WatchRoomInvite {
   max_uses: number;
   uses: number;
   expires_at: string;
-  created_at: string;
-}
-
-export interface WatchRoomMessage {
-  id: string;
-  room_id: string;
-  user_id: string;
-  user_name?: string;
-  user_avatar?: string;
-  kind: "text" | "emoji";
-  text?: string;
-  emoji?: string;
   created_at: string;
 }
 
@@ -4120,6 +4273,54 @@ export async function closeWatchRoom(token: string, roomID: string): Promise<voi
 export async function listPublicRooms(): Promise<{ items: PublicRoomListItem[] }> {
   const res = await fetch(`${API_URL}/rooms/public`);
   if (!res.ok) throw new Error("Failed to load public rooms");
+  return res.json();
+}
+
+export interface RoomMemberItem {
+  user_id: string;
+  user_name: string;
+  user_avatar?: string;
+  is_host: boolean;
+}
+
+// Paginated live roster — backs the virtualized member list in large rooms.
+export async function listRoomMembers(
+  roomID: string,
+  offset: number,
+  limit: number,
+): Promise<{ items: RoomMemberItem[]; total: number; offset: number; limit: number }> {
+  const res = await fetch(`${API_URL}/rooms/${roomID}/members?offset=${offset}&limit=${limit}`);
+  if (!res.ok) throw new Error("Failed to load members");
+  return res.json();
+}
+
+// Pinned premiere rooms shown at the top of the /rooms page.
+export async function listFeaturedRooms(): Promise<{ items: PublicRoomListItem[] }> {
+  const res = await fetch(`${API_URL}/rooms/featured`);
+  if (!res.ok) throw new Error("Failed to load featured rooms");
+  return res.json();
+}
+
+// Admin/superadmin-only: create a pinned premiere room.
+export async function adminCreatePremiereRoom(
+  token: string,
+  input: {
+    content_type: "movie" | "episode" | "series";
+    content_id: string;
+    max_members?: number;
+    pin_priority?: number;
+    scheduled_start_at?: string; // RFC3339
+  },
+): Promise<WatchRoom> {
+  const res = await fetch(`${API_URL}/admin/rooms`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || "Failed to create premiere room");
+  }
   return res.json();
 }
 
@@ -4241,12 +4442,6 @@ export async function createRoomInvite(
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { error?: string }).error || "Failed to create invite");
   }
-  return res.json();
-}
-
-export async function listRoomMessages(roomID: string): Promise<{ items: WatchRoomMessage[] }> {
-  const res = await fetch(`${API_URL}/rooms/${roomID}/messages`);
-  if (!res.ok) throw new Error("Failed to list messages");
   return res.json();
 }
 

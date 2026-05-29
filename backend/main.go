@@ -210,9 +210,21 @@ func main() {
 	banAppealRepo := repositories.NewBanAppealRepository(db)
 	banAppealHandler := handlers.NewBanAppealHandler(banAppealRepo, banHistoryRepo, userRepo, notificationService)
 
-	// Watch-room repository, hub, handler
+	// Watch-room repository, hub, handler. With REDIS_URL set the hub runs in
+	// cluster mode (Redis pub/sub + shared state) so multiple instances can
+	// share a room; without it, single-instance in-memory.
 	watchRoomRepo := repositories.NewWatchRoomRepository(db)
-	watchRoomHub := services.NewWatchRoomHub(watchRoomRepo)
+	var roomBus *services.RoomBus
+	if cfg.RedisURL != "" {
+		rb, err := services.NewRoomBus(cfg.RedisURL)
+		if err != nil {
+			log.Printf("WARNING: REDIS_URL set but Redis unreachable (%v) — watch-rooms fall back to single-instance mode", err)
+		} else {
+			roomBus = rb
+			log.Println("Watch-rooms: cluster mode enabled (Redis)")
+		}
+	}
+	watchRoomHub := services.NewWatchRoomHub(watchRoomRepo, roomBus)
 	watchRoomHub.StartHeartbeat()
 	watchRoomHandler := handlers.NewWatchRoomHandler(watchRoomRepo, userRepo, movieRepo, seriesRepo, notificationService, watchRoomHub)
 
@@ -277,7 +289,10 @@ func main() {
 
 	// Clip repository and handler
 	clipRepo := repositories.NewClipRepository(db)
-	clipHandler := handlers.NewClipHandler(clipRepo, seriesRepo, parserURL)
+	clipAIUsageRepo := repositories.NewClipAIUsageRepository(db)
+	clipHandler := handlers.NewClipHandler(clipRepo, seriesRepo, clipAIUsageRepo, parserURL)
+	expenseRepo := repositories.NewExpenseRepository(db)
+	expenseHandler := handlers.NewExpenseHandler(expenseRepo, clipAIUsageRepo)
 
 	// B2 cleanup service — nil in DEV when credentials are not set; DeleteMovie
 	// then falls through to DB-only removal without aborting.
@@ -342,7 +357,9 @@ func main() {
 	}
 
 	// Register routes
-	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler)
+	deleteJobHandler := handlers.NewDeleteJobHandler(repositories.NewDeleteJobRepository(db))
+
+	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler, deleteJobHandler, expenseHandler)
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)
 	seoNotifier := buildSEONotifier(cfg, db)
@@ -371,6 +388,11 @@ func main() {
 
 	// Start premium cleanup background job (runs every 10 minutes)
 	go startPremiumCleanupJob(userRepo, notificationService)
+
+	// Start content-deletion worker (runs every 10s). Executes queued
+	// DeleteJobs in-process — full B2 + Mongo cascade with progress written
+	// back to the job for the admin UI's progress bar. See delete_job_worker.go.
+	go startDeleteJobWorker(repositories.NewDeleteJobRepository(db), movieService, seriesService)
 
 	// Start serial-parent finalizer (runs every 30s). Materializes Series /
 	// Seasons / Episodes rows for serial-parent jobs whose child episode
@@ -530,12 +552,18 @@ func executeInstagramSchedule(
 	// builder. Falls back to "movie" semantics if the load fails — keeps
 	// the publish moving rather than blocking on a transient DB hiccup.
 	isSeries := false
+	var aiCaption string
+	var aiHashtags []string
 	if clipRepo != nil {
 		if clip, err := clipRepo.FindByID(context.Background(), schedule.ClipID); err == nil && clip != nil {
 			isSeries = services.IsSeriesClip(clip)
+			aiCaption = clip.Caption
+			aiHashtags = clip.Hashtags
 		}
 	}
-	caption := services.BuildInstagramClipCaption(
+	caption := services.BuildClipCaptionAI(
+		aiCaption,
+		aiHashtags,
 		services.ResolveInstagramCodeByClipID(context.Background(), clipRepo, seriesRepo, schedule.ClipID, schedule.MovieCode),
 		isSeries,
 	)

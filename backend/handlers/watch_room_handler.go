@@ -22,10 +22,10 @@ import (
 
 // Free-tier limits. Premium accounts bypass both.
 const (
-	freeRoomsPerDay  = 3
-	freeMaxMembers   = 2
+	freeRoomsPerDay   = 3
+	freeMaxMembers    = 2
 	premiumMaxMembers = 20
-	roomTTL          = 12 * time.Hour
+	roomTTL           = 12 * time.Hour
 	// Invite links expire fast on purpose — every "Taklif yuborish" click
 	// generates a fresh one, so a stale notification card can't be reused
 	// after 10 minutes. Same TTL for free and premium hosts.
@@ -34,13 +34,13 @@ const (
 )
 
 type WatchRoomHandler struct {
-	repo                 *repositories.WatchRoomRepository
-	userRepo             *repositories.UserRepository
-	movieRepo            *repositories.MovieRepository
-	seriesRepo           *repositories.SeriesRepository
-	notificationService  *services.NotificationService
-	hub                  *services.WatchRoomHub
-	upgrader             websocket.Upgrader
+	repo                *repositories.WatchRoomRepository
+	userRepo            *repositories.UserRepository
+	movieRepo           *repositories.MovieRepository
+	seriesRepo          *repositories.SeriesRepository
+	notificationService *services.NotificationService
+	hub                 *services.WatchRoomHub
+	upgrader            websocket.Upgrader
 }
 
 func NewWatchRoomHandler(
@@ -83,7 +83,7 @@ func (h *WatchRoomHandler) CreateRoom(c *gin.Context) {
 	var body struct {
 		ContentType string `json:"content_type" binding:"required"` // movie | episode | series
 		ContentID   string `json:"content_id" binding:"required"`
-		Visibility  string `json:"visibility"` // public | private (default private)
+		Visibility  string `json:"visibility"`  // public | private (default private)
 		MaxMembers  int    `json:"max_members"` // requested cap; capped server-side by plan
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -123,9 +123,9 @@ func (h *WatchRoomHandler) CreateRoom(c *gin.Context) {
 	// the "active room" pill in the navbar would have ambiguous targets.
 	if existing, err := h.repo.FindActiveByOwner(ctx, userID); err == nil && existing != nil {
 		c.JSON(http.StatusConflict, gin.H{
-			"error":           "you already have an open room",
-			"active_room_id":  existing.ID.Hex(),
-			"detail":          "close your current room before opening a new one",
+			"error":          "you already have an open room",
+			"active_room_id": existing.ID.Hex(),
+			"detail":         "close your current room before opening a new one",
 		})
 		return
 	}
@@ -171,10 +171,10 @@ func (h *WatchRoomHandler) CreateRoom(c *gin.Context) {
 
 	now := time.Now()
 	room := &models.WatchRoom{
-		OwnerID:         userID,
-		OwnerName:       resolveDisplayName(user),
-		OwnerAvatar:     resolveAvatarURL(user),
-		OwnerIsPremium:  isPremium,
+		OwnerID:             userID,
+		OwnerName:           resolveDisplayName(user),
+		OwnerAvatar:         resolveAvatarURL(user),
+		OwnerIsPremium:      isPremium,
 		ContentType:         body.ContentType,
 		ContentID:           contentID,
 		ContentTitle:        title,
@@ -184,15 +184,126 @@ func (h *WatchRoomHandler) CreateRoom(c *gin.Context) {
 		SeasonID:            seasonID,
 		CurrentEpisodeID:    currentEpID,
 		CurrentEpisodeTitle: currentEpTitle,
-		Visibility:      body.Visibility,
-		MaxMembers:      maxMembers,
-		PositionSeconds: 0,
-		IsPlaying:       false,
-		LastStateUpdate: now,
-		Status:          "active",
-		CreatedAt:       now,
-		UpdatedAt:       now,
-		ExpiresAt:       now.Add(roomTTL),
+		Visibility:          body.Visibility,
+		MaxMembers:          maxMembers,
+		PositionSeconds:     0,
+		IsPlaying:           false,
+		LastStateUpdate:     now,
+		Status:              "active",
+		CreatedAt:           now,
+		UpdatedAt:           now,
+		ExpiresAt:           now.Add(roomTTL),
+	}
+	if err := h.repo.CreateRoom(ctx, room); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create room"})
+		return
+	}
+	c.JSON(http.StatusCreated, room)
+}
+
+// AdminCreateRoom creates a pinned "premiere" room. Admin/superadmin only.
+// Unlike the user CreateRoom it bypasses the free/premium quota, the
+// single-active-room-per-owner limit, and the plan member cap.
+// POST /api/admin/rooms
+func (h *WatchRoomHandler) AdminCreateRoom(c *gin.Context) {
+	userIDRaw, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "auth required"})
+		return
+	}
+	userIDHex, _ := userIDRaw.(string)
+	userID, err := primitive.ObjectIDFromHex(userIDHex)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid user id"})
+		return
+	}
+
+	var body struct {
+		ContentType      string `json:"content_type" binding:"required"` // movie | episode | series
+		ContentID        string `json:"content_id" binding:"required"`
+		MaxMembers       int    `json:"max_members"`
+		PinPriority      int    `json:"pin_priority"`
+		ScheduledStartAt string `json:"scheduled_start_at"` // RFC3339, optional
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if body.ContentType != "movie" && body.ContentType != "episode" && body.ContentType != "series" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "content_type must be movie, episode or series"})
+		return
+	}
+	contentID, err := primitive.ObjectIDFromHex(body.ContentID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid content_id"})
+		return
+	}
+
+	// Default premiere capacity; clamp to a sane window.
+	maxMembers := body.MaxMembers
+	if maxMembers <= 0 {
+		maxMembers = 5000
+	}
+	if maxMembers < 2 {
+		maxMembers = 2
+	}
+	if maxMembers > 10000 {
+		maxMembers = 10000
+	}
+
+	var scheduledStart time.Time
+	if s := strings.TrimSpace(body.ScheduledStartAt); s != "" {
+		t, perr := time.Parse(time.RFC3339, s)
+		if perr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "scheduled_start_at must be RFC3339"})
+			return
+		}
+		scheduledStart = t
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	user, err := h.userRepo.FindByID(userID.Hex())
+	if err != nil || user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		return
+	}
+
+	title, poster, slug, seriesID, seasonID, currentEpID, currentEpTitle, err := h.resolveContent(body.ContentType, contentID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "content not found"})
+		return
+	}
+
+	now := time.Now()
+	room := &models.WatchRoom{
+		OwnerID:             userID,
+		OwnerName:           resolveDisplayName(user),
+		OwnerAvatar:         resolveAvatarURL(user),
+		OwnerIsPremium:      user.IsPremiumActive(),
+		ContentType:         body.ContentType,
+		ContentID:           contentID,
+		ContentTitle:        title,
+		ContentPoster:       poster,
+		ContentSlug:         slug,
+		SeriesID:            seriesID,
+		SeasonID:            seasonID,
+		CurrentEpisodeID:    currentEpID,
+		CurrentEpisodeTitle: currentEpTitle,
+		Visibility:          "public", // premieres are always public
+		MaxMembers:          maxMembers,
+		Kind:                "premiere",
+		IsFeatured:          true,
+		PinPriority:         body.PinPriority,
+		ScheduledStartAt:    scheduledStart,
+		PositionSeconds:     0,
+		IsPlaying:           false,
+		LastStateUpdate:     now,
+		Status:              "active",
+		CreatedAt:           now,
+		UpdatedAt:           now,
+		ExpiresAt:           now.Add(roomTTL),
 	}
 	if err := h.repo.CreateRoom(ctx, room); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create room"})
@@ -281,7 +392,29 @@ func (h *WatchRoomHandler) ListPublicRoomsHandler(c *gin.Context) {
 	}
 	out := make([]row, 0, len(rooms))
 	for _, rm := range rooms {
-		mc := len(h.hub.SnapshotMembers(rm.ID))
+		mc := h.hub.MemberCount(rm.ID)
+		out = append(out, row{WatchRoom: rm, MemberCount: mc})
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out})
+}
+
+// GET /api/rooms/featured — pinned premiere rooms for the top of the /rooms
+// page. Same shape as the public list (room + live member_count).
+func (h *WatchRoomHandler) ListFeaturedRoomsHandler(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rooms, err := h.repo.ListFeaturedRooms(ctx, 20)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "list failed"})
+		return
+	}
+	type row struct {
+		models.WatchRoom
+		MemberCount int `json:"member_count"`
+	}
+	out := make([]row, 0, len(rooms))
+	for _, rm := range rooms {
+		mc := h.hub.MemberCount(rm.ID)
 		out = append(out, row{WatchRoom: rm, MemberCount: mc})
 	}
 	c.JSON(http.StatusOK, gin.H{"items": out})
@@ -609,10 +742,9 @@ func (h *WatchRoomHandler) CloseRoomEndpoint(c *gin.Context) {
 		h.hub.CloseRoom(hubRoom, "host_closed")
 	} else {
 		// No hub instance (no one ever connected) — close the row
-		// directly so it doesn't linger as active. Still wipe any chat
-		// rows that may exist (host could have created+chatted+reloaded).
+		// directly so it doesn't linger as active. No chat to wipe: chat
+		// is in-memory only and a room with no hub never buffered any.
 		_ = h.repo.CloseRoom(ctx, id)
-		_, _ = h.repo.DeleteRoomMessages(ctx, id)
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -705,21 +837,25 @@ func (h *WatchRoomHandler) CreateInvite(c *gin.Context) {
 	c.JSON(http.StatusCreated, inv)
 }
 
-// GET /api/rooms/:id/messages — replay chat history.
-func (h *WatchRoomHandler) ListMessages(c *gin.Context) {
+// Chat history is no longer a REST endpoint — it's replayed over the
+// WebSocket via a "chat_history" event on join (see the hub's AddClient).
+
+// GET /api/rooms/:id/members?offset=&limit= — paginated live roster.
+// Used by the virtualized member list in large/premiere rooms, where the
+// full roster is no longer pushed over the WebSocket.
+func (h *WatchRoomHandler) ListRoomMembers(c *gin.Context) {
 	id, err := primitive.ObjectIDFromHex(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	msgs, err := h.repo.ListRoomMessages(ctx, id, 200)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "list failed"})
-		return
+	offset, _ := strconv.Atoi(c.Query("offset"))
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	if limit <= 0 || limit > 200 {
+		limit = 50
 	}
-	c.JSON(http.StatusOK, gin.H{"items": msgs})
+	members, total := h.hub.SnapshotMembersPage(id, offset, limit)
+	c.JSON(http.StatusOK, gin.H{"items": members, "total": total, "offset": offset, "limit": limit})
 }
 
 // GET /ws/rooms/:id — WebSocket upgrade. Auth via token query string

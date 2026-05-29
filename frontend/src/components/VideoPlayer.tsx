@@ -59,6 +59,7 @@ interface Props {
   headerSubtitle?: string;
   seriesButtonUrl?: string;
   seriesButtonLabel?: string;
+  onSeriesButtonClick?: () => void;
   thumbnailsVttUrl?: string;
   thumbnailsSpriteUrl?: string;
   thumbnailsBaseUrl?: string;
@@ -371,6 +372,7 @@ function HLSPlayer({
   headerSubtitle,
   seriesButtonUrl,
   seriesButtonLabel,
+  onSeriesButtonClick,
   thumbnailsVttUrl,
   thumbnailsSpriteUrl,
   thumbnailsBaseUrl,
@@ -389,6 +391,7 @@ function HLSPlayer({
   headerSubtitle?: string;
   seriesButtonUrl?: string;
   seriesButtonLabel?: string;
+  onSeriesButtonClick?: () => void;
   thumbnailsVttUrl?: string;
   thumbnailsSpriteUrl?: string;
   thumbnailsBaseUrl?: string;
@@ -1083,7 +1086,7 @@ function HLSPlayer({
       </div>
 
       {/* Top title / series-button overlay — fades with controls, hidden during ads */}
-      {(headerTitle || seriesButtonUrl) && (
+      {(headerTitle || seriesButtonUrl || onSeriesButtonClick) && (
         <div
           className={`pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-3 px-4 pt-4 pb-8 transition-opacity duration-200 bg-gradient-to-b from-black/70 via-black/30 to-transparent ${
             showControls && !adActive ? "opacity-100" : "opacity-0"
@@ -1099,16 +1102,31 @@ function HLSPlayer({
               <p className="truncate text-xs text-gray-300/90 drop-shadow">{headerSubtitle}</p>
             )}
           </div>
-          {seriesButtonUrl && (
-            <Link
-              href={seriesButtonUrl}
-              onClick={(e) => e.stopPropagation()}
-              className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-sm border border-white/15 px-3 py-1.5 text-xs font-medium text-white transition-colors"
-            >
-              <List size={14} />
-              <span className="hidden sm:inline">{seriesButtonLabel || "Sezonlar va qismlar"}</span>
-              <span className="sm:hidden">Qismlar</span>
-            </Link>
+          {(seriesButtonUrl || onSeriesButtonClick) && (
+            onSeriesButtonClick ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSeriesButtonClick();
+                }}
+                className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-sm border border-white/15 px-3 py-1.5 text-xs font-medium text-white transition-colors"
+              >
+                <List size={14} />
+                <span className="hidden sm:inline">{seriesButtonLabel || "Sezonlar va qismlar"}</span>
+                <span className="sm:hidden">Qismlar</span>
+              </button>
+            ) : (
+              <Link
+                href={seriesButtonUrl!}
+                onClick={(e) => e.stopPropagation()}
+                className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-sm border border-white/15 px-3 py-1.5 text-xs font-medium text-white transition-colors"
+              >
+                <List size={14} />
+                <span className="hidden sm:inline">{seriesButtonLabel || "Sezonlar va qismlar"}</span>
+                <span className="sm:hidden">Qismlar</span>
+              </Link>
+            )
           )}
         </div>
       )}
@@ -1469,6 +1487,7 @@ export default function VideoPlayer({
   headerSubtitle,
   seriesButtonUrl,
   seriesButtonLabel,
+  onSeriesButtonClick,
   thumbnailsVttUrl,
   thumbnailsSpriteUrl,
   thumbnailsBaseUrl,
@@ -1626,6 +1645,7 @@ export default function VideoPlayer({
           headerSubtitle={headerSubtitle}
           seriesButtonUrl={seriesButtonUrl}
           seriesButtonLabel={seriesButtonLabel}
+          onSeriesButtonClick={onSeriesButtonClick}
           thumbnailsVttUrl={thumbnailsVttUrl}
           thumbnailsSpriteUrl={thumbnailsSpriteUrl}
           thumbnailsBaseUrl={thumbnailsBaseUrl}

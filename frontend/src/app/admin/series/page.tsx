@@ -25,6 +25,7 @@ import {
 } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
+import DeleteProgressModal from "@/components/admin/DeleteProgressModal";
 import CascadeDeleteModal, {
   formatCascadeWarning,
 } from "@/components/admin/CascadeDeleteModal";
@@ -65,6 +66,7 @@ export default function AdminSeriesPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AdminSeries | null>(null);
+  const [deleteJobId, setDeleteJobId] = useState<string | null>(null);
   const [approving, setApproving] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
 
@@ -119,13 +121,21 @@ export default function AdminSeriesPage() {
     setDeleting(s.id);
     try {
       const response = await adminDeleteSeries(token, s.id);
-      setSeries((prev) => prev.filter((item) => item.id !== s.id));
-      const warning = formatCascadeWarning(response?.deleted_b2);
-      if (warning) {
-        alert(`"${s.title}" o'chirildi, lekin ba'zi fayllar muammoli:\n\n${warning}`);
+      if (response.job_id) {
+        // Async cascade — show the progress modal and let it poll to completion.
+        setDeleteJobId(response.job_id);
+      } else {
+        // Fallback for non-async (if job_id missing)
+        setSeries((prev) => prev.filter((item) => item.id !== s.id));
+        const warning = formatCascadeWarning(response?.deleted_b2);
+        if (warning) {
+          alert(`"${s.title}" o'chirildi, lekin ba'zi fayllar muammoli:\n\n${warning}`);
+        }
+        setDeleteTarget(null);
+        setDeleting(null);
       }
-      setDeleteTarget(null);
-    } finally {
+    } catch (err: any) {
+      alert(err?.message || "O'chirishda xatolik");
       setDeleting(null);
     }
   };
@@ -414,7 +424,7 @@ export default function AdminSeriesPage() {
       )}
 
       <CascadeDeleteModal
-        open={deleteTarget !== null}
+        open={deleteTarget !== null && !deleteJobId}
         kind="series"
         title={deleteTarget?.title ?? ""}
         onConfirm={performDelete}
@@ -422,6 +432,21 @@ export default function AdminSeriesPage() {
           if (deleting === null) setDeleteTarget(null);
         }}
       />
+
+      {deleteJobId && (
+        <DeleteProgressModal
+          jobId={deleteJobId}
+          isOpen={true}
+          onClose={() => {
+            if (deleteTarget) {
+              setSeries((prev) => prev.filter((item) => item.id !== deleteTarget.id));
+              setDeleteTarget(null);
+            }
+            setDeleteJobId(null);
+            setDeleting(null);
+          }}
+        />
+      )}
     </div>
   );
 }
