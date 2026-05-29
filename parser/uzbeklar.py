@@ -29,6 +29,9 @@ DEBUG = os.environ.get("PARSER_DEBUG", "false").lower() == "true"
 
 _FILE_RE = re.compile(r"""file\s*:\s*["'](?P<url>https?://[^"']+\.(?:mp4|m3u8|mpd))["']""", re.IGNORECASE)
 _DETAIL_URL_RE = re.compile(r"^https?://(?:www\.)?uzbeklar\.biz/(\d+)-[^/]+\.html$", re.IGNORECASE)
+# Serial detail pages embed a playlist as file:"https://uzbeklar.biz/serial/<slug>.txt";
+# movie pages embed a direct .mp4. This is the reliable movie/serial discriminator.
+_SERIAL_TXT_RE = re.compile(r"""file\s*:\s*["']https?://[^"']+\.txt["']""", re.IGNORECASE)
 
 
 class UzbeklarParser(BaseParser):
@@ -93,24 +96,29 @@ class UzbeklarParser(BaseParser):
             title = clean_text(a.get_text())
             source_id = m.group(1)
 
+            # The poster <img> lives in the sibling `a.short-img`, not under the
+            # `.short-title` anchor — climb to the `.short-item` card to find it.
+            card = a.find_parent(class_="short-item") or a.find_parent("div")
             poster = ""
-            # The card structure puts the <img> in a sibling anchor inside the same item.
-            item = a.find_parent(class_=re.compile(r"short-item|short-cols|short-desc"))
-            if not item:
-                item = a.find_parent("div")
-            if item:
-                img = item.find("img")
+            if card:
+                img = card.select_one("a.short-img img, img.poster, img.xfieldimage, img")
                 if img:
                     src = img.get("data-src") or img.get("data-original") or img.get("src", "")
                     if src:
                         poster = normalize_url(src, self.BASE_URL)
 
-            content_type = "movie"  # Serial vs movie cannot be told from card alone;
-            # the serial detector in server.py will reclassify based on detail page.
+            year = extract_year(title) or 0
+            if card and not year:
+                label = card.select_one(".short-label22, .short-label")
+                if label:
+                    year = extract_year(label.get_text()) or 0
+
+            # Provisional guess from the card; refined below via the detail page.
+            content_type = "serial" if (card and self._card_is_serial(card)) else "movie"
 
             results.append(SearchResult(
                 title=title,
-                year=0,
+                year=year,
                 poster=poster,
                 description="",
                 source_id=source_id,
@@ -118,8 +126,43 @@ class UzbeklarParser(BaseParser):
                 source=self.source_name,
                 content_type=content_type,
             ))
+        # The search-results template shows the full plot (no "qism" episode
+        # range), so the card alone can't tell movie from serial. Classify by
+        # the detail page's player source, in parallel to keep search snappy.
+        self._classify_results_by_detail(results)
         logger.info(f"[UZBEKLAR] search results: {len(results)}")
         return results
+
+    def _classify_results_by_detail(self, results: List[SearchResult]) -> None:
+        """Set content_type on each result from its detail page (serial vs movie)."""
+        subset = [r for r in results if r.detail_url][:25]
+        if not subset:
+            return
+
+        def classify(r: SearchResult) -> None:
+            ct = self._detail_content_type(r.detail_url)
+            if ct:
+                r.content_type = ct
+
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=6) as ex:
+                list(ex.map(classify, subset))
+        except Exception as e:
+            logger.warning(f"[UZBEKLAR] detail classification failed: {e}")
+
+    def _detail_content_type(self, url: str) -> str:
+        """Return 'serial' if the detail page embeds a .txt playlist, else 'movie'.
+
+        Returns '' only on fetch error so the caller keeps its provisional guess."""
+        try:
+            resp = self.session.get(url, timeout=20, headers={"Referer": self.BASE_URL + "/"})
+            if resp.status_code != 200:
+                return ""
+            return "serial" if _SERIAL_TXT_RE.search(resp.text) else "movie"
+        except Exception as e:
+            logger.debug(f"[UZBEKLAR] _detail_content_type fetch failed for {url}: {e}")
+            return ""
 
     # ------------------------------------------------------------------
     # Details
@@ -303,6 +346,19 @@ class UzbeklarParser(BaseParser):
             "has_more": has_more,
         }
 
+    # uzbeklar.biz cards list serials with a flat episode range such as
+    # "1-14 qism" / "14 qism" in the short description; movies never carry it.
+    _EPISODE_MARKER_RE = re.compile(r"\d+\s*qism", re.IGNORECASE)
+
+    @classmethod
+    def _card_is_serial(cls, card) -> bool:
+        """True when a `.short-item` card looks like a serial (has an episode marker)."""
+        try:
+            text = card.get_text(" ", strip=True)
+        except Exception:
+            return False
+        return bool(cls._EPISODE_MARKER_RE.search(text))
+
     def _extract_catalog_card(self, card, is_serial_listing: bool) -> Optional[Dict[str, Any]]:
         """Extract one catalog item from a `.short-item` card."""
         a = card.select_one("a.short-title") or card.select_one("a.short-img")
@@ -335,11 +391,13 @@ class UzbeklarParser(BaseParser):
         if not year:
             year = extract_year(card.get_text()) or 0
 
+        is_serial = is_serial_listing or self._card_is_serial(card)
+
         return {
             "source_id": source_id,
             "title": title,
             "year": year,
-            "type": "serial" if is_serial_listing else "movie",
+            "type": "serial" if is_serial else "movie",
             "poster": poster,
             "description": "",
             "genres": [],
