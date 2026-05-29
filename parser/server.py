@@ -910,6 +910,51 @@ def _probe_local_port(port: int) -> str:
         return "down"
 
 
+def _filter_reachable_candidates(candidate_dicts: list) -> list:
+    """Drop mp4 candidates that respond 404/403/410 to a quick HEAD. Keeps
+    the original order for everything else. Manifest URLs (.m3u8/.mpd/.ism)
+    are passed through untouched because they're often signed and would
+    reject our header-less probe even when valid.
+
+    Falls back to returning the original list on any unexpected error so a
+    probe issue does not break the whole selection path.
+    """
+    try:
+        import urllib.request
+        import urllib.error
+        ok = []
+        for item in candidate_dicts:
+            url = item.get("url", "")
+            kind = (item.get("type") or "").lower()
+            if not url or kind not in ("mp4", "direct_mp4", "direct_download"):
+                ok.append(item)
+                continue
+            try:
+                req = urllib.request.Request(url, method="HEAD",
+                    headers={"User-Agent": "Mozilla/5.0", "Accept": "*/*"})
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    status = resp.status
+                if 200 <= status < 400:
+                    ok.append(item)
+                else:
+                    logger.info(f"[quality] candidate skipped status={status} url={url[:120]}")
+            except urllib.error.HTTPError as e:
+                if e.code in (403, 404, 410):
+                    logger.info(f"[quality] candidate skipped HEAD {e.code} url={url[:120]}")
+                    continue
+                ok.append(item)
+            except Exception as e:
+                # network glitch — don't punish the candidate
+                logger.info(f"[quality] probe error url={url[:80]} err={e}; keeping")
+                ok.append(item)
+        # If everything got dropped (e.g. all servers down), return the
+        # original list so the caller can still try its preferred URL.
+        return ok if ok else candidate_dicts
+    except Exception as e:
+        logger.warning(f"[quality] reachability filter failed: {e}; passing through")
+        return candidate_dicts
+
+
 def safe_truncate(s: str, max_len: int) -> str:
     """Truncate string to max_len without raising IndexError"""
     if not s:
@@ -2441,6 +2486,15 @@ class ParserHandler(BaseHTTPRequestHandler):
             for item in candidate_dicts
         ]))
 
+        # Reachability filter: candidates that 404 / 403 from the CDN make
+        # the whole job fail later in /download. Drop dead URLs here so the
+        # selector falls through to the next-best quality (e.g. asilmedia
+        # often lists a 1080p URL that no longer exists but ships valid
+        # 720p mirrors). Only enabled for mp4 direct downloads — manifest
+        # URLs (.m3u8 / .mpd) are often signed and require headers we
+        # cannot replay at this stage.
+        candidate_dicts = _filter_reachable_candidates(candidate_dicts)
+
         # Use the enhanced selection function after quality ordering so equal
         # quality/type candidates still benefit from its confidence logic.
         best_candidate = choose_best_media_candidate([
@@ -2453,7 +2507,7 @@ class ParserHandler(BaseHTTPRequestHandler):
             )
             for item in candidate_dicts
         ])
-        
+
         if best_candidate:
             logger.info(f"[SERVER] ═══════════════════════════════════════════")
             logger.info(f"[SERVER] SELECTED media URL:")
