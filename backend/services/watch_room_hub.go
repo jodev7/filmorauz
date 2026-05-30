@@ -355,8 +355,11 @@ func (h *WatchRoomHub) RemoveClient(rm *HubRoom, c *HubClient) {
 		}
 	}
 
-	// Per-member leave events only in small rooms.
-	if !rm.presenceMode {
+	// Per-member leave events only in small rooms — and only once the user
+	// has no other live connection. Otherwise closing one of two devices
+	// (same account) would broadcast member_left and drop the user from
+	// everyone's roster even though their other device is still in the room.
+	if !rm.presenceMode && !sameUserStillHere {
 		h.broadcast(rm, hubMessage{
 			Type:    "member_left",
 			Payload: map[string]any{"user_id": c.UserID.Hex()},
@@ -988,7 +991,14 @@ func (h *WatchRoomHub) memberCount(rm *HubRoom) int {
 	}
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
-	return len(rm.clients)
+	// Count distinct users, not raw connections — one account opened on two
+	// devices is still one member. Without this the roster count showed "2"
+	// while the deduped member LIST showed the user once.
+	seen := make(map[primitive.ObjectID]struct{}, len(rm.clients))
+	for c := range rm.clients {
+		seen[c.UserID] = struct{}{}
+	}
+	return len(seen)
 }
 
 // broadcast delivers msg to every member of the room. In cluster mode it
