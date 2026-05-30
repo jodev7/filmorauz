@@ -40,6 +40,7 @@ import {
   ArrowLeft,
   Home,
   AlertTriangle,
+  RefreshCw,
   SkipForward,
   List,
   XCircle,
@@ -837,6 +838,20 @@ export default function WatchRoomPage() {
                 {connected ? "Online" : "Ulanish…"}
               </span>
             </div>
+
+            {/* Guest-only "sync to host" — one tap snaps the guest's
+                playhead + play/pause back to the host's current state.
+                Handy when drift creeps in or autoplay was blocked and the
+                guest fell out of sync. */}
+            {!isHost && state && (
+              <button
+                onClick={applyStateToPlayer}
+                className="absolute bottom-2 left-2 z-20 flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] sm:text-xs bg-black/60 hover:bg-black/80 border border-white/15 rounded-lg text-white transition-colors"
+                title="Hostning hozirgi pozitsiyasiga sinxronlash"
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> Hostga sinxron
+              </button>
+            )}
           </div>
 
           {/* Mobile member toggle */}

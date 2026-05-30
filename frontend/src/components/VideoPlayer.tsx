@@ -1008,6 +1008,34 @@ function HLSPlayer({
     };
   }, [src]);
 
+  // Auto-PiP: when the user switches tab/app while the video is playing,
+  // pop it into the floating window automatically (and restore on return).
+  // Browsers only permit the programmatic request from a visibilitychange
+  // handler when the page already has a user-gesture history and media is
+  // active, so this silently no-ops where disallowed.
+  useEffect(() => {
+    if (!pipSupported) return;
+    const doc = document as Document & {
+      pictureInPictureElement?: Element;
+      exitPictureInPicture?: () => Promise<void>;
+    };
+    const onVisibility = () => {
+      const video = videoRef.current as
+        | (HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> })
+        | null;
+      if (!video) return;
+      if (document.hidden) {
+        if (!video.paused && !doc.pictureInPictureElement) {
+          video.requestPictureInPicture?.().catch(() => {});
+        }
+      } else if (doc.pictureInPictureElement) {
+        doc.exitPictureInPicture?.().catch(() => {});
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [pipSupported]);
+
   const togglePictureInPicture = async () => {
     const video = videoRef.current as
       | (HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> })

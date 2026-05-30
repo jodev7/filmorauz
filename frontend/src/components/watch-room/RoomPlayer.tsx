@@ -452,6 +452,29 @@ export default function RoomPlayer({
     };
   }, [src]);
 
+  // Auto-PiP on tab/app switch while playing (restored on return). No-ops
+  // where the browser disallows the programmatic request.
+  useEffect(() => {
+    if (!pipSupported) return;
+    const doc = document as Document & {
+      pictureInPictureElement?: Element;
+      exitPictureInPicture?: () => Promise<void>;
+    };
+    const onVisibility = () => {
+      const v = videoRef.current as
+        | (HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> })
+        | null;
+      if (!v) return;
+      if (document.hidden) {
+        if (!v.paused && !doc.pictureInPictureElement) v.requestPictureInPicture?.().catch(() => {});
+      } else if (doc.pictureInPictureElement) {
+        doc.exitPictureInPicture?.().catch(() => {});
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [pipSupported]);
+
   const togglePiP = async () => {
     const v = videoRef.current as
       | (HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> })
