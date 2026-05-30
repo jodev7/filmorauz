@@ -9,6 +9,7 @@ import {
   VolumeX,
   Maximize,
   Minimize,
+  PictureInPicture2,
   Settings,
   Loader2,
   Crown,
@@ -96,6 +97,11 @@ export default function RoomPlayer({
   const [duration, setDuration] = useState(0);
   const [buffering, setBuffering] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Picture-in-Picture — floating OS window so the room video keeps playing
+  // when the user switches tab/app. Feature-detected (hidden on iPhone
+  // Safari, which lacks the <video> PiP API).
+  const [isPiP, setIsPiP] = useState(false);
+  const [pipSupported, setPipSupported] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [qualities, setQualities] = useState<QualityLevel[]>([]);
   const [selectedLevel, setSelectedLevel] = useState<number>(-1); // -1 = auto
@@ -424,6 +430,44 @@ export default function RoomPlayer({
     document.addEventListener("fullscreenchange", onFs);
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
+
+  // ── Picture-in-Picture: feature-detect + track OS window state ──────
+  useEffect(() => {
+    const v = videoRef.current;
+    const doc = document as Document & { pictureInPictureEnabled?: boolean };
+    setPipSupported(
+      !!doc.pictureInPictureEnabled &&
+        !!v &&
+        typeof (v as HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> })
+          .requestPictureInPicture === "function",
+    );
+    if (!v) return;
+    const onEnter = () => setIsPiP(true);
+    const onLeave = () => setIsPiP(false);
+    v.addEventListener("enterpictureinpicture", onEnter);
+    v.addEventListener("leavepictureinpicture", onLeave);
+    return () => {
+      v.removeEventListener("enterpictureinpicture", onEnter);
+      v.removeEventListener("leavepictureinpicture", onLeave);
+    };
+  }, [src]);
+
+  const togglePiP = async () => {
+    const v = videoRef.current as
+      | (HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> })
+      | null;
+    const doc = document as Document & {
+      pictureInPictureElement?: Element;
+      exitPictureInPicture?: () => Promise<void>;
+    };
+    if (!v) return;
+    try {
+      if (doc.pictureInPictureElement) await doc.exitPictureInPicture?.();
+      else if (v.requestPictureInPicture) await v.requestPictureInPicture();
+    } catch {
+      /* not-allowed — ignore */
+    }
+  };
 
   // ── Auto-hide controls after 2.5s of mouse idleness ─────────────────
   useEffect(() => {
@@ -955,6 +999,16 @@ export default function RoomPlayer({
           )}
 
           {/* Fullscreen */}
+          {pipSupported && (
+            <button
+              onClick={togglePiP}
+              className={`transition-colors ${isPiP ? "text-brand-red" : "hover:text-brand-red"}`}
+              aria-label="Suzuvchi oyna (Picture-in-Picture)"
+              title="Suzuvchi oynada ko'rish"
+            >
+              <PictureInPicture2 className="w-5 h-5" />
+            </button>
+          )}
           <button onClick={toggleFullscreen} className="hover:text-brand-red transition-colors">
             {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
           </button>
