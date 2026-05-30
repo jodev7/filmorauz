@@ -356,6 +356,22 @@ export default function WatchRoomPage() {
         text: "Host qaytib keldi.",
         createdAt: new Date().toISOString(),
       });
+    } else if (e.type === "host_changed") {
+      // The old host didn't return in time, so the hub promoted a guest.
+      // Updating owner_id re-derives isHost everywhere (this client may now
+      // BE the host and gain controls) and clears the disconnect countdown.
+      setHostGoneDeadline(null);
+      setRoom((prev) => (prev ? { ...prev, owner_id: e.ownerID } : prev));
+      appendChat({
+        userID: "system",
+        userName: "system",
+        kind: "text",
+        text:
+          e.ownerID === userID
+            ? "Endi siz host bo'ldingiz."
+            : `${e.userName || "Foydalanuvchi"} yangi host bo'ldi.`,
+        createdAt: new Date().toISOString(),
+      });
     } else if (e.type === "episode_change") {
       setRoom((prev) =>
         prev

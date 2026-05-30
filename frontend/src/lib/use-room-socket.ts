@@ -55,6 +55,7 @@ export type RoomEvent =
   | { type: "reaction"; reaction: RoomReaction }
   | { type: "host_disconnected"; deadlineMs: number; graceSeconds: number }
   | { type: "host_reconnected" }
+  | { type: "host_changed"; ownerID: string; userName: string }
   | { type: "episode_change"; episodeID: string; episodeTitle: string }
   | { type: "episode_request"; userID: string; userName: string; targetEpisodeID?: string; reason: string }
   | { type: "theme_change"; from: string; to: string }
@@ -246,6 +247,13 @@ export function useRoomSocket(
           break;
         case "host_reconnected":
           pushEvent({ type: "host_reconnected" });
+          break;
+        case "host_changed":
+          pushEvent({
+            type: "host_changed",
+            ownerID: String(p.owner_id || ""),
+            userName: String(p.user_name || ""),
+          });
           break;
         case "episode_change":
           pushEvent({

@@ -947,6 +947,7 @@ func (h *WatchRoomHandler) WebSocket(c *gin.Context, validateToken func(string) 
 		UserAvatar: resolveAvatarURL(user),
 		IsHost:     room.OwnerID == userID,
 		Conn:       conn,
+		JoinedAt:   time.Now(),
 	}
 	if err := h.hub.AddClient(hubRoom, client); err != nil {
 		_ = conn.WriteJSON(map[string]string{"type": "error", "error": err.Error()})

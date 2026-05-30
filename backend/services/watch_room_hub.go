@@ -39,6 +39,9 @@ type HubClient struct {
 	IsHost     bool
 	Conn       *websocket.Conn
 	send       chan []byte
+	// JoinedAt orders clients for host-transfer: when the host drops and the
+	// grace window expires, the earliest-joined remaining guest is promoted.
+	JoinedAt time.Time
 }
 
 // HubRoom is the live, in-memory state for one watch-room. Persisted state
@@ -373,7 +376,7 @@ func (h *WatchRoomHub) RemoveClient(rm *HubRoom, c *HubClient) {
 			deadline := time.Now().Add(HostDisconnectGrace)
 			rm.HostDisconnectDeadline = deadline
 			rm.hostGraceTimer = time.AfterFunc(HostDisconnectGrace, func() {
-				h.CloseRoom(rm, "host_disconnect")
+				h.promoteHostOrClose(rm)
 			})
 			rm.mu.Unlock()
 			// Tell every remaining client when the room will be torn down
@@ -396,6 +399,59 @@ func (h *WatchRoomHub) RemoveClient(rm *HubRoom, c *HubClient) {
 			h.CloseRoom(rm, "empty")
 		}
 	}
+}
+
+// promoteHostOrClose runs when the host's grace window expires. If any
+// guests are still connected, the earliest-joined one is promoted to host
+// (and the new owner persisted) so the room keeps going instead of being
+// torn down. With nobody left, the room closes as before.
+func (h *WatchRoomHub) promoteHostOrClose(rm *HubRoom) {
+	rm.mu.Lock()
+	if rm.closed {
+		rm.mu.Unlock()
+		return
+	}
+	// Host reconnected just as the timer fired — nothing to do.
+	if rm.hasHostLocked() {
+		rm.hostGraceTimer = nil
+		rm.HostDisconnectDeadline = time.Time{}
+		rm.mu.Unlock()
+		return
+	}
+	var newHost *HubClient
+	for c := range rm.clients {
+		if newHost == nil || c.JoinedAt.Before(newHost.JoinedAt) {
+			newHost = c
+		}
+	}
+	if newHost == nil {
+		rm.mu.Unlock()
+		h.CloseRoom(rm, "host_disconnect")
+		return
+	}
+	newHost.IsHost = true
+	rm.OwnerID = newHost.UserID
+	rm.hostGraceTimer = nil
+	rm.HostDisconnectDeadline = time.Time{}
+	newOwnerID := newHost.UserID
+	newOwnerName := newHost.UserName
+	rm.mu.Unlock()
+
+	// Persist the new owner so reconnects / cold-start resolve host status.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := h.repo.UpdateOwner(ctx, rm.ID, newOwnerID); err != nil {
+		log.Printf("[hub] room=%s host-transfer persist failed: %v", rm.ID.Hex(), err)
+	}
+
+	h.broadcast(rm, hubMessage{
+		Type: "host_changed",
+		Payload: map[string]any{
+			"owner_id":  newOwnerID.Hex(),
+			"user_name": newOwnerName,
+		},
+	}, nil)
+	log.Printf("[hub] room=%s host transferred to user=%s", rm.ID.Hex(), newOwnerID.Hex())
 }
 
 // recordChat buffers one chat/emoji entry for replay on rejoin. In cluster
