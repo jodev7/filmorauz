@@ -8,6 +8,7 @@ import {
   Volume2,
   VolumeX,
   Maximize,
+  PictureInPicture2,
   AlertTriangle,
   RefreshCw,
   Settings,
@@ -418,6 +419,13 @@ function HLSPlayer({
   const [showPremiumPrompt, setShowPremiumPrompt] = useState(false);
   const [seekStep, setSeekStep] = useState(10);
   const [showSettings, setShowSettings] = useState(false);
+  // Picture-in-Picture: lets the video keep playing in a floating OS-level
+  // window after the user switches tab/app (YouTube-style). `isPiP` drives
+  // the toggle icon; support is feature-detected so the button hides on
+  // browsers without PiP (notably iPhone Safari, which has no <video> PiP —
+  // it only offers native fullscreen → control-center PiP).
+  const [isPiP, setIsPiP] = useState(false);
+  const [pipSupported, setPipSupported] = useState(false);
   const [settingsPane, setSettingsPane] = useState<"root" | "quality" | "speed" | "seek">("root");
 
   // Progress hover preview
@@ -977,6 +985,49 @@ function HLSPlayer({
     );
   };
 
+  // Feature-detect PiP once and keep `isPiP` in sync with the OS window,
+  // which the user can close from the floating window itself (not just our
+  // button) — so we listen to enter/leave events rather than trusting state.
+  useEffect(() => {
+    const video = videoRef.current;
+    const doc = document as Document & { pictureInPictureEnabled?: boolean };
+    const supported =
+      !!doc.pictureInPictureEnabled &&
+      !!video &&
+      typeof (video as HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> })
+        .requestPictureInPicture === "function";
+    setPipSupported(supported);
+    if (!video) return;
+    const onEnter = () => setIsPiP(true);
+    const onLeave = () => setIsPiP(false);
+    video.addEventListener("enterpictureinpicture", onEnter);
+    video.addEventListener("leavepictureinpicture", onLeave);
+    return () => {
+      video.removeEventListener("enterpictureinpicture", onEnter);
+      video.removeEventListener("leavepictureinpicture", onLeave);
+    };
+  }, [src]);
+
+  const togglePictureInPicture = async () => {
+    const video = videoRef.current as
+      | (HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> })
+      | null;
+    const doc = document as Document & {
+      pictureInPictureElement?: Element;
+      exitPictureInPicture?: () => Promise<void>;
+    };
+    if (!video) return;
+    try {
+      if (doc.pictureInPictureElement) {
+        await doc.exitPictureInPicture?.();
+      } else if (video.requestPictureInPicture) {
+        await video.requestPictureInPicture();
+      }
+    } catch {
+      /* user gesture / not-allowed — ignore, button stays inert */
+    }
+  };
+
   const qualityLabel = qualities.find((q) => q.index === selectedQuality)?.label ?? "Auto";
 
   if (error) {
@@ -1457,6 +1508,20 @@ function HLSPlayer({
                 </div>
               )}
             </div>
+
+            {/* Picture-in-Picture — keeps the video playing in a floating
+                OS window when the user leaves the tab/app. Hidden where
+                unsupported (e.g. iPhone Safari). */}
+            {pipSupported && (
+              <button
+                onClick={togglePictureInPicture}
+                className={`transition-colors ${isPiP ? "text-brand-red" : "text-white hover:text-brand-red"}`}
+                aria-label="Suzuvchi oyna (Picture-in-Picture)"
+                title="Suzuvchi oynada ko'rish"
+              >
+                <PictureInPicture2 size={18} />
+              </button>
+            )}
 
             {/* Fullscreen */}
             <button onClick={toggleFullscreen} className="text-white hover:text-brand-red transition-colors">
