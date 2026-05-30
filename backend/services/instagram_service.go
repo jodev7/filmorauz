@@ -164,6 +164,7 @@ func (e *InstagramUploadError) Error() string { return e.RawError }
 var errorTypeMessages = map[string]string{
 	"challenge_required":  "Instagram tekshiruvi talab qilinadi (qayta login kerak)",
 	"checkpoint_required": "Hisob tekshiruvi talab qilinadi",
+	"account_restricted":  "Instagram akkauntga cheklov qo'ygan (account restricted)",
 	"session_expired":     "Sessiya muddati tugagan yoki bekor qilingan (token expired or invalid), qayta login kerak",
 	"no_session":          "Sessiya fayli topilmadi",
 	"bad_credentials":     "Login yoki parol noto'g'ri",
@@ -175,6 +176,7 @@ var errorTypeMessages = map[string]string{
 var errorTypeActions = map[string]string{
 	"challenge_required":  "ig_login.py orqali sessiyani yangilang",
 	"checkpoint_required": "ig_login.py orqali sessiyani yangilang",
+	"account_restricted":  "Instagram ilovasida akkauntga kirib cheklovni 'Request review' orqali tasdiqlating",
 	"session_expired":     "ig_login.py orqali qayta login qiling",
 	"no_session":          "ig_login.py orqali birinchi marta login qiling",
 	"bad_credentials":     "Login va parolni tekshiring",

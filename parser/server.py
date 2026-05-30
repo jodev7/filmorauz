@@ -1330,6 +1330,7 @@ def _ig_action_required(error_type: str, account: str) -> str:
     actions = {
         "session_expired": "Token muddati tugagan — ig_add_account.py orqali shu akkauntni qayta ulang",
         "challenge_required": "Instagram appda challenge/checkpoint ni confirm qiling, keyin ig_add_account.py orqali qayta ulang",
+        "account_restricted": "Instagram akkauntga cheklov qo'ygan. Ilovada akkaunt bilan login qilib cheklovni 'Request review' orqali tasdiqlatib oling; tasdiqlangach upload o'zi ishlaydi",
         "action_blocked": "Instagram vaqtincha blok qo'ygan. Biroz kutib qayta urinib ko'ring",
         "proxy_failed": "Proxy almashtiring yoki o'chirib qayta urinib ko'ring",
         "upload_failed": "Qayta urinib ko'ring",
@@ -1395,7 +1396,13 @@ def _ig_find_account(requested_account: str, username: str = ""):
 def _ig_graph_classify(payload) -> str:
     err = payload.get("error", {}) if isinstance(payload, dict) else {}
     code = err.get("code")
+    subcode = err.get("error_subcode")
     msg = (err.get("message") or str(payload)).lower()
+    # Account-level restriction: Instagram has flagged/limited the account
+    # itself (common on new or recently-flagged accounts). Not a token problem —
+    # the user must resolve the restriction in the Instagram app.
+    if code == 25 or subcode == 2207050 or "restricted" in msg or "ограничени" in msg:
+        return "account_restricted"
     if code == 190 or "access token" in msg or "session" in msg or "expired" in msg:
         return "session_expired"
     if code in (4, 17, 32, 613) or any(t in msg for t in ("rate", "limit", "too many", "spam")):
