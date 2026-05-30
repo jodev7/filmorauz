@@ -1008,6 +1008,46 @@ function HLSPlayer({
     };
   }, [src]);
 
+  // Screen Wake Lock: keep the phone awake while playing. A custom
+  // (non-fullscreen) player doesn't inhibit the OS idle timer, so the
+  // screen sleeps after a minute without a touch mid-playback. Re-acquire
+  // on tab return (the OS releases it on hide). No-ops where unsupported.
+  useEffect(() => {
+    const nav = navigator as Navigator & {
+      wakeLock?: { request: (t: "screen") => Promise<{ release: () => Promise<void> }> };
+    };
+    if (!nav.wakeLock) return;
+    let sentinel: { release: () => Promise<void> } | null = null;
+    let cancelled = false;
+    const acquire = async () => {
+      if (sentinel) return;
+      try {
+        sentinel = await nav.wakeLock!.request("screen");
+        if (cancelled) {
+          sentinel.release().catch(() => {});
+          sentinel = null;
+        }
+      } catch {
+        /* not allowed — ignore */
+      }
+    };
+    const release = () => {
+      sentinel?.release().catch(() => {});
+      sentinel = null;
+    };
+    if (playing) acquire();
+    else release();
+    const onVis = () => {
+      if (!document.hidden && playing) acquire();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVis);
+      release();
+    };
+  }, [playing]);
+
   // Auto-PiP: when the user switches tab/app while the video is playing,
   // pop it into the floating window automatically (and restore on return).
   // Browsers only permit the programmatic request from a visibilitychange

@@ -431,6 +431,47 @@ export default function RoomPlayer({
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
 
+  // ── Screen Wake Lock: keep the phone awake while the video plays ────
+  // A custom (non-fullscreen) HTML5 player doesn't inhibit the OS idle
+  // timer, so the screen sleeps after a minute of no touch mid-playback.
+  // Hold a screen wake lock while playing; the OS auto-releases it when the
+  // tab is hidden, so we re-acquire on return. No-ops where unsupported.
+  useEffect(() => {
+    const nav = navigator as Navigator & {
+      wakeLock?: { request: (t: "screen") => Promise<{ release: () => Promise<void> }> };
+    };
+    if (!nav.wakeLock) return;
+    let sentinel: { release: () => Promise<void> } | null = null;
+    let cancelled = false;
+    const acquire = async () => {
+      if (sentinel) return;
+      try {
+        sentinel = await nav.wakeLock!.request("screen");
+        if (cancelled) {
+          sentinel.release().catch(() => {});
+          sentinel = null;
+        }
+      } catch {
+        /* not allowed (e.g. low battery) — ignore */
+      }
+    };
+    const release = () => {
+      sentinel?.release().catch(() => {});
+      sentinel = null;
+    };
+    if (playing) acquire();
+    else release();
+    const onVis = () => {
+      if (!document.hidden && playing) acquire();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVis);
+      release();
+    };
+  }, [playing]);
+
   // ── Picture-in-Picture: feature-detect + track OS window state ──────
   useEffect(() => {
     const v = videoRef.current;
