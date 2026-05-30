@@ -32,6 +32,9 @@ _DETAIL_URL_RE = re.compile(r"^https?://(?:www\.)?uzbeklar\.biz/(\d+)-[^/]+\.htm
 # Serial detail pages embed a playlist as file:"https://uzbeklar.biz/serial/<slug>.txt";
 # movie pages embed a direct .mp4. This is the reliable movie/serial discriminator.
 _SERIAL_TXT_RE = re.compile(r"""file\s*:\s*["']https?://[^"']+\.txt["']""", re.IGNORECASE)
+# Episode source_id produced by canonical_episode_id(): "<parentID>:sXXeYY".
+# Present when the worker resolves a specific serial episode via /details.
+_EPISODE_SID_RE = re.compile(r":s(\d+)e(\d+)\s*$", re.IGNORECASE)
 
 
 class UzbeklarParser(BaseParser):
@@ -219,6 +222,26 @@ class UzbeklarParser(BaseParser):
         quality = clean_text(labels.get("sifat", ""))
 
         video_urls = self._extract_video_urls(html)
+
+        # Serial episode resolution: a serial detail page only embeds direct
+        # .mp4 links for the inline (first) episode(s); episodes 3..N live only
+        # in the .txt playlist. When the worker requests a specific episode
+        # (source_id like "9903:s01e06"), the page-scraped links resolve to the
+        # wrong episode or to nothing, so the download fails. Resolve the exact
+        # episode URL from the playlist instead — the same source the serial
+        # extractor uses — so every episode gets a working download URL.
+        ep_match = _EPISODE_SID_RE.search(source_id or "")
+        if ep_match:
+            season_no, episode_no = int(ep_match.group(1)), int(ep_match.group(2))
+            ep_url = self._resolve_episode_video_url(url, season_no, episode_no)
+            if ep_url:
+                lower = ep_url.lower()
+                kind = "m3u8" if lower.endswith(".m3u8") else ("mpd" if lower.endswith(".mpd") else "mp4")
+                video_urls = [{"url": ep_url, "type": kind, "quality": "auto", "label": ""}]
+                logger.info(f"[UZBEKLAR] resolved episode {source_id} -> {ep_url}")
+            else:
+                logger.warning(f"[UZBEKLAR] episode {source_id} not found in playlist for {url}")
+
         if not video_urls:
             logger.warning(f"[UZBEKLAR] no file:\"...\" pattern matched on {url}")
 
@@ -245,6 +268,24 @@ class UzbeklarParser(BaseParser):
             detail_url=url,
             player_url="",
         )
+
+    def _resolve_episode_video_url(self, page_url: str, season: int, episode: int) -> str:
+        """Resolve a single serial episode's video URL from the .txt playlist.
+
+        Reuses UzbeklarSerialParser (the same logic the serial extractor uses)
+        so per-episode resolution at download time matches extraction. Lazy
+        import avoids a circular dependency at module load."""
+        try:
+            from uzbeklar_serial import UzbeklarSerialParser
+            result = UzbeklarSerialParser().parse(page_url)
+            if not result.get("success"):
+                return ""
+            for ep in result.get("episodes", []):
+                if int(ep.get("season") or 0) == season and int(ep.get("episode") or 0) == episode:
+                    return (ep.get("source_episode_url") or "").strip()
+        except Exception as e:
+            logger.warning(f"[UZBEKLAR] episode resolve failed url={page_url} s{season}e{episode}: {e}")
+        return ""
 
     # ------------------------------------------------------------------
     # Catalog browsing (admin ingestion "click a source" view)
