@@ -12,6 +12,7 @@ const RoomPlayer = dynamic(() => import("@/components/watch-room/RoomPlayer"), {
   loading: () => <div className="w-full h-full bg-black animate-pulse" />,
 });
 import MemberList from "@/components/watch-room/MemberList";
+import GifPicker from "@/components/watch-room/GifPicker";
 import {
   getWatchRoom,
   createRoomInvite,
@@ -57,7 +58,14 @@ import {
 import Navbar from "@/components/Navbar";
 import Link from "next/link";
 
-const EMOJI_PALETTE = ["😀", "😂", "❤️", "🔥", "👏", "🎉", "😮", "😢", "👍", "🤔", "😍", "🍿"];
+const EMOJI_PALETTE = [
+  "😀", "😂", "🤣", "😅", "😊", "😍", "🥰", "😘", "😎", "🤩",
+  "🤔", "🤨", "😐", "🙄", "😏", "😴", "😭", "😢", "😤", "😡",
+  "🥺", "😱", "😨", "🤯", "🤗", "🤭", "🤫", "😬", "🙃", "😇",
+  "👍", "👎", "👏", "🙌", "🙏", "💪", "🤝", "✌️", "🤞", "👌",
+  "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "💔", "💯", "🔥",
+  "🎉", "🎊", "✨", "⭐", "🌟", "💫", "🍿", "🎬", "👀", "💀",
+];
 
 // Preset gradients for the premium-only room theme picker. Each gradient
 // is hard-coded as a (from, to) hex pair so the picker is deterministic
@@ -91,6 +99,7 @@ export default function WatchRoomPage() {
   const [kicked, setKicked] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [gifOpen, setGifOpen] = useState(false);
   const [showMembers, setShowMembers] = useState(false); // mobile drawer
   const [typingUsers, setTypingUsers] = useState<Record<string, string>>({}); // userID → name
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
@@ -614,6 +623,11 @@ export default function WatchRoomPage() {
     setEmojiOpen(false);
   };
 
+  const handleSendGif = (gifUrl: string) => {
+    sendChat("gif", gifUrl);
+    setGifOpen(false);
+  };
+
   const handleCopyInviteLink = useCallback(async () => {
     if (!token || !room) return;
     try {
@@ -1011,6 +1025,14 @@ export default function WatchRoomPage() {
                       <span className="text-gray-400 text-xs">{c.userName || "Foydalanuvchi"}: </span>
                       {c.kind === "emoji" ? (
                         <span className="text-2xl font-emoji">{c.emoji}</span>
+                      ) : c.kind === "gif" && c.gifUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={c.gifUrl}
+                          alt="GIF"
+                          loading="lazy"
+                          className="mt-1 max-w-[180px] w-full h-auto rounded-lg"
+                        />
                       ) : (
                         <span className="break-words">{c.text}</span>
                       )}
@@ -1021,7 +1043,7 @@ export default function WatchRoomPage() {
             </div>
             <div className="border-t border-brand-border p-2 relative">
               {emojiOpen && (
-                <div className="absolute bottom-12 left-2 right-2 bg-brand-dark border border-brand-border rounded-lg p-2 grid grid-cols-6 gap-1">
+                <div className="absolute bottom-12 left-2 right-2 bg-brand-dark border border-brand-border rounded-lg p-2 grid grid-cols-6 gap-1 max-h-48 overflow-y-auto">
                   {EMOJI_PALETTE.map((e) => (
                     <button
                       key={e}
@@ -1033,14 +1055,35 @@ export default function WatchRoomPage() {
                   ))}
                 </div>
               )}
+              {gifOpen && (
+                <GifPicker onSelect={handleSendGif} onClose={() => setGifOpen(false)} />
+              )}
               <div className="flex items-center gap-1 min-w-0">
                 <button
-                  onClick={() => setEmojiOpen((v) => !v)}
+                  onClick={() => {
+                    setGifOpen(false);
+                    setEmojiOpen((v) => !v);
+                  }}
                   className="p-2 text-gray-400 hover:text-white shrink-0"
                   aria-label="Reaktsiya"
                   title="Reaktsiya yuborish (video ustida ko'rinadi)"
                 >
                   {emojiOpen ? <X className="w-4 h-4" /> : <PartyPopper className="w-4 h-4" />}
+                </button>
+                <button
+                  onClick={() => {
+                    setEmojiOpen(false);
+                    setGifOpen((v) => !v);
+                  }}
+                  className={`px-1.5 py-1 text-[11px] font-bold rounded shrink-0 border ${
+                    gifOpen
+                      ? "text-brand-red border-brand-red"
+                      : "text-gray-400 border-gray-600 hover:text-white hover:border-gray-400"
+                  }`}
+                  aria-label="GIF"
+                  title="GIF yuborish"
+                >
+                  GIF
                 </button>
                 {/* min-w-0 + w-0 lets the flex-1 input actually shrink. Without
                     it the input's intrinsic content width (from a long typed
@@ -1417,6 +1460,12 @@ function FullscreenChatOverlay({
               <span>
                 <span className="text-gray-300 text-xs mr-1">{c.userName}:</span>
                 <span className="text-xl font-emoji">{c.emoji}</span>
+              </span>
+            ) : c.kind === "gif" && c.gifUrl ? (
+              <span className="inline-flex flex-col">
+                <span className="text-gray-300 text-xs mb-1">{c.userName}:</span>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={c.gifUrl} alt="GIF" className="max-w-[140px] w-full h-auto rounded-lg" />
               </span>
             ) : (
               <span>
