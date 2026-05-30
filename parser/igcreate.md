@@ -205,3 +205,24 @@ Akkaunt topilsa — tayyor. Birinchi clip joylanganda Instagram'da Reel paydo bo
 7. [ ] Backend `INSTAGRAM_ACCOUNTS_JSON`'ga akkaunt + filter qo'shildi
 8. [ ] Servis(lar) restart qilindi
 9. [ ] Test post bilan tekshirildi
+
+---
+
+## Token refresh — qo'lda birinchi ishga tushirish
+
+Tokenlar endigina olingan bo'lsa, ular 24 soatdan yosh — Instagram bunday tokenni
+yangilamaydi, shuning uchun haftalik timer'ning birinchi urinishi "failed" bo'lishi
+mumkin (zararsiz). "Failed" ko'rinishini ko'rishni xohlamasangiz, **ertadan keyin
+(≥24 soat o'tgach)** bir marta qo'lda ishga tushiring:
+
+```bash
+ssh root@144.91.79.0 'systemctl start ig-token-refresh.service && tail /var/log/ig_refresh.log'
+```
+
+## Foydali buyruqlar
+
+```bash
+systemctl list-timers ig-token-refresh.timer   # keyingi ishga tushish vaqti
+systemctl status ig-token-refresh.service       # oxirgi natija
+tail -f /var/log/ig_refresh.log                  # loglar
+```
