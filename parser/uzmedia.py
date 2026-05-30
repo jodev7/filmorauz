@@ -4,7 +4,9 @@ uCoz based website - uses GET search /search/?q=query
 """
 import logging
 import os
+import re
 from typing import List, Dict, Any, Optional
+from urllib.parse import unquote
 from bs4 import BeautifulSoup
 
 from base_parser import BaseParser, SearchResult, MovieDetails
@@ -44,6 +46,16 @@ class UzmediaParser(BaseParser):
             "Referer": self.BASE_URL + "/",
             "Origin": self.BASE_URL,
         })
+        # uzmedia.tv serves a self-signed TLS certificate, so verification must
+        # be disabled. Setting it on the shared session covers both the movie
+        # parser's explicit verify=False calls AND UzmediaSerialParser, which
+        # reuses this session and previously failed with CERTIFICATE_VERIFY_FAILED.
+        self.session.verify = False
+        try:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except Exception:
+            pass
     
     def search(self, query: str) -> List[SearchResult]:
         """Search using GET request"""
@@ -273,11 +285,63 @@ class UzmediaParser(BaseParser):
             return match.group(1).replace(".html", "")
         return ""
 
+    # Episode source_id produced by canonical_episode_id(): "<id>:sXXeYY".
+    _EPISODE_SID_RE = re.compile(r":s(\d+)e(\d+)\s*$", re.IGNORECASE)
+    _EP_NUM_RE = re.compile(r"(\d+)\s*-\s*qism", re.IGNORECASE)
+
+    def extract_serial_episode_urls(self, html: str) -> Dict[int, str]:
+        """Map episode_number -> direct .mp4 URL from a uzmedia serial page.
+
+        uzmedia serial pages embed one player iframe per episode as
+        ``embed.html?file=http://s1.uzmedia.tv/seriallar/<name> N-qism hd ...mp4``
+        (the same .mp4 URLs also appear inline). The episode number lives in the
+        filename, so we read it from there rather than from absent "N-qism"
+        anchor links."""
+        out: Dict[int, str] = {}
+        candidates = re.findall(r"embed\.html\?file=([^\"'<>\s]+)", html)
+        candidates += re.findall(r"https?://[^\s\"'<>]+?\.mp4", html)
+        for raw in candidates:
+            raw = raw.strip()
+            # Keep the URL percent-encoded for the downloader; only unquote a
+            # copy to read the episode number from the "N-qism" filename.
+            if not unquote(raw).lower().endswith(".mp4"):
+                continue
+            m = self._EP_NUM_RE.search(unquote(raw))
+            if not m:
+                continue
+            out.setdefault(int(m.group(1)), raw)
+        return out
+
     def get_details(self, url: str, source_id: str, is_serial: bool = False, episode_id: str = "") -> MovieDetails:
         try:
             response = self.session.get(url, timeout=30, verify=False)
             soup = BeautifulSoup(response.text, "lxml")
-            
+
+            # Serial episode: the page embeds one direct .mp4 per episode and the
+            # first iframe is always episode 1, so resolve the requested episode
+            # (source_id like "<id>:s01e03") to its own .mp4 by filename instead.
+            ep_m = self._EPISODE_SID_RE.search(source_id or "")
+            if ep_m:
+                ep_no = int(ep_m.group(2))
+                ep_url = self.extract_serial_episode_urls(response.text).get(ep_no)
+                if ep_url:
+                    title = clean_text((soup.select_one("h1") or soup.select_one("title") or soup).get_text())
+                    poster = ""
+                    og_img = soup.select_one("meta[property='og:image']")
+                    if og_img:
+                        poster = normalize_url(og_img.get("content", ""), self.BASE_URL)
+                    lower = ep_url.lower()
+                    kind = "m3u8" if lower.endswith(".m3u8") else "mp4"
+                    logger.info(f"[UZMEDIA] resolved episode {source_id} -> {ep_url}")
+                    return MovieDetails(
+                        title=title, description="", poster=poster, backdrop="",
+                        year=extract_year(title) or 0, genres=[], country="", duration=0,
+                        video_page_url=url,
+                        video_urls=[{"url": ep_url, "type": kind, "quality": "auto", "label": ""}],
+                        source_id=source_id, source=self.source_name,
+                    )
+                logger.warning(f"[UZMEDIA] episode {source_id} not found on page {url}")
+
             title = clean_text((soup.select_one("h1") or soup.select_one("title") or soup).get_text())
             poster = ""
             og_img = soup.select_one("meta[property='og:image']")

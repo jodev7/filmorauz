@@ -56,52 +56,30 @@ class UzmediaSerialParser:
         parent_id = extract_source_id(url)
         grouped: Dict[tuple[int, int], Dict] = {}
 
-        episode_re = re.compile(r"^(\d+)\s*-\s*qism$", re.IGNORECASE)
-        season_ep_re = re.compile(r"^(?:(\d+)\s*-\s*(?:fasl|mavsum|sezon)\s+)?(\d+)\s*-\s*qism$", re.IGNORECASE)
-        seen_hrefs = set()
-        ep_links = []
-        
-        for a in soup.find_all("a", href=True):
-            href = a["href"].strip()
-            if not href or href in seen_hrefs or href.startswith("#") or href.startswith("javascript:"):
-                continue
-            
-            label = clean_text(a.get_text(" ", strip=True) or a.get("title", ""))
-            m = season_ep_re.search(label) or episode_re.search(label)
-            if m:
-                seen_hrefs.add(href)
-                season = int(m.group(1)) if len(m.groups()) > 1 and m.group(1) else 1
-                episode_no = int(m.groups()[-1])
-                full_href = href if href.startswith("http") else f"{self._movie.BASE_URL.rstrip('/')}/{href.lstrip('/')}"
-                ep_links.append((full_href, season, episode_no, label))
-
-        for full_href, season, episode_no, label in ep_links:
+        # uzmedia serial pages don't list episodes as "N-qism" anchor links;
+        # they embed one player iframe per episode (embed.html?file=<mp4>) plus
+        # the same direct .mp4 URLs inline, with the episode number in the
+        # filename. Discover all episodes from those URLs in a single page fetch
+        # (no slow per-episode subpage requests). Season is always 1 here.
+        season = 1
+        for episode_no, video_url in sorted(self._movie.extract_serial_episode_urls(resp.text).items()):
             key = (season, episode_no)
             if key in grouped:
                 continue
-            try:
-                logger.info(f"[UZMEDIA SERIAL] fetching subpage S{season}E{episode_no} url={full_href}")
-                ep_resp = self.session.get(full_href, timeout=15)
-                ep_soup = BeautifulSoup(ep_resp.text, "lxml")
-                entries = self._movie._extract_video_urls(ep_soup, full_href)
-                video_url = entries[0]["url"] if entries else ""
-                
-                grouped[key] = {
-                    "season": season,
-                    "episode": episode_no,
-                    "season_number": season,
-                    "episode_number": episode_no,
-                    "title": f"{episode_no}-qism",
-                    "episode_url": full_href,
-                    "detail_url": full_href,
-                    "source_episode_url": full_href,
-                    "source_id": canonical_episode_id(parent_id, season, episode_no),
-                    "video_url": video_url,
-                    "poster": poster,
-                    "quality_urls": {},
-                }
-            except Exception as e:
-                logger.warning(f"[UZMEDIA SERIAL] failed to fetch subpage S{season}E{episode_no}: {e}")
+            grouped[key] = {
+                "season": season,
+                "episode": episode_no,
+                "season_number": season,
+                "episode_number": episode_no,
+                "title": f"{episode_no}-qism",
+                "episode_url": url,
+                "detail_url": url,
+                "source_episode_url": video_url,
+                "source_id": canonical_episode_id(parent_id, season, episode_no),
+                "video_url": video_url,
+                "poster": poster,
+                "quality_urls": {},
+            }
 
         episodes = list(grouped.values())
         episodes.sort(key=lambda x: (x["season"], x["episode"]))
