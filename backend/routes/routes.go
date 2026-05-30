@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"time"
+
 	"github.com/filmorauz/backend/handlers"
 	"github.com/filmorauz/backend/middleware"
 	"github.com/filmorauz/backend/services"
@@ -170,9 +172,9 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	api.GET("/media/access-token", middleware.OptionalAuth(authService), mediaHandler.GetMediaToken)
 
 	// Public movie routes
-	api.GET("/homepage", homepageHandler.GetHomepageData)
+	api.GET("/homepage", middleware.CacheResponse(30*time.Second), homepageHandler.GetHomepageData)
 	api.GET("/movies", movieHandler.ListMovies)
-	api.GET("/movies/trending", movieHandler.GetTrendingMovies)
+	api.GET("/movies/trending", middleware.CacheResponse(30*time.Second), movieHandler.GetTrendingMovies)
 	// Movie by slug (must come before :id routes to avoid slug being treated as id)
 	api.GET("/movies/slug/:slug", movieHandler.GetMovieBySlug)
 	// Movie by ID and recommendations
@@ -416,7 +418,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	collections := api.Group("/collections")
 	{
 		collections.GET("", collectionHandler.GetCollections)
-		collections.GET("/featured", collectionHandler.GetFeaturedCollections)
+		collections.GET("/featured", middleware.CacheResponse(60*time.Second), collectionHandler.GetFeaturedCollections)
 		collections.GET("/slug/:slug", collectionHandler.GetCollectionBySlug)
 	}
 
