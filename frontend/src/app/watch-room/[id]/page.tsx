@@ -435,12 +435,22 @@ export default function WatchRoomPage() {
 
   // ── Sync guest player to host state via the RoomPlayer's sync API ───
   const syncApiRef = useRef<{ setPosition: (s: number) => void; setPlaying: (p: boolean) => void } | null>(null);
+  // Mirror the latest host state into a ref so the player can pull the
+  // current target the moment it registers its sync API — see the
+  // applyStateToPlayer / registerSync wiring below.
+  const stateRef = useRef<typeof state>(null);
   useEffect(() => {
-    if (isHost || !state || !syncApiRef.current) return;
-    const target = effectivePosition(state);
-    syncApiRef.current.setPosition(target);
-    syncApiRef.current.setPlaying(state.isPlaying);
-  }, [state, isHost]);
+    stateRef.current = state;
+  }, [state]);
+  const applyStateToPlayer = useCallback(() => {
+    const s = stateRef.current;
+    if (isHostRef.current || !s || !syncApiRef.current) return;
+    syncApiRef.current.setPosition(effectivePosition(s));
+    syncApiRef.current.setPlaying(s.isPlaying);
+  }, []);
+  useEffect(() => {
+    applyStateToPlayer();
+  }, [state, isHost, applyStateToPlayer]);
 
   // ── Host broadcasts player events to the hub ────────────────────────
   const onHostPlay = useCallback(
@@ -547,11 +557,15 @@ export default function WatchRoomPage() {
     return () => v.removeEventListener("ended", onEnded);
   }, [isHost, room, token, nextEp, videoSrc]);
 
-  // Chat auto-scroll
+  // Chat auto-scroll — only stick to the bottom when the user is already
+  // near it. Now that the list is a fixed, scrollable block, yanking the
+  // viewport down on every new message would fight a user who scrolled up
+  // to re-read history.
   useEffect(() => {
     const el = chatScrollRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
   }, [chat.length]);
 
   // ── Chat input + typing ──────────────────────────────────────────────
@@ -775,6 +789,14 @@ export default function WatchRoomPage() {
                 onHostSeek={onHostSeek}
                 registerSync={(api) => {
                   syncApiRef.current = api;
+                  // The player may register its sync API AFTER the host's
+                  // (steady) state already arrived — e.g. on rejoin, where the
+                  // protected playback URL resolves slowly so videoSrc (and
+                  // thus RoomPlayer) mounts well after the WS state_sync. In
+                  // that case the state-driven effect already ran against a
+                  // null ref and won't re-fire (state is unchanged), leaving
+                  // the guest frozen/paused at 0. Push the current target now.
+                  applyStateToPlayer();
                 }}
                 fullscreenOverlay={
                   <FullscreenChatOverlay reactions={floatingReactions} chat={chat} />
@@ -940,7 +962,7 @@ export default function WatchRoomPage() {
                 </span>
               )}
             </div>
-            <div ref={chatScrollRef} className="flex-1 overflow-y-auto p-3 space-y-2 min-h-[200px] lg:max-h-[60vh]">
+            <div ref={chatScrollRef} className="flex-1 overflow-y-auto overscroll-contain p-3 space-y-2 min-h-[200px] max-h-[45vh] lg:max-h-[60vh]">
               {chat.length === 0 && <p className="text-xs text-gray-500">Hozircha xabar yo&apos;q.</p>}
               {chat.map((c, idx) => (
                 <div key={idx} className="text-sm">
