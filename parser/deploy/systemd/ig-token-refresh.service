@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh Instagram 60-day Graph API tokens (ig_accounts.json)
+# Tokens are refreshed over HTTPS, so wait until the network is actually up.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/filmorauz/parser
+ExecStart=/opt/filmorauz/parser/venv/bin/python /opt/filmorauz/parser/ig_refresh_tokens.py
+# Keep the script's own log; systemd journal also captures stdout/stderr.
+StandardOutput=append:/var/log/ig_refresh.log
+StandardError=append:/var/log/ig_refresh.log

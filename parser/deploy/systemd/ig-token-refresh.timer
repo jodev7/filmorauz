@@ -1,0 +1,15 @@
+[Unit]
+Description=Weekly Instagram token refresh (runs ig-token-refresh.service)
+
+[Timer]
+# Every Sunday at 04:00 server time.
+OnCalendar=Sun *-*-* 04:00:00
+# If the VPS was powered off at the scheduled time, run as soon as it boots
+# back up instead of skipping the missed run. This is what makes the job
+# survive reboots / downtime without ever letting a 60-day token expire.
+Persistent=true
+# Small random delay so the job doesn't fire at the exact same second every week.
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

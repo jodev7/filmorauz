@@ -5,6 +5,11 @@
 backend/.env
 frontend/.env.local
 
+# Instagram secrets — 60-day tokens, sessions, publish sidecar state
+parser/ig_accounts.json
+parser/ig_sessions/
+parser/ig_publish_state/
+
 # Keep the templates
 !backend/.env.dev
 !backend/.env.prod

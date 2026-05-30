@@ -1328,8 +1328,8 @@ class InstagramUploadError(Exception):
 
 def _ig_action_required(error_type: str, account: str) -> str:
     actions = {
-        "session_expired": "ig_login.py orqali qayta login qiling",
-        "challenge_required": "Instagram appda challenge/checkpoint ni confirm qiling, keyin ig_login.py orqali qayta login qiling",
+        "session_expired": "Token muddati tugagan — ig_add_account.py orqali shu akkauntni qayta ulang",
+        "challenge_required": "Instagram appda challenge/checkpoint ni confirm qiling, keyin ig_add_account.py orqali qayta ulang",
         "action_blocked": "Instagram vaqtincha blok qo'ygan. Biroz kutib qayta urinib ko'ring",
         "proxy_failed": "Proxy almashtiring yoki o'chirib qayta urinib ko'ring",
         "upload_failed": "Qayta urinib ko'ring",
@@ -1339,6 +1339,153 @@ def _ig_action_required(error_type: str, account: str) -> str:
 
 def _ig_raise(error_type: str, account: str, message: str):
     raise InstagramUploadError(error_type, account, message, _ig_action_required(error_type, account))
+
+
+# ── Instagram Graph API (Content Publishing) ─────────────────────────────────
+# Replaces the legacy instagrapi private-API flow. Each account authorizes once
+# via Instagram Business Login (see ig_add_account.py); we store a 60-day token
+# + user_id in ig_accounts.json and publish Reels through graph.instagram.com.
+# Instagram fetches the public video_url itself, so the VPS never logs in to
+# instagram.com and never trips the IP block that the private API hit.
+IG_GRAPH_API_VERSION = os.environ.get("IG_GRAPH_API_VERSION", "v21.0")
+IG_GRAPH_BASE = f"https://graph.instagram.com/{IG_GRAPH_API_VERSION}"
+IG_ACCOUNTS_FILE = Path(__file__).parent / "ig_accounts.json"
+# Reel containers usually finish encoding in <60s; allow generous headroom.
+# The backend HTTP timeout (15m) is well above this, so we can afford to wait.
+IG_GRAPH_STATUS_TIMEOUT = int(os.environ.get("IG_GRAPH_STATUS_TIMEOUT", "300"))
+IG_GRAPH_POLL_INTERVAL = int(os.environ.get("IG_GRAPH_POLL_INTERVAL", "5"))
+
+
+def _ig_safe_response_json(resp):
+    try:
+        return resp.json()
+    except Exception:
+        return resp.text
+
+
+def _ig_load_accounts_file():
+    try:
+        data = json.loads(IG_ACCOUNTS_FILE.read_text())
+        return data.get("accounts", []) or []
+    except FileNotFoundError:
+        return []
+    except Exception as exc:
+        logger.warning(f"[Instagram] ig_accounts.json read failed: {exc}")
+        return []
+
+
+def _ig_find_account(requested_account: str, username: str = ""):
+    """Match a request to an entry in ig_accounts.json. The backend sends both
+    a logical name (e.g. "breaking_bad") and the real IG handle (username); we
+    match either against each entry's name/username, normalized."""
+    accounts = _ig_load_accounts_file()
+    for candidate in (username, requested_account):
+        if not candidate:
+            continue
+        cn = _ig_normalize_account_name(candidate)
+        for a in accounts:
+            if cn in (
+                _ig_normalize_account_name(a.get("username", "")),
+                _ig_normalize_account_name(a.get("name", "")),
+            ):
+                return a
+    return None
+
+
+def _ig_graph_classify(payload) -> str:
+    err = payload.get("error", {}) if isinstance(payload, dict) else {}
+    code = err.get("code")
+    msg = (err.get("message") or str(payload)).lower()
+    if code == 190 or "access token" in msg or "session" in msg or "expired" in msg:
+        return "session_expired"
+    if code in (4, 17, 32, 613) or any(t in msg for t in ("rate", "limit", "too many", "spam")):
+        return "action_blocked"
+    return "upload_failed"
+
+
+def _ig_graph_publish(account_entry, video_url, caption, publish_key=""):
+    account = account_entry.get("name") or account_entry.get("username") or "unknown"
+    user_id = str(account_entry.get("user_id", "")).strip()
+    token = (account_entry.get("access_token") or "").strip()
+    if not user_id or not token:
+        _ig_raise("session_expired", account,
+                  f"account='{account}' uchun user_id/token yo'q (ig_add_account.py orqali qo'shing)")
+
+    # 1) create REELS container — Instagram pulls the public video_url itself.
+    r = requests.post(
+        f"{IG_GRAPH_BASE}/{user_id}/media",
+        data={"media_type": "REELS", "video_url": video_url,
+              "caption": caption or "", "access_token": token},
+        timeout=60,
+    )
+    body = _ig_safe_response_json(r)
+    if r.status_code >= 400 or not (isinstance(body, dict) and body.get("id")):
+        _ig_raise(_ig_graph_classify(body), account,
+                  f"container yaratilmadi (http={r.status_code}): {body}")
+    creation_id = body["id"]
+    logger.info(f"[Instagram] graph container account={account} creation_id={creation_id}")
+
+    # 2) poll until the container finishes encoding.
+    deadline = time.time() + IG_GRAPH_STATUS_TIMEOUT
+    while True:
+        sr = requests.get(
+            f"{IG_GRAPH_BASE}/{creation_id}",
+            params={"fields": "status_code,status", "access_token": token},
+            timeout=30,
+        )
+        sb = _ig_safe_response_json(sr)
+        status_code = sb.get("status_code") if isinstance(sb, dict) else None
+        if status_code == "FINISHED":
+            break
+        if status_code == "ERROR" or sr.status_code >= 400:
+            _ig_raise(_ig_graph_classify(sb), account, f"container processing xato: {sb}")
+        if time.time() > deadline:
+            _ig_raise("upload_failed", account,
+                      f"container FINISHED bo'lmadi (timeout {IG_GRAPH_STATUS_TIMEOUT}s) status={status_code}")
+        time.sleep(IG_GRAPH_POLL_INTERVAL)
+
+    # 3) publish the finished container.
+    pr = requests.post(
+        f"{IG_GRAPH_BASE}/{user_id}/media_publish",
+        data={"creation_id": creation_id, "access_token": token},
+        timeout=60,
+    )
+    pb = _ig_safe_response_json(pr)
+    if pr.status_code >= 400 or not (isinstance(pb, dict) and pb.get("id")):
+        _ig_raise(_ig_graph_classify(pb), account, f"publish xato (http={pr.status_code}): {pb}")
+    media_id = str(pb["id"])
+
+    # 4) best-effort permalink lookup for the post URL / shortcode.
+    post_url, media_code = "", ""
+    try:
+        lr = requests.get(
+            f"{IG_GRAPH_BASE}/{media_id}",
+            params={"fields": "permalink", "access_token": token},
+            timeout=30,
+        )
+        lb = _ig_safe_response_json(lr)
+        if isinstance(lb, dict):
+            post_url = lb.get("permalink", "") or ""
+            m = re.search(r"/(?:reel|p)/([^/]+)/", post_url)
+            if m:
+                media_code = m.group(1)
+    except Exception as exc:
+        logger.warning(f"[Instagram] permalink lookup failed media_id={media_id}: {exc}")
+
+    _ig_mark_upload(account)
+    result = {
+        "status": "success",
+        "account": account,
+        "media_id": media_id,
+        "media_code": media_code,
+        "post_url": post_url,
+    }
+    # Persist BEFORE returning so the backend can recover via
+    # /instagram/upload/status if the HTTP response is lost to a proxy timeout.
+    if publish_key:
+        _ig_save_publish_success(publish_key, result)
+    logger.info(f"[Instagram] graph publish success account={account} media_id={media_id} url={post_url}")
+    return result
 
 
 def _serial_job_snapshot(job_id: str):
@@ -4705,74 +4852,43 @@ class ParserHandler(BaseHTTPRequestHandler):
                     account_param
                     or body.get("account_name", "")
                     or body.get("account", "")
-                    or "main"
                 ).strip()
 
                 logger.info(
                     f"[Instagram] upload requested account_param={account_param or '-'} "
-                    f"requested_account={requested_account or '-'} url={video_url}"
+                    f"requested_account={requested_account or '-'} username={username or '-'} url={video_url}"
                 )
 
-                try:
-                    from instagrapi import Client  # noqa: F401
-                except ImportError:
-                    self._send_error("instagrapi not installed — run: pip install instagrapi", 500)
+                # Graph API publishing: Instagram fetches the public video_url
+                # itself, so no local download / instagrapi login is needed.
+                entry = _ig_find_account(requested_account, username)
+                if not entry:
+                    self._send_json({
+                        "status": "failed",
+                        "account": requested_account or username,
+                        "error_type": "session_expired",
+                        "action_required": "ig_add_account.py orqali shu akkauntni qo'shing",
+                        "message": f"account='{requested_account or username}' ig_accounts.json da topilmadi",
+                        "error": "account not found in ig_accounts.json",
+                    })
                     return
 
-                import tempfile
-
-                tmp_path = None
                 try:
-                    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
-                        tmp_path = f.name
-                    logger.info(f"[Instagram] download prepare received_url={video_url} final_resolved_url={video_url}")
-                    _download_remote_video_to_path(video_url, tmp_path)
-                    video_path = Path(tmp_path)
-                    accounts_to_try = _ig_accounts_to_try(requested_account)
-                    last_error = None
-
-                    for index, account in enumerate(accounts_to_try):
-                        account_config = _ig_get_account_config(
-                            account,
-                            body_username=username,
-                            body_password=password,
-                        )
-                        logger.info(
-                            f"[Instagram] resolved account={account_config['account']} "
-                            f"username={account_config['username'] or '-'} "
-                            f"session_file={account_config['session_file']} "
-                            f"exists={account_config['session_file'].exists()}"
-                        )
-                        try:
-                            result = _ig_upload_for_account(account_config, video_path, caption, publish_key=publish_key)
-                            self._send_json(result)
-                            return
-                        except InstagramUploadError as exc:
-                            last_error = exc
-                            logger.error(
-                                f"[Instagram] final fail account={exc.account} "
-                                f"type={exc.error_type}: {exc.message}"
-                            )
-                            if index < len(accounts_to_try) - 1:
-                                logger.warning(
-                                    f"[Instagram] switching account {account_config['account']} -> "
-                                    f"{accounts_to_try[index + 1]}"
-                                )
-                            else:
-                                self._send_json({
-                                    "status": "failed",
-                                    "account": exc.account,
-                                    "error_type": exc.error_type,
-                                    "action_required": exc.action_required,
-                                    "message": exc.message,
-                                    "error": exc.message,
-                                })
-                                return
-                    if last_error:
-                        raise last_error
-                finally:
-                    if tmp_path and os.path.exists(tmp_path):
-                        os.unlink(tmp_path)
+                    result = _ig_graph_publish(entry, video_url, caption, publish_key=publish_key)
+                    self._send_json(result)
+                except InstagramUploadError as exc:
+                    logger.error(
+                        f"[Instagram] graph fail account={exc.account} "
+                        f"type={exc.error_type}: {exc.message}"
+                    )
+                    self._send_json({
+                        "status": "failed",
+                        "account": exc.account,
+                        "error_type": exc.error_type,
+                        "action_required": exc.action_required,
+                        "message": exc.message,
+                        "error": exc.message,
+                    })
             except Exception as e:
                 logger.error(f"[Instagram] endpoint error: {e}", exc_info=True)
                 self._send_error(str(e), 500)

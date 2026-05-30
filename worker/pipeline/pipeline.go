@@ -1581,9 +1581,9 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 		} else {
 			err = reqErr
 		}
-		reqCancel()
 
 		if err != nil {
+			reqCancel()
 			consecutiveErrors++
 			log.Printf("[WORKER] /progress transport error — job_id=%s, err=%v, consecutive=%d/%d",
 				jobID, err, consecutiveErrors, consecutiveErrorLimit)
@@ -1598,9 +1598,17 @@ func (p *Pipeline) pollDownloadProgress(ctx context.Context, job *models.Ingesti
 			continue
 		}
 
+		// IMPORTANT: do not cancel reqCtx until the body is fully read.
+		// http.Client.Do returns once the response headers arrive; the body is
+		// streamed lazily and stays bound to the request context. Cancelling
+		// here (before io.ReadAll) aborts the in-flight body read with
+		// "context canceled" — which under parser load surfaced as
+		// "parser /progress body unreadable N polls in a row: context canceled"
+		// and failed otherwise-healthy downloads.
 		rawBody, readErr := io.ReadAll(progressResp.Body)
 		statusCode := progressResp.StatusCode
 		progressResp.Body.Close()
+		reqCancel()
 
 		if readErr != nil {
 			consecutiveErrors++
