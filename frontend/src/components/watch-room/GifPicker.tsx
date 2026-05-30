@@ -3,24 +3,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Search, X, Loader2 } from "lucide-react";
 
-// Instagram-style GIF picker backed by GIPHY. Shows trending on open and
-// searches as the user types (debounced). Selecting a GIF hands its CDN URL
-// back to the parent, which sends it as a kind:"gif" chat message.
+// Instagram-style GIF picker. Shows trending on open and searches as the
+// user types (debounced). Selecting a GIF hands its URL back to the parent,
+// which sends it as a kind:"gif" chat message.
 //
-// Requires NEXT_PUBLIC_GIPHY_API_KEY. GIPHY's developer terms require the
-// "Powered by GIPHY" attribution rendered below the grid.
+// Goes through OUR backend proxy (/api/gifs/search) so the GIPHY API key
+// stays server-side and is never shipped to the browser. GIPHY's terms still
+// require the "Powered by GIPHY" attribution rendered below the grid.
 
-const GIPHY_KEY = process.env.NEXT_PUBLIC_GIPHY_API_KEY || "";
-const GIPHY_ENDPOINT = "https://api.giphy.com/v1/gifs";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
 
-type GiphyItem = {
+type GifItem = {
   id: string;
-  images: {
-    fixed_height: { url: string; width: string; height: string };
-    fixed_height_small: { url: string };
-    original: { url: string };
-  };
   title?: string;
+  preview: string; // small thumb for the grid
+  url: string; // full gif sent into chat
 };
 
 export default function GifPicker({
@@ -31,33 +28,28 @@ export default function GifPicker({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
-  const [gifs, setGifs] = useState<GiphyItem[]>([]);
+  const [gifs, setGifs] = useState<GifItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchGifs = useCallback(async (q: string) => {
-    if (!GIPHY_KEY) {
-      setError("GIF xizmati sozlanmagan.");
-      return;
-    }
     setLoading(true);
     setError(null);
     try {
-      // Trending when the box is empty, search otherwise. rating=pg-13 keeps
-      // the grid SFW-ish for a couples/family watch room.
-      const path = q.trim() ? "search" : "trending";
-      const params = new URLSearchParams({
-        api_key: GIPHY_KEY,
-        limit: "24",
-        rating: "pg-13",
-        bundle: "fixed_height",
-      });
+      const params = new URLSearchParams({ limit: "24" });
       if (q.trim()) params.set("q", q.trim());
-      const res = await fetch(`${GIPHY_ENDPOINT}/${path}?${params.toString()}`);
+      // Plain (unauthenticated) fetch so the backend response cache can serve
+      // repeat searches — GIF results aren't user-specific.
+      const res = await fetch(`${API_BASE}/gifs/search?${params.toString()}`);
+      if (res.status === 503) {
+        setError("GIF xizmati sozlanmagan.");
+        setGifs([]);
+        return;
+      }
       if (!res.ok) throw new Error(String(res.status));
       const json = await res.json();
-      setGifs(Array.isArray(json.data) ? json.data : []);
+      setGifs(Array.isArray(json.gifs) ? json.gifs : []);
     } catch {
       setError("GIF'larni yuklab bo'lmadi.");
       setGifs([]);
@@ -112,12 +104,12 @@ export default function GifPicker({
             {gifs.map((g) => (
               <button
                 key={g.id}
-                onClick={() => onSelect(g.images.fixed_height.url)}
+                onClick={() => onSelect(g.url)}
                 className="block w-full overflow-hidden rounded-lg hover:ring-2 hover:ring-brand-red transition"
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={g.images.fixed_height_small.url}
+                  src={g.preview}
                   alt={g.title || "GIF"}
                   loading="lazy"
                   className="w-full h-auto bg-brand-card"

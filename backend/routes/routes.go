@@ -9,7 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler, contentHandler *handlers.ContentHandler, systemHandler *handlers.SystemHandler, deleteJobHandler *handlers.DeleteJobHandler, expenseHandler *handlers.ExpenseHandler, announcementHandler *handlers.AnnouncementHandler) {
+func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler, contentHandler *handlers.ContentHandler, systemHandler *handlers.SystemHandler, deleteJobHandler *handlers.DeleteJobHandler, expenseHandler *handlers.ExpenseHandler, announcementHandler *handlers.AnnouncementHandler, gifHandler *handlers.GifHandler) {
 	r.GET("/sitemap.xml", sitemapHandler.GetSitemapIndex)
 	r.GET("/sitemap-static.xml", sitemapHandler.GetSitemapStatic)
 	r.GET("/sitemap-genres.xml", sitemapHandler.GetSitemapGenres)
@@ -175,6 +175,10 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	api.GET("/homepage", middleware.CacheResponse(30*time.Second), homepageHandler.GetHomepageData)
 	api.GET("/movies", movieHandler.ListMovies)
 	api.GET("/movies/trending", middleware.CacheResponse(30*time.Second), movieHandler.GetTrendingMovies)
+
+	// Watch-room chat GIF picker — proxies GIPHY so the API key stays
+	// server-side. Cached 5m to spare the GIPHY quota on repeat searches.
+	api.GET("/gifs/search", middleware.CacheResponse(5*time.Minute), gifHandler.SearchGifs)
 	// Movie by slug (must come before :id routes to avoid slug being treated as id)
 	api.GET("/movies/slug/:slug", movieHandler.GetMovieBySlug)
 	// Movie by ID and recommendations
