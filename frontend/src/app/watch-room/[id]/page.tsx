@@ -1,9 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import dynamic from "next/dynamic";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import RoomPlayer from "@/components/watch-room/RoomPlayer";
+// Code-split the room player (heavy hls.js bundle) out of the room route's
+// initial JS — the room shell + chat render first while the player streams
+// in. ssr:false because hls.js is browser-only.
+const RoomPlayer = dynamic(() => import("@/components/watch-room/RoomPlayer"), {
+  ssr: false,
+  loading: () => <div className="w-full h-full bg-black animate-pulse" />,
+});
 import MemberList from "@/components/watch-room/MemberList";
 import {
   getWatchRoom,
