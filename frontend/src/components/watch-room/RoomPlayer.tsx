@@ -109,8 +109,17 @@ export default function RoomPlayer({
   // Progress-bar hover state: fractional position (0..1) and pixel-x for
   // the tooltip. Null when the cursor isn't over the bar.
   const [scrubHover, setScrubHover] = useState<{ frac: number; x: number } | null>(null);
+  // True while the host is dragging the progress bar. Lets onPointerMove keep
+  // seeking continuously instead of only jumping on a single click/tap.
+  const isScrubbingRef = useRef(false);
   const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Touch devices: skip the double-tap-to-fullscreen gesture. Users tapping
+  // the ±skip buttons in quick succession kept triggering fullscreen by
+  // accident, then navigating away on the next stray tap.
+  const isMobile =
+    typeof navigator !== "undefined" &&
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
   // Host-only skip-step (seconds). Persisted to localStorage so it
   // survives reloads. Default 10s — same as most major players.
@@ -732,8 +741,14 @@ export default function RoomPlayer({
       onMouseMove={showControls}
       onMouseLeave={() => playing && setControlsVisible(false)}
       onClick={() => {
-        // Wait 220ms — if a 2nd click comes in (dblclick) we cancel the
-        // play-toggle and let onDoubleClick fire instead.
+        // On touch devices there's no double-tap-to-fullscreen, so toggle
+        // immediately — no need to debounce against a pending dblclick.
+        if (isMobile) {
+          togglePlay();
+          return;
+        }
+        // Desktop: wait 220ms — if a 2nd click comes in (dblclick) we cancel
+        // the play-toggle and let onDoubleClick fire instead.
         if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
         clickTimerRef.current = setTimeout(() => {
           togglePlay();
@@ -742,6 +757,7 @@ export default function RoomPlayer({
       }}
       onDoubleClick={(e) => {
         e.stopPropagation();
+        if (isMobile) return; // fullscreen via the dedicated button on mobile
         if (clickTimerRef.current) {
           clearTimeout(clickTimerRef.current);
           clickTimerRef.current = null;
@@ -810,18 +826,36 @@ export default function RoomPlayer({
             Guests get the preview too (they can't actually seek but
             knowing the time helps for chat coordination). */}
         <div
-          className={`relative h-1.5 bg-white/20 rounded-full mb-2 group/scrub ${isHost ? "cursor-pointer" : "cursor-not-allowed"}`}
-          onMouseMove={(e) => {
+          className={`relative h-1.5 bg-white/20 rounded-full mb-2 group/scrub touch-none ${isHost ? "cursor-pointer" : "cursor-not-allowed"}`}
+          onPointerDown={(e) => {
+            if (!isHost) return;
+            // Capture the pointer so dragging keeps reporting to this element
+            // even when the cursor/finger slides off the thin bar.
+            e.currentTarget.setPointerCapture(e.pointerId);
+            isScrubbingRef.current = true;
             const rect = e.currentTarget.getBoundingClientRect();
             const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
             setScrubHover({ frac, x: e.clientX - rect.left });
+            onScrubChange(frac);
           }}
-          onMouseLeave={() => setScrubHover(null)}
-          onClick={(e) => {
-            if (!isHost) return;
+          onPointerMove={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
-            const frac = (e.clientX - rect.left) / rect.width;
-            onScrubChange(Math.max(0, Math.min(1, frac)));
+            const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+            setScrubHover({ frac, x: Math.max(0, Math.min(rect.width, e.clientX - rect.left)) });
+            // While dragging, seek continuously so the bar follows the finger.
+            if (isHost && isScrubbingRef.current) onScrubChange(frac);
+          }}
+          onPointerUp={(e) => {
+            if (isScrubbingRef.current) {
+              e.currentTarget.releasePointerCapture(e.pointerId);
+              isScrubbingRef.current = false;
+            }
+          }}
+          onPointerCancel={() => {
+            isScrubbingRef.current = false;
+          }}
+          onMouseLeave={() => {
+            if (!isScrubbingRef.current) setScrubHover(null);
           }}
         >
           <div

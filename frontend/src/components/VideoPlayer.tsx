@@ -412,6 +412,13 @@ function HLSPlayer({
   const [showControls, setShowControls] = useState(true);
   const [buffered, setBuffered] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // Scrubbing state for the progress bar. The range input is controlled by
+  // `currentTime`, which only advances on `timeupdate`; during an HLS seek
+  // that event lags, so a naive drag snaps the thumb back to the old position
+  // and the bar feels un-draggable (it only "jumps" on release). While the
+  // user drags we show `scrubValue` and hold the commit until pointer-up.
+  const [scrubbing, setScrubbing] = useState(false);
+  const [scrubValue, setScrubValue] = useState(0);
 
   const [qualities, setQualities] = useState<QualityLevel[]>([]);
   const [selectedQuality, setSelectedQuality] = useState(-1); // -1 = Auto
@@ -918,13 +925,6 @@ function HLSPlayer({
     else video.pause();
   };
 
-  const seek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (adActive) return;
-    const video = videoRef.current;
-    if (!video) return;
-    video.currentTime = Number(e.target.value);
-  };
-
   const changeVolume = (e: React.ChangeEvent<HTMLInputElement>) => {
     const video = videoRef.current;
     if (!video) return;
@@ -1119,6 +1119,13 @@ function HLSPlayer({
       onMouseEnter={() => setShowControls(true)}
       onClick={() => {
         resetControlsTimer();
+        // On touch devices there's no double-tap-to-fullscreen (it kept firing
+        // by accident while users tapped the seek buttons), so toggle play
+        // immediately instead of debouncing against a pending dblclick.
+        if (isMobile) {
+          togglePlay();
+          return;
+        }
         if (clickTimer.current) clearTimeout(clickTimer.current);
         clickTimer.current = setTimeout(() => {
           clickTimer.current = null;
@@ -1126,6 +1133,7 @@ function HLSPlayer({
         }, 250);
       }}
       onDoubleClick={(e) => {
+        if (isMobile) return; // fullscreen via the dedicated button on mobile
         e.preventDefault();
         if (clickTimer.current) {
           clearTimeout(clickTimer.current);
@@ -1410,10 +1418,11 @@ function HLSPlayer({
               className="absolute top-0 left-0 h-full bg-white/25 rounded-full pointer-events-none"
               style={{ width: duration ? `${Math.min((buffered / duration) * 100, 100)}%` : "0%" }}
             />
-            {/* played */}
+            {/* played — follow the drag position while scrubbing so the bar
+                tracks the finger/cursor instead of the (lagging) video time */}
             <div
               className="absolute top-0 left-0 h-full bg-brand-red rounded-full pointer-events-none"
-              style={{ width: duration ? `${Math.min((currentTime / duration) * 100, 100)}%` : "0%" }}
+              style={{ width: duration ? `${Math.min(((scrubbing ? scrubValue : currentTime) / duration) * 100, 100)}%` : "0%" }}
             />
             {/* hover indicator dot */}
             {hoverTime !== null && duration > 0 && !adActive && (
@@ -1428,8 +1437,25 @@ function HLSPlayer({
               min={0}
               max={duration || 0}
               step={0.1}
-              value={currentTime}
-              onChange={seek}
+              value={scrubbing ? scrubValue : currentTime}
+              onPointerDown={() => {
+                if (adActive) return;
+                setScrubValue(videoRef.current?.currentTime ?? currentTime);
+                setScrubbing(true);
+              }}
+              onChange={(e) => {
+                if (adActive) return;
+                // Track the drag locally; commit to the video on pointer-up so
+                // HLS isn't hammered with a seek on every intermediate value.
+                setScrubValue(Number(e.target.value));
+              }}
+              onPointerUp={() => {
+                if (!scrubbing) return;
+                const video = videoRef.current;
+                if (video) video.currentTime = scrubValue;
+                setScrubbing(false);
+              }}
+              onPointerCancel={() => setScrubbing(false)}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
             />
           </div>
