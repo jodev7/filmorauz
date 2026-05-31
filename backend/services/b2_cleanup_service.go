@@ -44,6 +44,7 @@ var allowedB2DeleteRoots = []string{
 	"images/backdrops/",
 	"images/series/",
 	"images/episodes/",
+	"content/",
 }
 
 // broadB2DeletePrefixes is an explicit blocklist of prefixes that must
@@ -76,6 +77,8 @@ var broadB2DeletePrefixes = map[string]struct{}{
 	"movies/":           {},
 	"clips":             {},
 	"clips/":            {},
+	"content":           {},
+	"content/":          {},
 }
 
 // B2CleanupService deletes files from a Backblaze B2 bucket.

@@ -326,7 +326,7 @@ func main() {
 	// Content folders — admin-curated clips (CapCut exports) with scheduling.
 	contentFolderRepo := repositories.NewContentFolderRepository(db)
 	contentClipRepo := repositories.NewContentClipRepository(db)
-	contentHandler := handlers.NewContentHandler(contentFolderRepo, contentClipRepo, publishJobRepo, uploadHandler, cfg, parserURL)
+	contentHandler := handlers.NewContentHandler(contentFolderRepo, contentClipRepo, publishJobRepo, uploadHandler, cfg, parserURL, b2Cleanup)
 
 	movieService.SetStorageDependencies(clipRepo, igScheduleRepo, publishJobRepo, b2Cleanup)
 	seriesService.SetStorageDependencies(clipRepo, igScheduleRepo, publishJobRepo, b2Cleanup)

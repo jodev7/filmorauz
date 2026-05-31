@@ -37,6 +37,7 @@ type ContentHandler struct {
 	uploader   *UploadHandler
 	cfg        *config.Config
 	parserURL  string
+	b2Cleanup  *services.B2CleanupService // optional — nil means skip B2 cleanup (e.g. DEV)
 }
 
 func NewContentHandler(
@@ -46,6 +47,7 @@ func NewContentHandler(
 	uploader *UploadHandler,
 	cfg *config.Config,
 	parserURL string,
+	b2Cleanup *services.B2CleanupService,
 ) *ContentHandler {
 	return &ContentHandler{
 		folderRepo: folderRepo,
@@ -54,7 +56,23 @@ func NewContentHandler(
 		uploader:   uploader,
 		cfg:        cfg,
 		parserURL:  parserURL,
+		b2Cleanup:  b2Cleanup,
 	}
+}
+
+// removeClipFromStorage best-effort deletes a clip's underlying file from B2.
+// No-op in DEV / when B2 is not configured. Errors are logged, not returned —
+// storage cleanup must never block the DB delete the admin requested.
+func (h *ContentHandler) removeClipFromStorage(clip *models.ContentClip) {
+	if h.b2Cleanup == nil || clip == nil {
+		return
+	}
+	raw := clip.URL
+	if h.b2Cleanup.NormalizeKey(raw) == "" {
+		raw = clip.Path
+	}
+	summary := services.NewB2DeleteSummary()
+	h.b2Cleanup.SafeDeleteKey(raw, "content-clip-"+clip.ID.Hex(), summary)
 }
 
 // ── Folders ──────────────────────────────────────────────────────────────
@@ -176,6 +194,13 @@ func (h *ContentHandler) DeleteFolder(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
+	// Remove each clip's B2 file before dropping the DB rows, so deleting a
+	// folder does not orphan its videos in storage (best-effort).
+	if clips, listErr := h.clipRepo.ListByFolder(ctx, id); listErr == nil {
+		for i := range clips {
+			h.removeClipFromStorage(&clips[i])
+		}
+	}
 	if _, err := h.clipRepo.DeleteByFolder(ctx, id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to remove folder clips"})
 		return
@@ -346,6 +371,8 @@ func (h *ContentHandler) DeleteClip(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete clip"})
 		return
 	}
+	// Remove the underlying video from B2 after the DB row is gone (best-effort).
+	h.removeClipFromStorage(clip)
 	if err := h.folderRepo.IncrementClipsCount(ctx, clip.FolderID, -1); err != nil {
 		_ = err
 	}
