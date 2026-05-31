@@ -18,14 +18,16 @@ import (
 
 const (
 	maxDirectImageUploadSize int64 = 20 * 1024 * 1024
-	maxDirectVideoUploadSize int64 = 5 * 1024 * 1024 * 1024
+	maxDirectVideoUploadSize int64 = 15 * 1024 * 1024 * 1024
 )
 
 type b2AuthorizeResponse struct {
-	AccountID          string `json:"accountId"`
-	AuthorizationToken string `json:"authorizationToken"`
-	APIURL             string `json:"apiUrl"`
-	Allowed            struct {
+	AccountID               string `json:"accountId"`
+	AuthorizationToken      string `json:"authorizationToken"`
+	APIURL                  string `json:"apiUrl"`
+	RecommendedPartSize     int64  `json:"recommendedPartSize"`
+	AbsoluteMinimumPartSize int64  `json:"absoluteMinimumPartSize"`
+	Allowed                 struct {
 		BucketID   string `json:"bucketId"`
 		BucketName string `json:"bucketName"`
 	} `json:"allowed"`

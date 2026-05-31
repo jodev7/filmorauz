@@ -273,6 +273,12 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	api.GET("/get-upload-url", ingestionHandler.GetUploadURL)
 	api.GET("/upload/b2-url", middleware.RequireAdmin(authService), uploadHandler.GetB2UploadURL)
 	api.POST("/upload/b2-complete", middleware.RequireAdmin(authService), uploadHandler.CompleteB2Upload)
+	// Multipart (large file) upload broker — used for multi-GB videos so a
+	// network blip doesn't restart the whole upload and parts go in parallel.
+	api.POST("/upload/b2-large/start", middleware.RequireAdmin(authService), uploadHandler.StartB2LargeFile)
+	api.POST("/upload/b2-large/part-url", middleware.RequireAdmin(authService), uploadHandler.GetB2PartUploadURL)
+	api.POST("/upload/b2-large/finish", middleware.RequireAdmin(authService), uploadHandler.FinishB2LargeFile)
+	api.POST("/upload/b2-large/cancel", middleware.RequireAdmin(authService), uploadHandler.CancelB2LargeFile)
 
 	// Admin routes — protected by JWT and admin role check
 	admin := api.Group("/admin")

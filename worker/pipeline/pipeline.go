@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/filmorauz/worker/models"
@@ -2132,6 +2133,24 @@ func (p *Pipeline) processDirectUploadJob(ctx context.Context, job *models.Inges
 	}
 	log.Printf("[DIRECT_UPLOAD] Downloaded temp file to: %s", localTempPath)
 
+	// Disk preflight: the transcode produces an intermediate base video plus
+	// several HLS renditions, all on local disk before upload. For a multi-GB
+	// source this can easily need 3-4× the source size. Bail out early with a
+	// clear message rather than filling the disk halfway through a long encode.
+	if srcInfo, statErr := os.Stat(localTempPath); statErr == nil {
+		needed := srcInfo.Size() * 3
+		if free, dErr := freeDiskBytes(p.config.TempDir); dErr == nil && free < needed {
+			errMsg := fmt.Sprintf("not enough disk space to process: need ~%.1f GB free, have %.1f GB (source %.1f GB)",
+				float64(needed)/(1<<30), float64(free)/(1<<30), float64(srcInfo.Size())/(1<<30))
+			log.Printf("[DIRECT_UPLOAD] ERROR: %s", errMsg)
+			p.cleanupFile(localTempPath)
+			if fErr := p.failJobWithStatus(jobID, models.IngestionStatusFailed, errMsg); fErr != nil {
+				log.Printf("[DIRECT_UPLOAD] Failed to mark job as failed: %v", fErr)
+			}
+			return fmt.Errorf("%s", errMsg)
+		}
+	}
+
 	// Update status to processing
 	if err := p.updateStatus(jobID, models.IngestionStatusProcessing, 30); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
@@ -3260,6 +3279,18 @@ func (p *Pipeline) failJobWithStatus(jobID string, status models.IngestionStatus
 
 	log.Printf("Job %s marked as %s: %s", jobID, status, errorMsg)
 	return nil
+}
+
+// freeDiskBytes returns the available bytes on the filesystem backing dir.
+func freeDiskBytes(dir string) (int64, error) {
+	if dir == "" {
+		dir = "."
+	}
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return 0, err
+	}
+	return int64(st.Bavail) * int64(st.Bsize), nil
 }
 
 // cleanupFile removes a temporary file
