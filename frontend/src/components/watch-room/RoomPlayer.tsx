@@ -16,6 +16,7 @@ import {
   RotateCcw,
   Rewind,
   FastForward,
+  RefreshCw,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
@@ -69,6 +70,12 @@ type Props = {
   // the parent (outside the player container) meant fullscreen took
   // the player but left reactions behind on the page.
   reactionsOverlay?: React.ReactNode;
+  // Guest-only "sync to host" affordance. Rendered inside the player so it
+  // fades with the auto-hiding controls instead of permanently covering the
+  // video. `canSyncToHost` gates visibility (guest + host state known);
+  // `onSyncToHost` snaps the guest's playhead to the host's current state.
+  canSyncToHost?: boolean;
+  onSyncToHost?: () => void;
 };
 
 export default function RoomPlayer({
@@ -84,6 +91,8 @@ export default function RoomPlayer({
   registerSync,
   fullscreenOverlay,
   reactionsOverlay,
+  canSyncToHost,
+  onSyncToHost,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -126,7 +135,9 @@ export default function RoomPlayer({
   const SKIP_STORAGE_KEY = "roomPlayer.skipSeconds";
   const SKIP_PRESETS = [5, 10, 15, 30, 60];
   const [skipSeconds, setSkipSeconds] = useState<number>(10);
-  const [showSkipMenu, setShowSkipMenu] = useState(false);
+  // Settings dropdown sub-pane, mirroring the main VideoPlayer: the gear
+  // opens a root menu that drills into quality or the skip-step picker.
+  const [settingsPane, setSettingsPane] = useState<"root" | "quality" | "seek">("root");
   useEffect(() => {
     if (typeof window === "undefined") return;
     const raw = window.localStorage.getItem(SKIP_STORAGE_KEY);
@@ -805,12 +816,44 @@ export default function RoomPlayer({
         </div>
       </div>
 
-      {/* Floating big-play overlay when paused (host only) */}
-      {!playing && isHost && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="bg-black/50 rounded-full p-4">
-            <Play className="w-10 h-10 text-white" />
-          </div>
+      {/* Center playback controls (host only) — mirrors the main VideoPlayer:
+          ±skip flank a big play/pause. Fades with the auto-hiding controls so
+          the video isn't permanently covered. Guests don't drive playback, so
+          they get no center buttons (they watch + use "Hostga sinxron"). */}
+      {isHost && (
+        <div
+          className={`pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-8 sm:gap-14 transition-opacity duration-200 ${
+            controlsVisible ? "opacity-100" : "opacity-0"
+          }`}
+        >
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); skip(-skipSeconds); showControls(); }}
+            className="pointer-events-auto relative flex h-12 w-12 items-center justify-center rounded-full bg-black/45 text-white transition hover:bg-black/65 sm:h-14 sm:w-14"
+            aria-label={`${skipSeconds}s orqaga`}
+            title={`${skipSeconds}s orqaga (←)`}
+          >
+            <Rewind className="w-6 h-6" />
+            <span className="absolute -bottom-0 text-[9px] tabular-nums leading-none">{skipSeconds}</span>
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); togglePlay(); showControls(); }}
+            className="pointer-events-auto flex h-16 w-16 items-center justify-center rounded-full bg-black/55 text-white transition hover:bg-black/75 sm:h-20 sm:w-20"
+            aria-label={playing ? "Pauza" : "Play"}
+          >
+            {playing ? <Pause className="w-8 h-8" fill="white" /> : <Play className="w-8 h-8 ml-1" fill="white" />}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); skip(skipSeconds); showControls(); }}
+            className="pointer-events-auto relative flex h-12 w-12 items-center justify-center rounded-full bg-black/45 text-white transition hover:bg-black/65 sm:h-14 sm:w-14"
+            aria-label={`${skipSeconds}s oldinga`}
+            title={`${skipSeconds}s oldinga (→)`}
+          >
+            <FastForward className="w-6 h-6" />
+            <span className="absolute -bottom-0 text-[9px] tabular-nums leading-none">{skipSeconds}</span>
+          </button>
         </div>
       )}
 
@@ -890,111 +933,9 @@ export default function RoomPlayer({
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3 text-white">
-          {/* Skip backward (host only) */}
-          {isHost && (
-            <button
-              onClick={() => skip(-skipSeconds)}
-              className="hover:text-brand-red transition-colors relative"
-              title={`${skipSeconds}s orqaga (←)`}
-              aria-label="Orqaga otkazish"
-            >
-              <Rewind className="w-5 h-5" />
-              <span className="absolute -top-1 -right-2 text-[9px] tabular-nums bg-black/60 rounded px-1 leading-tight">
-                {skipSeconds}
-              </span>
-            </button>
-          )}
-
-          {/* Play/Pause (host only) */}
-          {isHost ? (
-            <button onClick={togglePlay} className="hover:text-brand-red transition-colors">
-              {playing ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
-            </button>
-          ) : (
-            <span className="text-xs opacity-70 px-1">
-              {playing ? <Pause className="w-4 h-4 inline" /> : <Play className="w-4 h-4 inline" />}
-            </span>
-          )}
-
-          {/* Skip forward + step picker (host only). Long-press / right-click
-              opens a small popover to set the step (5/10/15/30/60 + custom). */}
-          {isHost && (
-            <div className="relative">
-              <button
-                onClick={() => skip(skipSeconds)}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setShowSkipMenu((v) => !v);
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="hover:text-brand-red transition-colors relative"
-                title={`${skipSeconds}s oldinga (→) — sozlash uchun o'ng-bosing`}
-                aria-label="Oldinga otkazish"
-              >
-                <FastForward className="w-5 h-5" />
-                <span className="absolute -top-1 -right-2 text-[9px] tabular-nums bg-black/60 rounded px-1 leading-tight">
-                  {skipSeconds}
-                </span>
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowSkipMenu((v) => !v);
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="ml-0.5 text-[10px] opacity-70 hover:opacity-100 hover:text-brand-red transition px-1"
-                title="Otkazish sekundlarini sozlash"
-                aria-label="Otkazish sozlamalari"
-              >
-                ⚙
-              </button>
-              {showSkipMenu && (
-                <div
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => e.stopPropagation()}
-                  className="absolute left-0 bottom-8 bg-black/95 border border-white/10 rounded-lg overflow-hidden min-w-[160px] z-50 shadow-xl p-2"
-                >
-                  <div className="text-[10px] text-gray-400 mb-1 px-1">
-                    Otkazish sekundi
-                  </div>
-                  <div className="grid grid-cols-3 gap-1">
-                    {SKIP_PRESETS.map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => {
-                          updateSkipSeconds(s);
-                          setShowSkipMenu(false);
-                        }}
-                        className={`text-xs px-2 py-1 rounded ${
-                          skipSeconds === s
-                            ? "bg-brand-red text-white"
-                            : "bg-white/5 hover:bg-white/15 text-white"
-                        }`}
-                      >
-                        {s}s
-                      </button>
-                    ))}
-                  </div>
-                  <div className="mt-2 flex items-center gap-1">
-                    <input
-                      type="number"
-                      min={1}
-                      max={300}
-                      value={skipSeconds}
-                      onChange={(e) => updateSkipSeconds(Number(e.target.value))}
-                      onKeyDown={(e) => e.stopPropagation()}
-                      className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-brand-red"
-                    />
-                    <span className="text-[10px] text-gray-400">sek</span>
-                  </div>
-                  <div className="mt-2 text-[10px] text-gray-500 leading-snug">
-                    Klaviatura: ←/→ otkazish, Space play/pause
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+          {/* Play/Pause + ±skip live in the center overlay above (host only),
+              mirroring the main VideoPlayer. The skip-step is configured from
+              the settings gear. */}
 
           {/* Volume */}
           <button onClick={toggleMute} className="hover:text-brand-red transition-colors">
@@ -1032,6 +973,7 @@ export default function RoomPlayer({
                 e.stopPropagation();
                 const nextOpen = !showSettings;
                 setShowSettings(nextOpen);
+                setSettingsPane("root");
                 // On-demand refresh: if the picker is about to open with
                 // only "Auto" (or empty), re-fetch the master playlist
                 // and populate. This is the last line of defense for
@@ -1055,27 +997,102 @@ export default function RoomPlayer({
               <div
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => e.stopPropagation()}
-                className="absolute right-0 bottom-8 bg-black/95 border border-white/10 rounded-lg overflow-hidden min-w-[120px] z-50 shadow-xl"
+                className="absolute right-0 bottom-8 bg-black/95 border border-white/10 rounded-lg overflow-hidden min-w-[180px] z-50 shadow-xl text-xs"
               >
-                {qualities.map((q) => (
-                  <button
-                    key={q.index}
-                    type="button"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setQuality(q.index);
-                    }}
-                    className={`block w-full px-3 py-2 text-left text-xs hover:bg-white/10 ${
-                      q.index === selectedLevel ? "text-brand-red font-semibold" : "text-white"
-                    }`}
-                  >
-                    {q.label}
-                  </button>
-                ))}
-                {qualities.length <= 1 && (
-                  <div className="px-3 py-2 text-[10px] text-gray-500 border-t border-white/10">
-                    Bu video uchun boshqa sifat mavjud emas
+                {/* Root pane — entries drill into sub-panes. */}
+                {settingsPane === "root" && (
+                  <div className="py-1">
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setSettingsPane("quality"); }}
+                      className="flex w-full items-center justify-between px-3 py-2 text-left text-white hover:bg-white/10"
+                    >
+                      <span>Sifat</span>
+                      <span className="text-white/60">{qualityLabel}</span>
+                    </button>
+                    {/* Skip-step is host-only (guests can't drive playback). */}
+                    {isHost && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setSettingsPane("seek"); }}
+                        className="flex w-full items-center justify-between px-3 py-2 text-left text-white hover:bg-white/10"
+                      >
+                        <span>Otkazish qadami</span>
+                        <span className="text-white/60">{skipSeconds}s</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Quality pane. */}
+                {settingsPane === "quality" && (
+                  <div className="py-1">
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setSettingsPane("root"); }}
+                      className="block w-full px-3 py-2 text-left text-white/70 hover:bg-white/10"
+                    >
+                      ‹ Sifat
+                    </button>
+                    {qualities.map((q) => (
+                      <button
+                        key={q.index}
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => { e.stopPropagation(); setQuality(q.index); }}
+                        className={`block w-full px-3 py-1.5 text-left hover:bg-white/10 ${
+                          q.index === selectedLevel ? "text-brand-red font-semibold" : "text-white"
+                        }`}
+                      >
+                        {q.label}
+                      </button>
+                    ))}
+                    {qualities.length <= 1 && (
+                      <div className="px-3 py-2 text-[10px] text-gray-500 border-t border-white/10">
+                        Bu video uchun boshqa sifat mavjud emas
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Skip-step pane (host only). */}
+                {settingsPane === "seek" && (
+                  <div className="py-1">
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setSettingsPane("root"); }}
+                      className="block w-full px-3 py-2 text-left text-white/70 hover:bg-white/10"
+                    >
+                      ‹ Otkazish qadami
+                    </button>
+                    {SKIP_PRESETS.map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); updateSkipSeconds(s); }}
+                        className={`block w-full px-3 py-1.5 text-left hover:bg-white/10 ${
+                          s === skipSeconds ? "text-brand-red font-semibold" : "text-white"
+                        }`}
+                      >
+                        {s}s
+                      </button>
+                    ))}
+                    <div className="mt-1 flex items-center gap-1 border-t border-white/10 px-3 py-2">
+                      <input
+                        type="number"
+                        min={1}
+                        max={300}
+                        value={skipSeconds}
+                        onChange={(e) => updateSkipSeconds(Number(e.target.value))}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-brand-red"
+                      />
+                      <span className="text-[10px] text-gray-400">sek</span>
+                    </div>
+                    <div className="px-3 pb-2 text-[10px] text-gray-500 leading-snug">
+                      Klaviatura: ←/→ otkazish, Space play/pause
+                    </div>
                   </div>
                 )}
               </div>
@@ -1112,6 +1129,21 @@ export default function RoomPlayer({
           </button>
         </div>
       </div>
+
+      {/* Guest-only "sync to host" — snaps the guest's playhead + play state
+          back to the host's. Lives inside the player so it fades with the
+          auto-hiding controls instead of permanently covering the video. */}
+      {canSyncToHost && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onSyncToHost?.(); showControls(); }}
+          className={`absolute bottom-16 sm:bottom-20 left-3 z-20 flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] sm:text-xs bg-black/60 hover:bg-black/80 border border-white/15 rounded-lg text-white transition-opacity ${
+            controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"
+          }`}
+          title="Hostning hozirgi pozitsiyasiga sinxronlash"
+        >
+          <RefreshCw className="w-3.5 h-3.5" /> Hostga sinxron
+        </button>
+      )}
 
       {/* Floating reactions — always inside the player container so
           they survive fullscreen. */}
