@@ -303,9 +303,11 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 				{"steps.process": bson.M{"$exists": false}},
 				{"steps.process": bson.M{"$ne": true}},
 			}},
-			// Either a regular job whose download finished and produced a local
-			// file, OR a clip_only job which re-pulls its own HLS from
-			// master_playlist_url (no prior download step / local file needed).
+			// A job qualifies for processing via one of:
+			//  - a regular job whose download finished and produced a local file;
+			//  - a clip_only job that re-pulls its own HLS from master_playlist_url;
+			//  - a direct_upload job that pulls its source from temp_file_url (B2
+			//    temp). The last two have no prior download step / local file.
 			{"$or": []bson.M{
 				{
 					"steps.download": true,
@@ -314,6 +316,10 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 				{
 					"content_type":        "clip_only",
 					"master_playlist_url": bson.M{"$exists": true, "$ne": ""},
+				},
+				{
+					"source":        "direct_upload",
+					"temp_file_url": bson.M{"$exists": true, "$ne": ""},
 				},
 			}},
 		},
@@ -338,7 +344,7 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 	}
 
 	log.Printf("[REPO] ClaimNextProcessingJob: querying for pending processing jobs...")
-	log.Printf("[REPO] ClaimNextProcessingJob filter: status=ready_to_process, retry_count<3, steps.process!=true, AND (steps.download=true+local_path OR content_type=clip_only+master_playlist_url)")
+	log.Printf("[REPO] ClaimNextProcessingJob filter: status=ready_to_process, retry_count<3, steps.process!=true, AND (steps.download=true+local_path OR content_type=clip_only+master_playlist_url OR source=direct_upload+temp_file_url)")
 	log.Printf("[REPO] ClaimNextProcessingJob FINAL QUERY: %+v", filter)
 
 	opts := options.FindOneAndUpdate().
@@ -355,12 +361,17 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 		return nil, err
 	}
 
-	// clip_only jobs carry a remote HLS URL in local_path and download it
-	// themselves in processClipOnlyJob, so the on-disk artifact check below
-	// (which expects a real local file) does not apply to them.
+	// clip_only and direct_upload jobs fetch their own source (a remote HLS URL
+	// or a B2 temp file) inside their dedicated pipeline, so the on-disk
+	// artifact check below (which expects a real local file) does not apply.
 	if job.ContentType == "clip_only" {
 		log.Printf("[REPO] ClaimNextProcessingJob: CLAIMED clip_only job %s (title: %s, master=%s)",
 			job.ID.Hex(), job.Title, job.MasterPlaylistURL)
+		return &job, nil
+	}
+	if job.Source == "direct_upload" {
+		log.Printf("[REPO] ClaimNextProcessingJob: CLAIMED direct_upload job %s (title: %s, temp=%s)",
+			job.ID.Hex(), job.Title, job.TempFileURL)
 		return &job, nil
 	}
 
