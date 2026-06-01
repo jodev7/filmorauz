@@ -116,7 +116,7 @@ func main() {
 	ratingService := services.NewRatingService(ratingRepo, seriesRatingRepo, episodeRatingRepo, movieRepo, seriesRepo)
 
 	// Share service
-	shareService := services.NewShareService(shareRepo, movieRepo, userRepo, cfg.BaseSiteURL)
+	shareService := services.NewShareService(shareRepo, movieRepo, seriesRepo, userRepo, cfg.BaseSiteURL)
 
 	// Seed admin user on first run
 	seedAdmin(userRepo, cfg.AdminTelegramID)

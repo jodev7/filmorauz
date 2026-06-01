@@ -237,7 +237,7 @@ export default async function SeriesDetailPage({ params }: Props) {
 
               <div className="mb-4 flex flex-wrap items-start gap-2">
                 <WatchTogetherButton contentType="series" contentID={series.id} />
-                <SeriesShareButton seriesSlug={series.slug} seriesTitle={series.title} />
+                <SeriesShareButton seriesId={series.id} seriesTitle={series.title} />
               </div>
 
               <div className="mb-6">

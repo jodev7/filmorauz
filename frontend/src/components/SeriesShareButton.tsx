@@ -2,28 +2,44 @@
 
 import { useState } from "react";
 import { Share2, Copy, Check, Send } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
+import { createSeriesShare, ShareResponse } from "@/lib/api";
 
 interface Props {
-  seriesSlug: string;
+  seriesId: string;
   seriesTitle: string;
 }
 
-// Series don't use the tracked movie-share backend (which is movie-id bound),
-// so we share the direct /series/<slug> URL — copy or send to Telegram.
-// Mirrors the movie ShareButton's UI/UX.
-export default function SeriesShareButton({ seriesSlug, seriesTitle }: Props) {
-  const [open, setOpen] = useState(false);
+// Tracked series share — mirrors the movie ShareButton. Creates a short
+// share record on the backend (POST /series/share) and surfaces the returned
+// /series/<slug>?share=<code> link for copy / Telegram.
+export default function SeriesShareButton({ seriesId, seriesTitle }: Props) {
+  const { token } = useAuth();
+  const [loading, setLoading] = useState(false);
+  const [shareData, setShareData] = useState<ShareResponse | null>(null);
   const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
-  const shareUrl = `${siteUrl.replace(/\/$/, "")}/series/${seriesSlug}`;
+  const handleShare = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await createSeriesShare(token, seriesId);
+      setShareData(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create share");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const copyToClipboard = async () => {
+    if (!shareData?.share_url) return;
     try {
-      await navigator.clipboard.writeText(shareUrl);
+      await navigator.clipboard.writeText(shareData.share_url);
     } catch {
       const input = document.createElement("input");
-      input.value = shareUrl;
+      input.value = shareData.share_url;
       document.body.appendChild(input);
       input.select();
       document.execCommand("copy");
@@ -34,18 +50,19 @@ export default function SeriesShareButton({ seriesSlug, seriesTitle }: Props) {
   };
 
   const shareToTelegram = () => {
+    if (!shareData?.share_url) return;
     const text = encodeURIComponent(`📺 ${seriesTitle}\nFILMORAUZ'da tomosha qiling`);
-    const url = encodeURIComponent(shareUrl);
+    const url = encodeURIComponent(shareData.share_url);
     window.open(`https://t.me/share/url?url=${url}&text=${text}`, "_blank");
   };
 
-  if (open) {
+  if (shareData) {
     return (
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
           <input
             type="text"
-            value={shareUrl}
+            value={shareData.share_url}
             readOnly
             className="flex-1 bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm"
           />
@@ -65,22 +82,26 @@ export default function SeriesShareButton({ seriesSlug, seriesTitle }: Props) {
           </button>
         </div>
         <button
-          onClick={() => setOpen(false)}
+          onClick={() => setShareData(null)}
           className="text-sm text-gray-400 hover:text-white transition-colors self-start"
         >
-          Yopish
+          Yangi havola yaratish
         </button>
       </div>
     );
   }
 
   return (
-    <button
-      onClick={() => setOpen(true)}
-      className="flex items-center gap-2 px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white hover:bg-brand-border transition-colors"
-    >
-      <Share2 size={18} />
-      Ulashish
-    </button>
+    <div className="flex flex-col gap-1">
+      <button
+        onClick={handleShare}
+        disabled={loading}
+        className="flex items-center gap-2 px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white hover:bg-brand-border transition-colors disabled:opacity-50"
+      >
+        <Share2 size={18} />
+        {loading ? "Yaratilmoqda..." : "Ulashish"}
+      </button>
+      {error && <span className="text-xs text-red-400">{error}</span>}
+    </div>
   );
 }

@@ -3086,6 +3086,30 @@ export async function createMovieShare(
   return res.json();
 }
 
+// Create a tracked share link for a series (mirrors createMovieShare).
+export async function createSeriesShare(
+  token: string | null,
+  seriesId: string
+): Promise<ShareResponse> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(`${API_URL}/series/share`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ series_id: seriesId }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to create share");
+  }
+  return res.json();
+}
+
 // Record a share open event
 export async function recordShareOpen(code: string): Promise<void> {
   const res = await fetch(`${API_URL}/shares/${code}/open`, {

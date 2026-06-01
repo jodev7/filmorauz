@@ -232,6 +232,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 
 	// Share routes (public)
 	api.POST("/movies/share", shareHandler.CreateShare)
+	api.POST("/series/share", shareHandler.CreateSeriesShare)
 	api.POST("/shares/:code/open", shareHandler.RecordShareOpen)
 	api.GET("/movies/share-stats", shareHandler.GetMovieShareStats)
 
