@@ -145,5 +145,20 @@ export function buildEpisodeJsonLd(data: EpisodePageData) {
       url: buildSeriesUrl(data.series.series.slug),
     },
     datePublished: data.episode.air_date || undefined,
+    // Nested VideoObject so Google can index the episode video. contentUrl is
+    // the real media stream (episode.video_url holds the HLS master playlist),
+    // NOT the page — avoids "Video isn't on a watch page" / blob: src.
+    video: data.episode.video_url
+      ? {
+          "@type": "VideoObject",
+          name: data.episode.title,
+          description: data.episode.description || data.description,
+          thumbnailUrl: [data.imageUrl],
+          uploadDate: data.episode.air_date || data.episode.created_at || undefined,
+          contentUrl: data.episode.video_url,
+          embedUrl: data.canonicalUrl,
+          ...(data.episode.duration ? { duration: `PT${data.episode.duration}M` } : {}),
+        }
+      : undefined,
   };
 }
