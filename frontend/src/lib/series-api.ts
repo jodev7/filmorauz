@@ -84,6 +84,7 @@ export interface SeriesListResponse {
   data: Series[];
   page: number;
   limit: number;
+  total?: number;
 }
 
 // Helper function to build episode URL - use consistently across the app
