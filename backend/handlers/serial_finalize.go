@@ -175,7 +175,14 @@ func (h *IngestionHandler) finalizeOneSerialParent(ctx context.Context, parent *
 			VideoURL:   c.MasterPlaylistURL,
 			Poster:     c.EpisodePosterURL,
 		}
-		episode, err := h.upsertEpisode(ctx, series.ID, season.ID, ep, series.PosterURL)
+		// Episode thumbnails come from the SERIES BACKDROP (not the per-episode
+		// image scraped from the source site, which is low quality / wrong).
+		// Fall back to the series poster only when no backdrop exists.
+		episodeThumb := strings.TrimSpace(series.BackdropURL)
+		if episodeThumb == "" {
+			episodeThumb = series.PosterURL
+		}
+		episode, err := h.upsertEpisode(ctx, series.ID, season.ID, ep, episodeThumb)
 		if err != nil {
 			log.Printf("[serial finalize] parent=%s upsert episode S%02dE%02d: %v",
 				parentHex, seasonNum, c.EpisodeNumber, err)

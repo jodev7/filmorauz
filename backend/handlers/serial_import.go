@@ -763,9 +763,12 @@ func (h *IngestionHandler) upsertEpisode(ctx context.Context, seriesID, seasonID
 		}
 	}
 
-	thumb := ep.Poster
+	// Prefer the caller-supplied thumbnail (the series backdrop) over the
+	// per-episode image scraped from the source site. The scraped ep.Poster is
+	// only a last resort when no backdrop/poster is available.
+	thumb := strings.TrimSpace(fallbackPoster)
 	if thumb == "" {
-		thumb = fallbackPoster
+		thumb = ep.Poster
 	}
 	title := strings.TrimSpace(ep.Title)
 	if title == "" {
