@@ -175,7 +175,11 @@ func (h *IngestionHandler) finalizeOneSerialParent(ctx context.Context, parent *
 			VideoURL:   c.MasterPlaylistURL,
 			Poster:     c.EpisodePosterURL,
 		}
-		episode, err := h.upsertEpisode(ctx, series.ID, season.ID, ep, series.PosterURL)
+		// Episode thumbnails are intentionally left empty at creation. They are
+		// stamped from the series backdrop later, when an admin approves the
+		// series (see SetSeriesApprovalStatus). We do NOT use the per-episode
+		// image scraped from the source site.
+		episode, err := h.upsertEpisode(ctx, series.ID, season.ID, ep, "")
 		if err != nil {
 			log.Printf("[serial finalize] parent=%s upsert episode S%02dE%02d: %v",
 				parentHex, seasonNum, c.EpisodeNumber, err)

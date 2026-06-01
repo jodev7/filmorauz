@@ -823,6 +823,23 @@ func (r *SeriesRepository) UpdateEpisode(episode *models.Episode) error {
 	return err
 }
 
+// SetEpisodesThumbnailBySeriesID overwrites the thumbnail of every episode in
+// a series. Used at approval time to stamp the series backdrop onto all
+// episode posters at once. Returns the number of episodes updated.
+func (r *SeriesRepository) SetEpisodesThumbnailBySeriesID(seriesID primitive.ObjectID, thumbnailURL string) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	res, err := r.episodeCol.UpdateMany(ctx,
+		bson.M{"series_id": seriesID},
+		bson.M{"$set": bson.M{"thumbnail_url": thumbnailURL, "updated_at": time.Now()}},
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.ModifiedCount, nil
+}
+
 // UpdateEpisodeSeasonAndNumber updates only season_id and episode_number for an episode
 func (r *SeriesRepository) UpdateEpisodeSeasonAndNumber(episodeID primitive.ObjectID, seasonID primitive.ObjectID, episodeNumber int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

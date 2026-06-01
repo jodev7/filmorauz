@@ -763,10 +763,10 @@ func (h *IngestionHandler) upsertEpisode(ctx context.Context, seriesID, seasonID
 		}
 	}
 
-	thumb := ep.Poster
-	if thumb == "" {
-		thumb = fallbackPoster
-	}
+	// Episode thumbnail is whatever the caller passes (empty at creation; the
+	// series backdrop is stamped on later at approval time). We deliberately
+	// ignore ep.Poster — the per-episode image scraped from the source site.
+	thumb := strings.TrimSpace(fallbackPoster)
 	title := strings.TrimSpace(ep.Title)
 	if title == "" {
 		title = fmt.Sprintf("%d-qism", ep.Episode)

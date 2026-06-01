@@ -914,6 +914,20 @@ func (s *SeriesService) SetSeriesApprovalStatus(id, status, byUserID string) err
 		if err := s.ensureSeriesCode(series); err != nil {
 			return err
 		}
+		// Stamp the series backdrop (fallback: poster) onto every episode's
+		// thumbnail. Episode posters are intentionally left empty at import
+		// time and only set here, on approval.
+		thumb := strings.TrimSpace(series.BackdropURL)
+		if thumb == "" {
+			thumb = strings.TrimSpace(series.PosterURL)
+		}
+		if thumb != "" {
+			if n, err := s.seriesRepo.SetEpisodesThumbnailBySeriesID(oid, thumb); err != nil {
+				log.Printf("[approve] series=%s set episode thumbnails failed: %v", id, err)
+			} else {
+				log.Printf("[approve] series=%s stamped backdrop onto %d episode(s)", id, n)
+			}
+		}
 	}
 	if err := s.seriesRepo.SetApprovalStatus(id, status, byUserID); err != nil {
 		return err

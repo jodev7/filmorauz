@@ -4,9 +4,11 @@ import { Suspense } from "react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MovieCard from "@/components/MovieCard";
+import SeriesCard from "@/components/SeriesCard";
 import GenreFilter from "@/components/GenreFilter";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getMovies, searchMovies, Movie } from "@/lib/api";
+import { getSeries, type Series } from "@/lib/series-api";
 import { getTranslations } from "@/lib/i18n-server";
 import { localizeSingleGenre } from "@/lib/localization";
 import Link from "next/link";
@@ -58,6 +60,12 @@ export default async function MoviesPage({ searchParams }: Props) {
 
   let movies: Movie[] = [];
   let total = 0;
+  // Genre nav links (Dorama, Anime, Multifilmlar…) point here, but those
+  // genres span both movies AND series. When browsing by genre (not a free
+  // text search) also pull the matching series so the page shows everything
+  // under that genre, not just movies. Only the first page of series is
+  // shown inline; "Barcha seriallar" links to the full /series list.
+  let series: Series[] = [];
 
   try {
     if (search) {
@@ -70,6 +78,15 @@ export default async function MoviesPage({ searchParams }: Props) {
     }
   } catch {
     // show empty state
+  }
+
+  if (genre && !search && page === 1) {
+    try {
+      const sres = await getSeries(1, limit, genre);
+      series = sres.data || [];
+    } catch {
+      // non-fatal — just omit the series section
+    }
   }
 
   const totalPages = Math.ceil(total / limit);
@@ -90,7 +107,8 @@ export default async function MoviesPage({ searchParams }: Props) {
               {pageTitle}
             </h1>
             <p className="text-gray-500 text-sm">
-              {total} ta film topildi
+              {total} ta film
+              {series.length > 0 ? ` · ${series.length} ta serial` : ""} topildi
             </p>
           </div>
 
@@ -114,20 +132,51 @@ export default async function MoviesPage({ searchParams }: Props) {
             </div>
           )}
 
+          {/* Seriallar — shown when browsing a genre that also has series. */}
+          {series.length > 0 && (
+            <section className="mb-10">
+              <div className="flex items-center justify-between mb-3 sm:mb-4">
+                <h2 className="font-display text-xl sm:text-2xl text-white tracking-wide">
+                  Seriallar
+                </h2>
+                <Link
+                  href={`/series?genre=${encodeURIComponent(genre)}`}
+                  className="text-sm text-brand-red hover:underline whitespace-nowrap"
+                >
+                  Barcha seriallar →
+                </Link>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4 isolate">
+                {series.map((s) => (
+                  <div key={s.id} className="isolate">
+                    <SeriesCard series={s} />
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {movies.length > 0 ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4 isolate">
-              {movies.map((movie) => (
-                <div key={movie.id} className="isolate">
-                  <MovieCard movie={movie} />
-                </div>
-              ))}
-            </div>
-          ) : (
+            <section>
+              {series.length > 0 && (
+                <h2 className="font-display text-xl sm:text-2xl text-white tracking-wide mb-3 sm:mb-4">
+                  Kinolar
+                </h2>
+              )}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4 isolate">
+                {movies.map((movie) => (
+                  <div key={movie.id} className="isolate">
+                    <MovieCard movie={movie} />
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : series.length === 0 ? (
             <div className="py-24 text-center text-gray-500">
               <p className="text-lg">{t("movies.noResults")}</p>
               {search && <p className="text-sm mt-2">{t("movies.noResultsHint")}</p>}
             </div>
-          )}
+          ) : null}
 
           {!search && totalPages > 1 && (
             <div className="flex items-center justify-center gap-4 mt-12 pb-8 flex-wrap">
