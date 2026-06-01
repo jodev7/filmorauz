@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/filmorauz/worker/models"
 )
@@ -33,6 +35,31 @@ func (p *Pipeline) processClipOnlyJob(ctx context.Context, job *models.Ingestion
 	if err := p.updateStatus(jobID, models.IngestionStatusProcessing, 20); err != nil {
 		return fmt.Errorf("clip_only update_status processing: %w", err)
 	}
+
+	// Heartbeat goroutine: HLS download + clip generation for a full episode
+	// routinely exceed the 10-minute "processing stalled" watchdog window
+	// (RecoverStaleJobs), which would otherwise reset the job to
+	// ready_to_process mid-flight and loop until retry_count hits the limit.
+	// Periodically bump updated_at to keep the watchdog satisfied. Mirrors the
+	// heartbeat used during HLS ParallelUpload.
+	doneHeartbeat := make(chan struct{})
+	var stopHeartbeatOnce sync.Once
+	stopHeartbeat := func() { stopHeartbeatOnce.Do(func() { close(doneHeartbeat) }) }
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				log.Printf("[CLIP_ONLY] heartbeat job=%s (keeping status fresh during clip generation)", jobID)
+				p.updateStatus(jobID, models.IngestionStatusProcessing, 60)
+			case <-doneHeartbeat:
+				return
+			}
+		}
+	}()
+	// Guarantees the goroutine is torn down on every return path (incl. errors).
+	defer stopHeartbeat()
 
 	tmpDir, err := os.MkdirTemp("", "clip_only_*")
 	if err != nil {
@@ -71,6 +98,10 @@ func (p *Pipeline) processClipOnlyJob(ctx context.Context, job *models.Ingestion
 	if clipErr := p.generateEpisodeClips(ctx, job, mp4Path); clipErr != nil {
 		return fmt.Errorf("clip_only generateEpisodeClips: %w", clipErr)
 	}
+
+	// Stop the heartbeat before the terminal update so a late tick cannot
+	// flip the job back to "processing" after we mark it completed.
+	stopHeartbeat()
 
 	if err := p.updateStatus(jobID, models.IngestionStatusCompleted, 100); err != nil {
 		log.Printf("[CLIP_ONLY] WARN: complete: %v", err)
