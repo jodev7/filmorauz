@@ -311,13 +311,21 @@ func (h *SitemapHandler) GetSitemapVideos(c *gin.Context) {
 		if pub.IsZero() {
 			pub = m.UpdatedAt
 		}
+		loc := h.baseSiteURL + "/movies/" + m.Slug
+		// <video:content_loc> must point at the actual media file, not the
+		// HTML landing page (Google rejects entries where content_loc/player_loc
+		// equals <loc>). Use the HLS master playlist (fallback: video_url).
+		stream := absoluteMediaURL(strings.TrimSpace(firstNonEmpty(m.MasterPlaylistURL, m.VideoURL)), h.baseSiteURL)
+		if stream == "" || stream == loc {
+			continue
+		}
 		set.URLs = append(set.URLs, videoSitemapURL{
-			Loc: h.baseSiteURL + "/movies/" + m.Slug,
+			Loc: loc,
 			Video: &videoSitemapV{
 				ThumbnailLoc:    poster,
 				Title:           title,
 				Description:     desc,
-				PlayerLoc:       h.baseSiteURL + "/movies/" + m.Slug + "?play=1",
+				ContentLoc:      stream,
 				Duration:        m.Duration * 60,
 				PublicationDate: formatTime(pub),
 				FamilyFriendly:  "yes",
@@ -367,14 +375,18 @@ func (h *SitemapHandler) GetSitemapVideos(c *gin.Context) {
 			}
 			thumb = absoluteMediaURL(thumb, h.baseSiteURL)
 
-			var loc, player string
+			var loc string
 			if strings.TrimSpace(series.Slug) != "" && season.SeasonNumber > 0 && ep.EpisodeNumber > 0 {
 				loc = fmt.Sprintf("%s/series/%s/season/%d/episode/%d", h.baseSiteURL, series.Slug, season.SeasonNumber, ep.EpisodeNumber)
-				player = loc
 			} else if !ep.ID.IsZero() {
 				loc = fmt.Sprintf("%s/episode/%s", h.baseSiteURL, ep.ID.Hex())
-				player = loc
 			} else {
+				continue
+			}
+			// <video:content_loc> must be the real media file, not the landing
+			// page. Skip episodes with no stream yet (still processing).
+			stream := absoluteMediaURL(strings.TrimSpace(firstNonEmpty(ep.MasterPlaylistURL, ep.VideoURL)), h.baseSiteURL)
+			if stream == "" || stream == loc {
 				continue
 			}
 
@@ -403,7 +415,7 @@ func (h *SitemapHandler) GetSitemapVideos(c *gin.Context) {
 					ThumbnailLoc:    thumb,
 					Title:           title,
 					Description:     desc,
-					PlayerLoc:       player,
+					ContentLoc:      stream,
 					Duration:        ep.Duration * 60,
 					PublicationDate: formatTime(pub),
 					FamilyFriendly:  "yes",

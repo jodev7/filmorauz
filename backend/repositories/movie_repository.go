@@ -30,6 +30,9 @@ type SitemapMovieRecord struct {
 	Duration    int                `bson:"duration,omitempty"`
 	Year        int                `bson:"year,omitempty"`
 	CreatedAt   time.Time          `bson:"created_at,omitempty"`
+	// Stream URLs for the video sitemap's <video:content_loc>.
+	MasterPlaylistURL string `bson:"master_playlist_url,omitempty"`
+	VideoURL          string `bson:"video_url,omitempty"`
 }
 
 func normalizeGenreValues(genres []string) []string {
@@ -129,6 +132,8 @@ func (r *MovieRepository) ListPublishedForSitemap() ([]SitemapMovieRecord, error
 			"duration":    1,
 			"year":        1,
 			"created_at":  1,
+			"master_playlist_url": 1,
+			"video_url":           1,
 		}).
 		SetSort(bson.D{{Key: "updated_at", Value: -1}, {Key: "_id", Value: 1}})
 

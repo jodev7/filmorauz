@@ -49,6 +49,9 @@ type SitemapEpisodeRecord struct {
 	ThumbnailURL  string             `bson:"thumbnail_url,omitempty"`
 	Duration      int                `bson:"duration,omitempty"`
 	CreatedAt     time.Time          `bson:"created_at,omitempty"`
+	// Stream URLs for the video sitemap's <video:content_loc>.
+	MasterPlaylistURL string `bson:"master_playlist_url,omitempty"`
+	VideoURL          string `bson:"video_url,omitempty"`
 }
 
 func normalizeSeriesGenres(genres []string) []string {
@@ -259,6 +262,8 @@ func (r *SeriesRepository) GetEpisodesBySeriesIDs(seriesIDs []primitive.ObjectID
 			"thumbnail_url":  1,
 			"duration":       1,
 			"created_at":     1,
+			"master_playlist_url": 1,
+			"video_url":           1,
 		}).
 		SetSort(bson.D{
 			{Key: "series_id", Value: 1},
