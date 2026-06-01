@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/filmorauz/backend/repositories"
+	"github.com/filmorauz/backend/services"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -27,20 +28,24 @@ import (
 // Splitting like this keeps each file well below Google's 50k-URL / 50MB
 // cap and lets Search Console report partial failures per section.
 type SitemapHandler struct {
-	movieRepo   *repositories.MovieRepository
-	seriesRepo  *repositories.SeriesRepository
-	baseSiteURL string
+	movieRepo         *repositories.MovieRepository
+	seriesRepo        *repositories.SeriesRepository
+	clipRepo          *repositories.ClipRepository
+	collectionService *services.CollectionService
+	baseSiteURL       string
 }
 
-func NewSitemapHandler(movieRepo *repositories.MovieRepository, seriesRepo *repositories.SeriesRepository, baseSiteURL string) *SitemapHandler {
+func NewSitemapHandler(movieRepo *repositories.MovieRepository, seriesRepo *repositories.SeriesRepository, clipRepo *repositories.ClipRepository, collectionService *services.CollectionService, baseSiteURL string) *SitemapHandler {
 	trimmed := strings.TrimRight(strings.TrimSpace(baseSiteURL), "/")
 	if trimmed == "" {
 		trimmed = "https://filmorauz.net"
 	}
 	return &SitemapHandler{
-		movieRepo:   movieRepo,
-		seriesRepo:  seriesRepo,
-		baseSiteURL: trimmed,
+		movieRepo:         movieRepo,
+		seriesRepo:        seriesRepo,
+		clipRepo:          clipRepo,
+		collectionService: collectionService,
+		baseSiteURL:       trimmed,
 	}
 }
 
@@ -112,6 +117,7 @@ func (h *SitemapHandler) GetSitemapIndex(c *gin.Context) {
 			{Loc: h.baseSiteURL + "/sitemap-movies.xml", LastMod: now},
 			{Loc: h.baseSiteURL + "/sitemap-series.xml", LastMod: now},
 			{Loc: h.baseSiteURL + "/sitemap-episodes.xml", LastMod: now},
+			{Loc: h.baseSiteURL + "/sitemap-collections.xml", LastMod: now},
 			{Loc: h.baseSiteURL + "/sitemap-videos.xml", LastMod: now},
 		},
 	}
@@ -219,6 +225,29 @@ func (h *SitemapHandler) GetSitemapSeries(c *gin.Context) {
 	writeXML(c, set)
 }
 
+// GetSitemapCollections serves published collection detail URLs.
+func (h *SitemapHandler) GetSitemapCollections(c *gin.Context) {
+	set := newURLSet()
+	if h.collectionService != nil {
+		if cols, err := h.collectionService.GetAll(c.Request.Context()); err == nil {
+			for _, col := range cols {
+				if !col.IsPublished || strings.TrimSpace(col.Slug) == "" {
+					continue
+				}
+				set.URLs = append(set.URLs, sitemapURL{
+					Loc:        h.baseSiteURL + "/collections/" + col.Slug,
+					LastMod:    formatTime(col.UpdatedAt),
+					ChangeFreq: "weekly",
+					Priority:   0.6,
+				})
+			}
+		} else {
+			log.Printf("[sitemap-collections] load failed: %v", err)
+		}
+	}
+	writeXML(c, set)
+}
+
 // GetSitemapEpisodes serves the canonical SEO episode URL when slug +
 // season + episode are all known, falling back to /episode/:id otherwise.
 func (h *SitemapHandler) GetSitemapEpisodes(c *gin.Context) {
@@ -282,6 +311,14 @@ func (h *SitemapHandler) GetSitemapVideos(c *gin.Context) {
 		Xmlns:   "http://www.sitemaps.org/schemas/sitemap/0.9",
 		XmlnsVi: "http://www.google.com/schemas/sitemap-video/1.1",
 	}
+	// Prefer a real MP4 clip for <video:content_loc> (Google wants raw video
+	// bytes, and HLS .m3u8 is a playlist). We already generate ~15 vertical
+	// MP4 clips per title — reuse the first as the indexable media file.
+	var movieClipURLs, episodeClipURLs map[primitive.ObjectID]string
+	if h.clipRepo != nil {
+		movieClipURLs, _ = h.clipRepo.MovieClipURLs(c.Request.Context())
+		episodeClipURLs, _ = h.clipRepo.EpisodeClipURLs(c.Request.Context())
+	}
 	for _, m := range movies {
 		if strings.TrimSpace(m.Slug) == "" {
 			continue
@@ -315,7 +352,7 @@ func (h *SitemapHandler) GetSitemapVideos(c *gin.Context) {
 		// <video:content_loc> must point at the actual media file, not the
 		// HTML landing page (Google rejects entries where content_loc/player_loc
 		// equals <loc>). Use the HLS master playlist (fallback: video_url).
-		stream := absoluteMediaURL(strings.TrimSpace(firstNonEmpty(m.MasterPlaylistURL, m.VideoURL)), h.baseSiteURL)
+		stream := absoluteMediaURL(strings.TrimSpace(firstNonEmpty(movieClipURLs[m.ID], m.MasterPlaylistURL, m.VideoURL)), h.baseSiteURL)
 		if stream == "" || stream == loc {
 			continue
 		}
@@ -385,7 +422,7 @@ func (h *SitemapHandler) GetSitemapVideos(c *gin.Context) {
 			}
 			// <video:content_loc> must be the real media file, not the landing
 			// page. Skip episodes with no stream yet (still processing).
-			stream := absoluteMediaURL(strings.TrimSpace(firstNonEmpty(ep.MasterPlaylistURL, ep.VideoURL)), h.baseSiteURL)
+			stream := absoluteMediaURL(strings.TrimSpace(firstNonEmpty(episodeClipURLs[ep.ID], ep.MasterPlaylistURL, ep.VideoURL)), h.baseSiteURL)
 			if stream == "" || stream == loc {
 				continue
 			}

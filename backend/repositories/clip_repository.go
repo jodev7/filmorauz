@@ -1001,6 +1001,50 @@ func (r *ClipRepository) FindByEpisodeID(ctx context.Context, episodeID primitiv
 	return clips, nil
 }
 
+// MovieClipURLs returns one clip URL per movie (the lowest-sequence clip),
+// keyed by movie ObjectID. Used by the video sitemap so <video:content_loc>
+// can point at a real MP4 clip instead of the HLS playlist.
+func (r *ClipRepository) MovieClipURLs(ctx context.Context) (map[primitive.ObjectID]string, error) {
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"movie_id": bson.M{"$exists": true, "$ne": nil}, "url": bson.M{"$ne": ""}}}},
+		{{Key: "$sort", Value: bson.D{{Key: "movie_id", Value: 1}, {Key: "sequence", Value: 1}}}},
+		{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$movie_id"}, {Key: "url", Value: bson.D{{Key: "$first", Value: "$url"}}}}}},
+	}
+	return r.aggregateIDURLMap(ctx, pipeline)
+}
+
+// EpisodeClipURLs returns one clip URL per episode, keyed by episode ObjectID.
+func (r *ClipRepository) EpisodeClipURLs(ctx context.Context) (map[primitive.ObjectID]string, error) {
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"episode_id": bson.M{"$exists": true, "$ne": nil}, "url": bson.M{"$ne": ""}}}},
+		{{Key: "$sort", Value: bson.D{{Key: "episode_id", Value: 1}, {Key: "sequence", Value: 1}}}},
+		{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$episode_id"}, {Key: "url", Value: bson.D{{Key: "$first", Value: "$url"}}}}}},
+	}
+	return r.aggregateIDURLMap(ctx, pipeline)
+}
+
+func (r *ClipRepository) aggregateIDURLMap(ctx context.Context, pipeline mongo.Pipeline) (map[primitive.ObjectID]string, error) {
+	cursor, err := r.col.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	out := make(map[primitive.ObjectID]string)
+	for cursor.Next(ctx) {
+		var row struct {
+			ID  primitive.ObjectID `bson:"_id"`
+			URL string             `bson:"url"`
+		}
+		if err := cursor.Decode(&row); err != nil {
+			continue
+		}
+		if !row.ID.IsZero() && strings.TrimSpace(row.URL) != "" {
+			out[row.ID] = strings.TrimSpace(row.URL)
+		}
+	}
+	return out, nil
+}
+
 // DeleteBySeriesAndEpisodeIDs removes every clip whose series_id matches
 // or whose episode_id is in the given list. The OR query catches legacy
 // clip rows that lack a series_id but reference one of the deleted

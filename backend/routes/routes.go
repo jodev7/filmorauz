@@ -16,6 +16,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	r.GET("/sitemap-movies.xml", sitemapHandler.GetSitemapMovies)
 	r.GET("/sitemap-series.xml", sitemapHandler.GetSitemapSeries)
 	r.GET("/sitemap-episodes.xml", sitemapHandler.GetSitemapEpisodes)
+	r.GET("/sitemap-collections.xml", sitemapHandler.GetSitemapCollections)
 	r.GET("/sitemap-videos.xml", sitemapHandler.GetSitemapVideos)
 	r.GET("/robots.txt", sitemapHandler.GetRobotsTxt)
 
