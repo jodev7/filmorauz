@@ -2702,8 +2702,13 @@ func (p *Pipeline) createMovieInDatabase(job *models.IngestionJob, metadata *mod
 		"pipeline_complete":  false,
 		"clips_status":       "pending",
 		"selected_video_url": job.VideoURL,
-		"created_at":         time.Now(),
-		"updated_at":         time.Now(),
+		// Direct uploads must go through the same manual review as parser
+		// imports. Without these the inserted doc has no approval_status, and
+		// the UI/public treat a missing status as "approved" → auto-published.
+		"approval_status": "pending",
+		"is_published":    false,
+		"created_at":      time.Now(),
+		"updated_at":      time.Now(),
 	}
 
 	existingDoc, duplicateReason, err := p.findExistingMovieForImport(
