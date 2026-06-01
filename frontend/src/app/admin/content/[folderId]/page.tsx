@@ -18,6 +18,8 @@ import {
   Calendar,
   Instagram,
   Youtube,
+  Copy,
+  ExternalLink,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -263,15 +265,14 @@ function ClipRow({
   return (
     <div className="bg-brand-card border border-brand-border rounded-xl p-4">
       <div className="flex items-start gap-4">
-        <div className="w-24 h-32 flex-shrink-0 bg-brand-dark rounded-lg overflow-hidden flex items-center justify-center text-gray-700 relative">
+        <div className="w-32 sm:w-40 flex-shrink-0 aspect-[9/16] bg-black rounded-lg overflow-hidden">
           <video
-            src={`${clip.url}#t=0.1`}
-            className="absolute inset-0 h-full w-full object-cover"
+            src={clip.url}
+            className="h-full w-full object-contain bg-black"
+            controls
             preload="metadata"
             playsInline
-            muted
           />
-          <Video size={20} className="relative z-10 text-white/60 pointer-events-none" />
         </div>
 
         <div className="flex-1 min-w-0">
@@ -279,6 +280,29 @@ function ClipRow({
             <div className="min-w-0">
               <h3 className="text-white font-medium truncate">{clip.title}</h3>
               <p className="text-xs text-gray-500 mt-0.5 truncate">{clip.filename}</p>
+              {/* Direct clip URL — open in new tab or copy. */}
+              <div className="flex items-center gap-1.5 mt-1">
+                <a
+                  href={clip.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[11px] text-brand-red hover:underline truncate flex items-center gap-1 max-w-[22rem]"
+                  title={clip.url}
+                >
+                  <ExternalLink size={11} className="shrink-0" />
+                  <span className="truncate">{clip.url}</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(clip.url);
+                  }}
+                  title="URL nusxalash"
+                  className="p-1 text-gray-500 hover:text-white shrink-0"
+                >
+                  <Copy size={12} />
+                </button>
+              </div>
               {clip.caption && (
                 <p className="text-xs text-gray-400 mt-2 line-clamp-2">{clip.caption}</p>
               )}
