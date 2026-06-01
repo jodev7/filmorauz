@@ -1015,6 +1015,14 @@ func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
 	if source != "" {
 		filter["source"] = source
 	}
+	// Hide clip_only jobs from the admin ingestion list. They are an internal
+	// post-finalize enrichment step (serial episode clips) and shouldn't
+	// clutter the operator-facing queue — the same way movie clip generation
+	// runs invisibly inside the movie job. The worker still claims them via
+	// ClaimNextProcessingJob, which has its own filter and is unaffected.
+	// $ne also matches documents where content_type is absent (movies), so
+	// only clip_only rows are excluded.
+	filter["content_type"] = bson.M{"$ne": "clip_only"}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

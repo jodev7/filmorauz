@@ -48,7 +48,6 @@ import {
   ArrowLeft,
   Home,
   AlertTriangle,
-  RefreshCw,
   SkipForward,
   List,
   XCircle,
@@ -842,6 +841,8 @@ export default function WatchRoomPage() {
                 reactionsOverlay={floatingReactions.map((r, idx) => (
                   <FloatingReactionBubble key={r.id} reaction={r} index={idx} />
                 ))}
+                canSyncToHost={!isHost && state != null}
+                onSyncToHost={applyStateToPlayer}
               />
             ) : (
               <div className="flex items-center justify-center h-full">
@@ -876,19 +877,8 @@ export default function WatchRoomPage() {
               </span>
             </div>
 
-            {/* Guest-only "sync to host" — one tap snaps the guest's
-                playhead + play/pause back to the host's current state.
-                Handy when drift creeps in or autoplay was blocked and the
-                guest fell out of sync. */}
-            {!isHost && state && (
-              <button
-                onClick={applyStateToPlayer}
-                className="absolute bottom-16 sm:bottom-20 left-2 z-20 flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] sm:text-xs bg-black/60 hover:bg-black/80 border border-white/15 rounded-lg text-white transition-colors"
-                title="Hostning hozirgi pozitsiyasiga sinxronlash"
-              >
-                <RefreshCw className="w-3.5 h-3.5" /> Hostga sinxron
-              </button>
-            )}
+            {/* Guest-only "sync to host" now lives inside RoomPlayer so it
+                fades with the auto-hiding controls (see canSyncToHost). */}
           </div>
 
           {/* Mobile member toggle */}
