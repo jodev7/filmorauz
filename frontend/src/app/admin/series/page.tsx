@@ -69,6 +69,10 @@ export default function AdminSeriesPage() {
   const [deleteJobId, setDeleteJobId] = useState<string | null>(null);
   const [approving, setApproving] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
+  // Client-side pagination so the admin list doesn't render every series at
+  // once and stretch the page.
+  const PAGE_SIZE = 20;
+  const [page, setPage] = useState(1);
 
   const fetchSeries = async () => {
     if (!token) return;
@@ -110,6 +114,15 @@ export default function AdminSeriesPage() {
 
     setFiltered(result);
   }, [search, series, statusFilter]);
+
+  // Reset to page 1 when filters change (not on every series refresh).
+  useEffect(() => {
+    setPage(1);
+  }, [search, statusFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageItems = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   const handleDeleteClick = (s: AdminSeries) => {
     setDeleteTarget(s);
@@ -263,6 +276,7 @@ export default function AdminSeriesPage() {
 
       {/* Table */}
       {!loading && filtered.length > 0 && (
+        <>
         <div className="bg-brand-card border border-brand-border rounded-lg overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -289,7 +303,7 @@ export default function AdminSeriesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-brand-border">
-                {filtered.map((s) => {
+                {pageItems.map((s) => {
                   const adminSeriesPosterSrc = s.poster_url ? normalizeMediaUrl(s.poster_url) : "";
                   return (
                   <tr key={s.id} className="hover:bg-brand-dark/30">
@@ -421,6 +435,28 @@ export default function AdminSeriesPage() {
             </table>
           </div>
         </div>
+        {totalPages > 1 && (
+          <div className="flex items-center justify-center gap-3 mt-4">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={safePage <= 1}
+              className="px-3 py-1.5 bg-brand-card border border-brand-border rounded-lg text-sm text-gray-300 disabled:opacity-40 hover:border-gray-500 transition-colors"
+            >
+              Oldingi
+            </button>
+            <span className="text-sm text-gray-500">
+              {safePage} / {totalPages} · {filtered.length} ta
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage >= totalPages}
+              className="px-3 py-1.5 bg-brand-card border border-brand-border rounded-lg text-sm text-gray-300 disabled:opacity-40 hover:border-gray-500 transition-colors"
+            >
+              Keyingi
+            </button>
+          </div>
+        )}
+        </>
       )}
 
       <CascadeDeleteModal
