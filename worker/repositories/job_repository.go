@@ -295,13 +295,27 @@ func (r *JobRepository) NormalizeQueuedJobs(ctx context.Context) (int64, error) 
 // ClaimNextProcessingJob atomically claims a job ready for ffmpeg processing.
 func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.IngestionJob, error) {
 	filter := bson.M{
-		"status":         models.IngestionStatusReadyToProcess,
-		"retry_count":    bson.M{"$lt": 3},
-		"steps.download": true,
-		"local_path":     bson.M{"$exists": true, "$ne": ""},
-		"$or": []bson.M{
-			{"steps.process": bson.M{"$exists": false}},
-			{"steps.process": bson.M{"$ne": true}},
+		"status":      models.IngestionStatusReadyToProcess,
+		"retry_count": bson.M{"$lt": 3},
+		"$and": []bson.M{
+			// The process step must not already be done.
+			{"$or": []bson.M{
+				{"steps.process": bson.M{"$exists": false}},
+				{"steps.process": bson.M{"$ne": true}},
+			}},
+			// Either a regular job whose download finished and produced a local
+			// file, OR a clip_only job which re-pulls its own HLS from
+			// master_playlist_url (no prior download step / local file needed).
+			{"$or": []bson.M{
+				{
+					"steps.download": true,
+					"local_path":     bson.M{"$exists": true, "$ne": ""},
+				},
+				{
+					"content_type":        "clip_only",
+					"master_playlist_url": bson.M{"$exists": true, "$ne": ""},
+				},
+			}},
 		},
 	}
 
@@ -324,7 +338,7 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 	}
 
 	log.Printf("[REPO] ClaimNextProcessingJob: querying for pending processing jobs...")
-	log.Printf("[REPO] ClaimNextProcessingJob filter: status=ready_to_process, retry_count<3, steps.download=true, steps.process=$exists:false OR steps.process!=true")
+	log.Printf("[REPO] ClaimNextProcessingJob filter: status=ready_to_process, retry_count<3, steps.process!=true, AND (steps.download=true+local_path OR content_type=clip_only+master_playlist_url)")
 	log.Printf("[REPO] ClaimNextProcessingJob FINAL QUERY: %+v", filter)
 
 	opts := options.FindOneAndUpdate().
@@ -339,6 +353,15 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 		}
 		log.Printf("[REPO] ClaimNextProcessingJob: ERROR - %v", err)
 		return nil, err
+	}
+
+	// clip_only jobs carry a remote HLS URL in local_path and download it
+	// themselves in processClipOnlyJob, so the on-disk artifact check below
+	// (which expects a real local file) does not apply to them.
+	if job.ContentType == "clip_only" {
+		log.Printf("[REPO] ClaimNextProcessingJob: CLAIMED clip_only job %s (title: %s, master=%s)",
+			job.ID.Hex(), job.Title, job.MasterPlaylistURL)
+		return &job, nil
 	}
 
 	verifiedPath := resolveExistingDownloadedArtifact(job.ID.Hex(), job.LocalPath, "")
