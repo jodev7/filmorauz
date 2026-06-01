@@ -1504,7 +1504,7 @@ function HLSPlayer({
                 <Settings size={18} />
               </button>
               {showSettings && (
-                <div ref={settingsRef} className="absolute bottom-full right-0 mb-2 min-w-[200px] overflow-hidden rounded-lg border border-white/10 bg-black/95 text-xs shadow-xl">
+                <div ref={settingsRef} className="absolute bottom-full right-0 z-50 mb-2 min-w-[200px] overflow-hidden rounded-lg border border-white/10 bg-black/95 text-xs shadow-xl">
                   {settingsPane === "root" && (
                     <div className="py-1">
                       {qualities.length > 1 && (
