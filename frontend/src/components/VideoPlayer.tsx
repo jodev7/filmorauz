@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Link from "next/link";
 import {
   Play,
@@ -481,22 +481,37 @@ function HLSPlayer({
   type ThumbCue = { start: number; end: number; src: string; x: number; y: number; w: number; h: number };
   const [thumbCues, setThumbCues] = useState<ThumbCue[] | null>(null);
   const thumbFetchStarted = useRef(false);
+  // Thumbnails: prefer the explicit props, but fall back to deriving the
+  // thumbnail dir from the HLS src (…/index.m3u8 → …/thumbnails/). The worker
+  // uploads preview.vtt + sprite.webp + frame_NNNN.webp there, so scrub
+  // previews work even when the movie/episode row predates the thumbnail-URL
+  // fields (or they were never persisted).
+  const derivedThumbBase = useMemo(() => {
+    if (thumbnailsBaseUrl) return thumbnailsBaseUrl;
+    if (src && /\/(index|master)\.m3u8(\?.*)?$/.test(src)) {
+      return src.replace(/\/(index|master)\.m3u8(\?.*)?$/, "/thumbnails/");
+    }
+    return "";
+  }, [thumbnailsBaseUrl, src]);
+  const effVttUrl = thumbnailsVttUrl || (derivedThumbBase ? `${derivedThumbBase}preview.vtt` : "");
+  const effSpriteUrl = thumbnailsSpriteUrl || (derivedThumbBase ? `${derivedThumbBase}sprite.webp` : "");
+  const effInterval = thumbnailInterval && thumbnailInterval > 0 ? thumbnailInterval : 5;
   const ensureThumbCues = useCallback(() => {
     if (thumbFetchStarted.current) return;
     thumbFetchStarted.current = true;
     // Preload the sprite in parallel with VTT — first hover usually means the
     // user will keep moving, so warming the image cache cuts the visible
     // flash on the first cue render. img.decode() resolves once decoded.
-    if (thumbnailsSpriteUrl) {
+    if (effSpriteUrl) {
       const img = new Image();
-      img.src = thumbnailsSpriteUrl;
+      img.src = effSpriteUrl;
     }
-    if (!thumbnailsVttUrl) return;
-    fetch(thumbnailsVttUrl)
+    if (!effVttUrl) return;
+    fetch(effVttUrl)
       .then((r) => (r.ok ? r.text() : Promise.reject(r.status)))
-      .then((text) => setThumbCues(parseThumbnailVtt(text, thumbnailsVttUrl)))
+      .then((text) => setThumbCues(parseThumbnailVtt(text, effVttUrl)))
       .catch(() => { /* fall back to time-only tooltip */ });
-  }, [thumbnailsVttUrl, thumbnailsSpriteUrl]);
+  }, [effVttUrl, effSpriteUrl]);
   const activeCue = (() => {
     if (hoverTime === null) return null;
     if (thumbCues && thumbCues.length) {
@@ -507,11 +522,10 @@ function HLSPlayer({
       }
       return thumbCues[thumbCues.length - 1];
     }
-    if (thumbnailsBaseUrl) {
-      const interval = thumbnailInterval && thumbnailInterval > 0 ? thumbnailInterval : 5;
-      const idx = Math.floor(hoverTime / interval) + 1;
+    if (derivedThumbBase) {
+      const idx = Math.floor(hoverTime / effInterval) + 1;
       const padded = String(idx).padStart(4, "0");
-      return { start: 0, end: 0, src: `${thumbnailsBaseUrl}frame_${padded}.webp`, x: 0, y: 0, w: 0, h: 0 };
+      return { start: 0, end: 0, src: `${derivedThumbBase}frame_${padded}.webp`, x: 0, y: 0, w: 0, h: 0 };
     }
     return null;
   })();
