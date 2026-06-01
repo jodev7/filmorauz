@@ -8,6 +8,7 @@ import {
   Volume2,
   VolumeX,
   Maximize,
+  PictureInPicture2,
   AlertTriangle,
   RefreshCw,
   Settings,
@@ -411,6 +412,13 @@ function HLSPlayer({
   const [showControls, setShowControls] = useState(true);
   const [buffered, setBuffered] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // Scrubbing state for the progress bar. The range input is controlled by
+  // `currentTime`, which only advances on `timeupdate`; during an HLS seek
+  // that event lags, so a naive drag snaps the thumb back to the old position
+  // and the bar feels un-draggable (it only "jumps" on release). While the
+  // user drags we show `scrubValue` and hold the commit until pointer-up.
+  const [scrubbing, setScrubbing] = useState(false);
+  const [scrubValue, setScrubValue] = useState(0);
 
   const [qualities, setQualities] = useState<QualityLevel[]>([]);
   const [selectedQuality, setSelectedQuality] = useState(-1); // -1 = Auto
@@ -418,6 +426,13 @@ function HLSPlayer({
   const [showPremiumPrompt, setShowPremiumPrompt] = useState(false);
   const [seekStep, setSeekStep] = useState(10);
   const [showSettings, setShowSettings] = useState(false);
+  // Picture-in-Picture: lets the video keep playing in a floating OS-level
+  // window after the user switches tab/app (YouTube-style). `isPiP` drives
+  // the toggle icon; support is feature-detected so the button hides on
+  // browsers without PiP (notably iPhone Safari, which has no <video> PiP —
+  // it only offers native fullscreen → control-center PiP).
+  const [isPiP, setIsPiP] = useState(false);
+  const [pipSupported, setPipSupported] = useState(false);
   const [settingsPane, setSettingsPane] = useState<"root" | "quality" | "speed" | "seek">("root");
 
   // Progress hover preview
@@ -910,13 +925,6 @@ function HLSPlayer({
     else video.pause();
   };
 
-  const seek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (adActive) return;
-    const video = videoRef.current;
-    if (!video) return;
-    video.currentTime = Number(e.target.value);
-  };
-
   const changeVolume = (e: React.ChangeEvent<HTMLInputElement>) => {
     const video = videoRef.current;
     if (!video) return;
@@ -977,6 +985,117 @@ function HLSPlayer({
     );
   };
 
+  // Feature-detect PiP once and keep `isPiP` in sync with the OS window,
+  // which the user can close from the floating window itself (not just our
+  // button) — so we listen to enter/leave events rather than trusting state.
+  useEffect(() => {
+    const video = videoRef.current;
+    const doc = document as Document & { pictureInPictureEnabled?: boolean };
+    const supported =
+      !!doc.pictureInPictureEnabled &&
+      !!video &&
+      typeof (video as HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> })
+        .requestPictureInPicture === "function";
+    setPipSupported(supported);
+    if (!video) return;
+    const onEnter = () => setIsPiP(true);
+    const onLeave = () => setIsPiP(false);
+    video.addEventListener("enterpictureinpicture", onEnter);
+    video.addEventListener("leavepictureinpicture", onLeave);
+    return () => {
+      video.removeEventListener("enterpictureinpicture", onEnter);
+      video.removeEventListener("leavepictureinpicture", onLeave);
+    };
+  }, [src]);
+
+  // Screen Wake Lock: keep the phone awake while playing. A custom
+  // (non-fullscreen) player doesn't inhibit the OS idle timer, so the
+  // screen sleeps after a minute without a touch mid-playback. Re-acquire
+  // on tab return (the OS releases it on hide). No-ops where unsupported.
+  useEffect(() => {
+    const nav = navigator as Navigator & {
+      wakeLock?: { request: (t: "screen") => Promise<{ release: () => Promise<void> }> };
+    };
+    if (!nav.wakeLock) return;
+    let sentinel: { release: () => Promise<void> } | null = null;
+    let cancelled = false;
+    const acquire = async () => {
+      if (sentinel) return;
+      try {
+        sentinel = await nav.wakeLock!.request("screen");
+        if (cancelled) {
+          sentinel.release().catch(() => {});
+          sentinel = null;
+        }
+      } catch {
+        /* not allowed — ignore */
+      }
+    };
+    const release = () => {
+      sentinel?.release().catch(() => {});
+      sentinel = null;
+    };
+    if (playing) acquire();
+    else release();
+    const onVis = () => {
+      if (!document.hidden && playing) acquire();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVis);
+      release();
+    };
+  }, [playing]);
+
+  // Auto-PiP: when the user switches tab/app while the video is playing,
+  // pop it into the floating window automatically (and restore on return).
+  // Browsers only permit the programmatic request from a visibilitychange
+  // handler when the page already has a user-gesture history and media is
+  // active, so this silently no-ops where disallowed.
+  useEffect(() => {
+    if (!pipSupported) return;
+    const doc = document as Document & {
+      pictureInPictureElement?: Element;
+      exitPictureInPicture?: () => Promise<void>;
+    };
+    const onVisibility = () => {
+      const video = videoRef.current as
+        | (HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> })
+        | null;
+      if (!video) return;
+      if (document.hidden) {
+        if (!video.paused && !doc.pictureInPictureElement) {
+          video.requestPictureInPicture?.().catch(() => {});
+        }
+      } else if (doc.pictureInPictureElement) {
+        doc.exitPictureInPicture?.().catch(() => {});
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [pipSupported]);
+
+  const togglePictureInPicture = async () => {
+    const video = videoRef.current as
+      | (HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> })
+      | null;
+    const doc = document as Document & {
+      pictureInPictureElement?: Element;
+      exitPictureInPicture?: () => Promise<void>;
+    };
+    if (!video) return;
+    try {
+      if (doc.pictureInPictureElement) {
+        await doc.exitPictureInPicture?.();
+      } else if (video.requestPictureInPicture) {
+        await video.requestPictureInPicture();
+      }
+    } catch {
+      /* user gesture / not-allowed — ignore, button stays inert */
+    }
+  };
+
   const qualityLabel = qualities.find((q) => q.index === selectedQuality)?.label ?? "Auto";
 
   if (error) {
@@ -1000,6 +1119,13 @@ function HLSPlayer({
       onMouseEnter={() => setShowControls(true)}
       onClick={() => {
         resetControlsTimer();
+        // On touch devices there's no double-tap-to-fullscreen (it kept firing
+        // by accident while users tapped the seek buttons), so toggle play
+        // immediately instead of debouncing against a pending dblclick.
+        if (isMobile) {
+          togglePlay();
+          return;
+        }
         if (clickTimer.current) clearTimeout(clickTimer.current);
         clickTimer.current = setTimeout(() => {
           clickTimer.current = null;
@@ -1007,6 +1133,7 @@ function HLSPlayer({
         }, 250);
       }}
       onDoubleClick={(e) => {
+        if (isMobile) return; // fullscreen via the dedicated button on mobile
         e.preventDefault();
         if (clickTimer.current) {
           clearTimeout(clickTimer.current);
@@ -1291,10 +1418,11 @@ function HLSPlayer({
               className="absolute top-0 left-0 h-full bg-white/25 rounded-full pointer-events-none"
               style={{ width: duration ? `${Math.min((buffered / duration) * 100, 100)}%` : "0%" }}
             />
-            {/* played */}
+            {/* played — follow the drag position while scrubbing so the bar
+                tracks the finger/cursor instead of the (lagging) video time */}
             <div
               className="absolute top-0 left-0 h-full bg-brand-red rounded-full pointer-events-none"
-              style={{ width: duration ? `${Math.min((currentTime / duration) * 100, 100)}%` : "0%" }}
+              style={{ width: duration ? `${Math.min(((scrubbing ? scrubValue : currentTime) / duration) * 100, 100)}%` : "0%" }}
             />
             {/* hover indicator dot */}
             {hoverTime !== null && duration > 0 && !adActive && (
@@ -1309,8 +1437,25 @@ function HLSPlayer({
               min={0}
               max={duration || 0}
               step={0.1}
-              value={currentTime}
-              onChange={seek}
+              value={scrubbing ? scrubValue : currentTime}
+              onPointerDown={() => {
+                if (adActive) return;
+                setScrubValue(videoRef.current?.currentTime ?? currentTime);
+                setScrubbing(true);
+              }}
+              onChange={(e) => {
+                if (adActive) return;
+                // Track the drag locally; commit to the video on pointer-up so
+                // HLS isn't hammered with a seek on every intermediate value.
+                setScrubValue(Number(e.target.value));
+              }}
+              onPointerUp={() => {
+                if (!scrubbing) return;
+                const video = videoRef.current;
+                if (video) video.currentTime = scrubValue;
+                setScrubbing(false);
+              }}
+              onPointerCancel={() => setScrubbing(false)}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
             />
           </div>
@@ -1457,6 +1602,20 @@ function HLSPlayer({
                 </div>
               )}
             </div>
+
+            {/* Picture-in-Picture — keeps the video playing in a floating
+                OS window when the user leaves the tab/app. Hidden where
+                unsupported (e.g. iPhone Safari). */}
+            {pipSupported && (
+              <button
+                onClick={togglePictureInPicture}
+                className={`transition-colors ${isPiP ? "text-brand-red" : "text-white hover:text-brand-red"}`}
+                aria-label="Suzuvchi oyna (Picture-in-Picture)"
+                title="Suzuvchi oynada ko'rish"
+              >
+                <PictureInPicture2 size={18} />
+              </button>
+            )}
 
             {/* Fullscreen */}
             <button onClick={toggleFullscreen} className="text-white hover:text-brand-red transition-colors">

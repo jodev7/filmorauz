@@ -1,10 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import dynamic from "next/dynamic";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import RoomPlayer from "@/components/watch-room/RoomPlayer";
+// Code-split the room player (heavy hls.js bundle) out of the room route's
+// initial JS — the room shell + chat render first while the player streams
+// in. ssr:false because hls.js is browser-only.
+const RoomPlayer = dynamic(() => import("@/components/watch-room/RoomPlayer"), {
+  ssr: false,
+  loading: () => <div className="w-full h-full bg-black animate-pulse" />,
+});
 import MemberList from "@/components/watch-room/MemberList";
+import GifPicker from "@/components/watch-room/GifPicker";
 import {
   getWatchRoom,
   createRoomInvite,
@@ -40,6 +48,7 @@ import {
   ArrowLeft,
   Home,
   AlertTriangle,
+  RefreshCw,
   SkipForward,
   List,
   XCircle,
@@ -49,7 +58,14 @@ import {
 import Navbar from "@/components/Navbar";
 import Link from "next/link";
 
-const EMOJI_PALETTE = ["😀", "😂", "❤️", "🔥", "👏", "🎉", "😮", "😢", "👍", "🤔", "😍", "🍿"];
+const EMOJI_PALETTE = [
+  "😀", "😂", "🤣", "😅", "😊", "😍", "🥰", "😘", "😎", "🤩",
+  "🤔", "🤨", "😐", "🙄", "😏", "😴", "😭", "😢", "😤", "😡",
+  "🥺", "😱", "😨", "🤯", "🤗", "🤭", "🤫", "😬", "🙃", "😇",
+  "👍", "👎", "👏", "🙌", "🙏", "💪", "🤝", "✌️", "🤞", "👌",
+  "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "💔", "💯", "🔥",
+  "🎉", "🎊", "✨", "⭐", "🌟", "💫", "🍿", "🎬", "👀", "💀",
+];
 
 // Preset gradients for the premium-only room theme picker. Each gradient
 // is hard-coded as a (from, to) hex pair so the picker is deterministic
@@ -83,6 +99,7 @@ export default function WatchRoomPage() {
   const [kicked, setKicked] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [gifOpen, setGifOpen] = useState(false);
   const [showMembers, setShowMembers] = useState(false); // mobile drawer
   const [typingUsers, setTypingUsers] = useState<Record<string, string>>({}); // userID → name
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
@@ -355,6 +372,22 @@ export default function WatchRoomPage() {
         text: "Host qaytib keldi.",
         createdAt: new Date().toISOString(),
       });
+    } else if (e.type === "host_changed") {
+      // The old host didn't return in time, so the hub promoted a guest.
+      // Updating owner_id re-derives isHost everywhere (this client may now
+      // BE the host and gain controls) and clears the disconnect countdown.
+      setHostGoneDeadline(null);
+      setRoom((prev) => (prev ? { ...prev, owner_id: e.ownerID } : prev));
+      appendChat({
+        userID: "system",
+        userName: "system",
+        kind: "text",
+        text:
+          e.ownerID === userID
+            ? "Endi siz host bo'ldingiz."
+            : `${e.userName || "Foydalanuvchi"} yangi host bo'ldi.`,
+        createdAt: new Date().toISOString(),
+      });
     } else if (e.type === "episode_change") {
       setRoom((prev) =>
         prev
@@ -435,12 +468,22 @@ export default function WatchRoomPage() {
 
   // ── Sync guest player to host state via the RoomPlayer's sync API ───
   const syncApiRef = useRef<{ setPosition: (s: number) => void; setPlaying: (p: boolean) => void } | null>(null);
+  // Mirror the latest host state into a ref so the player can pull the
+  // current target the moment it registers its sync API — see the
+  // applyStateToPlayer / registerSync wiring below.
+  const stateRef = useRef<typeof state>(null);
   useEffect(() => {
-    if (isHost || !state || !syncApiRef.current) return;
-    const target = effectivePosition(state);
-    syncApiRef.current.setPosition(target);
-    syncApiRef.current.setPlaying(state.isPlaying);
-  }, [state, isHost]);
+    stateRef.current = state;
+  }, [state]);
+  const applyStateToPlayer = useCallback(() => {
+    const s = stateRef.current;
+    if (isHostRef.current || !s || !syncApiRef.current) return;
+    syncApiRef.current.setPosition(effectivePosition(s));
+    syncApiRef.current.setPlaying(s.isPlaying);
+  }, []);
+  useEffect(() => {
+    applyStateToPlayer();
+  }, [state, isHost, applyStateToPlayer]);
 
   // ── Host broadcasts player events to the hub ────────────────────────
   const onHostPlay = useCallback(
@@ -547,11 +590,15 @@ export default function WatchRoomPage() {
     return () => v.removeEventListener("ended", onEnded);
   }, [isHost, room, token, nextEp, videoSrc]);
 
-  // Chat auto-scroll
+  // Chat auto-scroll — only stick to the bottom when the user is already
+  // near it. Now that the list is a fixed, scrollable block, yanking the
+  // viewport down on every new message would fight a user who scrolled up
+  // to re-read history.
   useEffect(() => {
     const el = chatScrollRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
   }, [chat.length]);
 
   // ── Chat input + typing ──────────────────────────────────────────────
@@ -574,6 +621,11 @@ export default function WatchRoomPage() {
   const handleSendEmoji = (emoji: string) => {
     sendReaction(emoji);
     setEmojiOpen(false);
+  };
+
+  const handleSendGif = (gifUrl: string) => {
+    sendChat("gif", gifUrl);
+    setGifOpen(false);
   };
 
   const handleCopyInviteLink = useCallback(async () => {
@@ -775,6 +827,14 @@ export default function WatchRoomPage() {
                 onHostSeek={onHostSeek}
                 registerSync={(api) => {
                   syncApiRef.current = api;
+                  // The player may register its sync API AFTER the host's
+                  // (steady) state already arrived — e.g. on rejoin, where the
+                  // protected playback URL resolves slowly so videoSrc (and
+                  // thus RoomPlayer) mounts well after the WS state_sync. In
+                  // that case the state-driven effect already ran against a
+                  // null ref and won't re-fire (state is unchanged), leaving
+                  // the guest frozen/paused at 0. Push the current target now.
+                  applyStateToPlayer();
                 }}
                 fullscreenOverlay={
                   <FullscreenChatOverlay reactions={floatingReactions} chat={chat} />
@@ -815,6 +875,20 @@ export default function WatchRoomPage() {
                 {connected ? "Online" : "Ulanish…"}
               </span>
             </div>
+
+            {/* Guest-only "sync to host" — one tap snaps the guest's
+                playhead + play/pause back to the host's current state.
+                Handy when drift creeps in or autoplay was blocked and the
+                guest fell out of sync. */}
+            {!isHost && state && (
+              <button
+                onClick={applyStateToPlayer}
+                className="absolute bottom-2 left-2 z-20 flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] sm:text-xs bg-black/60 hover:bg-black/80 border border-white/15 rounded-lg text-white transition-colors"
+                title="Hostning hozirgi pozitsiyasiga sinxronlash"
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> Hostga sinxron
+              </button>
+            )}
           </div>
 
           {/* Mobile member toggle */}
@@ -940,7 +1014,7 @@ export default function WatchRoomPage() {
                 </span>
               )}
             </div>
-            <div ref={chatScrollRef} className="flex-1 overflow-y-auto p-3 space-y-2 min-h-[200px] lg:max-h-[60vh]">
+            <div ref={chatScrollRef} className="flex-1 overflow-y-auto overscroll-contain p-3 space-y-2 min-h-[200px] max-h-[45vh] lg:max-h-[60vh]">
               {chat.length === 0 && <p className="text-xs text-gray-500">Hozircha xabar yo&apos;q.</p>}
               {chat.map((c, idx) => (
                 <div key={idx} className="text-sm">
@@ -951,6 +1025,14 @@ export default function WatchRoomPage() {
                       <span className="text-gray-400 text-xs">{c.userName || "Foydalanuvchi"}: </span>
                       {c.kind === "emoji" ? (
                         <span className="text-2xl font-emoji">{c.emoji}</span>
+                      ) : c.kind === "gif" && c.gifUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={c.gifUrl}
+                          alt="GIF"
+                          loading="lazy"
+                          className="mt-1 max-w-[180px] w-full h-auto rounded-lg"
+                        />
                       ) : (
                         <span className="break-words">{c.text}</span>
                       )}
@@ -961,7 +1043,7 @@ export default function WatchRoomPage() {
             </div>
             <div className="border-t border-brand-border p-2 relative">
               {emojiOpen && (
-                <div className="absolute bottom-12 left-2 right-2 bg-brand-dark border border-brand-border rounded-lg p-2 grid grid-cols-6 gap-1">
+                <div className="absolute bottom-12 left-2 right-2 bg-brand-dark border border-brand-border rounded-lg p-2 grid grid-cols-6 gap-1 max-h-48 overflow-y-auto">
                   {EMOJI_PALETTE.map((e) => (
                     <button
                       key={e}
@@ -973,14 +1055,35 @@ export default function WatchRoomPage() {
                   ))}
                 </div>
               )}
+              {gifOpen && (
+                <GifPicker onSelect={handleSendGif} onClose={() => setGifOpen(false)} />
+              )}
               <div className="flex items-center gap-1 min-w-0">
                 <button
-                  onClick={() => setEmojiOpen((v) => !v)}
+                  onClick={() => {
+                    setGifOpen(false);
+                    setEmojiOpen((v) => !v);
+                  }}
                   className="p-2 text-gray-400 hover:text-white shrink-0"
                   aria-label="Reaktsiya"
                   title="Reaktsiya yuborish (video ustida ko'rinadi)"
                 >
                   {emojiOpen ? <X className="w-4 h-4" /> : <PartyPopper className="w-4 h-4" />}
+                </button>
+                <button
+                  onClick={() => {
+                    setEmojiOpen(false);
+                    setGifOpen((v) => !v);
+                  }}
+                  className={`px-1.5 py-1 text-[11px] font-bold rounded shrink-0 border ${
+                    gifOpen
+                      ? "text-brand-red border-brand-red"
+                      : "text-gray-400 border-gray-600 hover:text-white hover:border-gray-400"
+                  }`}
+                  aria-label="GIF"
+                  title="GIF yuborish"
+                >
+                  GIF
                 </button>
                 {/* min-w-0 + w-0 lets the flex-1 input actually shrink. Without
                     it the input's intrinsic content width (from a long typed
@@ -1357,6 +1460,12 @@ function FullscreenChatOverlay({
               <span>
                 <span className="text-gray-300 text-xs mr-1">{c.userName}:</span>
                 <span className="text-xl font-emoji">{c.emoji}</span>
+              </span>
+            ) : c.kind === "gif" && c.gifUrl ? (
+              <span className="inline-flex flex-col">
+                <span className="text-gray-300 text-xs mb-1">{c.userName}:</span>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={c.gifUrl} alt="GIF" className="max-w-[140px] w-full h-auto rounded-lg" />
               </span>
             ) : (
               <span>

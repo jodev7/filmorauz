@@ -139,6 +139,18 @@ func (r *WatchRoomRepository) SetTheme(ctx context.Context, id primitive.ObjectI
 	return err
 }
 
+// UpdateOwner reassigns the room host. Used when the original host drops
+// and the grace window expires but guests remain — instead of closing, the
+// hub promotes a guest and persists the new owner so a later reconnect (or
+// cold-start) resolves host status correctly.
+func (r *WatchRoomRepository) UpdateOwner(ctx context.Context, id, newOwnerID primitive.ObjectID) error {
+	_, err := r.rooms.UpdateByID(ctx, id, bson.M{"$set": bson.M{
+		"owner_id":   newOwnerID,
+		"updated_at": time.Now(),
+	}})
+	return err
+}
+
 // SetCurrentEpisode mutates a series room's currently-playing episode and
 // resets the playback head to zero. Called both from the host's manual
 // "switch episode" action and from the auto-advance flow when an episode

@@ -1571,6 +1571,29 @@ function uploadBackendMediaToEndpoint(
   });
 }
 
+// Rolling-window speed tracker. Instead of averaging bytes over the whole
+// upload (which smooths out real network fluctuation and shows a misleading
+// "stable" speed), this keeps the last ~5s of (timestamp, bytes) samples and
+// reports the instantaneous throughput across that window — what the user
+// actually experiences moment-to-moment.
+function createSpeedTracker(windowMs = 5000) {
+  const samples: Array<{ t: number; loaded: number }> = [];
+  return {
+    sample(loaded: number): { bytesPerSecond: number } {
+      const now = Date.now();
+      samples.push({ t: now, loaded });
+      // Drop samples older than the window (keep at least 2 for a delta).
+      while (samples.length > 2 && now - samples[0].t > windowMs) {
+        samples.shift();
+      }
+      const first = samples[0];
+      const deltaBytes = loaded - first.loaded;
+      const deltaSec = Math.max((now - first.t) / 1000, 0.001);
+      return { bytesPerSecond: Math.max(0, deltaBytes / deltaSec) };
+    },
+  };
+}
+
 // Direct browser-to-B2 upload.
 export interface UploadProgressInfo {
   progress?: number;
@@ -1587,7 +1610,7 @@ export async function directB2Upload(
   type: "poster" | "backdrop" | "video",
   onProgress?: (progress: UploadProgressInfo) => void
 ): Promise<{ url: string; file_key: string }> {
-  const maxSize = type === "video" ? 5 * 1024 * 1024 * 1024 : 20 * 1024 * 1024;
+  const maxSize = type === "video" ? 15 * 1024 * 1024 * 1024 : 20 * 1024 * 1024;
   const allowedTypes = type === "video"
     ? ["video/mp4", "video/webm", "video/ogg", "video/quicktime"]
     : ["image/jpeg", "image/jpg", "image/png", "image/webp"];
@@ -1599,6 +1622,13 @@ export async function directB2Upload(
     throw new Error(type === "video"
       ? "Invalid video type. Allowed: mp4, webm, ogg, mov"
       : "Invalid image type. Allowed: jpg, png, webp");
+  }
+
+  // Large videos use the multipart (resumable, parallel) path so a single
+  // network drop doesn't restart a multi-GB upload from zero. Small files keep
+  // the simpler single-POST path below.
+  if (type === "video" && file.size > LARGE_UPLOAD_THRESHOLD) {
+    return directB2UploadLarge(token, file, type, onProgress);
   }
 
   const qs = new URLSearchParams({
@@ -1634,7 +1664,7 @@ export async function directB2Upload(
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    const startedAt = Date.now();
+    const tracker = createSpeedTracker();
     let lastProgressAt = 0;
 
     xhr.open("POST", uploadUrl);
@@ -1646,16 +1676,19 @@ export async function directB2Upload(
     xhr.upload.onprogress = (event) => {
       if (!onProgress) return;
 
+      // Always feed the tracker so the rolling speed reflects every sample,
+      // even the ones we throttle out of the UI update below.
+      const sample = tracker.sample(event.loaded);
+
       const now = Date.now();
       const shouldUpdate = now - lastProgressAt >= 400 || (event.lengthComputable && event.loaded >= event.total);
       if (!shouldUpdate) return;
       lastProgressAt = now;
 
-      const elapsedSeconds = Math.max((now - startedAt) / 1000, 0.001);
-      const speedBytesPerSecond = event.loaded / elapsedSeconds;
       const hasTotal = event.lengthComputable && event.total > 0;
       const total = hasTotal ? event.total : undefined;
       const progress = total ? Math.min(100, Math.round((event.loaded / total) * 100)) : undefined;
+      const speedBytesPerSecond = sample.bytesPerSecond;
       const etaSeconds = total && speedBytesPerSecond > 0
         ? Math.max(0, Math.round((total - event.loaded) / speedBytesPerSecond))
         : undefined;
@@ -1750,6 +1783,196 @@ export async function directB2Upload(
 
     xhr.send(file);
   });
+}
+
+// Files larger than this use the multipart (b2 large file) path. 100MB matches
+// the server-advertised part size, so anything bigger is at least 2 parts.
+const LARGE_UPLOAD_THRESHOLD = 100 * 1024 * 1024;
+// How many parts upload concurrently. Browsers cap connections per host; 4 is
+// a good balance between throughput and not starving other requests.
+const PART_UPLOAD_CONCURRENCY = 4;
+// Per-part retry budget. A failed part is retried with a fresh part-URL.
+const PART_UPLOAD_RETRIES = 4;
+
+async function sha1Hex(buffer: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-1", buffer);
+  const bytes = new Uint8Array(digest);
+  let hex = "";
+  for (let i = 0; i < bytes.length; i++) {
+    hex += bytes[i].toString(16).padStart(2, "0");
+  }
+  return hex;
+}
+
+// Multipart, parallel, per-part-retry upload to Backblaze B2. The backend
+// brokers all account-authenticated calls (start/part-url/finish/cancel); the
+// browser only ever talks to B2 with short-lived part upload tokens.
+async function directB2UploadLarge(
+  token: string,
+  file: File,
+  type: "video",
+  onProgress?: (progress: UploadProgressInfo) => void
+): Promise<{ url: string; file_key: string }> {
+  // 1. Start the large file — get fileId + the part size to slice with.
+  const startRes = await fetch(`${API_URL}/upload/b2-large/start`, {
+    method: "POST",
+    headers: authHeaders(token),
+    cache: "no-store",
+    body: JSON.stringify({
+      type,
+      filename: file.name,
+      contentType: file.type || "application/octet-stream",
+      size: file.size,
+    }),
+  });
+  if (!startRes.ok) {
+    const err = await startRes.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to start upload (status ${startRes.status})`);
+  }
+  const started = await startRes.json();
+  const fileId: string = started.fileId;
+  const fileKey: string = started.fileKey;
+  const cdnUrl: string = started.cdnUrl || "";
+  const partSize: number = started.partSize || LARGE_UPLOAD_THRESHOLD;
+  if (!fileId || !fileKey) throw new Error("Upload start response incomplete");
+
+  const partCount = Math.max(1, Math.ceil(file.size / partSize));
+  const partSha1: string[] = new Array(partCount).fill("");
+  // Bytes confirmed uploaded per part — drives a single aggregate progress bar.
+  const partUploaded: number[] = new Array(partCount).fill(0);
+  const tracker = createSpeedTracker();
+  let lastEmit = 0;
+
+  const emitProgress = (force = false) => {
+    if (!onProgress) return;
+    const now = Date.now();
+    if (!force && now - lastEmit < 400) return;
+    lastEmit = now;
+    const loaded = partUploaded.reduce((a, b) => a + b, 0);
+    const sample = tracker.sample(loaded);
+    const progress = Math.min(100, Math.round((loaded / file.size) * 100));
+    const etaSeconds = sample.bytesPerSecond > 0
+      ? Math.max(0, Math.round((file.size - loaded) / sample.bytesPerSecond))
+      : undefined;
+    onProgress({
+      progress,
+      loaded,
+      total: file.size,
+      uploadedMB: loaded / 1024 / 1024,
+      speedMBps: sample.bytesPerSecond / 1024 / 1024,
+      etaSeconds,
+    });
+  };
+
+  // Upload one part (1-indexed for B2) with retry + fresh part-URL per attempt.
+  const uploadPart = async (partIndex: number): Promise<void> => {
+    const start = partIndex * partSize;
+    const end = Math.min(start + partSize, file.size);
+    const blob = file.slice(start, end);
+    const buffer = await blob.arrayBuffer();
+    const sha1 = await sha1Hex(buffer);
+    partSha1[partIndex] = sha1;
+
+    let attempt = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        const urlRes = await fetch(`${API_URL}/upload/b2-large/part-url`, {
+          method: "POST",
+          headers: authHeaders(token),
+          cache: "no-store",
+          body: JSON.stringify({ fileId }),
+        });
+        if (!urlRes.ok) throw new Error(`part-url failed (${urlRes.status})`);
+        const partURL = await urlRes.json();
+
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", partURL.uploadUrl);
+          xhr.setRequestHeader("Authorization", partURL.authorizationToken);
+          xhr.setRequestHeader("X-Bz-Part-Number", String(partIndex + 1));
+          // Content-Length is a forbidden header in XHR — the browser sets it
+          // automatically from the sent buffer.
+          xhr.setRequestHeader("X-Bz-Content-Sha1", sha1);
+          xhr.upload.onprogress = (event) => {
+            partUploaded[partIndex] = event.loaded;
+            emitProgress();
+          };
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              partUploaded[partIndex] = buffer.byteLength;
+              emitProgress();
+              resolve();
+            } else {
+              reject(new Error(`B2 part upload rejected (${xhr.status})`));
+            }
+          };
+          xhr.onerror = () => reject(new Error("part upload network error"));
+          xhr.ontimeout = () => reject(new Error("part upload timeout"));
+          xhr.send(buffer);
+        });
+        return; // success
+      } catch (err) {
+        attempt += 1;
+        partUploaded[partIndex] = 0; // reset so progress stays honest on retry
+        if (attempt > PART_UPLOAD_RETRIES) {
+          throw err instanceof Error ? err : new Error("part upload failed");
+        }
+        // Exponential-ish backoff before retrying with a fresh part URL.
+        await new Promise((r) => setTimeout(r, 500 * attempt));
+      }
+    }
+  };
+
+  // 2. Upload parts with a bounded worker pool.
+  try {
+    let next = 0;
+    const workers: Promise<void>[] = [];
+    const runWorker = async () => {
+      while (next < partCount) {
+        const idx = next++;
+        await uploadPart(idx);
+      }
+    };
+    for (let i = 0; i < Math.min(PART_UPLOAD_CONCURRENCY, partCount); i++) {
+      workers.push(runWorker());
+    }
+    await Promise.all(workers);
+  } catch (err) {
+    // Best-effort cancel so B2 doesn't keep orphaned parts billing.
+    fetch(`${API_URL}/upload/b2-large/cancel`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify({ fileId }),
+    }).catch(() => {});
+    throw err;
+  }
+
+  // 3. Finish — hand B2 the ordered SHA1 array to assemble the file.
+  const finishRes = await fetch(`${API_URL}/upload/b2-large/finish`, {
+    method: "POST",
+    headers: authHeaders(token),
+    cache: "no-store",
+    body: JSON.stringify({
+      fileId,
+      fileKey,
+      type,
+      size: file.size,
+      contentType: file.type || "application/octet-stream",
+      filename: file.name,
+      partSha1Array: partSha1,
+    }),
+  });
+  if (!finishRes.ok) {
+    const err = await finishRes.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to finish upload (status ${finishRes.status})`);
+  }
+  const finished = await finishRes.json();
+  emitProgress(true);
+  return {
+    url: finished.url || cdnUrl || "",
+    file_key: finished.file_key || finished.fileKey || fileKey,
+  };
 }
 
 // Backend-proxied upload for movie poster/backdrop. The browser POSTs the file

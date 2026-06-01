@@ -9,6 +9,7 @@ import {
   VolumeX,
   Maximize,
   Minimize,
+  PictureInPicture2,
   Settings,
   Loader2,
   Crown,
@@ -96,6 +97,11 @@ export default function RoomPlayer({
   const [duration, setDuration] = useState(0);
   const [buffering, setBuffering] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Picture-in-Picture — floating OS window so the room video keeps playing
+  // when the user switches tab/app. Feature-detected (hidden on iPhone
+  // Safari, which lacks the <video> PiP API).
+  const [isPiP, setIsPiP] = useState(false);
+  const [pipSupported, setPipSupported] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [qualities, setQualities] = useState<QualityLevel[]>([]);
   const [selectedLevel, setSelectedLevel] = useState<number>(-1); // -1 = auto
@@ -103,8 +109,17 @@ export default function RoomPlayer({
   // Progress-bar hover state: fractional position (0..1) and pixel-x for
   // the tooltip. Null when the cursor isn't over the bar.
   const [scrubHover, setScrubHover] = useState<{ frac: number; x: number } | null>(null);
+  // True while the host is dragging the progress bar. Lets onPointerMove keep
+  // seeking continuously instead of only jumping on a single click/tap.
+  const isScrubbingRef = useRef(false);
   const controlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Touch devices: skip the double-tap-to-fullscreen gesture. Users tapping
+  // the ±skip buttons in quick succession kept triggering fullscreen by
+  // accident, then navigating away on the next stray tap.
+  const isMobile =
+    typeof navigator !== "undefined" &&
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
   // Host-only skip-step (seconds). Persisted to localStorage so it
   // survives reloads. Default 10s — same as most major players.
@@ -425,6 +440,108 @@ export default function RoomPlayer({
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
 
+  // ── Screen Wake Lock: keep the phone awake while the video plays ────
+  // A custom (non-fullscreen) HTML5 player doesn't inhibit the OS idle
+  // timer, so the screen sleeps after a minute of no touch mid-playback.
+  // Hold a screen wake lock while playing; the OS auto-releases it when the
+  // tab is hidden, so we re-acquire on return. No-ops where unsupported.
+  useEffect(() => {
+    const nav = navigator as Navigator & {
+      wakeLock?: { request: (t: "screen") => Promise<{ release: () => Promise<void> }> };
+    };
+    if (!nav.wakeLock) return;
+    let sentinel: { release: () => Promise<void> } | null = null;
+    let cancelled = false;
+    const acquire = async () => {
+      if (sentinel) return;
+      try {
+        sentinel = await nav.wakeLock!.request("screen");
+        if (cancelled) {
+          sentinel.release().catch(() => {});
+          sentinel = null;
+        }
+      } catch {
+        /* not allowed (e.g. low battery) — ignore */
+      }
+    };
+    const release = () => {
+      sentinel?.release().catch(() => {});
+      sentinel = null;
+    };
+    if (playing) acquire();
+    else release();
+    const onVis = () => {
+      if (!document.hidden && playing) acquire();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVis);
+      release();
+    };
+  }, [playing]);
+
+  // ── Picture-in-Picture: feature-detect + track OS window state ──────
+  useEffect(() => {
+    const v = videoRef.current;
+    const doc = document as Document & { pictureInPictureEnabled?: boolean };
+    setPipSupported(
+      !!doc.pictureInPictureEnabled &&
+        !!v &&
+        typeof (v as HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> })
+          .requestPictureInPicture === "function",
+    );
+    if (!v) return;
+    const onEnter = () => setIsPiP(true);
+    const onLeave = () => setIsPiP(false);
+    v.addEventListener("enterpictureinpicture", onEnter);
+    v.addEventListener("leavepictureinpicture", onLeave);
+    return () => {
+      v.removeEventListener("enterpictureinpicture", onEnter);
+      v.removeEventListener("leavepictureinpicture", onLeave);
+    };
+  }, [src]);
+
+  // Auto-PiP on tab/app switch while playing (restored on return). No-ops
+  // where the browser disallows the programmatic request.
+  useEffect(() => {
+    if (!pipSupported) return;
+    const doc = document as Document & {
+      pictureInPictureElement?: Element;
+      exitPictureInPicture?: () => Promise<void>;
+    };
+    const onVisibility = () => {
+      const v = videoRef.current as
+        | (HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> })
+        | null;
+      if (!v) return;
+      if (document.hidden) {
+        if (!v.paused && !doc.pictureInPictureElement) v.requestPictureInPicture?.().catch(() => {});
+      } else if (doc.pictureInPictureElement) {
+        doc.exitPictureInPicture?.().catch(() => {});
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [pipSupported]);
+
+  const togglePiP = async () => {
+    const v = videoRef.current as
+      | (HTMLVideoElement & { requestPictureInPicture?: () => Promise<unknown> })
+      | null;
+    const doc = document as Document & {
+      pictureInPictureElement?: Element;
+      exitPictureInPicture?: () => Promise<void>;
+    };
+    if (!v) return;
+    try {
+      if (doc.pictureInPictureElement) await doc.exitPictureInPicture?.();
+      else if (v.requestPictureInPicture) await v.requestPictureInPicture();
+    } catch {
+      /* not-allowed — ignore */
+    }
+  };
+
   // ── Auto-hide controls after 2.5s of mouse idleness ─────────────────
   useEffect(() => {
     if (controlsTimer.current) clearTimeout(controlsTimer.current);
@@ -624,8 +741,14 @@ export default function RoomPlayer({
       onMouseMove={showControls}
       onMouseLeave={() => playing && setControlsVisible(false)}
       onClick={() => {
-        // Wait 220ms — if a 2nd click comes in (dblclick) we cancel the
-        // play-toggle and let onDoubleClick fire instead.
+        // On touch devices there's no double-tap-to-fullscreen, so toggle
+        // immediately — no need to debounce against a pending dblclick.
+        if (isMobile) {
+          togglePlay();
+          return;
+        }
+        // Desktop: wait 220ms — if a 2nd click comes in (dblclick) we cancel
+        // the play-toggle and let onDoubleClick fire instead.
         if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
         clickTimerRef.current = setTimeout(() => {
           togglePlay();
@@ -634,6 +757,7 @@ export default function RoomPlayer({
       }}
       onDoubleClick={(e) => {
         e.stopPropagation();
+        if (isMobile) return; // fullscreen via the dedicated button on mobile
         if (clickTimerRef.current) {
           clearTimeout(clickTimerRef.current);
           clickTimerRef.current = null;
@@ -702,18 +826,36 @@ export default function RoomPlayer({
             Guests get the preview too (they can't actually seek but
             knowing the time helps for chat coordination). */}
         <div
-          className={`relative h-1.5 bg-white/20 rounded-full mb-2 group/scrub ${isHost ? "cursor-pointer" : "cursor-not-allowed"}`}
-          onMouseMove={(e) => {
+          className={`relative h-1.5 bg-white/20 rounded-full mb-2 group/scrub touch-none ${isHost ? "cursor-pointer" : "cursor-not-allowed"}`}
+          onPointerDown={(e) => {
+            if (!isHost) return;
+            // Capture the pointer so dragging keeps reporting to this element
+            // even when the cursor/finger slides off the thin bar.
+            e.currentTarget.setPointerCapture(e.pointerId);
+            isScrubbingRef.current = true;
             const rect = e.currentTarget.getBoundingClientRect();
             const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
             setScrubHover({ frac, x: e.clientX - rect.left });
+            onScrubChange(frac);
           }}
-          onMouseLeave={() => setScrubHover(null)}
-          onClick={(e) => {
-            if (!isHost) return;
+          onPointerMove={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
-            const frac = (e.clientX - rect.left) / rect.width;
-            onScrubChange(Math.max(0, Math.min(1, frac)));
+            const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+            setScrubHover({ frac, x: Math.max(0, Math.min(rect.width, e.clientX - rect.left)) });
+            // While dragging, seek continuously so the bar follows the finger.
+            if (isHost && isScrubbingRef.current) onScrubChange(frac);
+          }}
+          onPointerUp={(e) => {
+            if (isScrubbingRef.current) {
+              e.currentTarget.releasePointerCapture(e.pointerId);
+              isScrubbingRef.current = false;
+            }
+          }}
+          onPointerCancel={() => {
+            isScrubbingRef.current = false;
+          }}
+          onMouseLeave={() => {
+            if (!isScrubbingRef.current) setScrubHover(null);
           }}
         >
           <div
@@ -955,6 +1097,16 @@ export default function RoomPlayer({
           )}
 
           {/* Fullscreen */}
+          {pipSupported && (
+            <button
+              onClick={togglePiP}
+              className={`transition-colors ${isPiP ? "text-brand-red" : "hover:text-brand-red"}`}
+              aria-label="Suzuvchi oyna (Picture-in-Picture)"
+              title="Suzuvchi oynada ko'rish"
+            >
+              <PictureInPicture2 className="w-5 h-5" />
+            </button>
+          )}
           <button onClick={toggleFullscreen} className="hover:text-brand-red transition-colors">
             {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
           </button>

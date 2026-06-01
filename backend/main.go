@@ -194,6 +194,7 @@ func main() {
 	presenceService := services.NewPresenceService()
 	presenceHandler := handlers.NewPresenceHandler(presenceService, userRepo)
 	systemHandler := handlers.NewSystemHandler(cfg, db, getParserURL())
+	gifHandler := handlers.NewGifHandler(cfg)
 	userHandler := handlers.NewUserHandler(watchHistoryRepo, favoriteRepo, movieRepo, seriesRepo, userRepo)
 	collectionHandler := handlers.NewCollectionHandler(collectionService)
 	ratingHandler := handlers.NewRatingHandler(ratingService)
@@ -325,7 +326,7 @@ func main() {
 	// Content folders — admin-curated clips (CapCut exports) with scheduling.
 	contentFolderRepo := repositories.NewContentFolderRepository(db)
 	contentClipRepo := repositories.NewContentClipRepository(db)
-	contentHandler := handlers.NewContentHandler(contentFolderRepo, contentClipRepo, publishJobRepo, uploadHandler, cfg, parserURL)
+	contentHandler := handlers.NewContentHandler(contentFolderRepo, contentClipRepo, publishJobRepo, uploadHandler, cfg, parserURL, b2Cleanup)
 
 	movieService.SetStorageDependencies(clipRepo, igScheduleRepo, publishJobRepo, b2Cleanup)
 	seriesService.SetStorageDependencies(clipRepo, igScheduleRepo, publishJobRepo, b2Cleanup)
@@ -362,7 +363,7 @@ func main() {
 	// Register routes
 	deleteJobHandler := handlers.NewDeleteJobHandler(repositories.NewDeleteJobRepository(db))
 
-	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler, deleteJobHandler, expenseHandler, announcementHandler)
+	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler, deleteJobHandler, expenseHandler, announcementHandler, gifHandler)
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)
 	seoNotifier := buildSEONotifier(cfg, db)

@@ -1,13 +1,15 @@
 package routes
 
 import (
+	"time"
+
 	"github.com/filmorauz/backend/handlers"
 	"github.com/filmorauz/backend/middleware"
 	"github.com/filmorauz/backend/services"
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler, contentHandler *handlers.ContentHandler, systemHandler *handlers.SystemHandler, deleteJobHandler *handlers.DeleteJobHandler, expenseHandler *handlers.ExpenseHandler, announcementHandler *handlers.AnnouncementHandler) {
+func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler, contentHandler *handlers.ContentHandler, systemHandler *handlers.SystemHandler, deleteJobHandler *handlers.DeleteJobHandler, expenseHandler *handlers.ExpenseHandler, announcementHandler *handlers.AnnouncementHandler, gifHandler *handlers.GifHandler) {
 	r.GET("/sitemap.xml", sitemapHandler.GetSitemapIndex)
 	r.GET("/sitemap-static.xml", sitemapHandler.GetSitemapStatic)
 	r.GET("/sitemap-genres.xml", sitemapHandler.GetSitemapGenres)
@@ -170,9 +172,13 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	api.GET("/media/access-token", middleware.OptionalAuth(authService), mediaHandler.GetMediaToken)
 
 	// Public movie routes
-	api.GET("/homepage", homepageHandler.GetHomepageData)
+	api.GET("/homepage", middleware.CacheResponse(30*time.Second), homepageHandler.GetHomepageData)
 	api.GET("/movies", movieHandler.ListMovies)
-	api.GET("/movies/trending", movieHandler.GetTrendingMovies)
+	api.GET("/movies/trending", middleware.CacheResponse(30*time.Second), movieHandler.GetTrendingMovies)
+
+	// Watch-room chat GIF picker — proxies GIPHY so the API key stays
+	// server-side. Cached 5m to spare the GIPHY quota on repeat searches.
+	api.GET("/gifs/search", middleware.CacheResponse(5*time.Minute), gifHandler.SearchGifs)
 	// Movie by slug (must come before :id routes to avoid slug being treated as id)
 	api.GET("/movies/slug/:slug", movieHandler.GetMovieBySlug)
 	// Movie by ID and recommendations
@@ -267,6 +273,12 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	api.GET("/get-upload-url", ingestionHandler.GetUploadURL)
 	api.GET("/upload/b2-url", middleware.RequireAdmin(authService), uploadHandler.GetB2UploadURL)
 	api.POST("/upload/b2-complete", middleware.RequireAdmin(authService), uploadHandler.CompleteB2Upload)
+	// Multipart (large file) upload broker — used for multi-GB videos so a
+	// network blip doesn't restart the whole upload and parts go in parallel.
+	api.POST("/upload/b2-large/start", middleware.RequireAdmin(authService), uploadHandler.StartB2LargeFile)
+	api.POST("/upload/b2-large/part-url", middleware.RequireAdmin(authService), uploadHandler.GetB2PartUploadURL)
+	api.POST("/upload/b2-large/finish", middleware.RequireAdmin(authService), uploadHandler.FinishB2LargeFile)
+	api.POST("/upload/b2-large/cancel", middleware.RequireAdmin(authService), uploadHandler.CancelB2LargeFile)
 
 	// Admin routes — protected by JWT and admin role check
 	admin := api.Group("/admin")
@@ -416,7 +428,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	collections := api.Group("/collections")
 	{
 		collections.GET("", collectionHandler.GetCollections)
-		collections.GET("/featured", collectionHandler.GetFeaturedCollections)
+		collections.GET("/featured", middleware.CacheResponse(60*time.Second), collectionHandler.GetFeaturedCollections)
 		collections.GET("/slug/:slug", collectionHandler.GetCollectionBySlug)
 	}
 

@@ -2,9 +2,17 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Clock, Calendar, Heart, Eye, Crown } from "lucide-react";
-import VideoPlayer from "@/components/VideoPlayer";
+// Code-split the player (which pulls in the heavy hls.js bundle) out of the
+// watch route's initial JS. The page shell — poster, title, info, ads —
+// paints immediately while the player chunk streams in behind a skeleton.
+// ssr:false because hls.js is browser-only.
+const VideoPlayer = dynamic(() => import("@/components/VideoPlayer"), {
+  ssr: false,
+  loading: () => <div className="w-full aspect-video bg-black rounded-xl animate-pulse" />,
+});
 import WatchTogetherButton from "@/components/WatchTogetherButton";
 import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveUnifiedWatchProgress, getWatchProgress, resetWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, getProtectedMediaAccess, Ad, Movie } from "@/lib/api";
 import { pickWeightedRandomAd } from "@/lib/ads-utils";

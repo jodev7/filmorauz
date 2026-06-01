@@ -104,8 +104,9 @@ type WatchRoomMessage struct {
 	UserID    primitive.ObjectID `bson:"user_id" json:"user_id"`
 	UserName  string             `bson:"user_name,omitempty" json:"user_name,omitempty"`
 	UserAvatar string            `bson:"user_avatar,omitempty" json:"user_avatar,omitempty"`
-	Kind      string             `bson:"kind" json:"kind"` // "text" | "emoji"
+	Kind      string             `bson:"kind" json:"kind"` // "text" | "emoji" | "gif"
 	Text      string             `bson:"text,omitempty" json:"text,omitempty"`
 	Emoji     string             `bson:"emoji,omitempty" json:"emoji,omitempty"`
+	GifURL    string             `bson:"gif_url,omitempty" json:"gif_url,omitempty"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 }

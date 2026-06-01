@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Loader2, Plus, X, Info, Upload, CheckCircle, AlertCircle } from "lucide-react";
 import { MovieInput, VideoSourceType, directB2Upload, backendUploadMovieImage, createDirectUploadJob, DirectUploadInput, IngestionJob, UploadProgressInfo } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
@@ -139,6 +139,23 @@ export default function MovieForm({
 
   const [directUploadJob, setDirectUploadJob] = useState<DirectUploadState>({ status: "idle" });
   const [tempFileKey, setTempFileKey] = useState<string>("");
+
+  // Warn before leaving while any file is still uploading. A multi-GB video
+  // upload is tied to this tab — navigating away aborts it and the admin loses
+  // all progress.
+  const isUploading =
+    uploads.poster.status === "uploading" ||
+    uploads.backdrop.status === "uploading" ||
+    uploads.video.status === "uploading";
+  useEffect(() => {
+    if (!isUploading) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isUploading]);
 
   const set = (field: keyof MovieInput, value: unknown) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -606,7 +623,7 @@ export default function MovieForm({
             {uploads.video.status === "success" && (
               <div className="upload-status success">
                 <CheckCircle size={20} />
-                <span>Video uploaded successfully</span>
+                <span>Video yuklandi — &quot;Create&quot; bosgach qayta ishlashga yuboriladi</span>
               </div>
             )}
             {uploads.video.status === "error" && (
@@ -634,6 +651,16 @@ export default function MovieForm({
               </>
             )}
           </div>
+          {form.source_type === "direct_upload" && (
+            <p className="mt-2 flex items-start gap-1.5 text-xs text-gray-500">
+              <Info size={14} className="mt-0.5 shrink-0" />
+              <span>
+                Video yuklab bo&apos;lingach, &quot;Create&quot; tugmasi uni qayta ishlash navbatiga qo&apos;yadi
+                (HLS/sifatlarga o&apos;girish). Kino darhol chiqmaydi — process tugagach efirga chiqadi.
+                Yuklash davomida bu sahifani yopmang.
+              </span>
+            </p>
+          )}
         </div>
       )}
 
@@ -769,11 +796,11 @@ export default function MovieForm({
       <div className="flex items-center gap-3 pt-2">
         <button
           type="submit"
-          disabled={loading || directUploadJob.status === "job_created"}
+          disabled={loading || isUploading || directUploadJob.status === "job_created"}
           className="flex items-center gap-2 bg-brand-red hover:bg-orange-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold px-8 py-3 rounded-xl transition-colors"
         >
           {loading && <Loader2 size={16} className="animate-spin" />}
-          {loading ? "Saving..." : submitLabel}
+          {isUploading ? "Yuklanmoqda..." : loading ? "Saving..." : submitLabel}
         </button>
         {directUploadJob.status === "job_created" && (
           <span className="text-green-500 text-sm">

@@ -30,6 +30,10 @@ type Config struct {
 	TelegramChannelUsername string
 	WorkerUploadsDir        string
 	AIEndpoint              string
+	// GiphyAPIKey backs the watch-room chat GIF picker. Kept server-side so
+	// the key is never exposed to the browser — the frontend hits our
+	// /api/gifs proxy instead of api.giphy.com directly.
+	GiphyAPIKey string
 	UploadsDir              string
 	CDNURL                  string
 	B2Bucket                string
@@ -91,6 +95,7 @@ func Load() *Config {
 		TelegramChannelUsername: getEnv("TG_CHANNEL_USERNAME", ""),
 		WorkerUploadsDir:        getEnv("WORKER_UPLOADS_DIR", "../worker/uploads"),
 		AIEndpoint:              getEnv("AI_ENDPOINT", ""),
+		GiphyAPIKey:             strings.TrimSpace(getEnv("GIPHY_API_KEY", "")),
 		UploadsDir:              getEnv("UPLOADS_DIR", "./uploads"),
 		CDNURL:                  getEnv("CDN_URL", ""),
 		B2Bucket:                getEnvAny([]string{"B2_BUCKET_NAME", "B2_BUCKET"}, ""),

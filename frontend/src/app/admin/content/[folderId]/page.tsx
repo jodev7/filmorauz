@@ -265,12 +265,13 @@ function ClipRow({
       <div className="flex items-start gap-4">
         <div className="w-24 h-32 flex-shrink-0 bg-brand-dark rounded-lg overflow-hidden flex items-center justify-center text-gray-700 relative">
           <video
-            src={clip.url}
+            src={`${clip.url}#t=0.1`}
             className="absolute inset-0 h-full w-full object-cover"
             preload="metadata"
+            playsInline
             muted
           />
-          <Video size={20} className="relative z-10 text-white/60" />
+          <Video size={20} className="relative z-10 text-white/60 pointer-events-none" />
         </div>
 
         <div className="flex-1 min-w-0">

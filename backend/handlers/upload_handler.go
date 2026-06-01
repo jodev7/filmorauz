@@ -371,7 +371,7 @@ func (h *UploadHandler) UploadMovieAssets(c *gin.Context) {
 		maxSize = 10 * 1024 * 1024 // 10MB
 		allowedTypes = allowedImageTypes
 	case "video":
-		maxSize = 5 * 1024 * 1024 * 1024 // 5GB for videos
+		maxSize = 15 * 1024 * 1024 * 1024 // 15GB for videos
 		allowedTypes = map[string]bool{
 			"video/mp4":             true,
 			"video/webm":            true,
@@ -985,7 +985,7 @@ func (h *UploadHandler) UploadTemp(c *gin.Context) {
 		maxSize = 20 * 1024 * 1024 // 20 MB for images
 		allowedTypes = allowedImageTypes
 	case "video", "temp_movie":
-		maxSize = 5 * 1024 * 1024 * 1024
+		maxSize = 15 * 1024 * 1024 * 1024
 		allowedTypes = map[string]bool{
 			"video/mp4":       true,
 			"video/webm":      true,

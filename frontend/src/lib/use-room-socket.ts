@@ -23,9 +23,10 @@ export type RoomChatEntry = {
   userID: string;
   userName: string;
   userAvatar?: string;
-  kind: "text" | "emoji";
+  kind: "text" | "emoji" | "gif";
   text?: string;
   emoji?: string;
+  gifUrl?: string;
   createdAt: string;
 };
 
@@ -55,6 +56,7 @@ export type RoomEvent =
   | { type: "reaction"; reaction: RoomReaction }
   | { type: "host_disconnected"; deadlineMs: number; graceSeconds: number }
   | { type: "host_reconnected" }
+  | { type: "host_changed"; ownerID: string; userName: string }
   | { type: "episode_change"; episodeID: string; episodeTitle: string }
   | { type: "episode_request"; userID: string; userName: string; targetEpisodeID?: string; reason: string }
   | { type: "theme_change"; from: string; to: string }
@@ -65,7 +67,7 @@ export type UseRoomSocketResult = {
   connected: boolean;
   state: RoomSyncState | null;
   sendHostAction: (action: "play" | "pause" | "seek", position: number) => void;
-  sendChat: (kind: "text" | "emoji", payload: string) => void;
+  sendChat: (kind: "text" | "emoji" | "gif", payload: string) => void;
   sendTyping: (isTyping: boolean) => void;
   sendReaction: (emoji: string) => void;
   sendKick: (userID: string) => void;
@@ -152,9 +154,10 @@ export function useRoomSocket(
               userID: String(p.user_id || ""),
               userName: String(p.user_name || ""),
               userAvatar: typeof p.user_avatar === "string" ? p.user_avatar : undefined,
-              kind: (p.kind as "text" | "emoji") || "text",
+              kind: (p.kind as "text" | "emoji" | "gif") || "text",
               text: typeof p.text === "string" ? p.text : undefined,
               emoji: typeof p.emoji === "string" ? p.emoji : undefined,
+              gifUrl: typeof p.gif_url === "string" ? p.gif_url : undefined,
               createdAt: String(p.created_at || new Date().toISOString()),
             },
           });
@@ -167,9 +170,10 @@ export function useRoomSocket(
               userID: String(m.user_id || ""),
               userName: String(m.user_name || ""),
               userAvatar: typeof m.user_avatar === "string" ? m.user_avatar : undefined,
-              kind: (m.kind as "text" | "emoji") || "text",
+              kind: (m.kind as "text" | "emoji" | "gif") || "text",
               text: typeof m.text === "string" ? m.text : undefined,
               emoji: typeof m.emoji === "string" ? m.emoji : undefined,
+              gifUrl: typeof m.gif_url === "string" ? m.gif_url : undefined,
               createdAt: String(m.created_at || new Date().toISOString()),
             })),
           });
@@ -247,6 +251,13 @@ export function useRoomSocket(
         case "host_reconnected":
           pushEvent({ type: "host_reconnected" });
           break;
+        case "host_changed":
+          pushEvent({
+            type: "host_changed",
+            ownerID: String(p.owner_id || ""),
+            userName: String(p.user_name || ""),
+          });
+          break;
         case "episode_change":
           pushEvent({
             type: "episode_change",
@@ -318,6 +329,7 @@ export function useRoomSocket(
     sendHostAction: (action, position) => send("host_action", { action, position }),
     sendChat: (kind, payload) => {
       if (kind === "emoji") send("chat_send", { kind: "emoji", emoji: payload });
+      else if (kind === "gif") send("chat_send", { kind: "gif", gif_url: payload });
       else send("chat_send", { kind: "text", text: payload });
     },
     sendTyping: (isTyping: boolean) => send("typing", { is_typing: isTyping }),

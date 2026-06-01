@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"net/url"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +16,19 @@ import (
 	"github.com/gorilla/websocket"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
+
+// isAllowedGifURL guards the gif chat kind: only https URLs hosted on GIPHY's
+// own CDN are accepted, so a client can't smuggle an arbitrary image/tracker
+// URL (or a non-image payload) into every member's chat. The picker only ever
+// hands us giphy.com media URLs; anything else is dropped.
+func isAllowedGifURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "giphy.com" || strings.HasSuffix(host, ".giphy.com")
+}
 
 var _ = primitive.NilObjectID // keep primitive imported even if every direct use is via models
 
@@ -39,6 +54,9 @@ type HubClient struct {
 	IsHost     bool
 	Conn       *websocket.Conn
 	send       chan []byte
+	// JoinedAt orders clients for host-transfer: when the host drops and the
+	// grace window expires, the earliest-joined remaining guest is promoted.
+	JoinedAt time.Time
 }
 
 // HubRoom is the live, in-memory state for one watch-room. Persisted state
@@ -295,6 +313,7 @@ func (h *WatchRoomHub) AddClient(rm *HubRoom, c *HubClient) error {
 				"kind":        m.Kind,
 				"text":        m.Text,
 				"emoji":       m.Emoji,
+				"gif_url":     m.GifURL,
 				"created_at":  m.CreatedAt,
 			})
 		}
@@ -352,8 +371,11 @@ func (h *WatchRoomHub) RemoveClient(rm *HubRoom, c *HubClient) {
 		}
 	}
 
-	// Per-member leave events only in small rooms.
-	if !rm.presenceMode {
+	// Per-member leave events only in small rooms — and only once the user
+	// has no other live connection. Otherwise closing one of two devices
+	// (same account) would broadcast member_left and drop the user from
+	// everyone's roster even though their other device is still in the room.
+	if !rm.presenceMode && !sameUserStillHere {
 		h.broadcast(rm, hubMessage{
 			Type:    "member_left",
 			Payload: map[string]any{"user_id": c.UserID.Hex()},
@@ -373,7 +395,7 @@ func (h *WatchRoomHub) RemoveClient(rm *HubRoom, c *HubClient) {
 			deadline := time.Now().Add(HostDisconnectGrace)
 			rm.HostDisconnectDeadline = deadline
 			rm.hostGraceTimer = time.AfterFunc(HostDisconnectGrace, func() {
-				h.CloseRoom(rm, "host_disconnect")
+				h.promoteHostOrClose(rm)
 			})
 			rm.mu.Unlock()
 			// Tell every remaining client when the room will be torn down
@@ -398,6 +420,59 @@ func (h *WatchRoomHub) RemoveClient(rm *HubRoom, c *HubClient) {
 	}
 }
 
+// promoteHostOrClose runs when the host's grace window expires. If any
+// guests are still connected, the earliest-joined one is promoted to host
+// (and the new owner persisted) so the room keeps going instead of being
+// torn down. With nobody left, the room closes as before.
+func (h *WatchRoomHub) promoteHostOrClose(rm *HubRoom) {
+	rm.mu.Lock()
+	if rm.closed {
+		rm.mu.Unlock()
+		return
+	}
+	// Host reconnected just as the timer fired — nothing to do.
+	if rm.hasHostLocked() {
+		rm.hostGraceTimer = nil
+		rm.HostDisconnectDeadline = time.Time{}
+		rm.mu.Unlock()
+		return
+	}
+	var newHost *HubClient
+	for c := range rm.clients {
+		if newHost == nil || c.JoinedAt.Before(newHost.JoinedAt) {
+			newHost = c
+		}
+	}
+	if newHost == nil {
+		rm.mu.Unlock()
+		h.CloseRoom(rm, "host_disconnect")
+		return
+	}
+	newHost.IsHost = true
+	rm.OwnerID = newHost.UserID
+	rm.hostGraceTimer = nil
+	rm.HostDisconnectDeadline = time.Time{}
+	newOwnerID := newHost.UserID
+	newOwnerName := newHost.UserName
+	rm.mu.Unlock()
+
+	// Persist the new owner so reconnects / cold-start resolve host status.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := h.repo.UpdateOwner(ctx, rm.ID, newOwnerID); err != nil {
+		log.Printf("[hub] room=%s host-transfer persist failed: %v", rm.ID.Hex(), err)
+	}
+
+	h.broadcast(rm, hubMessage{
+		Type: "host_changed",
+		Payload: map[string]any{
+			"owner_id":  newOwnerID.Hex(),
+			"user_name": newOwnerName,
+		},
+	}, nil)
+	log.Printf("[hub] room=%s host transferred to user=%s", rm.ID.Hex(), newOwnerID.Hex())
+}
+
 // recordChat buffers one chat/emoji entry for replay on rejoin. In cluster
 // mode it pushes the canonical chat-history payload onto the shared Redis
 // ring (so a join on any instance replays it); otherwise it appends to the
@@ -411,6 +486,7 @@ func (h *WatchRoomHub) recordChat(rm *HubRoom, m models.WatchRoomMessage) {
 			"kind":        m.Kind,
 			"text":        m.Text,
 			"emoji":       m.Emoji,
+			"gif_url":     m.GifURL,
 			"created_at":  m.CreatedAt,
 		})
 		if err == nil {
@@ -511,15 +587,21 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 
 	case "chat_send":
 		var p struct {
-			Kind  string `json:"kind"`
-			Text  string `json:"text"`
-			Emoji string `json:"emoji"`
+			Kind   string `json:"kind"`
+			Text   string `json:"text"`
+			Emoji  string `json:"emoji"`
+			GifURL string `json:"gif_url"`
 		}
 		if err := decodePayload(msg.Payload, &p); err != nil {
 			return
 		}
-		if p.Kind != "text" && p.Kind != "emoji" {
+		if p.Kind != "text" && p.Kind != "emoji" && p.Kind != "gif" {
 			p.Kind = "text"
+		}
+		// A gif message must carry a valid GIPHY URL; otherwise drop it so a
+		// malformed/forged gif can't render a broken or hostile image.
+		if p.Kind == "gif" && !isAllowedGifURL(p.GifURL) {
+			return
 		}
 		// Slow-mode in large/premiere rooms — drop and notify the sender.
 		if !rm.allowChat(c.UserID) {
@@ -537,6 +619,7 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 			Kind:       p.Kind,
 			Text:       p.Text,
 			Emoji:      p.Emoji,
+			GifURL:     p.GifURL,
 			CreatedAt:  time.Now(),
 		}
 		// Never persisted to Mongo — buffered for replay on rejoin (shared
@@ -548,6 +631,7 @@ func (h *WatchRoomHub) HandleCommand(rm *HubRoom, c *HubClient, raw []byte) {
 			"kind":        entry.Kind,
 			"text":        entry.Text,
 			"emoji":       entry.Emoji,
+			"gif_url":     entry.GifURL,
 			"created_at":  entry.CreatedAt,
 		}
 		h.recordChat(rm, entry)
@@ -932,7 +1016,14 @@ func (h *WatchRoomHub) memberCount(rm *HubRoom) int {
 	}
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
-	return len(rm.clients)
+	// Count distinct users, not raw connections — one account opened on two
+	// devices is still one member. Without this the roster count showed "2"
+	// while the deduped member LIST showed the user once.
+	seen := make(map[primitive.ObjectID]struct{}, len(rm.clients))
+	for c := range rm.clients {
+		seen[c.UserID] = struct{}{}
+	}
+	return len(seen)
 }
 
 // broadcast delivers msg to every member of the room. In cluster mode it
