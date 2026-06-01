@@ -331,6 +331,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 
 		// Bulk import from category
 		admin.POST("/ingestion/bulk-import", ingestionHandler.BulkImportFromCategory)
+		admin.POST("/ingestion/episodes/direct-upload", ingestionHandler.CreateEpisodeDirectUploadJob)
 
 		// Watch rooms (admin overview)
 		admin.GET("/rooms", watchRoomHandler.AdminListRooms)

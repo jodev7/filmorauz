@@ -186,6 +186,55 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	return nil
 }
 
+// processEpisodeDirectUploadJob handles a manually-uploaded serial episode
+// (Add Series → episode "direct upload"). The source video already sits in
+// B2 temp (temp_file_url); we pull it down to a local file and then run the
+// exact same per-episode pipeline used by serial import — transcode to the
+// serials/<slug>/season-N/episode-M HLS folder, link the Episode row, and
+// generate clips. Finally the B2 temp upload is removed.
+func (p *Pipeline) processEpisodeDirectUploadJob(ctx context.Context, job *models.IngestionJob) error {
+	jobID := job.ID.Hex()
+	log.Printf("[EPISODE_DIRECT] start job=%s series=%s S%02dE%02d temp=%s",
+		jobID, job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, job.TempFileURL)
+
+	if job.SeriesSlug == "" {
+		return fmt.Errorf("episode direct_upload job %s missing series_slug", jobID)
+	}
+	if job.TempFileURL == "" {
+		return fmt.Errorf("episode direct_upload job %s missing temp_file_url", jobID)
+	}
+
+	if err := p.updateStatus(jobID, models.IngestionStatusDownloading, 10); err != nil {
+		return fmt.Errorf("episode direct_upload update_status: %w", err)
+	}
+
+	localTempPath, err := p.downloadDirectUploadTempFile(job)
+	if err != nil {
+		errMsg := fmt.Sprintf("failed to download temp file: %v", err)
+		log.Printf("[EPISODE_DIRECT] ERROR: %s", errMsg)
+		if fErr := p.failJobWithStatus(jobID, models.IngestionStatusDownloadFailed, errMsg); fErr != nil {
+			log.Printf("[EPISODE_DIRECT] mark failed: %v", fErr)
+		}
+		return fmt.Errorf("%s", errMsg)
+	}
+	log.Printf("[EPISODE_DIRECT] downloaded temp → %s", localTempPath)
+
+	// Feed the downloaded file into the standard episode pipeline, which
+	// handles transcode + upload + Episode linkage + clips + completion.
+	job.LocalPath = localTempPath
+	if err := p.processEpisodeJob(ctx, job); err != nil {
+		p.cleanupFile(localTempPath)
+		return err
+	}
+
+	// Episode HLS is live; drop the B2 temp source. Best-effort.
+	if err := p.cleanupTempFile(job); err != nil {
+		log.Printf("[EPISODE_DIRECT] WARNING: cleanup B2 temp: %v", err)
+	}
+	log.Printf("[EPISODE_DIRECT] done job=%s", jobID)
+	return nil
+}
+
 func (p *Pipeline) notifyEpisodeComplete(ctx context.Context, job *models.IngestionJob, streamingURL, thumbnailsBaseURL string, thumbnailInterval int) error {
 	backendURL := p.config.BackendURL
 	if backendURL == "" {

@@ -2237,6 +2237,37 @@ export async function createDirectUploadJob(
   return json.data;
 }
 
+// Direct-upload input for a single serial episode. The video must already be
+// uploaded to B2 temp via directB2Upload(token, file, "video").
+export interface EpisodeDirectUploadInput {
+  season_id: string;
+  episode_number: number;
+  title: string;
+  temp_file_url: string;
+  temp_file_key?: string;
+  duration?: number;
+  quality?: string;
+}
+
+// Create a direct-upload ingestion job for one serial episode. Returns the
+// created (still-processing) episode plus the ingestion job.
+export async function createEpisodeDirectUpload(
+  token: string,
+  input: EpisodeDirectUploadInput
+): Promise<{ episode: Record<string, unknown>; job: IngestionJob }> {
+  const res = await fetch(`${API_URL}/admin/ingestion/episodes/direct-upload`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Failed to queue episode upload" }));
+    throw new Error(err.error || "Failed to queue episode upload");
+  }
+  const json = await res.json();
+  return json.data;
+}
+
 // Get all ingestion jobs
 export async function getIngestionJobs(
   token: string,

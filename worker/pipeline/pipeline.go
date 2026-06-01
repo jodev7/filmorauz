@@ -467,6 +467,12 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 
 	// Handle direct_upload source - download from B2 temp path
 	if job.Source == "direct_upload" {
+		// A manually-uploaded serial episode reuses the episode pipeline
+		// (per-episode HLS folder + Episode-row linkage) instead of the
+		// movie-creation path.
+		if job.ContentType == "episode" {
+			return p.processEpisodeDirectUploadJob(ctx, job)
+		}
 		return p.processDirectUploadJob(ctx, job)
 	}
 
