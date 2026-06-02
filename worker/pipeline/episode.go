@@ -139,17 +139,29 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	// === Clip generation ===
 	// Trigger at the episode level before the job is marked completed so the
 	// status reflects the full ingestion lifecycle, not just HLS availability.
-	log.Printf("[CLIPS] episode completed → generating clips")
-	log.Printf("[EPISODE] clip_generation start series_slug=%s season=%d episode=%d processed_master=%s local_path=%s",
-		job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, processedMaster, localPath)
-	if clipErr := p.generateEpisodeClips(ctx, job, processedMaster); clipErr != nil {
-		// Non-fatal: episode video is live; surface the failure in logs so
-		// an operator can re-run the clip stage if needed.
-		log.Printf("[EPISODE] WARNING: clip generation failed series_slug=%s S%02dE%02d: %v",
-			job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, clipErr)
-	} else {
-		log.Printf("[EPISODE] clip_generation end series_slug=%s season=%d episode=%d",
+	//
+	// In deferred-DB mode the Episode row does not exist yet (EpisodeID is
+	// zero), so clip generation cannot link clips to an episode here. The
+	// backend serial finalizer enqueues a dedicated clip_only job once the
+	// Episode row is created, which re-pulls this HLS and produces the clips.
+	// Attempting it inline would only fail with "episode_id is zero" and emit
+	// a misleading WARNING, so skip it entirely in that mode.
+	if job.EpisodeID.IsZero() {
+		log.Printf("[EPISODE] deferred-DB mode: skipping inline clip generation — backend finalizer will enqueue a clip_only job series_slug=%s S%02dE%02d",
 			job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber)
+	} else {
+		log.Printf("[CLIPS] episode completed → generating clips")
+		log.Printf("[EPISODE] clip_generation start series_slug=%s season=%d episode=%d processed_master=%s local_path=%s",
+			job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, processedMaster, localPath)
+		if clipErr := p.generateEpisodeClips(ctx, job, processedMaster); clipErr != nil {
+			// Non-fatal: episode video is live; surface the failure in logs so
+			// an operator can re-run the clip stage if needed.
+			log.Printf("[EPISODE] WARNING: clip generation failed series_slug=%s S%02dE%02d: %v",
+				job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, clipErr)
+		} else {
+			log.Printf("[EPISODE] clip_generation end series_slug=%s season=%d episode=%d",
+				job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber)
+		}
 	}
 
 	// Source file is no longer needed.
