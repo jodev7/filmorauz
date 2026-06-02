@@ -201,8 +201,10 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
     description: localizedDescription || buildContentDescription(localizedTitle, movie.year),
     thumbnailUrl: [pickSeoImage(movie.poster_url, movie.backdrop_url)],
     uploadDate: movie.created_at || (movie.year ? `${movie.year}-01-01` : undefined),
-    contentUrl: `${movieUrl}?play=1`,
-    embedUrl: movieUrl,
+    // contentUrl must point at the actual media file (HLS/CDN), not the HTML
+    // landing page — otherwise Google reports "Video isn't on a watch page".
+    contentUrl: movie.master_playlist_url || movie.video_url || undefined,
+    embedUrl: `${movieUrl}?play=1`,
     duration: movie.duration ? `PT${movie.duration}M` : undefined,
     inLanguage: "uz",
     isFamilyFriendly: true,

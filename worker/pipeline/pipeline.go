@@ -467,6 +467,12 @@ func (p *Pipeline) processJobWithRecovery(ctx context.Context, job *models.Inges
 
 	// Handle direct_upload source - download from B2 temp path
 	if job.Source == "direct_upload" {
+		// A manually-uploaded serial episode reuses the episode pipeline
+		// (per-episode HLS folder + Episode-row linkage) instead of the
+		// movie-creation path.
+		if job.ContentType == "episode" {
+			return p.processEpisodeDirectUploadJob(ctx, job)
+		}
 		return p.processDirectUploadJob(ctx, job)
 	}
 
@@ -2696,8 +2702,13 @@ func (p *Pipeline) createMovieInDatabase(job *models.IngestionJob, metadata *mod
 		"pipeline_complete":  false,
 		"clips_status":       "pending",
 		"selected_video_url": job.VideoURL,
-		"created_at":         time.Now(),
-		"updated_at":         time.Now(),
+		// Direct uploads must go through the same manual review as parser
+		// imports. Without these the inserted doc has no approval_status, and
+		// the UI/public treat a missing status as "approved" → auto-published.
+		"approval_status": "pending",
+		"is_published":    false,
+		"created_at":      time.Now(),
+		"updated_at":      time.Now(),
 	}
 
 	existingDoc, duplicateReason, err := p.findExistingMovieForImport(

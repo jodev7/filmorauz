@@ -34,6 +34,8 @@ import {
   CreateSeriesData,
   UploadProgressInfo,
   uploadSeriesImage,
+  directB2Upload,
+  createEpisodeDirectUpload,
 } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
@@ -274,6 +276,38 @@ export default function EditSeriesPage() {
     video_url: "",
     duration: 0,
   });
+  // Direct-upload state for the new episode's video (resumable B2 upload,
+  // mirrors Add Movie). When tempUrl is set, submitting goes through the
+  // transcode pipeline instead of saving a raw video_url.
+  const [episodeUpload, setEpisodeUpload] = useState<{
+    status: "idle" | "uploading" | "done" | "error";
+    progress: number;
+    uploadedMB?: number;
+    tempUrl?: string;
+    tempKey?: string;
+    fileName?: string;
+    message?: string;
+  }>({ status: "idle", progress: 0 });
+
+  const resetEpisodeUpload = () => setEpisodeUpload({ status: "idle", progress: 0 });
+
+  const handleEpisodeVideoUpload = async (file: File) => {
+    if (!token) return;
+    setEpisodeUpload({ status: "uploading", progress: 0, fileName: file.name });
+    try {
+      const result = await directB2Upload(token, file, "video", (p: UploadProgressInfo) => {
+        setEpisodeUpload((prev) => ({
+          ...prev,
+          status: "uploading",
+          progress: p.progress ?? prev.progress,
+          uploadedMB: p.uploadedMB ?? prev.uploadedMB,
+        }));
+      });
+      setEpisodeUpload({ status: "done", progress: 100, tempUrl: result.url, tempKey: result.file_key, fileName: file.name });
+    } catch (err) {
+      setEpisodeUpload({ status: "error", progress: 0, message: err instanceof Error ? err.message : "Upload failed" });
+    }
+  };
 
   const [addingSeason, setAddingSeason] = useState(false);
   const [addingEpisode, setAddingEpisode] = useState(false);
@@ -492,9 +526,30 @@ export default function EditSeriesPage() {
     e.preventDefault();
     if (!token || !activeSeasonId) return;
 
+    if (episodeUpload.status === "uploading") {
+      alert("Video hali yuklanmoqda, kuting...");
+      return;
+    }
     setAddingEpisode(true);
     try {
-      const episode = await adminCreateEpisode(token, activeSeasonId, newEpisode);
+      let episode: Episode;
+      if (episodeUpload.tempUrl) {
+        // Direct-upload path: the worker transcodes the uploaded file to HLS
+        // and links it to the episode (video_url filled asynchronously).
+        const res = await createEpisodeDirectUpload(token, {
+          season_id: activeSeasonId,
+          episode_number: newEpisode.episode_number,
+          title: newEpisode.title,
+          temp_file_url: episodeUpload.tempUrl,
+          temp_file_key: episodeUpload.tempKey,
+          duration: newEpisode.duration,
+          quality: form.quality,
+        });
+        episode = res.episode as unknown as Episode;
+      } else {
+        // Legacy path: a ready video_url was pasted.
+        episode = await adminCreateEpisode(token, activeSeasonId, newEpisode);
+      }
       setSeasons((prev) =>
         prev.map((s) =>
           s.season.id === activeSeasonId
@@ -502,15 +557,18 @@ export default function EditSeriesPage() {
             : s
         )
       );
+      // Keep the form open and bump the episode number so adding many
+      // episodes in a row (e.g. 100) is fast — no need to reopen each time.
+      const nextNumber = newEpisode.episode_number + 1;
       setNewEpisode({
-        episode_number: 1,
+        episode_number: nextNumber,
         title: "",
         description: "",
         thumbnail_url: "",
         video_url: "",
         duration: 0,
       });
-      setActiveSeasonId(null);
+      resetEpisodeUpload();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to add episode");
     } finally {
@@ -1254,8 +1312,56 @@ export default function EditSeriesPage() {
                             placeholder="Video URL"
                             value={newEpisode.video_url}
                             onChange={(e) => setNewEpisode({ ...newEpisode, video_url: e.target.value })}
-                            className="w-full px-3 py-2 bg-brand-card border border-brand-border rounded-lg text-white text-sm"
+                            disabled={episodeUpload.status === "uploading" || episodeUpload.status === "done"}
+                            className="w-full px-3 py-2 bg-brand-card border border-brand-border rounded-lg text-white text-sm disabled:opacity-50"
                           />
+
+                          {/* — yoki — direct video upload (Add Movie kabi) */}
+                          <div className="flex items-center gap-2 text-[11px] text-gray-500">
+                            <span className="flex-1 h-px bg-brand-border" /> yoki video faylni yuklang <span className="flex-1 h-px bg-brand-border" />
+                          </div>
+                          {episodeUpload.status === "idle" && (
+                            <label className="flex items-center justify-center gap-2 px-3 py-2 bg-brand-card border border-dashed border-brand-border rounded-lg text-sm text-gray-300 cursor-pointer hover:border-brand-red">
+                              <Upload className="w-4 h-4" />
+                              <span>Video tanlash (mp4/mov/webm)</span>
+                              <input
+                                type="file"
+                                accept="video/mp4,video/webm,video/ogg,video/quicktime"
+                                className="hidden"
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0];
+                                  if (f) void handleEpisodeVideoUpload(f);
+                                  e.target.value = "";
+                                }}
+                              />
+                            </label>
+                          )}
+                          {episodeUpload.status === "uploading" && (
+                            <div className="space-y-1">
+                              <div className="flex justify-between text-[11px] text-gray-400">
+                                <span className="truncate">{episodeUpload.fileName}</span>
+                                <span>{episodeUpload.progress}%{episodeUpload.uploadedMB ? ` · ${episodeUpload.uploadedMB.toFixed(0)} MB` : ""}</span>
+                              </div>
+                              <div className="h-1.5 bg-brand-border rounded-full overflow-hidden">
+                                <div className="h-full bg-brand-red transition-all" style={{ width: `${episodeUpload.progress}%` }} />
+                              </div>
+                            </div>
+                          )}
+                          {episodeUpload.status === "done" && (
+                            <div className="flex items-center justify-between gap-2 px-3 py-2 bg-green-500/10 border border-green-500/30 rounded-lg text-xs text-green-300">
+                              <span className="truncate">✓ Yuklandi: {episodeUpload.fileName} (transkod qilinadi)</span>
+                              <button type="button" onClick={resetEpisodeUpload} className="text-gray-400 hover:text-white shrink-0">
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          )}
+                          {episodeUpload.status === "error" && (
+                            <div className="px-3 py-2 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-300">
+                              {episodeUpload.message || "Upload failed"} ·{" "}
+                              <button type="button" onClick={resetEpisodeUpload} className="underline">qayta urinish</button>
+                            </div>
+                          )}
+
                           <input
                             type="number"
                             placeholder="Duration (min)"
@@ -1266,17 +1372,17 @@ export default function EditSeriesPage() {
                           <div className="flex gap-2">
                             <button
                               type="button"
-                              onClick={() => setActiveSeasonId(null)}
+                              onClick={() => { setActiveSeasonId(null); resetEpisodeUpload(); }}
                               className="flex-1 px-3 py-2 bg-brand-card border border-brand-border text-gray-400 rounded-lg text-sm"
                             >
                               Bekor
                             </button>
                             <button
                               type="submit"
-                              disabled={addingEpisode}
+                              disabled={addingEpisode || episodeUpload.status === "uploading"}
                               className="flex-1 px-3 py-2 bg-brand-red text-white rounded-lg text-sm disabled:opacity-50"
                             >
-                              {addingEpisode ? "..." : "Qo'shish"}
+                              {addingEpisode ? "..." : episodeUpload.status === "uploading" ? "Yuklanmoqda..." : "Qo'shish"}
                             </button>
                           </div>
                         </form>

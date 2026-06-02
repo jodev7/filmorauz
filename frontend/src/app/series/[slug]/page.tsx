@@ -21,6 +21,7 @@ import { buildContentDescription, buildContentKeywords, buildContentTitle, pickS
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
 const StarRating = dynamicImport(() => import("@/components/StarRating"));
+const SeriesShareButton = dynamicImport(() => import("@/components/SeriesShareButton"));
 
 interface Props {
   params: { slug: string };
@@ -234,8 +235,9 @@ export default async function SeriesDetailPage({ params }: Props) {
                 {series.description}
               </p>
 
-              <div className="mb-4 flex flex-wrap gap-2">
+              <div className="mb-4 flex flex-wrap items-start gap-2">
                 <WatchTogetherButton contentType="series" contentID={series.id} />
+                <SeriesShareButton seriesId={series.id} seriesTitle={series.title} />
               </div>
 
               <div className="mb-6">

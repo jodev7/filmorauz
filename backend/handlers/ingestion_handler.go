@@ -836,6 +836,98 @@ func (h *IngestionHandler) CreateDirectUploadJob(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"data": job, "message": "Direct upload ingestion job created"})
 }
 
+// CreateEpisodeDirectUploadJob registers a manually-uploaded serial episode.
+// The video already sits in B2 temp (temp_file_url, produced by the resumable
+// browser upload). We create the Episode row up-front so the worker can link
+// the resulting HLS to it, then enqueue a direct_upload ingestion job with
+// content_type=episode. The worker runs it through the standard per-episode
+// pipeline (transcode → serials/<slug>/season-N/episode-M → link → clips).
+// POST /api/admin/ingestion/episodes/direct-upload
+func (h *IngestionHandler) CreateEpisodeDirectUploadJob(c *gin.Context) {
+	var input struct {
+		SeasonID      string `json:"season_id" binding:"required"`
+		EpisodeNumber int    `json:"episode_number" binding:"required"`
+		Title         string `json:"title" binding:"required"`
+		TempFileURL   string `json:"temp_file_url" binding:"required"`
+		TempFileKey   string `json:"temp_file_key"`
+		Duration      int    `json:"duration"`
+		Quality       string `json:"quality"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	seasonID, err := primitive.ObjectIDFromHex(input.SeasonID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid season_id"})
+		return
+	}
+
+	season, err := h.seriesRepo.GetSeasonByID(seasonID)
+	if err != nil || season == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "season not found"})
+		return
+	}
+	series, err := h.seriesRepo.GetByID(season.SeriesID)
+	if err != nil || series == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "series not found"})
+		return
+	}
+
+	// Create the Episode row now (empty playback URL — filled when the worker
+	// finishes transcoding and calls /ingestion/episodes/:id/complete).
+	episode, err := h.seriesSvc.CreateEpisode(season.SeriesID, seasonID, input.EpisodeNumber, &models.EpisodeInput{
+		Title:    input.Title,
+		Duration: input.Duration,
+		Quality:  input.Quality,
+	})
+	if err != nil {
+		log.Printf("[INGESTION] EPISODE_DIRECT: create episode failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create episode"})
+		return
+	}
+
+	sourceID := input.TempFileKey
+	if sourceID == "" {
+		sourceID = fmt.Sprintf("manual/episode_mp4:%d", time.Now().UnixNano())
+	}
+
+	job := &models.IngestionJob{
+		Title:         fmt.Sprintf("%s S%02dE%02d", series.Title, season.SeasonNumber, input.EpisodeNumber),
+		Source:        "direct_upload",
+		SourceID:      sourceID,
+		ContentType:   "episode",
+		Status:        models.IngestionStatusReadyToProcess,
+		Stage:         string(models.IngestionStatusReadyToProcess),
+		Progress:      0,
+		Steps:         models.JobSteps{},
+		Logs:          []models.IngestionLog{},
+		Metadata:      &models.ParsedMovieMetadata{Title: input.Title, Duration: input.Duration},
+		TempFileURL:   input.TempFileURL,
+		TempFileKey:   input.TempFileKey,
+		DetailURL:     input.TempFileURL,
+		SeriesID:      season.SeriesID,
+		SeriesSlug:    series.Slug,
+		SeasonID:      seasonID,
+		SeasonNumber:  season.SeasonNumber,
+		EpisodeID:     episode.ID,
+		EpisodeNumber: input.EpisodeNumber,
+		Quality:       input.Quality,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := h.jobRepo.Create(ctx, job); err != nil {
+		log.Printf("[INGESTION] EPISODE_DIRECT: create job failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create job"})
+		return
+	}
+
+	log.Printf("[INGESTION] EPISODE_DIRECT: episode=%s job=%s S%02dE%02d", episode.ID.Hex(), job.ID.Hex(), season.SeasonNumber, input.EpisodeNumber)
+	c.JSON(http.StatusCreated, gin.H{"data": gin.H{"episode": episode, "job": job}, "message": "Episode direct upload queued"})
+}
+
 // GetUploadURL returns a presigned upload URL for direct B2 upload
 // GET /api/get-upload-url?type=poster|backdrop|video&filename=abc.jpg
 func (h *IngestionHandler) GetUploadURL(c *gin.Context) {

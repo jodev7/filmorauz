@@ -49,6 +49,9 @@ type SitemapEpisodeRecord struct {
 	ThumbnailURL  string             `bson:"thumbnail_url,omitempty"`
 	Duration      int                `bson:"duration,omitempty"`
 	CreatedAt     time.Time          `bson:"created_at,omitempty"`
+	// Stream URLs for the video sitemap's <video:content_loc>.
+	MasterPlaylistURL string `bson:"master_playlist_url,omitempty"`
+	VideoURL          string `bson:"video_url,omitempty"`
 }
 
 func normalizeSeriesGenres(genres []string) []string {
@@ -259,6 +262,8 @@ func (r *SeriesRepository) GetEpisodesBySeriesIDs(seriesIDs []primitive.ObjectID
 			"thumbnail_url":  1,
 			"duration":       1,
 			"created_at":     1,
+			"master_playlist_url": 1,
+			"video_url":           1,
 		}).
 		SetSort(bson.D{
 			{Key: "series_id", Value: 1},
@@ -460,6 +465,24 @@ func (r *SeriesRepository) List(limit, skip int, genre string) ([]models.Series,
 	}
 
 	return seriesList, nil
+}
+
+// CountList returns the number of publicly-visible series matching the same
+// filter as List (optionally narrowed by genre). Used for paginating /series.
+func (r *SeriesRepository) CountList(genre string) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	publicFilter := bson.M{
+		"$or": []bson.M{
+			{"is_published": true},
+			{"is_published": bson.M{"$exists": false}},
+		},
+	}
+	if normalized := normalizeSeriesGenres([]string{genre}); len(normalized) > 0 {
+		publicFilter["genre"] = bson.M{"$in": []string{normalized[0]}}
+	}
+	return r.seriesCol.CountDocuments(ctx, publicFilter)
 }
 
 func (r *SeriesRepository) Update(series *models.Series) error {

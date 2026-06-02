@@ -10,7 +10,10 @@ import (
 type Share struct {
 	ID               primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	Code             string             `bson:"code" json:"code"` // Short unique code
-	MovieID          primitive.ObjectID `bson:"movie_id" json:"movie_id"`
+	// ContentKind discriminates "movie" (default/legacy when empty) vs "series".
+	ContentKind      string             `bson:"content_kind,omitempty" json:"content_kind,omitempty"`
+	MovieID          primitive.ObjectID `bson:"movie_id,omitempty" json:"movie_id,omitempty"`
+	SeriesID         primitive.ObjectID `bson:"series_id,omitempty" json:"series_id,omitempty"`
 	CreatedByUserID  primitive.ObjectID `bson:"created_by_user_id,omitempty" json:"created_by_user_id,omitempty"`
 	CreatedByUserHex string             `bson:"created_by_user_hex,omitempty" json:"created_by_user_hex,omitempty"`
 	Source           string             `bson:"source" json:"source"` // "web" or "telegram"

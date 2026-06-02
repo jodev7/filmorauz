@@ -116,7 +116,7 @@ func main() {
 	ratingService := services.NewRatingService(ratingRepo, seriesRatingRepo, episodeRatingRepo, movieRepo, seriesRepo)
 
 	// Share service
-	shareService := services.NewShareService(shareRepo, movieRepo, userRepo, cfg.BaseSiteURL)
+	shareService := services.NewShareService(shareRepo, movieRepo, seriesRepo, userRepo, cfg.BaseSiteURL)
 
 	// Seed admin user on first run
 	seedAdmin(userRepo, cfg.AdminTelegramID)
@@ -283,13 +283,13 @@ func main() {
 	seriesHandler := handlers.NewSeriesHandler(seriesService, db)
 	mediaHandler := handlers.NewMediaHandler(cfg, movieService, seriesService, userRepo)
 	homepageHandler := handlers.NewHomepageHandler(movieService, collectionService, seriesService)
-	sitemapHandler := handlers.NewSitemapHandler(movieRepo, seriesRepo, cfg.BaseSiteURL)
+	clipRepo := repositories.NewClipRepository(db)
+	sitemapHandler := handlers.NewSitemapHandler(movieRepo, seriesRepo, clipRepo, collectionService, cfg.BaseSiteURL)
 	if telegramService != nil {
 		seriesHandler.SetTelegramService(telegramService)
 	}
 
-	// Clip repository and handler
-	clipRepo := repositories.NewClipRepository(db)
+	// Clip repository and handler (clipRepo created above for the sitemap).
 	clipAIUsageRepo := repositories.NewClipAIUsageRepository(db)
 	clipHandler := handlers.NewClipHandler(clipRepo, seriesRepo, clipAIUsageRepo, parserURL)
 	expenseRepo := repositories.NewExpenseRepository(db)

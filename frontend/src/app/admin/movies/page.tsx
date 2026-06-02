@@ -67,6 +67,10 @@ export default function AdminMoviesPage() {
   const [deleteTarget, setDeleteTarget] = useState<Movie | null>(null);
   const [approving, setApproving] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
+  // Client-side pagination so the admin list doesn't render hundreds of rows
+  // at once and stretch the page.
+  const PAGE_SIZE = 20;
+  const [page, setPage] = useState(1);
 
   const fetchMovies = async () => {
     if (!token) return;
@@ -108,6 +112,16 @@ export default function AdminMoviesPage() {
 
     setFiltered(result);
   }, [search, movies, statusFilter]);
+
+  // Reset to the first page whenever the filters change (but not on every
+  // movies refresh, so an approve/delete doesn't yank the admin to page 1).
+  useEffect(() => {
+    setPage(1);
+  }, [search, statusFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageItems = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   const handleDeleteClick = (movie: Movie) => {
     setDeleteTarget(movie);
@@ -260,6 +274,7 @@ export default function AdminMoviesPage() {
           )}
         </div>
       ) : (
+        <>
         <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -279,7 +294,7 @@ export default function AdminMoviesPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((movie) => {
+                {pageItems.map((movie) => {
                   const adminPosterSrc = normalizeMediaUrl(movie.poster_url);
                   return (
                   <tr
@@ -412,6 +427,28 @@ export default function AdminMoviesPage() {
             </table>
           </div>
         </div>
+        {totalPages > 1 && (
+          <div className="flex items-center justify-center gap-3 mt-4">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={safePage <= 1}
+              className="px-3 py-1.5 bg-brand-card border border-brand-border rounded-lg text-sm text-gray-300 disabled:opacity-40 hover:border-gray-500 transition-colors"
+            >
+              Oldingi
+            </button>
+            <span className="text-sm text-gray-500">
+              {safePage} / {totalPages} · {filtered.length} ta
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={safePage >= totalPages}
+              className="px-3 py-1.5 bg-brand-card border border-brand-border rounded-lg text-sm text-gray-300 disabled:opacity-40 hover:border-gray-500 transition-colors"
+            >
+              Keyingi
+            </button>
+          </div>
+        )}
+        </>
       )}
 
       <CascadeDeleteModal

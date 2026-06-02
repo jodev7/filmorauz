@@ -142,16 +142,6 @@ interface JobResult {
   error?: string;
 }
 
-interface PublishModal {
-  clip: Clip;
-  selectedJobs: SelectedJob[];
-  mode: UploadMode;
-  scheduledFor: string;
-  caption: string; // editable Instagram caption (pre-filled from Gemini)
-  results: JobResult[] | null;
-  scheduledCreated: boolean;
-}
-
 // Server-side group summary tree (counts only — no clip docs).
 interface ServerEpisodeGroup {
   group_key: string;
@@ -532,7 +522,7 @@ function scopeKey(scope: Scope): string {
 
 // ─── Clip table (shared by movie groups and episode groups) ──────────────────
 
-function ClipTable({
+function ClipTableBase({
   page,
   publishJobs,
   downloading,
@@ -678,6 +668,410 @@ function ClipTable({
           />
         </div>
       )}
+    </div>
+  );
+}
+
+// Memoized so that unrelated parent re-renders (e.g. the publish modal, which
+// now owns its own editable state) don't re-reconcile every expanded clip
+// table. Props are stable: publishJobs/downloading/uploading come from memoized
+// or rarely-changing parent state, and the handlers are useCallback-wrapped.
+const ClipTable = React.memo(ClipTableBase);
+
+// ─── Publish modal ────────────────────────────────────────────────────────────
+//
+// Self-contained: it owns ALL editable state (caption, selected accounts,
+// schedule time, mode, results). This is deliberate — keeping this state out of
+// the page component means typing in the caption or toggling an account no
+// longer re-renders the entire clips page (all group tables + rows), which was
+// the main cause of the modal feeling sluggish. The page only tells the modal
+// WHICH clip to publish and how to refresh afterwards.
+function PublishModal({
+  clip,
+  initialSelectedJobs,
+  allAccounts,
+  hasAnyAccount,
+  token,
+  onClose,
+  onPublished,
+  onBusyChange,
+}: {
+  clip: Clip;
+  initialSelectedJobs: SelectedJob[];
+  allAccounts: AllAccounts;
+  hasAnyAccount: boolean;
+  token: string | null;
+  onClose: () => void;
+  onPublished: (clip: Clip) => void | Promise<void>;
+  onBusyChange: (busy: boolean) => void;
+}) {
+  const [selectedJobs, setSelectedJobs] = useState<SelectedJob[]>(initialSelectedJobs);
+  const [mode, setMode] = useState<UploadMode>("now");
+  const [scheduledFor, setScheduledFor] = useState<string>(getNowTashkent());
+  const [caption, setCaption] = useState<string>(buildInstagramCaption(clip));
+  const [results, setResults] = useState<JobResult[] | null>(null);
+  const [scheduledCreated, setScheduledCreated] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const setBusyBoth = (b: boolean) => {
+    setBusy(b);
+    onBusyChange(b);
+  };
+
+  const toggleJob = (platform: Platform, accountName: string) => {
+    setSelectedJobs((prev) => {
+      const key = `${platform}:${accountName}`;
+      const exists = prev.some((j) => `${j.platform}:${j.account_name}` === key);
+      return exists
+        ? prev.filter((j) => `${j.platform}:${j.account_name}` !== key)
+        : [...prev, { platform, account_name: accountName }];
+    });
+  };
+
+  const handleUploadNow = async () => {
+    if (!token || selectedJobs.length === 0) return;
+    setBusyBoth(true);
+    try {
+      const res = await fetch(`${API}/admin/clips/${clip.id}/publish/now`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ jobs: selectedJobs, caption }),
+      });
+      const data = await res.json();
+      setResults(data.results || []);
+      await onPublished(clip);
+    } catch {
+      // silently ignore
+    } finally {
+      setBusyBoth(false);
+    }
+  };
+
+  const handleSchedule = async () => {
+    if (!token || selectedJobs.length === 0) return;
+    setBusyBoth(true);
+    try {
+      const res = await fetch(`${API}/admin/clips/${clip.id}/publish/schedule`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jobs: selectedJobs,
+          scheduled_for: tashkentLocalToISO(scheduledFor),
+          caption,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.count > 0) {
+        setScheduledCreated(true);
+        await onPublished(clip);
+      } else {
+        setResults([
+          {
+            platform: "instagram",
+            account_name: "system",
+            status: "failed",
+            error: data.error || "Rejalash muvaffaqiyatsiz",
+          },
+        ]);
+      }
+    } catch {
+      // silently ignore
+    } finally {
+      setBusyBoth(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
+      <div className="bg-brand-card border border-brand-border rounded-xl w-full max-w-sm shadow-2xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-brand-border sticky top-0 bg-brand-card">
+          <div>
+            <h2 className="text-white font-semibold text-sm">Ijtimoiy tarmoqlarga yuklash</h2>
+            <p className="text-gray-500 text-xs mt-0.5 truncate max-w-[220px]">
+              {getClipDisplayTitle(clip)} — klip #{getClipSequence(clip)}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-gray-500 hover:text-white transition-colors"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {scheduledCreated ? (
+          <div className="px-5 py-6 text-center space-y-3">
+            <div className="w-12 h-12 rounded-full bg-blue-500/15 flex items-center justify-center mx-auto">
+              <CalendarClock size={24} className="text-blue-400" />
+            </div>
+            <p className="text-white font-medium">Rejalashtirildi!</p>
+            <p className="text-gray-400 text-sm">
+              Yuklash vaqti:{" "}
+              <span className="text-blue-400 font-medium">
+                {formatTashkent(tashkentLocalToISO(scheduledFor))}
+              </span>
+            </p>
+            <p className="text-gray-500 text-xs">
+              {selectedJobs.map((j) => `${PLATFORM_META[j.platform].label}/${j.account_name}`).join(", ")}
+            </p>
+            {selectedJobs.some((j) => j.platform === "instagram") && (
+              <div className="rounded-lg border border-brand-border bg-brand-dark/40 px-3 py-2 text-left">
+                <p className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Instagram caption</p>
+                <pre className="whitespace-pre-wrap text-xs text-gray-200 font-sans">
+                  {caption}
+                </pre>
+              </div>
+            )}
+            <button
+              onClick={onClose}
+              className="w-full mt-2 py-2 rounded-lg bg-brand-border text-gray-300 text-sm hover:bg-white/10 transition-colors"
+            >
+              Yopish
+            </button>
+          </div>
+        ) : results ? (
+          <div className="px-5 py-4 space-y-3">
+            <p className="text-gray-400 text-xs mb-1">Yuklash natijalari:</p>
+            {results.map((r, i) => (
+              <div
+                key={i}
+                className={`rounded-lg border px-3 py-2.5 ${
+                  r.status === "success"
+                    ? "border-green-500/30 bg-green-500/5"
+                    : "border-red-500/30 bg-red-500/5"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <PlatformBadge platform={r.platform} />
+                    <span className="text-gray-200 text-sm font-mono">{r.account_name}</span>
+                  </div>
+                  {r.status === "success" ? (
+                    <span className="inline-flex items-center gap-1 text-xs text-green-400 font-medium">
+                      <CheckCircle size={13} /> OK
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-xs text-red-400 font-medium">
+                      <XCircle size={13} /> Xato
+                    </span>
+                  )}
+                </div>
+                {r.status === "failed" && r.error && (
+                  <p className="text-xs text-red-300 mt-1 break-words">{r.error}</p>
+                )}
+              </div>
+            ))}
+            <button
+              onClick={onClose}
+              className="w-full py-2 rounded-lg bg-brand-border text-gray-300 text-sm hover:bg-white/10 transition-colors"
+            >
+              Yopish
+            </button>
+          </div>
+        ) : (
+          <div className="px-5 py-4 space-y-4">
+            {!hasAnyAccount ? (
+              <p className="text-gray-500 text-sm text-center py-4">
+                Hech qanday akkaunt sozlanmagan.
+                <br />
+                <span className="text-xs text-gray-600">
+                  INSTAGRAM_ACCOUNTS_JSON / YOUTUBE_ACCOUNTS_JSON / TIKTOK_ACCOUNTS_JSON env o&apos;rnatilmagan.
+                </span>
+              </p>
+            ) : (
+              <>
+                <div className="space-y-4">
+                  {ALL_PLATFORMS.map((platform) => {
+                    const accounts = allAccounts[platform];
+                    const meta = PLATFORM_META[platform];
+                    const { Icon } = meta;
+                    if (accounts.length === 0) return null;
+                    const allChecked = accounts.every((name) =>
+                      selectedJobs.some((j) => j.platform === platform && j.account_name === name)
+                    );
+                    const someChecked = accounts.some((name) =>
+                      selectedJobs.some((j) => j.platform === platform && j.account_name === name)
+                    );
+                    const toggleAll = () => {
+                      if (allChecked) {
+                        setSelectedJobs((prev) => prev.filter((j) => j.platform !== platform));
+                      } else {
+                        setSelectedJobs((prev) => [
+                          ...prev.filter((j) => j.platform !== platform),
+                          ...accounts.map((name) => ({ platform, account_name: name })),
+                        ]);
+                      }
+                    };
+                    return (
+                      <div key={platform} className="rounded-lg border border-brand-border overflow-hidden">
+                        <label
+                          className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors ${
+                            someChecked ? meta.bgColor : "bg-white/5"
+                          } hover:bg-white/10`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={allChecked}
+                            ref={(el) => { if (el) el.indeterminate = someChecked && !allChecked; }}
+                            onChange={toggleAll}
+                            className="w-4 h-4 cursor-pointer"
+                          />
+                          <Icon size={14} className={meta.color} />
+                          <span className={`text-sm font-semibold ${meta.color}`}>{meta.label}</span>
+                          <span className="ml-auto text-xs text-gray-500">
+                            {accounts.filter((name) =>
+                              selectedJobs.some((j) => j.platform === platform && j.account_name === name)
+                            ).length}/{accounts.length}
+                          </span>
+                        </label>
+                        <div className="divide-y divide-brand-border">
+                          {accounts.map((name) => {
+                            const checked = selectedJobs.some(
+                              (j) => j.platform === platform && j.account_name === name
+                            );
+                            return (
+                              <label
+                                key={name}
+                                className={`flex items-center gap-3 pl-8 pr-3 py-2 cursor-pointer transition-colors ${
+                                  checked ? meta.bgColor : "hover:bg-white/5"
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleJob(platform, name)}
+                                  className="w-4 h-4 cursor-pointer"
+                                />
+                                <span className="text-gray-200 text-sm font-mono">{name}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {selectedJobs.length > 0 && (
+                  <p className="text-xs text-gray-500">
+                    Tanlangan:{" "}
+                    {selectedJobs
+                      .map((j) => `${PLATFORM_META[j.platform].label}/${j.account_name}`)
+                      .join(", ")}
+                  </p>
+                )}
+
+                {selectedJobs.some((j) => j.platform === "instagram") && (
+                  <div className="rounded-lg border border-brand-border bg-brand-dark/40 px-3 py-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-[11px] uppercase tracking-wide text-gray-500">Instagram caption</p>
+                      <button
+                        type="button"
+                        onClick={() => setCaption(buildInstagramCaption(clip))}
+                        className="text-[11px] text-gray-500 hover:text-white transition-colors"
+                      >
+                        AI matnini tiklash
+                      </button>
+                    </div>
+                    <textarea
+                      value={caption}
+                      onChange={(e) => setCaption(e.target.value)}
+                      rows={6}
+                      placeholder="Instagram uchun caption..."
+                      className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-gray-200 text-xs focus:outline-none focus:border-pink-500 resize-y"
+                    />
+                    <p className="mt-1 text-[10px] text-gray-600">
+                      AI tomonidan yozilgan — yuklashdan oldin tahrirlashingiz mumkin.
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex rounded-lg border border-brand-border overflow-hidden">
+                  <button
+                    onClick={() => setMode("now")}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors ${
+                      mode === "now"
+                        ? "bg-brand-red text-white"
+                        : "text-gray-400 hover:text-white hover:bg-white/5"
+                    }`}
+                  >
+                    <Upload size={13} />
+                    Hozir yuklash
+                  </button>
+                  <button
+                    onClick={() => setMode("scheduled")}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors ${
+                      mode === "scheduled"
+                        ? "bg-blue-600 text-white"
+                        : "text-gray-400 hover:text-white hover:bg-white/5"
+                    }`}
+                  >
+                    <Calendar size={13} />
+                    Vaqt belgilash
+                  </button>
+                </div>
+
+                {mode === "scheduled" && (
+                  <div>
+                    <label className="block text-gray-400 text-xs mb-1.5">
+                      Yuklash vaqti{" "}
+                      <span className="text-gray-600">(Toshkent vaqti, UTC+5)</span>
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={scheduledFor}
+                      onChange={(e) => setScheduledFor(e.target.value)}
+                      className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={onClose}
+                className="flex-1 py-2 rounded-lg border border-brand-border text-gray-400 text-sm hover:bg-white/5 transition-colors"
+              >
+                Bekor
+              </button>
+              {mode === "now" ? (
+                <button
+                  onClick={handleUploadNow}
+                  disabled={selectedJobs.length === 0 || busy || !hasAnyAccount}
+                  className="flex-1 py-2 rounded-lg bg-brand-red text-white text-sm font-medium hover:bg-brand-red/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
+                >
+                  {busy ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" /> Yuklanmoqda...
+                    </>
+                  ) : (
+                    <>
+                      <Upload size={14} /> Yuklash
+                    </>
+                  )}
+                </button>
+              ) : (
+                <button
+                  onClick={handleSchedule}
+                  disabled={selectedJobs.length === 0 || busy || !hasAnyAccount}
+                  className="flex-1 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
+                >
+                  {busy ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" /> Saqlanmoqda...
+                    </>
+                  ) : (
+                    <>
+                      <CalendarClock size={14} /> Rejalash
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1071,7 +1465,10 @@ export default function AdminClipsPage() {
 
   const [uploading, setUploading] = useState<Record<string, boolean>>({});
   const [downloading, setDownloading] = useState<Record<string, boolean>>({});
-  const [modal, setModal] = useState<PublishModal | null>(null);
+  // Only WHICH clip is being published + its default account selection lives in
+  // the page. All editable modal state (caption, toggles, schedule) lives inside
+  // <PublishModal/> so editing it never re-renders this page.
+  const [modalTarget, setModalTarget] = useState<{ clip: Clip; initialJobs: SelectedJob[] } | null>(null);
   const [editingJob, setEditingJob] = useState<{ id: string; value: string } | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
 
@@ -1376,7 +1773,7 @@ export default function AdminClipsPage() {
 
   // ── Publish modal handlers (unchanged behavior) ─────────────────────
 
-  const openModal = (clip: Clip) => {
+  const openModal = useCallback((clip: Clip) => {
     const defaultJobs: SelectedJob[] = [];
     // Auto-select every IG account whose filter rules match this clip.
     // When no account matches (or no account has a filter at all) we
@@ -1388,31 +1785,11 @@ export default function AdminClipsPage() {
     igDefaults.forEach((name) => {
       defaultJobs.push({ platform: "instagram", account_name: name });
     });
-    setModal({
-      clip,
-      selectedJobs: defaultJobs,
-      mode: "now",
-      scheduledFor: getNowTashkent(),
-      caption: buildInstagramCaption(clip),
-      results: null,
-      scheduledCreated: false,
-    });
-  };
+    setModalTarget({ clip, initialJobs: defaultJobs });
+  }, [igAccountsMeta, allAccounts]);
 
   const hasAnyAccount =
     allAccounts.instagram.length > 0 || allAccounts.youtube.length > 0 || allAccounts.tiktok.length > 0;
-
-  const toggleJob = (platform: Platform, accountName: string) => {
-    setModal((prev) => {
-      if (!prev) return prev;
-      const key = `${platform}:${accountName}`;
-      const exists = prev.selectedJobs.some((j) => `${j.platform}:${j.account_name}` === key);
-      const updated = exists
-        ? prev.selectedJobs.filter((j) => `${j.platform}:${j.account_name}` !== key)
-        : [...prev.selectedJobs, { platform, account_name: accountName }];
-      return { ...prev, selectedJobs: updated };
-    });
-  };
 
   const refreshAfterPublish = (clip: Clip) => {
     // Refetch the scope this clip belongs to so the upload counters update.
@@ -1429,70 +1806,14 @@ export default function AdminClipsPage() {
     }
   };
 
-  const handleUploadNow = async () => {
-    if (!token || !modal || modal.selectedJobs.length === 0) return;
-    const { clip, selectedJobs, caption } = modal;
-    setUploading((prev) => ({ ...prev, [clip.id]: true }));
-    try {
-      const res = await fetch(`${API}/admin/clips/${clip.id}/publish/now`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ jobs: selectedJobs, caption }),
-      });
-      const data = await res.json();
-      setModal((prev) => (prev ? { ...prev, results: data.results || [] } : prev));
-      refreshAfterPublish(clip);
-      await fetchJobs();
-      await fetchAllPendingJobs();
-    } catch {
-      // silently ignore
-    } finally {
-      setUploading((prev) => ({ ...prev, [clip.id]: false }));
-    }
-  };
-
-  const handleSchedule = async () => {
-    if (!token || !modal || modal.selectedJobs.length === 0) return;
-    const { clip, selectedJobs, scheduledFor, caption } = modal;
-    setUploading((prev) => ({ ...prev, [clip.id]: true }));
-    try {
-      const res = await fetch(`${API}/admin/clips/${clip.id}/publish/schedule`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jobs: selectedJobs,
-          scheduled_for: tashkentLocalToISO(scheduledFor),
-          caption,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok && data.count > 0) {
-        setModal((prev) => (prev ? { ...prev, scheduledCreated: true } : prev));
-        await fetchJobs();
-        await fetchAllPendingJobs();
-      } else {
-        setModal((prev) =>
-          prev
-            ? {
-                ...prev,
-                results: [
-                  {
-                    platform: "instagram",
-                    account_name: "system",
-                    status: "failed",
-                    error: data.error || "Rejalash muvaffaqiyatsiz",
-                  },
-                ],
-              }
-            : prev
-        );
-      }
-    } catch {
-      // silently ignore
-    } finally {
-      setUploading((prev) => ({ ...prev, [clip.id]: false }));
-    }
-  };
+  // Called by <PublishModal/> after a successful publish/schedule so the page
+  // refreshes the affected clip scope counters and the jobs lists.
+  const handlePublished = useCallback(async (clip: Clip) => {
+    refreshAfterPublish(clip);
+    await fetchJobs();
+    await fetchAllPendingJobs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchJobs, fetchAllPendingJobs, scopeClips]);
 
   const handleCancelJob = async (id: string) => {
     if (!token) return;
@@ -1527,7 +1848,7 @@ export default function AdminClipsPage() {
     }
   };
 
-  const handleDownloadClip = (clip: Clip) => {
+  const handleDownloadClip = useCallback((clip: Clip) => {
     if (!token) return;
     setDownloading((prev) => ({ ...prev, [clip.id]: true }));
 
@@ -1550,7 +1871,7 @@ export default function AdminClipsPage() {
       .finally(() => {
         setDownloading((prev) => ({ ...prev, [clip.id]: false }));
       });
-  };
+  }, [token]);
 
   // ── Derived: paged content group list ───────────────────────────────
 
@@ -2150,322 +2471,18 @@ export default function AdminClipsPage() {
       )}
 
       {/* ── Publish Modal ──────────────────────────────────────────── */}
-      {modal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-brand-card border border-brand-border rounded-xl w-full max-w-sm shadow-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-brand-border sticky top-0 bg-brand-card">
-              <div>
-                <h2 className="text-white font-semibold text-sm">Ijtimoiy tarmoqlarga yuklash</h2>
-                <p className="text-gray-500 text-xs mt-0.5 truncate max-w-[220px]">
-                  {getClipDisplayTitle(modal.clip)} — klip #{getClipSequence(modal.clip)}
-                </p>
-              </div>
-              <button
-                onClick={() => setModal(null)}
-                className="text-gray-500 hover:text-white transition-colors"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            {modal.scheduledCreated ? (
-              <div className="px-5 py-6 text-center space-y-3">
-                <div className="w-12 h-12 rounded-full bg-blue-500/15 flex items-center justify-center mx-auto">
-                  <CalendarClock size={24} className="text-blue-400" />
-                </div>
-                <p className="text-white font-medium">Rejalashtirildi!</p>
-                <p className="text-gray-400 text-sm">
-                  Yuklash vaqti:{" "}
-                  <span className="text-blue-400 font-medium">
-                    {formatTashkent(tashkentLocalToISO(modal.scheduledFor))}
-                  </span>
-                </p>
-                <p className="text-gray-500 text-xs">
-                  {modal.selectedJobs.map((j) => `${PLATFORM_META[j.platform].label}/${j.account_name}`).join(", ")}
-                </p>
-                {modal.selectedJobs.some((j) => j.platform === "instagram") && (
-                  <div className="rounded-lg border border-brand-border bg-brand-dark/40 px-3 py-2 text-left">
-                    <p className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Instagram caption</p>
-                    <pre className="whitespace-pre-wrap text-xs text-gray-200 font-sans">
-                      {modal.caption}
-                    </pre>
-                  </div>
-                )}
-                <button
-                  onClick={() => setModal(null)}
-                  className="w-full mt-2 py-2 rounded-lg bg-brand-border text-gray-300 text-sm hover:bg-white/10 transition-colors"
-                >
-                  Yopish
-                </button>
-              </div>
-            ) : modal.results ? (
-              <div className="px-5 py-4 space-y-3">
-                <p className="text-gray-400 text-xs mb-1">Yuklash natijalari:</p>
-                {modal.results.map((r, i) => (
-                  <div
-                    key={i}
-                    className={`rounded-lg border px-3 py-2.5 ${
-                      r.status === "success"
-                        ? "border-green-500/30 bg-green-500/5"
-                        : "border-red-500/30 bg-red-500/5"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-2">
-                        <PlatformBadge platform={r.platform} />
-                        <span className="text-gray-200 text-sm font-mono">{r.account_name}</span>
-                      </div>
-                      {r.status === "success" ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-green-400 font-medium">
-                          <CheckCircle size={13} /> OK
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-xs text-red-400 font-medium">
-                          <XCircle size={13} /> Xato
-                        </span>
-                      )}
-                    </div>
-                    {r.status === "failed" && r.error && (
-                      <p className="text-xs text-red-300 mt-1 break-words">{r.error}</p>
-                    )}
-                  </div>
-                ))}
-                <button
-                  onClick={() => setModal(null)}
-                  className="w-full py-2 rounded-lg bg-brand-border text-gray-300 text-sm hover:bg-white/10 transition-colors"
-                >
-                  Yopish
-                </button>
-              </div>
-            ) : (
-              <div className="px-5 py-4 space-y-4">
-                {!hasAnyAccount ? (
-                  <p className="text-gray-500 text-sm text-center py-4">
-                    Hech qanday akkaunt sozlanmagan.
-                    <br />
-                    <span className="text-xs text-gray-600">
-                      INSTAGRAM_ACCOUNTS_JSON / YOUTUBE_ACCOUNTS_JSON / TIKTOK_ACCOUNTS_JSON env o&apos;rnatilmagan.
-                    </span>
-                  </p>
-                ) : (
-                  <>
-                    <div className="space-y-4">
-                      {ALL_PLATFORMS.map((platform) => {
-                        const accounts = allAccounts[platform];
-                        const meta = PLATFORM_META[platform];
-                        const { Icon } = meta;
-                        if (accounts.length === 0) return null;
-                        const allChecked = accounts.every((name) =>
-                          modal.selectedJobs.some((j) => j.platform === platform && j.account_name === name)
-                        );
-                        const someChecked = accounts.some((name) =>
-                          modal.selectedJobs.some((j) => j.platform === platform && j.account_name === name)
-                        );
-                        const toggleAll = () => {
-                          if (allChecked) {
-                            setModal((p) => p ? {
-                              ...p,
-                              selectedJobs: p.selectedJobs.filter((j) => j.platform !== platform),
-                            } : p);
-                          } else {
-                            setModal((p) => {
-                              if (!p) return p;
-                              const existing = p.selectedJobs.filter((j) => j.platform !== platform);
-                              return {
-                                ...p,
-                                selectedJobs: [
-                                  ...existing,
-                                  ...accounts.map((name) => ({ platform, account_name: name })),
-                                ],
-                              };
-                            });
-                          }
-                        };
-                        return (
-                          <div key={platform} className="rounded-lg border border-brand-border overflow-hidden">
-                            <label
-                              className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors ${
-                                someChecked ? meta.bgColor : "bg-white/5"
-                              } hover:bg-white/10`}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={allChecked}
-                                ref={(el) => { if (el) el.indeterminate = someChecked && !allChecked; }}
-                                onChange={toggleAll}
-                                className="w-4 h-4 cursor-pointer"
-                              />
-                              <Icon size={14} className={meta.color} />
-                              <span className={`text-sm font-semibold ${meta.color}`}>{meta.label}</span>
-                              <span className="ml-auto text-xs text-gray-500">
-                                {accounts.filter((name) =>
-                                  modal.selectedJobs.some((j) => j.platform === platform && j.account_name === name)
-                                ).length}/{accounts.length}
-                              </span>
-                            </label>
-                            <div className="divide-y divide-brand-border">
-                              {accounts.map((name) => {
-                                const checked = modal.selectedJobs.some(
-                                  (j) => j.platform === platform && j.account_name === name
-                                );
-                                return (
-                                  <label
-                                    key={name}
-                                    className={`flex items-center gap-3 pl-8 pr-3 py-2 cursor-pointer transition-colors ${
-                                      checked ? meta.bgColor : "hover:bg-white/5"
-                                    }`}
-                                  >
-                                    <input
-                                      type="checkbox"
-                                      checked={checked}
-                                      onChange={() => toggleJob(platform, name)}
-                                      className="w-4 h-4 cursor-pointer"
-                                    />
-                                    <span className="text-gray-200 text-sm font-mono">{name}</span>
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {modal.selectedJobs.length > 0 && (
-                      <p className="text-xs text-gray-500">
-                        Tanlangan:{" "}
-                        {modal.selectedJobs
-                          .map((j) => `${PLATFORM_META[j.platform].label}/${j.account_name}`)
-                          .join(", ")}
-                      </p>
-                    )}
-
-                    {modal.selectedJobs.some((j) => j.platform === "instagram") && (
-                      <div className="rounded-lg border border-brand-border bg-brand-dark/40 px-3 py-2">
-                        <div className="flex items-center justify-between mb-1">
-                          <p className="text-[11px] uppercase tracking-wide text-gray-500">Instagram caption</p>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setModal((p) => (p ? { ...p, caption: buildInstagramCaption(p.clip) } : p))
-                            }
-                            className="text-[11px] text-gray-500 hover:text-white transition-colors"
-                          >
-                            AI matnini tiklash
-                          </button>
-                        </div>
-                        <textarea
-                          value={modal.caption}
-                          onChange={(e) =>
-                            setModal((p) => (p ? { ...p, caption: e.target.value } : p))
-                          }
-                          rows={6}
-                          placeholder="Instagram uchun caption..."
-                          className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-gray-200 text-xs focus:outline-none focus:border-pink-500 resize-y"
-                        />
-                        <p className="mt-1 text-[10px] text-gray-600">
-                          AI tomonidan yozilgan — yuklashdan oldin tahrirlashingiz mumkin.
-                        </p>
-                      </div>
-                    )}
-
-                    <div className="flex rounded-lg border border-brand-border overflow-hidden">
-                      <button
-                        onClick={() => setModal((p) => (p ? { ...p, mode: "now" } : p))}
-                        className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors ${
-                          modal.mode === "now"
-                            ? "bg-brand-red text-white"
-                            : "text-gray-400 hover:text-white hover:bg-white/5"
-                        }`}
-                      >
-                        <Upload size={13} />
-                        Hozir yuklash
-                      </button>
-                      <button
-                        onClick={() => setModal((p) => (p ? { ...p, mode: "scheduled" } : p))}
-                        className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors ${
-                          modal.mode === "scheduled"
-                            ? "bg-blue-600 text-white"
-                            : "text-gray-400 hover:text-white hover:bg-white/5"
-                        }`}
-                      >
-                        <Calendar size={13} />
-                        Vaqt belgilash
-                      </button>
-                    </div>
-
-                    {modal.mode === "scheduled" && (
-                      <div>
-                        <label className="block text-gray-400 text-xs mb-1.5">
-                          Yuklash vaqti{" "}
-                          <span className="text-gray-600">(Toshkent vaqti, UTC+5)</span>
-                        </label>
-                        <input
-                          type="datetime-local"
-                          value={modal.scheduledFor}
-                          onChange={(e) =>
-                            setModal((p) => (p ? { ...p, scheduledFor: e.target.value } : p))
-                          }
-                          className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                        />
-                      </div>
-                    )}
-                  </>
-                )}
-
-                <div className="flex gap-2 pt-1">
-                  <button
-                    onClick={() => setModal(null)}
-                    className="flex-1 py-2 rounded-lg border border-brand-border text-gray-400 text-sm hover:bg-white/5 transition-colors"
-                  >
-                    Bekor
-                  </button>
-                  {modal.mode === "now" ? (
-                    <button
-                      onClick={handleUploadNow}
-                      disabled={
-                        modal.selectedJobs.length === 0 ||
-                        uploading[modal.clip.id] ||
-                        !hasAnyAccount
-                      }
-                      className="flex-1 py-2 rounded-lg bg-brand-red text-white text-sm font-medium hover:bg-brand-red/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
-                    >
-                      {uploading[modal.clip.id] ? (
-                        <>
-                          <Loader2 size={14} className="animate-spin" /> Yuklanmoqda...
-                        </>
-                      ) : (
-                        <>
-                          <Upload size={14} /> Yuklash
-                        </>
-                      )}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleSchedule}
-                      disabled={
-                        modal.selectedJobs.length === 0 ||
-                        uploading[modal.clip.id] ||
-                        !hasAnyAccount
-                      }
-                      className="flex-1 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
-                    >
-                      {uploading[modal.clip.id] ? (
-                        <>
-                          <Loader2 size={14} className="animate-spin" /> Saqlanmoqda...
-                        </>
-                      ) : (
-                        <>
-                          <CalendarClock size={14} /> Rejalash
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+      {modalTarget && (
+        <PublishModal
+          key={modalTarget.clip.id}
+          clip={modalTarget.clip}
+          initialSelectedJobs={modalTarget.initialJobs}
+          allAccounts={allAccounts}
+          hasAnyAccount={hasAnyAccount}
+          token={token}
+          onClose={() => setModalTarget(null)}
+          onPublished={handlePublished}
+          onBusyChange={(b) => setUploading((prev) => ({ ...prev, [modalTarget.clip.id]: b }))}
+        />
       )}
     </div>
   );

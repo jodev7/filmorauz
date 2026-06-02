@@ -350,8 +350,28 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 	opts := options.FindOneAndUpdate().
 		SetSort(bson.D{{Key: "created_at", Value: 1}})
 
+	// clip_only jobs are lightweight (re-pull an already-published episode's HLS
+	// and cut clips) and represent episodes that are ALREADY live for viewers —
+	// only their promo clips are missing. Claim them ahead of regular video
+	// processing so a large in-flight series ingest cannot starve clip
+	// generation for hours behind it (pure created_at FIFO did exactly that).
 	var job models.IngestionJob
-	err := r.collection.FindOneAndUpdate(ctx, filter, update, opts).Decode(&job)
+	clipFilter := bson.M{"content_type": "clip_only"}
+	for k, v := range filter {
+		clipFilter[k] = v
+	}
+	err := r.collection.FindOneAndUpdate(ctx, clipFilter, update, opts).Decode(&job)
+	if err == nil {
+		log.Printf("[REPO] ClaimNextProcessingJob: CLAIMED clip_only job %s (priority lane, master=%s)",
+			job.ID.Hex(), job.MasterPlaylistURL)
+		return &job, nil
+	}
+	if err != mongo.ErrNoDocuments {
+		log.Printf("[REPO] ClaimNextProcessingJob: clip_only priority lane ERROR - %v", err)
+		return nil, err
+	}
+
+	err = r.collection.FindOneAndUpdate(ctx, filter, update, opts).Decode(&job)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			log.Printf("[REPO] ClaimNextProcessingJob: no pending processing jobs found (0 documents)")

@@ -197,7 +197,7 @@ func (r *ShareRepository) GetUserShareStats(userID primitive.ObjectID) (*models.
 
 	// Get unique movies shared
 	uniqueMoviesPipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{"created_by_user_id": userID}}},
+		{{Key: "$match", Value: bson.M{"created_by_user_id": userID, "movie_id": bson.M{"$exists": true}}}},
 		{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$movie_id"}}}},
 	}
 
@@ -216,7 +216,7 @@ func (r *ShareRepository) GetUserShareStats(userID primitive.ObjectID) (*models.
 
 	// Get top shared movie
 	topMoviePipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{"created_by_user_id": userID}}},
+		{{Key: "$match", Value: bson.M{"created_by_user_id": userID, "movie_id": bson.M{"$exists": true}}}},
 		{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$movie_id"}, {Key: "count", Value: bson.D{{Key: "$sum", Value: 1}}}}}},
 		{{Key: "$sort", Value: bson.D{{Key: "count", Value: -1}}}},
 		{{Key: "$limit", Value: 1}},
@@ -296,6 +296,7 @@ func (r *ShareRepository) GetAdminShareStats() (*models.AdminShareStats, error) 
 
 	// Top shared movies
 	topMoviesPipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"movie_id": bson.M{"$exists": true}}}},
 		{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$movie_id"}, {Key: "shares_created", Value: bson.D{{Key: "$sum", Value: 1}}}, {Key: "total_clicks", Value: bson.D{{Key: "$sum", Value: "$clicks"}}}}}},
 		{{Key: "$sort", Value: bson.D{{Key: "shares_created", Value: -1}}}},
 		{{Key: "$limit", Value: 10}},

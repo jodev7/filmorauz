@@ -65,6 +65,48 @@ func (h *ShareHandler) CreateShare(c *gin.Context) {
 	})
 }
 
+// CreateSeriesShare creates a new tracked share for a series
+// POST /api/series/share with body {"series_id": "..."}
+func (h *ShareHandler) CreateSeriesShare(c *gin.Context) {
+	var req struct {
+		SeriesID string `json:"series_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	seriesID, err := primitive.ObjectIDFromHex(req.SeriesID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid series id"})
+		return
+	}
+
+	var userID *primitive.ObjectID
+	userIDStr := c.GetString("user_id")
+	if userIDStr != "" {
+		if uid, err := primitive.ObjectIDFromHex(userIDStr); err == nil {
+			userID = &uid
+		}
+	}
+
+	source := "web"
+	if c.GetHeader("X-Telegram-Auth") != "" {
+		source = "telegram"
+	}
+
+	share, shareURL, err := h.shareService.CreateSeriesShare(seriesID, userID, source)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"share_code": share.Code,
+		"share_url":  shareURL,
+	})
+}
+
 // RecordShareOpen records when a share is opened
 func (h *ShareHandler) RecordShareOpen(c *gin.Context) {
 	code := c.Param("code")

@@ -265,6 +265,12 @@ func (s *SeriesService) ListSeries(limit, skip int, genre string) ([]models.Seri
 	return seriesList, nil
 }
 
+// CountSeries returns the total number of publicly-visible series (optionally
+// filtered by genre) for pagination.
+func (s *SeriesService) CountSeries(genre string) (int64, error) {
+	return s.seriesRepo.CountList(genre)
+}
+
 // UpdateSeries updates a series
 func (s *SeriesService) UpdateSeries(id primitive.ObjectID, input *models.SeriesInput) (*models.Series, error) {
 	series, err := s.seriesRepo.GetByID(id)

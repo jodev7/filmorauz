@@ -139,17 +139,29 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 	// === Clip generation ===
 	// Trigger at the episode level before the job is marked completed so the
 	// status reflects the full ingestion lifecycle, not just HLS availability.
-	log.Printf("[CLIPS] episode completed → generating clips")
-	log.Printf("[EPISODE] clip_generation start series_slug=%s season=%d episode=%d processed_master=%s local_path=%s",
-		job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, processedMaster, localPath)
-	if clipErr := p.generateEpisodeClips(ctx, job, processedMaster); clipErr != nil {
-		// Non-fatal: episode video is live; surface the failure in logs so
-		// an operator can re-run the clip stage if needed.
-		log.Printf("[EPISODE] WARNING: clip generation failed series_slug=%s S%02dE%02d: %v",
-			job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, clipErr)
-	} else {
-		log.Printf("[EPISODE] clip_generation end series_slug=%s season=%d episode=%d",
+	//
+	// In deferred-DB mode the Episode row does not exist yet (EpisodeID is
+	// zero), so clip generation cannot link clips to an episode here. The
+	// backend serial finalizer enqueues a dedicated clip_only job once the
+	// Episode row is created, which re-pulls this HLS and produces the clips.
+	// Attempting it inline would only fail with "episode_id is zero" and emit
+	// a misleading WARNING, so skip it entirely in that mode.
+	if job.EpisodeID.IsZero() {
+		log.Printf("[EPISODE] deferred-DB mode: skipping inline clip generation — backend finalizer will enqueue a clip_only job series_slug=%s S%02dE%02d",
 			job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber)
+	} else {
+		log.Printf("[CLIPS] episode completed → generating clips")
+		log.Printf("[EPISODE] clip_generation start series_slug=%s season=%d episode=%d processed_master=%s local_path=%s",
+			job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, processedMaster, localPath)
+		if clipErr := p.generateEpisodeClips(ctx, job, processedMaster); clipErr != nil {
+			// Non-fatal: episode video is live; surface the failure in logs so
+			// an operator can re-run the clip stage if needed.
+			log.Printf("[EPISODE] WARNING: clip generation failed series_slug=%s S%02dE%02d: %v",
+				job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, clipErr)
+		} else {
+			log.Printf("[EPISODE] clip_generation end series_slug=%s season=%d episode=%d",
+				job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber)
+		}
 	}
 
 	// Source file is no longer needed.
@@ -183,6 +195,55 @@ func (p *Pipeline) processEpisodeJob(ctx context.Context, job *models.IngestionJ
 
 	log.Printf("[EPISODE] done job=%s series=%s S%02dE%02d streaming=%s",
 		jobID, job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, streamingURL)
+	return nil
+}
+
+// processEpisodeDirectUploadJob handles a manually-uploaded serial episode
+// (Add Series → episode "direct upload"). The source video already sits in
+// B2 temp (temp_file_url); we pull it down to a local file and then run the
+// exact same per-episode pipeline used by serial import — transcode to the
+// serials/<slug>/season-N/episode-M HLS folder, link the Episode row, and
+// generate clips. Finally the B2 temp upload is removed.
+func (p *Pipeline) processEpisodeDirectUploadJob(ctx context.Context, job *models.IngestionJob) error {
+	jobID := job.ID.Hex()
+	log.Printf("[EPISODE_DIRECT] start job=%s series=%s S%02dE%02d temp=%s",
+		jobID, job.SeriesSlug, job.SeasonNumber, job.EpisodeNumber, job.TempFileURL)
+
+	if job.SeriesSlug == "" {
+		return fmt.Errorf("episode direct_upload job %s missing series_slug", jobID)
+	}
+	if job.TempFileURL == "" {
+		return fmt.Errorf("episode direct_upload job %s missing temp_file_url", jobID)
+	}
+
+	if err := p.updateStatus(jobID, models.IngestionStatusDownloading, 10); err != nil {
+		return fmt.Errorf("episode direct_upload update_status: %w", err)
+	}
+
+	localTempPath, err := p.downloadDirectUploadTempFile(job)
+	if err != nil {
+		errMsg := fmt.Sprintf("failed to download temp file: %v", err)
+		log.Printf("[EPISODE_DIRECT] ERROR: %s", errMsg)
+		if fErr := p.failJobWithStatus(jobID, models.IngestionStatusDownloadFailed, errMsg); fErr != nil {
+			log.Printf("[EPISODE_DIRECT] mark failed: %v", fErr)
+		}
+		return fmt.Errorf("%s", errMsg)
+	}
+	log.Printf("[EPISODE_DIRECT] downloaded temp → %s", localTempPath)
+
+	// Feed the downloaded file into the standard episode pipeline, which
+	// handles transcode + upload + Episode linkage + clips + completion.
+	job.LocalPath = localTempPath
+	if err := p.processEpisodeJob(ctx, job); err != nil {
+		p.cleanupFile(localTempPath)
+		return err
+	}
+
+	// Episode HLS is live; drop the B2 temp source. Best-effort.
+	if err := p.cleanupTempFile(job); err != nil {
+		log.Printf("[EPISODE_DIRECT] WARNING: cleanup B2 temp: %v", err)
+	}
+	log.Printf("[EPISODE_DIRECT] done job=%s", jobID)
 	return nil
 }
 

@@ -77,3 +77,6 @@ worker/readyvideo
 # Service account keys — never commit
 backend/secrets/
 
+
+# Local screenshots (not for VCS)
+screenshots/

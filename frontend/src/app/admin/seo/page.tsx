@@ -186,8 +186,9 @@ export default function AdminSEOPage() {
       {/* Events log */}
       <h2 className="text-lg font-semibold mb-3">So&apos;nggi hodisalar</h2>
       <div className="bg-white/5 rounded-lg overflow-hidden">
+        <div className="max-h-[60vh] overflow-y-auto">
         <table className="w-full text-sm">
-          <thead className="bg-white/10 text-left">
+          <thead className="bg-white/10 text-left sticky top-0 z-10">
             <tr>
               <th className="p-3">Vaqt</th>
               <th className="p-3">Provider</th>
@@ -243,6 +244,7 @@ export default function AdminSEOPage() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );

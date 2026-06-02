@@ -15,15 +15,17 @@ import (
 type ShareService struct {
 	shareRepo  *repositories.ShareRepository
 	movieRepo  *repositories.MovieRepository
+	seriesRepo *repositories.SeriesRepository
 	userRepo   *repositories.UserRepository
 	domain     string
 	codeLength int
 }
 
-func NewShareService(shareRepo *repositories.ShareRepository, movieRepo *repositories.MovieRepository, userRepo *repositories.UserRepository, domain string) *ShareService {
+func NewShareService(shareRepo *repositories.ShareRepository, movieRepo *repositories.MovieRepository, seriesRepo *repositories.SeriesRepository, userRepo *repositories.UserRepository, domain string) *ShareService {
 	return &ShareService{
 		shareRepo:  shareRepo,
 		movieRepo:  movieRepo,
+		seriesRepo: seriesRepo,
 		userRepo:   userRepo,
 		domain:     domain,
 		codeLength: 8,
@@ -68,6 +70,42 @@ func (s *ShareService) CreateShare(movieID primitive.ObjectID, userID *primitive
 	// Generate share URL
 	shareURL := fmt.Sprintf("%s/movies/%s?src=share&share=%s", s.domain, movie.Slug, code)
 
+	return share, shareURL, nil
+}
+
+// CreateSeriesShare creates a tracked share link for a series, mirroring
+// CreateShare but pointing at /series/<slug>.
+func (s *ShareService) CreateSeriesShare(seriesID primitive.ObjectID, userID *primitive.ObjectID, source string) (*models.Share, string, error) {
+	if s.seriesRepo == nil {
+		return nil, "", errors.New("series sharing not available")
+	}
+	series, err := s.seriesRepo.GetByID(seriesID)
+	if err != nil || series == nil {
+		return nil, "", errors.New("series not found")
+	}
+
+	code, err := s.generateShareCode()
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to generate share code: %w", err)
+	}
+
+	share := &models.Share{
+		Code:        code,
+		ContentKind: "series",
+		SeriesID:    seriesID,
+		Source:      source,
+		Clicks:      0,
+	}
+	if userID != nil && !userID.IsZero() {
+		share.CreatedByUserID = *userID
+		share.CreatedByUserHex = userID.Hex()
+	}
+
+	if err := s.shareRepo.Create(share); err != nil {
+		return nil, "", fmt.Errorf("failed to create share: %w", err)
+	}
+
+	shareURL := fmt.Sprintf("%s/series/%s?src=share&share=%s", s.domain, series.Slug, code)
 	return share, shareURL, nil
 }
 

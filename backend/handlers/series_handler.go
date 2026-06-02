@@ -55,10 +55,17 @@ func (h *SeriesHandler) ListSeries(c *gin.Context) {
 	}
 	log.Printf("[SERIES API] ListSeries genre_filter=%q response_genres=%v", genre, extractSeriesGenres(seriesList))
 
+	total, err := h.seriesService.CountSeries(genre)
+	if err != nil {
+		log.Printf("[SERIES API] ListSeries count failed: %v", err)
+		total = int64(len(seriesList))
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"data":  seriesList,
 		"page":  page,
 		"limit": limit,
+		"total": total,
 	})
 }
 

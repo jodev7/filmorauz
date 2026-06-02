@@ -16,6 +16,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	r.GET("/sitemap-movies.xml", sitemapHandler.GetSitemapMovies)
 	r.GET("/sitemap-series.xml", sitemapHandler.GetSitemapSeries)
 	r.GET("/sitemap-episodes.xml", sitemapHandler.GetSitemapEpisodes)
+	r.GET("/sitemap-collections.xml", sitemapHandler.GetSitemapCollections)
 	r.GET("/sitemap-videos.xml", sitemapHandler.GetSitemapVideos)
 	r.GET("/robots.txt", sitemapHandler.GetRobotsTxt)
 
@@ -232,6 +233,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 
 	// Share routes (public)
 	api.POST("/movies/share", shareHandler.CreateShare)
+	api.POST("/series/share", shareHandler.CreateSeriesShare)
 	api.POST("/shares/:code/open", shareHandler.RecordShareOpen)
 	api.GET("/movies/share-stats", shareHandler.GetMovieShareStats)
 
@@ -331,6 +333,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 
 		// Bulk import from category
 		admin.POST("/ingestion/bulk-import", ingestionHandler.BulkImportFromCategory)
+		admin.POST("/ingestion/episodes/direct-upload", ingestionHandler.CreateEpisodeDirectUploadJob)
 
 		// Watch rooms (admin overview)
 		admin.GET("/rooms", watchRoomHandler.AdminListRooms)

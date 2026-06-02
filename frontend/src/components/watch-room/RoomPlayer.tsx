@@ -733,6 +733,20 @@ export default function RoomPlayer({
 
   const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0;
 
+  // Scrub-preview thumbnails: derive the thumbnail dir from the HLS src
+  // (…/index.m3u8 → …/thumbnails/) — the worker uploads frame_NNNN.webp tiles
+  // there. Mirrors the main VideoPlayer so the room player shows previews too.
+  const thumbBaseUrl = useMemo(() => {
+    if (src && /\/(index|master)\.m3u8(\?.*)?$/.test(src)) {
+      return src.replace(/\/(index|master)\.m3u8(\?.*)?$/, "/thumbnails/");
+    }
+    return "";
+  }, [src]);
+  const scrubThumbSrc =
+    thumbBaseUrl && scrubHover && duration > 0
+      ? `${thumbBaseUrl}frame_${String(Math.floor((duration * scrubHover.frac) / 5) + 1).padStart(4, "0")}.webp`
+      : "";
+
   const formatTime = (t: number) => {
     if (!isFinite(t) || t < 0) return "0:00";
     const h = Math.floor(t / 3600);
@@ -914,6 +928,17 @@ export default function RoomPlayer({
                 className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-white border-2 border-brand-red shadow-md pointer-events-none"
                 style={{ left: `${scrubHover.x}px` }}
               />
+              {scrubThumbSrc && (
+                <img
+                  src={scrubThumbSrc}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  className="absolute -top-[6.5rem] -translate-x-1/2 w-40 rounded ring-1 ring-white/20 shadow-lg bg-black pointer-events-none"
+                  style={{ left: `${scrubHover.x}px` }}
+                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }}
+                />
+              )}
               <div
                 className="absolute -top-7 -translate-x-1/2 px-1.5 py-0.5 text-[10px] tabular-nums bg-black/90 text-white rounded pointer-events-none whitespace-nowrap"
                 style={{ left: `${scrubHover.x}px` }}
