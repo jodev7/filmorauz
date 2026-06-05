@@ -42,6 +42,31 @@ func contentKindForClip(clip *models.Clip) string {
 	return "movie"
 }
 
+func parsePublishJobStatuses(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	seen := make(map[string]bool)
+	out := make([]string, 0)
+	for _, part := range strings.Split(raw, ",") {
+		status := strings.TrimSpace(part)
+		if status == "scheduled" {
+			status = models.PublishJobStatusPending
+		}
+		switch status {
+		case models.PublishJobStatusPending,
+			models.PublishJobStatusProcessing,
+			models.PublishJobStatusSuccess,
+			models.PublishJobStatusFailed:
+			if !seen[status] {
+				seen[status] = true
+				out = append(out, status)
+			}
+		}
+	}
+	return out
+}
+
 // ListAccounts GET /api/admin/publish/accounts
 // Returns all configured account names grouped by platform.
 func (h *PublishJobHandler) ListAccounts(c *gin.Context) {
@@ -282,8 +307,9 @@ func (h *PublishJobHandler) ListAll(c *gin.Context) {
 	limit, _ := strconv.ParseInt(c.DefaultQuery("limit", "50"), 10, 64)
 	offset, _ := strconv.ParseInt(c.DefaultQuery("offset", "0"), 10, 64)
 	platform := c.Query("platform")
+	statuses := parsePublishJobStatuses(c.Query("status"))
 
-	jobs, total, err := h.jobRepo.ListAll(limit, offset, platform)
+	jobs, total, err := h.jobRepo.ListAll(limit, offset, platform, statuses)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list jobs"})
 		return

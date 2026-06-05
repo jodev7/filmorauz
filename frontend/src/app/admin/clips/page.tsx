@@ -128,6 +128,16 @@ interface PublishJob {
   error?: string;
 }
 
+const ACTIVE_PUBLISH_JOB_STATUSES = new Set<PublishJob["status"]>([
+  "pending",
+  "scheduled",
+  "processing",
+]);
+
+function isActivePublishJob(job: Pick<PublishJob, "status">): boolean {
+  return ACTIVE_PUBLISH_JOB_STATUSES.has(job.status);
+}
+
 interface SelectedJob {
   platform: Platform;
   account_name: string;
@@ -314,7 +324,7 @@ function PlatformUploadStatuses({
     const meta = PLATFORM_META[platform];
     const { Icon } = meta;
     const successJobs = jobs.filter((j) => j.status === "success");
-    const pendingJobs = jobs.filter((j) => j.status === "pending" || j.status === "scheduled" || j.status === "processing");
+    const pendingJobs = jobs.filter(isActivePublishJob);
     const failedJobs = jobs.filter((j) => j.status === "failed");
     const lastSuccess = successJobs.sort((a, b) =>
       (b.executed_at ?? b.created_at).localeCompare(a.executed_at ?? a.created_at)
@@ -586,7 +596,7 @@ function ClipTableBase({
                 <td className="px-4 py-3">
                   <div className="flex flex-col gap-1.5 items-start">
                     <span className="text-gray-300 font-mono text-xs break-all">{clip.filename}</span>
-                    {clipJobs.some((j) => j.status === "scheduled" || j.status === "pending") && (
+                    {clipJobs.some(isActivePublishJob) && (
                       <span className="flex items-center gap-1 text-[10px] bg-amber-500/10 text-amber-400 px-1.5 py-0.5 rounded border border-amber-500/20 font-medium">
                         <CalendarClock size={12} />
                         Rejalashtirilgan
@@ -1643,14 +1653,32 @@ export default function AdminClipsPage() {
   const fetchAllPendingJobs = useCallback(async () => {
     if (!token) return;
     try {
-      // Fetch a larger number of active jobs (non-paginated for badge logic)
-      const res = await fetch(`${API}/admin/publish/jobs?status=pending,scheduled,processing&limit=200`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
+      const pageSize = 500;
+      let offset = 0;
+      let total = Infinity;
+      const jobs: PublishJob[] = [];
+
+      while (jobs.length < total) {
+        const params = new URLSearchParams({
+          status: "pending,scheduled,processing",
+          limit: String(pageSize),
+          offset: String(offset),
+        });
+        const res = await fetch(`${API}/admin/publish/jobs?${params.toString()}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) break;
+
         const data = await res.json();
-        setAllPendingJobs(data.items || data.data || []);
+        const items: PublishJob[] = data.items || data.data || [];
+        jobs.push(...items.filter(isActivePublishJob));
+        total = typeof data.total === "number" ? data.total : jobs.length;
+
+        if (items.length < pageSize) break;
+        offset += pageSize;
       }
+
+      setAllPendingJobs(jobs);
     } catch {
       // silently ignore
     }
@@ -1896,7 +1924,7 @@ export default function AdminClipsPage() {
     if (groupsPage > groupsTotalPages) setGroupsPage(groupsTotalPages);
   }, [groupsPage, groupsTotalPages]);
 
-  const pagedPendingJobs = publishJobs.filter((j) => j.status === "pending" || j.status === "scheduled" || j.status === "processing");
+  const pagedPendingJobs = publishJobs.filter(isActivePublishJob);
   const doneJobs = publishJobs.filter((j) => j.status === "success" || j.status === "failed");
   
   const allRelevantJobsForBadges = useMemo(() => {
