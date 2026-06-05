@@ -1365,9 +1365,11 @@ func assEscapeText(s string) string {
 // clipSubtitleASSHeader is the [Script Info] + [V4+ Styles] preamble for the
 // burnt-in clip subtitles. PlayResX/Y pin the ASS coordinate space to the
 // 1080×1920 Reels canvas so Fontsize and MarginV are true canvas pixels (no
-// original_size guesswork). The Default style is bold white with a thick black
-// outline, bottom-centred (Alignment=2) with MarginV=700 — placing the text in
-// the lower third of the centred movie frame, safely above the CTA at y=1300.
+// original_size guesswork). The Default style is regular-weight (non-bold)
+// white Poppins with a thick black outline, bottom-centred (Alignment=2) with
+// MarginV=700 — placing the text in the lower third of the centred movie frame,
+// safely above the CTA at y=1300. Fontname=Poppins resolves via fontconfig, so
+// the Poppins family must be installed on the worker host (fc-cache).
 const clipSubtitleASSHeader = `[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -1377,7 +1379,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Sans,54,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,3,1,2,60,60,700,1
+Style: Default,Poppins,54,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,1,2,60,60,700,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
