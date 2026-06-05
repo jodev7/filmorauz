@@ -1,0 +1,66 @@
+name: Deploy Worker and Parser
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "worker/**"
+      - "parser/**"
+  workflow_dispatch:
+
+jobs:
+  ci-worker-parser:
+    name: Build and Test Worker and Parser
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Worker Test
+        run: |
+          cd worker
+          go test ./...
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: parser/requirements.txt
+
+      - name: Parser Syntax/Test
+        run: |
+          cd parser
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m py_compile $(find . -name "*.py" -not -path "./venv/*")
+          if [ -d tests ]; then
+            pip install pytest
+            python -m pytest tests
+          fi
+
+  deploy-worker-parser:
+    name: Deploy Worker VPS
+    runs-on: ubuntu-latest
+    needs: ci-worker-parser
+
+    steps:
+      - name: Deploy to Worker VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.WORKER_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "Deploying WORKER/PARSER server..."
+            cd /opt/filmorauz
+            make vps-pull-worker
+            echo "WORKER/PARSER deployment completed"
