@@ -50,7 +50,7 @@ export default function Footer() {
         </div>
 
         <div className="mt-8 sm:mt-10 pt-6 border-t border-brand-border text-center text-xs text-gray-600">
-          © {new Date().getFullYear()} Nurmanov YUSUF Asliddin O'g'li .{t("footer.rights")}
+          © {new Date().getFullYear()} FilmoraUz.net .{t("footer.rights")}
         </div>
       </div>
     </footer>
