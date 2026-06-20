@@ -543,6 +543,17 @@ function HLSPlayer({
   const hasAppliedInitialSeek = useRef(false);
   const isDev = process.env.NODE_ENV !== "production";
 
+  const syncSelectedQualityFromHls = useCallback((hls: Hls, actualLevel?: number) => {
+    const nextQuality = hls.autoLevelEnabled
+      ? -1
+      : typeof actualLevel === "number" && actualLevel >= 0
+        ? actualLevel
+        : hls.currentLevel >= 0
+          ? hls.currentLevel
+          : hls.manualLevel;
+    setSelectedQuality((current) => (current === nextQuality ? current : nextQuality));
+  }, []);
+
   useEffect(() => {
     setSeekStep(loadSeekStep());
   }, []);
@@ -686,7 +697,10 @@ function HLSPlayer({
     }
 
     if (Hls.isSupported()) {
-      const hls = new Hls({ startLevel: -1 });
+      const hls = new Hls({
+        startLevel: -1,
+        preserveManualLevelOnError: true,
+      });
       hlsRef.current = hls;
       hls.loadSource(src);
       hls.attachMedia(video);
@@ -717,15 +731,32 @@ function HLSPlayer({
                 locked: !isPremiumUser && height > 480,
               });
             }
-          });
+        });
         if (!isPremiumUser && maxFreeLevelIndex >= 0) {
           hls.autoLevelCapping = maxFreeLevelIndex;
-          hls.nextLevel = maxFreeLevelIndex;
+          hls.nextAutoLevel = maxFreeLevelIndex;
         }
         setQualities(levels);
+        syncSelectedQualityFromHls(hls);
         if (shouldAutoPlay) {
           video.play().catch(() => {});
         }
+      });
+
+      hls.on(Hls.Events.LEVEL_SWITCHING, (_, data) => {
+        syncSelectedQualityFromHls(hls, data.level);
+      });
+
+      hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
+        syncSelectedQualityFromHls(hls, data.level);
+      });
+
+      hls.on(Hls.Events.LEVEL_UPDATED, () => {
+        syncSelectedQualityFromHls(hls);
+      });
+
+      hls.on(Hls.Events.FRAG_CHANGED, (_, data) => {
+        syncSelectedQualityFromHls(hls, data.frag.level);
       });
 
       // Track network error retries so we don't loop forever on a dead URL.
@@ -736,6 +767,7 @@ function HLSPlayer({
 
       hls.on(Hls.Events.ERROR, (_, data) => {
         logger.error("[HLSPlayer] error", data.type, data.details, data.fatal);
+        syncSelectedQualityFromHls(hls);
         if (!data.fatal) return;
 
         const respCode = (data as unknown as { response?: { code?: number } }).response?.code;
@@ -798,7 +830,7 @@ function HLSPlayer({
     } else {
       setError("Brauzeringiz HLS formatini qo'llab-quvvatlamaydi.");
     }
-  }, [src, isPremiumUser, shouldAutoPlay]);
+  }, [src, isPremiumUser, shouldAutoPlay, syncSelectedQualityFromHls]);
 
   const handleQualityChange = useCallback((quality: QualityLevel) => {
     setSettingsPane("root");
@@ -806,17 +838,17 @@ function HLSPlayer({
       setShowPremiumPrompt(true);
       return;
     }
-    setSelectedQuality(quality.index);
     const hls = hlsRef.current;
     const video = videoRef.current;
     if (!hls) return;
     hls.currentLevel = quality.index;
+    syncSelectedQualityFromHls(hls, quality.index);
     // Seek to current position to flush buffered old-quality data and reload at new level
     if (video) {
       const t = video.currentTime;
       video.currentTime = t;
     }
-  }, []);
+  }, [syncSelectedQualityFromHls]);
 
   // Sync speed
   useEffect(() => {
@@ -1110,7 +1142,22 @@ function HLSPlayer({
     }
   };
 
-  const qualityLabel = qualities.find((q) => q.index === selectedQuality)?.label ?? "Auto";
+  const qualityLabel = useMemo(() => {
+    if (selectedQuality === -1) return "Auto";
+    const fromQualities = qualities.find((q) => q.index === selectedQuality);
+    if (fromQualities) return fromQualities.label;
+    const level = hlsRef.current?.levels?.[selectedQuality];
+    if (level?.height) return `${level.height}p`;
+    if (level?.bitrate) return `${Math.round(level.bitrate / 1000)} kbps`;
+    return `Level ${selectedQuality}`;
+  }, [qualities, selectedQuality]);
+
+  const isQualitySelected = (quality: QualityLevel) => {
+    if (quality.index === selectedQuality) return true;
+    if (quality.index === -1 || selectedQuality === -1) return false;
+    const selectedLevel = hlsRef.current?.levels?.[selectedQuality];
+    return !!selectedLevel?.height && selectedLevel.height === quality.height;
+  };
 
   if (error) {
     return (
@@ -1560,7 +1607,7 @@ function HLSPlayer({
                           key={q.index}
                           onClick={() => handleQualityChange(q)}
                           className={`flex w-full items-center justify-between px-3 py-1.5 text-left transition-colors hover:bg-white/10 ${
-                            q.index === selectedQuality ? "text-brand-red font-semibold" : "text-white"
+                            isQualitySelected(q) ? "text-brand-red font-semibold" : "text-white"
                           }`}
                         >
                           <span>{q.locked ? `${q.label} 🔒 Premium` : q.label}</span>

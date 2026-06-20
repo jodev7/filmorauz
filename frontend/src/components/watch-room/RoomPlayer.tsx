@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Hls from "hls.js";
 import {
   Play,
@@ -114,6 +114,16 @@ export default function RoomPlayer({
   const [showSettings, setShowSettings] = useState(false);
   const [qualities, setQualities] = useState<QualityLevel[]>([]);
   const [selectedLevel, setSelectedLevel] = useState<number>(-1); // -1 = auto
+  const syncSelectedLevelFromHls = useCallback((hls: Hls, actualLevel?: number) => {
+    const nextLevel = hls.autoLevelEnabled
+      ? -1
+      : typeof actualLevel === "number" && actualLevel >= 0
+        ? actualLevel
+        : hls.currentLevel >= 0
+          ? hls.currentLevel
+          : hls.manualLevel;
+    setSelectedLevel((current) => (current === nextLevel ? current : nextLevel));
+  }, []);
   const [controlsVisible, setControlsVisible] = useState(true);
   // Progress-bar hover state: fractional position (0..1) and pixel-x for
   // the tooltip. Null when the cursor isn't over the bar.
@@ -191,8 +201,11 @@ export default function RoomPlayer({
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !src) return;
+    let cancelled = false;
     lastSrcRef.current = src;
     qualitiesSourceRef.current = null;
+    setQualities([]);
+    setSelectedLevel(-1);
     const isHls = /\.m3u8(\?|$)/i.test(src) || src.includes("/master.m3u8");
 
     // ALWAYS try to parse the master playlist for the quality picker —
@@ -200,6 +213,7 @@ export default function RoomPlayer({
     // Safari users would never see a populated picker.
     if (isHls) {
       void parseMasterPlaylist(src).then((variants) => {
+        if (cancelled) return;
         // Only populate from the manual parse if hls.js hasn't already
         // taken over. Manual indices are master-order positions; using
         // them as `hls.currentLevel` arguments can land on the wrong
@@ -214,7 +228,11 @@ export default function RoomPlayer({
     // Non-HLS source — just hand the URL to the video element.
     if (!isHls) {
       v.src = src;
-      return;
+      return () => {
+        cancelled = true;
+        v.removeAttribute("src");
+        v.load();
+      };
     }
     // PREFER hls.js whenever it's supported, even on browsers (like
     // some Chromium / Edge builds) that happen to advertise native
@@ -224,9 +242,18 @@ export default function RoomPlayer({
     // true last resort (Safari without MSE workarounds).
     if (!Hls.isSupported()) {
       v.src = src;
-      return;
+      return () => {
+        cancelled = true;
+        v.removeAttribute("src");
+        v.load();
+      };
     }
-    const hls = new Hls({ enableWorker: true, startLevel: -1, capLevelToPlayerSize: false });
+    const hls = new Hls({
+      enableWorker: true,
+      startLevel: -1,
+      capLevelToPlayerSize: false,
+      preserveManualLevelOnError: true,
+    });
     hlsRef.current = hls;
     hls.loadSource(src);
     hls.attachMedia(v);
@@ -235,12 +262,14 @@ export default function RoomPlayer({
     // indices map 1:1 to `hls.currentLevel`. Manual-fetch entries are
     // a fallback only used when hls.js hasn't populated yet.
     const setFromHls = (next: QualityLevel[]) => {
+      if (cancelled) return;
       if (next.length <= 1) return; // ignore stub events
       qualitiesSourceRef.current = "hls";
       setQualities(next);
     };
     hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
       setFromHls(buildLevels(data.levels));
+      syncSelectedLevelFromHls(hls);
     });
     hls.on(Hls.Events.LEVEL_LOADED, () => {
       if (hls.levels && hls.levels.length > 0) {
@@ -257,20 +286,28 @@ export default function RoomPlayer({
         setQualities((curr) => (curr.length > 1 ? curr : buildLevels(hls.levels)));
       }
     }, 1500);
+    hls.on(Hls.Events.LEVEL_SWITCHING, (_, data) => {
+      syncSelectedLevelFromHls(hls, data.level);
+    });
     hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
-      // Keep the picker label in sync when auto-bitrate switches.
-      if (selectedLevel === -1) {
-        // Auto mode — don't override the user's selection.
-        return;
-      }
-      setSelectedLevel(data.level);
+      syncSelectedLevelFromHls(hls, data.level);
+    });
+    hls.on(Hls.Events.LEVEL_UPDATED, () => {
+      syncSelectedLevelFromHls(hls);
+    });
+    hls.on(Hls.Events.FRAG_CHANGED, (_, data) => {
+      syncSelectedLevelFromHls(hls, data.frag.level);
+    });
+    hls.on(Hls.Events.ERROR, () => {
+      syncSelectedLevelFromHls(hls);
     });
     return () => {
+      cancelled = true;
       clearTimeout(lateCheck);
       hls.destroy();
       hlsRef.current = null;
     };
-  }, [src]);
+  }, [src, syncSelectedLevelFromHls]);
 
   // ── Host position persistence: resume on re-entry ──────────────────
   // Wait for metadata before applying the saved position so the seek
@@ -683,53 +720,74 @@ export default function RoomPlayer({
 
   const setQuality = (idx: number) => {
     const hls = hlsRef.current;
-    if (hls) {
-      if (idx === -1) {
-        hls.currentLevel = -1;
-        hls.loadLevel = -1;
-      } else {
-        const target = qualities.find((q) => q.index === idx);
-        let resolvedIdx = -1;
-        if (target && hls.levels && hls.levels.length > 0) {
-          for (let i = 0; i < hls.levels.length; i++) {
-            if (hls.levels[i].height === target.height) {
-              resolvedIdx = i;
-              break;
-            }
-          }
-          if (resolvedIdx < 0) {
-            for (let i = 0; i < hls.levels.length; i++) {
-              if (hls.levels[i].bitrate === target.height) {
-                resolvedIdx = i;
-                break;
-              }
-            }
-          }
-          if (resolvedIdx < 0 && idx >= 0 && idx < hls.levels.length) {
-            resolvedIdx = idx;
-          }
-        }
-        if (resolvedIdx >= 0) {
-          // Just set currentLevel — in hls.js v1.x this is the canonical
-          // "switch right now" API and it handles flushing the forward
-          // buffer + reloading from the new variant on its own. The
-          // previous approach (currentLevel + loadLevel + nextLoadLevel
-          // + manual BUFFER_FLUSHING + seek nudge) was fighting itself:
-          // the seek would land in an already-buffered range and skip
-          // the just-issued flush, so the switch sometimes "stuck" at
-          // the old quality. Trusting the single API is reliable.
-          hls.currentLevel = resolvedIdx;
+    if (!hls) {
+      setSelectedLevel(-1);
+      setShowSettings(false);
+      return;
+    }
+
+    if (idx === -1) {
+      hls.currentLevel = -1;
+      hls.loadLevel = -1;
+      syncSelectedLevelFromHls(hls);
+      setShowSettings(false);
+      return;
+    }
+
+    const target = qualities.find((q) => q.index === idx);
+    let resolvedIdx = -1;
+    if (target && hls.levels && hls.levels.length > 0) {
+      for (let i = 0; i < hls.levels.length; i++) {
+        if (hls.levels[i].height === target.height) {
+          resolvedIdx = i;
+          break;
         }
       }
+      if (resolvedIdx < 0) {
+        for (let i = 0; i < hls.levels.length; i++) {
+          if (hls.levels[i].bitrate === target.height) {
+            resolvedIdx = i;
+            break;
+          }
+        }
+      }
+      if (resolvedIdx < 0 && idx >= 0 && idx < hls.levels.length) {
+        resolvedIdx = idx;
+      }
     }
-    setSelectedLevel(idx);
+    if (resolvedIdx >= 0) {
+      qualitiesSourceRef.current = "hls";
+      setQualities(buildFromVariants(hls.levels));
+      // Just set currentLevel — in hls.js v1.x this is the canonical
+      // "switch right now" API and it handles flushing the forward
+      // buffer + reloading from the new variant on its own.
+      hls.currentLevel = resolvedIdx;
+      syncSelectedLevelFromHls(hls, resolvedIdx);
+    } else {
+      syncSelectedLevelFromHls(hls);
+    }
     setShowSettings(false);
   };
 
   const qualityLabel = useMemo(
-    () => qualities.find((q) => q.index === selectedLevel)?.label ?? "Auto",
+    () => {
+      if (selectedLevel === -1) return "Auto";
+      const fromQualities = qualities.find((q) => q.index === selectedLevel);
+      if (fromQualities) return fromQualities.label;
+      const level = hlsRef.current?.levels?.[selectedLevel];
+      if (level?.height) return `${level.height}p`;
+      if (level?.bitrate) return `${Math.round(level.bitrate / 1000)} kbps`;
+      return `Level ${selectedLevel}`;
+    },
     [qualities, selectedLevel],
   );
+
+  const isQualitySelected = (quality: QualityLevel) => {
+    if (quality.index === selectedLevel) return true;
+    if (quality.index === -1 || selectedLevel === -1) return false;
+    const currentLevel = hlsRef.current?.levels?.[selectedLevel];
+    return !!currentLevel?.height && currentLevel.height === quality.height;
+  };
 
   const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0;
 
@@ -1066,7 +1124,7 @@ export default function RoomPlayer({
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={(e) => { e.stopPropagation(); setQuality(q.index); }}
                         className={`block w-full px-3 py-1.5 text-left hover:bg-white/10 ${
-                          q.index === selectedLevel ? "text-brand-red font-semibold" : "text-white"
+                          isQualitySelected(q) ? "text-brand-red font-semibold" : "text-white"
                         }`}
                       >
                         {q.label}
