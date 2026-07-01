@@ -212,12 +212,22 @@ Agar saytni shu yerda davom ettirmoqchi bo'lsangiz, quyidagi tugmani bosing:`
 // BuildAuthSuccessKeyboard returns a single "open site" URL button shown
 // alongside BuildAuthSuccessMessage. The URL hits the homepage so the
 // user lands on something useful even when their original tab was a
-// deep link.
-func BuildAuthSuccessKeyboard(siteURL string) tgbotapi.InlineKeyboardMarkup {
+// deep link. When authCode is provided the URL carries the auth params
+// so the site can pick up the completed session even if the user lost
+// the original polling tab (e.g. Instagram/Telegram mobile flows).
+func BuildAuthSuccessKeyboard(siteURL, authCode string) tgbotapi.InlineKeyboardMarkup {
 	if siteURL == "" {
 		siteURL = "https://filmorauz.net"
 	}
-	button := tgbotapi.NewInlineKeyboardButtonURL("🎬 Saytni ochish", siteURL)
+	redirectURL := siteURL
+	if authCode != "" {
+		sep := "?"
+		if strings.Contains(siteURL, "?") {
+			sep = "&"
+		}
+		redirectURL = siteURL + sep + "auth_code=" + authCode + "&auth_status=completed"
+	}
+	button := tgbotapi.NewInlineKeyboardButtonURL("🎬 Saytni ochish", redirectURL)
 	row := []tgbotapi.InlineKeyboardButton{button}
 	return tgbotapi.NewInlineKeyboardMarkup(row)
 }

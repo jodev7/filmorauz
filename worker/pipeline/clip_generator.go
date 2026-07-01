@@ -1040,9 +1040,9 @@ func (p *Pipeline) movieIsAnimation(ctx context.Context, movieID interface{}) bo
 			if !ok {
 				continue
 			}
-			gl := strings.ToLower(strings.TrimSpace(gs))
+			gl := strings.TrimSpace(gs)
 			for _, ag := range animationGenres {
-				if strings.Contains(gl, ag) {
+				if strings.EqualFold(gl, ag) {
 					return true
 				}
 			}
