@@ -929,7 +929,7 @@ func (b *Bot) handleLogin(chatID int64, userID int64, user *tgbotapi.User, authC
 	}
 	successMsg := tgbotapi.NewMessage(chatID, keyboards.BuildAuthSuccessMessage())
 	successMsg.ParseMode = "HTML"
-	successMsg.ReplyMarkup = keyboards.BuildAuthSuccessKeyboard(siteURL)
+	successMsg.ReplyMarkup = keyboards.BuildAuthSuccessKeyboard(siteURL, authCode)
 	if _, err := b.api.Send(successMsg); err != nil {
 		log.Printf("[LOGIN] success message send failed user=%d: %v", userID, err)
 	}

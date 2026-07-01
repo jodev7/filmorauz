@@ -31,7 +31,7 @@ export default function Navbar() {
   const [searching, setSearching] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
-  const { isAuthenticated, user, isLoading } = useAuth();
+  const { isAuthenticated, user, isLoading, checkAuthStatus } = useAuth();
   const [loginModalOpen, setLoginModalOpen] = useState(false);
   const [suggestionModalOpen, setSuggestionModalOpen] = useState(false);
 
@@ -40,19 +40,21 @@ export default function Navbar() {
     const url = new URL(window.location.href);
     const authCode = url.searchParams.get("auth_code");
     const authStatus = url.searchParams.get("auth_status");
-    
+
     if (authCode && authStatus) {
-      // Clear URL params
       url.searchParams.delete("auth_code");
       url.searchParams.delete("auth_status");
       window.history.replaceState({}, "", url.toString());
-      
-      // If completed, just refresh - the auth context will pick up the new cookie
+
       if (authStatus === "completed") {
-        window.location.reload();
+        checkAuthStatus(authCode).then(() => {
+          setTimeout(() => {
+            window.location.reload();
+          }, 1500);
+        });
       }
     }
-  }, []);
+  }, [checkAuthStatus]);
 
   // Debounced search
   useEffect(() => {
