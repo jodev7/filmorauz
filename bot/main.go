@@ -786,18 +786,18 @@ func (b *Bot) handleCheckSubscription(chatID int64, userID int64) {
 			} else if resp != nil && resp.Error != "" {
 				log.Printf("[LOGIN] Backend error completing pending auth for user %d: %s", userID, resp.Error)
 				b.sendMessage(chatID, "❌ Avtorizatsiya amalga oshmadi. Iltimos, saytdan qayta urinib ko'ring.")
-		} else {
-			log.Printf("[LOGIN] Pending auth completed for user %d", userID)
-			siteURL := b.config.SiteURL
-			if siteURL == "" {
-				siteURL = "https://filmorauz.net"
+			} else {
+				log.Printf("[LOGIN] Pending auth completed for user %d", userID)
+				siteURL := b.config.SiteURL
+				if siteURL == "" {
+					siteURL = "https://filmorauz.net"
+				}
+				successMsg := tgbotapi.NewMessage(chatID, keyboards.BuildAuthSuccessMessage())
+				successMsg.ParseMode = "HTML"
+				successMsg.ReplyMarkup = keyboards.BuildAuthSuccessKeyboard(siteURL, pending.Code)
+				b.api.Send(successMsg)
+				b.sendMessage(chatID, keyboards.BuildSubscriptionSuccessMessage())
 			}
-			successMsg := tgbotapi.NewMessage(chatID, keyboards.BuildAuthSuccessMessage())
-			successMsg.ParseMode = "HTML"
-			successMsg.ReplyMarkup = keyboards.BuildAuthSuccessKeyboard(siteURL, pending.Code)
-			b.api.Send(successMsg)
-			b.sendMessage(chatID, keyboards.BuildSubscriptionSuccessMessage())
-		}
 		} else {
 			b.sendMessage(chatID, keyboards.BuildSubscriptionSuccessMessage())
 		}
