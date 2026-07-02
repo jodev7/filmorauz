@@ -24,8 +24,14 @@ const (
 	pendingInvoiceCleanupEvery = 30 * time.Second
 )
 
-// pendingInvoice tracks the messages we sent for a premium Stars purchase
-// session so we can clean them up after payment success or expiry.
+// pendingLogin tracks an in-progress login deep link so subscription-gated
+// logins can complete auth after the user subscribes.
+type pendingLogin struct {
+	Code      string
+	Username  string
+	FirstName string
+	LastName  string
+}
 type pendingInvoice struct {
 	chatID    int64
 	userID    int64
@@ -43,8 +49,9 @@ type Bot struct {
 	premiumClient       *services.PremiumClient
 	httpClient          *http.Client
 
-	pendingMu       sync.Mutex
-	pendingInvoices map[string]*pendingInvoice
+	pendingMu           sync.Mutex
+	pendingInvoices     map[string]*pendingInvoice
+	pendingLoginByUser  map[int64]*pendingLogin
 }
 
 // MovieCodeResponse represents the response from backend API
@@ -172,6 +179,7 @@ func NewBot(cfg *config.Config) (*Bot, error) {
 		premiumClient:       premiumClient,
 		httpClient:          &http.Client{Timeout: 10 * time.Second},
 		pendingInvoices:     make(map[string]*pendingInvoice),
+		pendingLoginByUser:  make(map[int64]*pendingLogin),
 	}, nil
 }
 
@@ -754,14 +762,47 @@ func (b *Bot) handleCallback(callback *tgbotapi.CallbackQuery) {
 func (b *Bot) handleCheckSubscription(chatID int64, userID int64) {
 	log.Printf("User %d pressed Tekshirish button", userID)
 
+	b.pendingMu.Lock()
+	pending := b.pendingLoginByUser[userID]
+	delete(b.pendingLoginByUser, userID)
+	b.pendingMu.Unlock()
+
 	status := b.subscriptionService.CheckUserSubscriptions(userID)
 	if status.IsSubscribed {
 		log.Printf("User %d is now subscribed, showing success and usage", userID)
-		// Send success message
-		b.sendMessage(chatID, keyboards.BuildSubscriptionSuccessMessage())
 
-		// Then send usage instructions
-		time.Sleep(200 * time.Millisecond) // Small delay
+		if pending != nil {
+			log.Printf("[LOGIN] Completing pending auth for user %d with code %s", userID, pending.Code)
+			user := &tgbotapi.User{
+				ID:        userID,
+				UserName:  pending.Username,
+				FirstName: pending.FirstName,
+				LastName:  pending.LastName,
+			}
+			resp, err := b.authClient.CompleteAuthSession(pending.Code, user)
+			if err != nil {
+				log.Printf("[LOGIN] Failed to complete pending auth for user %d: %v", userID, err)
+				b.sendMessage(chatID, "❌ Avtorizatsiyani yakunlashda xatolik yuz berdi. Iltimos, saytdan qayta urinib ko'ring.")
+			} else if resp != nil && resp.Error != "" {
+				log.Printf("[LOGIN] Backend error completing pending auth for user %d: %s", userID, resp.Error)
+				b.sendMessage(chatID, "❌ Avtorizatsiya amalga oshmadi. Iltimos, saytdan qayta urinib ko'ring.")
+		} else {
+			log.Printf("[LOGIN] Pending auth completed for user %d", userID)
+			siteURL := b.config.SiteURL
+			if siteURL == "" {
+				siteURL = "https://filmorauz.net"
+			}
+			successMsg := tgbotapi.NewMessage(chatID, keyboards.BuildAuthSuccessMessage())
+			successMsg.ParseMode = "HTML"
+			successMsg.ReplyMarkup = keyboards.BuildAuthSuccessKeyboard(siteURL, pending.Code)
+			b.api.Send(successMsg)
+			b.sendMessage(chatID, keyboards.BuildSubscriptionSuccessMessage())
+		}
+		} else {
+			b.sendMessage(chatID, keyboards.BuildSubscriptionSuccessMessage())
+		}
+
+		time.Sleep(200 * time.Millisecond)
 		usageText := `Kino linkini olish uchun quyidagicha yozing:
 
 /code KINO_KODI
@@ -860,10 +901,16 @@ func (b *Bot) handleLogin(chatID int64, userID int64, user *tgbotapi.User, authC
 
 	if !status.IsSubscribed {
 		log.Printf("[LOGIN] User %d is not subscribed to all channels, blocking login", userID)
-		// Send subscription requirement message
+		b.pendingMu.Lock()
+		b.pendingLoginByUser[userID] = &pendingLogin{
+			Code:      authCode,
+			Username:  user.UserName,
+			FirstName: user.FirstName,
+			LastName:  user.LastName,
+		}
+		b.pendingMu.Unlock()
 		b.sendMessage(chatID, keyboards.BuildAuthPendingMessage(b.getChannelTitles(status.MissingChans)))
 
-		// Also show the subscription keyboard
 		if len(status.MissingChans) > 0 {
 			keyboard := keyboards.BuildDynamicSubscriptionKeyboard(status.MissingChans)
 			msg := tgbotapi.NewMessage(chatID, "Quyida siz hali a'zo bo'lmagan kanallar ko'rsatilgan.\nObuna bo'lgach, qayta /start buyrug'ini yuboring:")
