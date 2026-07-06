@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"net/http"
+	"sort"
+	"strings"
 
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/services"
@@ -23,7 +25,9 @@ func NewHomepageHandler(movieService *services.MovieService, collectionService *
 }
 
 func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
-	movies, _, err := h.movieService.ListMovies("", 1, 20)
+	// Pull a larger recency pool than we render so genre rows have enough
+	// distinct material to draw from after de-duplication.
+	movies, _, err := h.movieService.ListMovies("", 1, 60)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch homepage movies"})
 		return
@@ -107,25 +111,41 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 		newMovies = newMovies[:12]
 	}
 
-	// Top-rated row — genuinely distinct from "new movies" (which is just the
-	// most recent uploads). Ranked by audience rating, not recency.
-	topRated, err := h.movieService.ListTopRated(12)
-	if err != nil {
-		topRated = []models.Movie{}
-	}
-	for i := range topRated {
-		protectMovieMedia(&topRated[i])
+	// Cross-row de-duplication: with a small, heavily multi-genre catalogue,
+	// every recency-ordered row otherwise echoes the same newest-import batch.
+	// Track movies already shown in earlier rows so later rows surface fresh
+	// titles. "Yangi filmlar" (newMovies) is the recency anchor, so seed the
+	// used-set with it; hero is a banner and intentionally not excluded.
+	used := make(map[string]bool)
+	for i := range newMovies {
+		used[newMovies[i].ID.Hex()] = true
 	}
 
-	// Genre discovery rows — surface a few popular genres as their own carousels
-	// so the homepage is more than recency-ordered lists. Empty genres are
-	// skipped so we never render a heading with no cards.
-	genreRowDefs := []struct{ label, slug string }{
-		{"Jangari", "action"},
-		{"Drama", "drama"},
-		{"Komediya", "comedy"},
+	// Top-rated row — ranked by audience rating, not recency. Exclude anything
+	// already shown so it never repeats the "new movies" row.
+	topRatedPool, err := h.movieService.ListTopRated(24)
+	if err != nil {
+		topRatedPool = []models.Movie{}
 	}
-	genreRows := make([]gin.H, 0, len(genreRowDefs))
+	topRated := make([]models.Movie, 0, 12)
+	for i := range topRatedPool {
+		id := topRatedPool[i].ID.Hex()
+		if used[id] {
+			continue
+		}
+		protectMovieMedia(&topRatedPool[i])
+		topRated = append(topRated, topRatedPool[i])
+		used[id] = true
+		if len(topRated) >= 12 {
+			break
+		}
+	}
+
+	// Genre discovery rows — instead of three fixed, overlapping genres, pick
+	// the genres with the most still-unshown movies so each row is genuinely
+	// distinct. Junk/umbrella genres are skipped, and any genre without enough
+	// fresh titles is dropped rather than rendered half-empty.
+	genreRows := buildGenreRows(movies, used)
 
 	premiumMovies := make([]models.Movie, 0, 12)
 	for i := range movies {
@@ -158,43 +178,6 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 		}
 	}
 
-	toMovieCardResponse := func(list []models.Movie) []gin.H {
-		out := make([]gin.H, len(list))
-		for i, movie := range list {
-			out[i] = gin.H{
-				"id":           movie.ID.Hex(),
-				"code":         movie.Code,
-				"title":        movie.Title,
-				"poster_url":   movie.PosterURL,
-				"backdrop_url": movie.BackdropURL,
-				"slug":         movie.Slug,
-				"year":       movie.Year,
-				"genre":      movie.Genre,
-				"duration":   movie.Duration,
-				"quality":    movie.Quality,
-				"is_premium": movie.IsPremium,
-				"rating_avg": movie.RatingAvg,
-				"created_at": movie.CreatedAt,
-			}
-		}
-		return out
-	}
-
-	for _, def := range genreRowDefs {
-		genreMovies, gErr := h.movieService.ListByGenre(def.slug, 12)
-		if gErr != nil || len(genreMovies) == 0 {
-			continue
-		}
-		for i := range genreMovies {
-			protectMovieMedia(&genreMovies[i])
-		}
-		genreRows = append(genreRows, gin.H{
-			"label":  def.label,
-			"slug":   def.slug,
-			"movies": toMovieCardResponse(genreMovies),
-		})
-	}
-
 	seriesResponse := make([]gin.H, len(seriesPreview))
 	for i, series := range seriesPreview {
 		seriesResponse[i] = gin.H{
@@ -213,12 +196,136 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"hero":                 heroResponse,
 		"genres":               genres,
-		"new_movies":           toMovieCardResponse(newMovies),
+		"new_movies":           movieCards(newMovies),
 		"trending":             trendingResponse,
-		"premium_movies":       toMovieCardResponse(premiumMovies),
-		"top_rated":            toMovieCardResponse(topRated),
+		"premium_movies":       movieCards(premiumMovies),
+		"top_rated":            movieCards(topRated),
 		"genre_rows":           genreRows,
 		"featured_collections": featuredCollections,
 		"series":               seriesResponse,
 	})
+}
+
+// movieCards maps movies to the compact card shape the homepage carousels use.
+func movieCards(list []models.Movie) []gin.H {
+	out := make([]gin.H, len(list))
+	for i, movie := range list {
+		out[i] = gin.H{
+			"id":           movie.ID.Hex(),
+			"code":         movie.Code,
+			"title":        movie.Title,
+			"poster_url":   movie.PosterURL,
+			"backdrop_url": movie.BackdropURL,
+			"slug":         movie.Slug,
+			"year":         movie.Year,
+			"genre":        movie.Genre,
+			"duration":     movie.Duration,
+			"quality":      movie.Quality,
+			"is_premium":   movie.IsPremium,
+			"rating_avg":   movie.RatingAvg,
+			"created_at":   movie.CreatedAt,
+		}
+	}
+	return out
+}
+
+// homepageGenreLabels is the display-name whitelist for dynamic genre rows.
+// Genres not listed here (and the junk "main" umbrella tag) are never rendered
+// as their own row, so scraper artefacts don't leak onto the homepage.
+var homepageGenreLabels = map[string]string{
+	"action":    "Jangari",
+	"drama":     "Drama",
+	"comedy":    "Komediya",
+	"thriller":  "Triller",
+	"horror":    "Dahshat",
+	"crime":     "Jinoyat",
+	"fantasy":   "Fantastika",
+	"animation": "Multfilmlar",
+	"detective": "Detektiv",
+	"romance":   "Romantika",
+	"sci-fi":    "Ilmiy-fantastika",
+	"family":    "Oilaviy",
+	"history":   "Tarixiy",
+	"western":   "Vestern",
+	"anime":     "Anime",
+}
+
+// buildGenreRows picks the genres with the most still-unshown movies and emits
+// one carousel per genre, drawing only titles not already used by earlier rows.
+// Each emitted movie is marked used so genre rows never repeat each other or the
+// "new movies" row. Genres below minGenreRowSize fresh titles are skipped.
+func buildGenreRows(pool []models.Movie, used map[string]bool) []gin.H {
+	const (
+		minGenreRowSize = 4
+		maxGenreRows    = 4
+		maxRowMovies    = 12
+	)
+
+	// Group still-unshown pool movies by whitelisted genre.
+	byGenre := make(map[string][]models.Movie)
+	for i := range pool {
+		if used[pool[i].ID.Hex()] {
+			continue
+		}
+		for _, g := range pool[i].Genre {
+			slug := strings.ToLower(strings.TrimSpace(g))
+			if slug == "" {
+				continue
+			}
+			if _, ok := homepageGenreLabels[slug]; !ok {
+				continue
+			}
+			byGenre[slug] = append(byGenre[slug], pool[i])
+		}
+	}
+
+	// Rank genres by how much fresh material they have; ties broken by slug so
+	// the ordering is deterministic across requests.
+	type genreCount struct {
+		slug string
+		n    int
+	}
+	order := make([]genreCount, 0, len(byGenre))
+	for slug, list := range byGenre {
+		order = append(order, genreCount{slug, len(list)})
+	}
+	sort.Slice(order, func(i, j int) bool {
+		if order[i].n != order[j].n {
+			return order[i].n > order[j].n
+		}
+		return order[i].slug < order[j].slug
+	})
+
+	rows := make([]gin.H, 0, maxGenreRows)
+	for _, gc := range order {
+		if len(rows) >= maxGenreRows {
+			break
+		}
+		row := make([]models.Movie, 0, maxRowMovies)
+		for _, m := range byGenre[gc.slug] {
+			id := m.ID.Hex()
+			if used[id] {
+				continue
+			}
+			row = append(row, m)
+			used[id] = true
+			if len(row) >= maxRowMovies {
+				break
+			}
+		}
+		if len(row) < minGenreRowSize {
+			// Not enough fresh titles once earlier rows claimed theirs — release
+			// the few we reserved so a later genre can still use them.
+			for i := range row {
+				used[row[i].ID.Hex()] = false
+			}
+			continue
+		}
+		rows = append(rows, gin.H{
+			"label":  homepageGenreLabels[gc.slug],
+			"slug":   gc.slug,
+			"movies": movieCards(row),
+		})
+	}
+	return rows
 }

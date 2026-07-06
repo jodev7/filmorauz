@@ -365,6 +365,67 @@ class AsilmediaSerialParser:
             "missing_numbers": missing_numbers,
         }
 
+    def resolve_episode_video_url(
+        self, serial_url: str, season: int, episode: int
+    ) -> Optional[Dict]:
+        """Re-resolve the freshest best-quality video URL for ONE specific
+        (season, episode) from the serial page.
+
+        Used by /details when the worker re-resolves an asilmedia serial-episode
+        download job. asilmedia serves short-lived signed CDN URLs, so the URL
+        captured at extraction time expires before the worker claims the job and
+        must be refreshed. The generic movie get_details() path was NOT
+        episode-aware: it returned every episode's URL from the serial page and
+        _extract_best_video_url() then picked one whole-page "best" URL, so every
+        episode of the serial downloaded the SAME video. This method instead
+        selects only the anchors whose season/episode match the requested one.
+
+        Single page fetch, no per-URL validation, to stay fast for long serials.
+        Returns {"video_url", "quality_urls", "title"} or None when not found.
+        """
+        resp = self.session.get(serial_url, timeout=30)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "lxml")
+        raw_section = soup.select_one("#episodes-raw-data")
+        if not raw_section:
+            return None
+
+        quality_urls: Dict[str, str] = {}
+        best = ""
+        title = ""
+        for anchor in raw_section.select("a[href]"):
+            href = (anchor.get("href") or "").strip()
+            if not href:
+                continue
+            href = self._movie._sanitize_video_url(href)
+            if not _VIDEO_URL_RE.search(href):
+                continue
+            label = (anchor.get("data-label") or anchor.get_text(" ", strip=True) or "").strip()
+            parsed = _parse_label_season_episode(label) or _parse_url_season_episode(href)
+            if not parsed:
+                continue
+            s_no, e_no = parsed
+            if s_no != season or e_no != episode:
+                continue
+            quality_match = _QUALITY_RE.search(label) or _QUALITY_RE.search(href)
+            quality_key = f"{quality_match.group(1)}p" if quality_match else "unknown"
+            quality_urls[quality_key] = href
+            if not best or _rank_quality(href) > _rank_quality(best):
+                best = href
+            if not title:
+                title = _parse_episode_title(label, e_no)
+
+        if not best:
+            logger.warning(
+                f"[ASILMEDIA SERIAL] resolve_episode_video_url: no anchor matched "
+                f"S{season:02d}E{episode:02d} on {serial_url}"
+            )
+            return None
+        logger.info(
+            f"[ASILMEDIA SERIAL] resolved fresh URL for S{season:02d}E{episode:02d}: {best[:80]}"
+        )
+        return {"video_url": best, "quality_urls": quality_urls, "title": title}
+
     def _compute_missing_numbers(self, episodes: List[Dict]) -> List[int]:
         by_season: Dict[int, set[int]] = {}
         for item in episodes:

@@ -3242,7 +3242,59 @@ class ParserHandler(BaseHTTPRequestHandler):
             if not source_id and not detail_url:
                 self._send_error("Missing 'id' or 'url' parameter")
                 return
-            
+
+            # ── ASILMEDIA SERIAL-EPISODE RE-RESOLVE ─────────────────────
+            # asilmedia serves short-lived signed CDN URLs, so serial-episode
+            # download jobs re-resolve their video_url here. But every episode
+            # job shares the same detail_url (the serial page), and the generic
+            # movie get_details() is NOT episode-aware — it returned the whole
+            # page's "best" URL, so ALL episodes downloaded the SAME video.
+            # When source_id carries the canonical ":sNNeMM" suffix, resolve the
+            # exact episode from the serial page instead.
+            serial_ep = re.search(r":s(\d{1,3})e(\d{1,4})$", source_id or "")
+            if source == "asilmedia" and serial_ep and detail_url:
+                season = int(serial_ep.group(1))
+                episode = int(serial_ep.group(2))
+                logger.info(
+                    f"[PARSER] asilmedia serial-episode re-resolve source_id={source_id} "
+                    f"S{season:02d}E{episode:02d} url={detail_url}"
+                )
+                try:
+                    resolved = SERIAL_PARSERS["asilmedia"].resolve_episode_video_url(
+                        detail_url, season, episode
+                    )
+                except Exception as exc:
+                    logger.error(f"[PARSER] asilmedia serial-episode resolve error: {exc}", exc_info=True)
+                    resolved = None
+
+                if resolved and resolved.get("video_url"):
+                    ep_url = resolved["video_url"]
+                    ep_type = "m3u8" if ".m3u8" in ep_url.lower() else ("mpd" if ".mpd" in ep_url.lower() else "mp4")
+                    payload = {
+                        "success": True,
+                        "video_found": True,
+                        "download_needed": True,
+                        "download_completed": False,
+                        "source": source,
+                        "source_id": source_id,
+                        "detail_url": detail_url,
+                        "video_url": ep_url,
+                        "video_url_type": ep_type,
+                        "video_page_url": detail_url,
+                        "selected_video_url": ep_url,
+                        "selected_quality": next(iter((resolved.get("quality_urls") or {}).keys()), ""),
+                        "type": "serial",
+                    }
+                    logger.info(f"[PARSER] /details serial-episode resolved S{season:02d}E{episode:02d} -> {ep_url[:80]}")
+                    self._send_json(payload)
+                    return
+                # Fall through to generic path if the episode couldn't be
+                # resolved (surfaces the normal video_url_not_found error).
+                logger.warning(
+                    f"[PARSER] asilmedia serial-episode {source_id} not resolved from serial page; "
+                    f"falling back to generic details path"
+                )
+
             try:
                 parser = PARSERS[source]
                 details = self._get_details_from_parser(parser, source, source_id, detail_url)
