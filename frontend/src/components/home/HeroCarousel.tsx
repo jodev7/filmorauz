@@ -12,9 +12,13 @@ interface HeroCarouselProps {
   movies: Movie[];
 }
 
+// Auto-advance cadence for the hero slider (ms).
+const HERO_AUTOPLAY_MS = 6000;
+
 export default function HeroCarousel({ movies }: HeroCarouselProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [loadedIndexes, setLoadedIndexes] = useState<Set<number>>(() => new Set([0]));
+  const [isPaused, setIsPaused] = useState(false);
 
   const markLoaded = useCallback((idx: number) => {
     setLoadedIndexes((prev) => {
@@ -46,6 +50,23 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
     return () => window.clearTimeout(id);
   }, [movies.length, markLoaded]);
 
+  // Auto-advance to the next slide on a timer. The effect re-runs whenever
+  // currentIndex changes, so manual navigation naturally resets the countdown.
+  // Pauses on hover/focus and respects the user's reduced-motion preference.
+  useEffect(() => {
+    if (movies.length <= 1 || isPaused) return;
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
+    const next = (currentIndex + 1) % movies.length;
+    markLoaded(next); // warm the upcoming image before the transition
+    const id = window.setTimeout(() => goTo(next), HERO_AUTOPLAY_MS);
+    return () => window.clearTimeout(id);
+  }, [currentIndex, movies.length, isPaused, goTo, markLoaded]);
+
   const heroTitle = useMemo(() => movies[0]?.title || "", [movies]);
 
   if (movies.length === 0) return null;
@@ -55,6 +76,10 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
       className="relative h-[60vh] min-h-[450px] max-h-[700px] overflow-hidden"
       aria-roledescription="carousel"
       aria-label={heroTitle ? `Hero: ${heroTitle}` : "Hero"}
+      onMouseEnter={() => setIsPaused(true)}
+      onMouseLeave={() => setIsPaused(false)}
+      onFocusCapture={() => setIsPaused(true)}
+      onBlurCapture={() => setIsPaused(false)}
     >
       {/* Slides */}
       <div className="absolute inset-0">
