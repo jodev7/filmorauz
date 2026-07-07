@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Loader2, Plus, X, Info, Upload, CheckCircle, AlertCircle } from "lucide-react";
+import { Loader2, Plus, X, Info, Upload, CheckCircle, AlertCircle, Sparkles } from "lucide-react";
 import { MovieInput, VideoSourceType, directB2Upload, backendUploadMovieImage, createDirectUploadJob, DirectUploadInput, IngestionJob, UploadProgressInfo } from "@/lib/api";
+import { buildSeoTitle, buildSeoDescription } from "@/lib/seo-template";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
 import { logger } from "@/lib/logger";
@@ -159,6 +160,17 @@ export default function MovieForm({
 
   const set = (field: keyof MovieInput, value: unknown) => {
     setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  // Wrap the plain name + base description into the site's standard SEO
+  // title/description. Idempotent — re-clicking (or editing an already-generated
+  // movie) strips the old wrapper first, so it never stacks.
+  const applySeoTemplate = () => {
+    setForm((prev) => ({
+      ...prev,
+      title: buildSeoTitle(prev.title, prev.year),
+      description: buildSeoDescription(prev.title, prev.year, prev.description),
+    }));
   };
 
   const handleUpload = async (type: "poster" | "backdrop" | "video", file: File) => {
@@ -444,6 +456,22 @@ export default function MovieForm({
           rows={4}
           className="field resize-none"
         />
+      </div>
+
+      {/* Auto-fill SEO title + description from the plain name/year/description */}
+      <div className="flex flex-col gap-2 rounded-lg border border-brand-border bg-gray-900/40 p-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-xs text-gray-500 leading-relaxed">
+          Faqat kino nomini, yilini va qisqa tavsifini kiriting — tugmani bosing,
+          SEO sarlavha va tavsif avtomatik yoziladi.
+        </p>
+        <button
+          type="button"
+          onClick={applySeoTemplate}
+          className="flex shrink-0 items-center justify-center gap-2 rounded-lg border border-brand-red/40 bg-brand-red/10 px-4 py-2 text-sm font-medium text-brand-red transition-colors hover:bg-brand-red/20"
+        >
+          <Sparkles size={16} />
+          SEO shablonni qo&apos;llash
+        </button>
       </div>
 
       {/* Slug */}

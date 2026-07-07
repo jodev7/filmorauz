@@ -19,7 +19,9 @@ import {
   CheckCircle,
   AlertCircle,
   GripVertical,
+  Sparkles,
 } from "lucide-react";
+import { buildSeoTitle, buildSeoDescription } from "@/lib/seo-template";
 import { useAuth } from "@/lib/auth-context";
 import {
   adminGetSeries,
@@ -482,6 +484,17 @@ export default function EditSeriesPage() {
     }
   };
 
+  // Wrap the plain name + base description into the site's standard SEO
+  // title/description. Idempotent — safe to click twice or on an already-generated
+  // series (the old wrapper is stripped before re-wrapping).
+  const applySeoTemplate = () => {
+    setForm((prev) => ({
+      ...prev,
+      title: buildSeoTitle(prev.title, prev.year),
+      description: buildSeoDescription(prev.title, prev.year, prev.description),
+    }));
+  };
+
   const addGenre = () => {
     const g = genreInput.trim().toLowerCase().replace(/\s+/g, "-");
     if (g && !(form.genre || []).includes(g)) {
@@ -898,6 +911,22 @@ export default function EditSeriesPage() {
                 rows={3}
                 className="w-full px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
               />
+            </div>
+
+            {/* Auto-fill SEO title + description from the plain name/year/description */}
+            <div className="flex flex-col gap-2 rounded-lg border border-brand-border bg-brand-card/60 p-3">
+              <p className="text-xs text-gray-500 leading-relaxed">
+                Faqat serial nomini, yilini va qisqa tavsifini kiriting — tugmani
+                bosing, SEO sarlavha va tavsif avtomatik yoziladi.
+              </p>
+              <button
+                type="button"
+                onClick={applySeoTemplate}
+                className="flex items-center justify-center gap-2 rounded-lg border border-brand-red/40 bg-brand-red/10 px-4 py-2 text-sm font-medium text-brand-red transition-colors hover:bg-brand-red/20"
+              >
+                <Sparkles size={16} />
+                SEO shablonni qo'llash
+              </button>
             </div>
 
             {/* Poster & Backdrop - Movie-Style Uploads */}
