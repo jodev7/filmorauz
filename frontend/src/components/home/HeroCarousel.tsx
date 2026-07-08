@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { Play } from "lucide-react";
 import { Movie } from "@/lib/api";
@@ -33,6 +33,20 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
     setCurrentIndex(idx);
     markLoaded(idx);
   }, [markLoaded]);
+
+  // Touch swipe: drag horizontally to move between slides on mobile.
+  const touchStartX = useRef<number | null>(null);
+  const onTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0]?.clientX ?? null;
+  }, []);
+  const onTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (touchStartX.current == null || movies.length <= 1) return;
+    const dx = (e.changedTouches[0]?.clientX ?? touchStartX.current) - touchStartX.current;
+    touchStartX.current = null;
+    if (Math.abs(dx) < 45) return; // ignore taps / tiny drags
+    const dir = dx < 0 ? 1 : -1; // swipe left → next
+    goTo((currentIndex + dir + movies.length) % movies.length);
+  }, [currentIndex, movies.length, goTo]);
 
   // After first paint, warm the next slide image so the transition feels instant.
   useEffect(() => {
@@ -80,6 +94,8 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
       onMouseLeave={() => setIsPaused(false)}
       onFocusCapture={() => setIsPaused(true)}
       onBlurCapture={() => setIsPaused(false)}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
     >
       {/* Slides */}
       <div className="absolute inset-0">
@@ -116,7 +132,7 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
               </div>
 
               {/* Content */}
-              <div className="relative h-full px-6 sm:px-10 lg:px-12 flex items-end pb-10 sm:pb-14">
+              <div className="relative h-full px-6 sm:px-10 lg:px-12 flex items-end pb-16 sm:pb-16">
                 <div className={`max-w-xl sm:max-w-2xl ${isActive ? "fade-up" : ""}`}>
                   {/* Meta chips (year · quality · duration) */}
                   <div className="mb-4 flex items-center gap-2 flex-wrap">
@@ -174,7 +190,7 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
 
       {/* Dots Pagination — floating glass capsule */}
       {movies.length > 1 && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 glass-pill flex gap-1.5 rounded-full px-3 py-2">
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 glass-pill flex gap-1.5 rounded-full px-3 py-1.5">
           {movies.map((movie, index) => (
             <button
               key={movie.id || movie.slug || `hero-${index}`}

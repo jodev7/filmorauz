@@ -138,6 +138,15 @@ export interface GenreRow {
   movies: Movie[];
 }
 
+export interface WeeklyTopItem {
+  id: string;
+  type: "movie" | "series";
+  title: string;
+  slug: string;
+  poster_url: string;
+  views: number;
+}
+
 export interface HomepageResponse {
   hero: Movie[];
   genres: GenreChip[];
@@ -148,6 +157,7 @@ export interface HomepageResponse {
   genre_rows: GenreRow[];
   featured_collections: Collection[];
   series: SeriesPreview[];
+  weekly_top: WeeklyTopItem[];
 }
 
 function normalizeGenreList(input: unknown): string[] {
@@ -346,6 +356,14 @@ export async function getHomepageData(): Promise<HomepageResponse> {
         created_at: item.created_at || "",
         updated_at: item.updated_at || "",
       })),
+      weekly_top: (json.weekly_top || []).map((item: any) => ({
+        id: item.id || "",
+        type: item.type === "series" ? "series" : "movie",
+        title: item.title || "",
+        slug: item.slug || "",
+        poster_url: item.poster_url || "",
+        views: item.views || 0,
+      })),
     };
   } catch (error) {
     if (process.env.NODE_ENV !== "production") {
@@ -361,6 +379,7 @@ export async function getHomepageData(): Promise<HomepageResponse> {
       genre_rows: [],
       featured_collections: [],
       series: [],
+      weekly_top: [],
     };
   }
 }

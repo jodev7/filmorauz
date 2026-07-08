@@ -56,8 +56,8 @@ function MovieCarouselImpl({ movies, priorityCount = 0 }: MovieCarouselProps) {
       {/* Navigation Buttons */}
       <button
         onClick={() => scroll("left")}
-        className={`absolute left-0 top-1/2 -translate-y-1/2 z-10 w-10 h-10 bg-brand-dark/80 hover:bg-brand-red rounded-full flex items-center justify-center transition-all duration-300 opacity-100 hover:scale-110 shadow-lg ${
-          canScrollLeft ? "ml-2" : "-ml-12"
+        className={`absolute left-0 top-1/2 -translate-y-1/2 z-10 w-10 h-10 glass-strong hover:bg-brand-red rounded-full hidden sm:flex items-center justify-center transition-all duration-300 hover:scale-110 shadow-lg ${
+          canScrollLeft ? "ml-2 opacity-100" : "-ml-12 opacity-0 pointer-events-none"
         }`}
         aria-label="Chapga surish"
       >
@@ -66,8 +66,8 @@ function MovieCarouselImpl({ movies, priorityCount = 0 }: MovieCarouselProps) {
 
       <button
         onClick={() => scroll("right")}
-        className={`absolute right-0 top-1/2 -translate-y-1/2 z-10 w-10 h-10 bg-brand-dark/80 hover:bg-brand-red rounded-full flex items-center justify-center transition-all duration-300 opacity-100 hover:scale-110 shadow-lg ${
-          canScrollRight ? "mr-2" : "-mr-12"
+        className={`absolute right-0 top-1/2 -translate-y-1/2 z-10 w-10 h-10 glass-strong hover:bg-brand-red rounded-full hidden sm:flex items-center justify-center transition-all duration-300 hover:scale-110 shadow-lg ${
+          canScrollRight ? "mr-2 opacity-100" : "-mr-12 opacity-0 pointer-events-none"
         }`}
         aria-label="O'ngga surish"
       >

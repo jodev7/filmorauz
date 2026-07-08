@@ -11,7 +11,6 @@ import QuickActionsBar from "@/components/home/QuickActionsBar";
 import TrendingSpotlight from "@/components/home/TrendingSpotlight";
 import SectionHeader from "@/components/home/SectionHeader";
 import WeeklyTop10 from "@/components/home/WeeklyTop10";
-import type { Movie } from "@/lib/api";
 import { getHomepageData } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
 
@@ -68,28 +67,8 @@ export default async function HomePage() {
   const seriesData = homepage.series || [];
   const genreChips = homepage.genres || [];
   const genreRows = homepage.genre_rows || [];
-
-  // Weekly Top 10 — pool every movie the homepage already loaded, de-dupe by
-  // id, and rank by view count. Uses existing payload (no extra request).
-  const weeklyTop10 = (() => {
-    const pool: Movie[] = [
-      ...trending,
-      ...recent,
-      ...topRated,
-      ...(homepage.premium_movies || []),
-      ...genreRows.flatMap((r) => r.movies || []),
-    ];
-    const seen = new Set<string>();
-    const unique: Movie[] = [];
-    for (const m of pool) {
-      if (!m?.id || seen.has(m.id)) continue;
-      seen.add(m.id);
-      unique.push(m);
-    }
-    return unique
-      .sort((a, b) => (b.views || 0) - (a.views || 0))
-      .slice(0, 10);
-  })();
+  // Weekly Top 10 — movies + series ranked by view count (built server-side).
+  const weeklyTop10 = homepage.weekly_top || [];
 
   return (
     <>
@@ -120,8 +99,8 @@ export default async function HomePage() {
           </div>
         </section>
 
-        {/* ── Weekly Top 10 (medal podium; ranked by views) ─────────── */}
-        <WeeklyTop10 movies={weeklyTop10} />
+        {/* ── Weekly Top 10 (medal podium; movies + series by views) ─── */}
+        <WeeklyTop10 items={weeklyTop10} />
 
         {/* ── Continue Watching (logged-in users; self-hides when empty) ── */}
         <ContinueWatchingRow />

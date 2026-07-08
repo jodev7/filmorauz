@@ -213,7 +213,7 @@ export default function CommentsSection({
             value={newComment}
             onChange={(e) => setNewComment(e.target.value)}
             placeholder={tt.writeComment}
-            className="w-full bg-black/50 border border-white/15 rounded-xl p-3 text-white placeholder-gray-500 focus:border-brand-red focus:outline-none resize-none"
+            className="w-full bg-black/50 border border-white/15 rounded-2xl p-3 text-white placeholder-gray-500 focus:border-brand-red focus:outline-none resize-none"
             rows={3}
             maxLength={2000}
           />
@@ -227,7 +227,7 @@ export default function CommentsSection({
           </button>
         </form>
       ) : (
-        <div className="mb-8 p-4 glass-card border border-white/10 rounded-lg">
+        <div className="mb-8 p-4 glass-card border border-white/10 rounded-2xl">
           <p className="text-gray-400">{tt.loginToComment}</p>
         </div>
       )}
@@ -353,7 +353,7 @@ function CommentThread({
 
   return (
     <div className={`${indentClass}`}>
-      <div className="glass-card border border-white/10 rounded-lg p-4">
+      <div className="glass-card border border-white/10 rounded-2xl p-4">
         {/* Reply context label - only show for replies (depth > 0) */}
         {parentInfo && (
           <div className="mb-2 text-xs text-gray-500 flex items-center gap-1">

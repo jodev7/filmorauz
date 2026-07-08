@@ -333,7 +333,7 @@ export default function Navbar() {
 
       {/* Mobile menu */}
       {menuOpen && (
-        <div className="lg:hidden border-t border-white/10 px-4 py-4 flex flex-col gap-1">
+        <div className="menu-drop lg:hidden border-t border-white/10 px-4 py-4 flex flex-col gap-1">
           {/* Mobile search */}
           <form
             onSubmit={handleSearchSubmit}
