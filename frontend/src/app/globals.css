@@ -96,23 +96,24 @@ body {
   border: 1px solid var(--glass-border);
   box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
 }
-/* Lightweight pill/chip surface — cheaper blur for many instances. */
+/* Pill/chip surface — no backdrop-filter (genre chips + header pills can be
+   numerous). Translucent white tint reads as glass without the blur cost. */
 .glass-pill {
-  background: rgba(255, 255, 255, 0.07);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid rgba(255, 255, 255, 0.11);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 /* Card-weight glass — no backdrop-filter so pages with dozens of cards stay
    smooth. A translucent top-lit gradient + hairline border reads as glass
    without the per-element blur cost. Used by movie/series/collection cards. */
 .glass-card {
-  background: rgba(17, 17, 25, 0.55);
-  backdrop-filter: blur(18px) saturate(150%);
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  /* No backdrop-filter: this class is used on dozens of cards per page, and a
+     per-card blur tanks scroll/paint performance (and Lighthouse). A slightly
+     opaque, top-lit dark surface keeps the glass look and readable text while
+     staying cheap. Real blur is reserved for the few chrome surfaces below. */
+  background: rgba(20, 20, 28, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 /* Interactive lift + border brighten on hover. */
@@ -172,6 +173,27 @@ body {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* Mobile menu drawer entrance — smooth slide-down + fade. */
+.menu-drop {
+  transform-origin: top;
+  animation: menuDrop 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes menuDrop {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scaleY(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scaleY(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .menu-drop {
+    animation: none;
   }
 }
 

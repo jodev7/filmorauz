@@ -140,8 +140,8 @@ function MovieCardImpl({ movie, priority = false, showSkeleton = true }: Props) 
       </div>
 
       {/* Info */}
-      <div className="p-3 flex flex-col flex-1 min-h-[80px]">
-        <h3 className={`font-semibold text-xs sm:text-sm leading-tight line-clamp-2 text-white group-hover:transition-colors ${
+      <div className="p-3 flex flex-col flex-1 min-h-[80px] min-w-0">
+        <h3 className={`font-semibold text-xs sm:text-sm leading-tight line-clamp-2 break-words text-white group-hover:transition-colors ${
           premium ? "group-hover:text-yellow-400" : "group-hover:text-orange-500"
         }`}>
           {cardTitle}

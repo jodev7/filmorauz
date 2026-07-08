@@ -193,6 +193,49 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 		}
 	}
 
+	// Weekly Top 10 — most-viewed titles across BOTH movies and series, ranked
+	// by view count. Built from the already-loaded recency pools (60 movies +
+	// 10 series) so it costs no extra queries. Each item carries a "type" so
+	// the frontend links to the right route (/movies vs /series).
+	type rankedItem struct {
+		card  gin.H
+		views int64
+	}
+	ranked := make([]rankedItem, 0, len(movies)+len(seriesList))
+	for _, m := range movies {
+		ranked = append(ranked, rankedItem{
+			views: m.Views,
+			card: gin.H{
+				"id":         m.ID.Hex(),
+				"type":       "movie",
+				"title":      m.Title,
+				"slug":       m.Slug,
+				"poster_url": m.PosterURL,
+				"views":      m.Views,
+			},
+		})
+	}
+	for _, s := range seriesList {
+		ranked = append(ranked, rankedItem{
+			views: s.Views,
+			card: gin.H{
+				"id":         s.ID.Hex(),
+				"type":       "series",
+				"title":      s.Title,
+				"slug":       s.Slug,
+				"poster_url": s.PosterURL,
+				"views":      s.Views,
+			},
+		})
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		return ranked[i].views > ranked[j].views
+	})
+	weeklyTop := make([]gin.H, 0, 10)
+	for i := 0; i < len(ranked) && i < 10; i++ {
+		weeklyTop = append(weeklyTop, ranked[i].card)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"hero":                 heroResponse,
 		"genres":               genres,
@@ -203,6 +246,7 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 		"genre_rows":           genreRows,
 		"featured_collections": featuredCollections,
 		"series":               seriesResponse,
+		"weekly_top":           weeklyTop,
 	})
 }
 
