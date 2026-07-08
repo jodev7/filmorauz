@@ -73,8 +73,8 @@ export default function GifPicker({
   }, [query, fetchGifs]);
 
   return (
-    <div className="absolute bottom-12 left-2 right-2 z-30 bg-brand-dark border border-brand-border rounded-xl shadow-2xl flex flex-col max-h-80 overflow-hidden">
-      <div className="flex items-center gap-2 p-2 border-b border-brand-border">
+    <div className="absolute bottom-12 left-2 right-2 z-30 bg-brand-dark border border-white/10 rounded-xl shadow-2xl flex flex-col max-h-80 overflow-hidden">
+      <div className="flex items-center gap-2 p-2 border-b border-white/10">
         <Search className="w-4 h-4 text-gray-400 shrink-0" />
         <input
           autoFocus
@@ -112,7 +112,7 @@ export default function GifPicker({
                   src={g.preview}
                   alt={g.title || "GIF"}
                   loading="lazy"
-                  className="w-full h-auto bg-brand-card"
+                  className="w-full h-auto glass-card"
                 />
               </button>
             ))}
@@ -120,7 +120,7 @@ export default function GifPicker({
         )}
       </div>
 
-      <div className="px-2 py-1 border-t border-brand-border text-[10px] text-gray-500 text-right">
+      <div className="px-2 py-1 border-t border-white/10 text-[10px] text-gray-500 text-right">
         Powered by GIPHY
       </div>
     </div>

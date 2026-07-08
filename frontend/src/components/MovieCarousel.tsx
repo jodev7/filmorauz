@@ -86,7 +86,7 @@ function MovieCarouselImpl({ movies, priorityCount = 0 }: MovieCarouselProps) {
         {movies.map((movie, index) => (
           <div
             key={movie.id}
-            className="shrink-0 w-[120px] sm:w-[140px] md:w-[160px] lg:w-[180px] snap-start isolate"
+            className="shrink-0 w-[145px] sm:w-[168px] md:w-[188px] lg:w-[210px] snap-start isolate"
           >
             <MovieCard
               movie={movie}

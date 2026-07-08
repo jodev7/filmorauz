@@ -23,9 +23,9 @@ export default function CollectionCard({ collection }: Props) {
   return (
     <Link
       href={`/collections/${collection.slug}`}
-      className="group block overflow-hidden rounded-xl bg-brand-card border border-brand-border hover:border-brand-red/60 transition-colors"
+      className="group block overflow-hidden rounded-2xl glass-card transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:border-orange-500/40"
     >
-      <div className="relative aspect-[2/3] overflow-hidden bg-brand-dark">
+      <div className="relative aspect-[2/3] overflow-hidden bg-white/5">
         {collection.poster_url ? (
           <MediaImage
             src={normalizeMediaUrl(collection.poster_url)}

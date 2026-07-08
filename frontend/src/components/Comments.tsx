@@ -203,7 +203,7 @@ export default function CommentsSection({
   const tt = t.uz;
 
   return (
-    <div className="mt-8 pt-8 border-t border-brand-border">
+    <div className="mt-8 pt-8 border-t border-white/10">
       <h2 className="text-2xl font-display text-white mb-6">{tt.title}</h2>
 
       {/* Comment form */}
@@ -213,7 +213,7 @@ export default function CommentsSection({
             value={newComment}
             onChange={(e) => setNewComment(e.target.value)}
             placeholder={tt.writeComment}
-            className="w-full bg-brand-card border border-brand-border rounded-lg p-3 text-white placeholder-gray-500 focus:border-brand-red focus:outline-none resize-none"
+            className="w-full bg-black/50 border border-white/15 rounded-xl p-3 text-white placeholder-gray-500 focus:border-brand-red focus:outline-none resize-none"
             rows={3}
             maxLength={2000}
           />
@@ -227,7 +227,7 @@ export default function CommentsSection({
           </button>
         </form>
       ) : (
-        <div className="mb-8 p-4 bg-brand-card border border-brand-border rounded-lg">
+        <div className="mb-8 p-4 glass-card border border-white/10 rounded-lg">
           <p className="text-gray-400">{tt.loginToComment}</p>
         </div>
       )}
@@ -353,7 +353,7 @@ function CommentThread({
 
   return (
     <div className={`${indentClass}`}>
-      <div className="bg-brand-card border border-brand-border rounded-lg p-4">
+      <div className="glass-card border border-white/10 rounded-lg p-4">
         {/* Reply context label - only show for replies (depth > 0) */}
         {parentInfo && (
           <div className="mb-2 text-xs text-gray-500 flex items-center gap-1">
@@ -479,7 +479,7 @@ function CommentThread({
                 return next;
               })}
               placeholder={tt.writeComment}
-              className="flex-1 bg-brand-dark border border-brand-border rounded px-3 py-2 text-white text-sm"
+              className="flex-1 bg-brand-dark border border-white/10 rounded px-3 py-2 text-white text-sm"
               autoFocus
             />
             <button

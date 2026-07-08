@@ -15,7 +15,7 @@ export default function DmcaPage() {
   return (
     <>
       <Navbar />
-      <main className="min-h-screen pt-20 sm:pt-24 bg-brand-dark">
+      <main className="min-h-screen pt-20 sm:pt-24">
         <div className="max-w-3xl mx-auto px-4 py-10 sm:py-14">
           <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-white tracking-wider mb-6">
             DMCA
@@ -25,7 +25,7 @@ export default function DmcaPage() {
           </p>
 
           <div className="space-y-6 text-gray-300 text-sm sm:text-base leading-relaxed">
-            <section className="bg-brand-card/50 border border-brand-border rounded-2xl p-5 sm:p-6">
+            <section className="glass-card border border-white/10 rounded-2xl p-5 sm:p-6">
               <h2 className="text-white font-semibold text-lg sm:text-xl mb-2">
                 DMCA nima?
               </h2>
@@ -37,7 +37,7 @@ export default function DmcaPage() {
               </p>
             </section>
 
-            <section className="bg-brand-card/50 border border-brand-border rounded-2xl p-5 sm:p-6">
+            <section className="glass-card border border-white/10 rounded-2xl p-5 sm:p-6">
               <h2 className="text-white font-semibold text-lg sm:text-xl mb-2">
                 Kontentni olib tashlashni so&apos;rash
               </h2>
@@ -55,7 +55,7 @@ export default function DmcaPage() {
               </ul>
             </section>
 
-            <section className="bg-brand-card/50 border border-brand-border rounded-2xl p-5 sm:p-6">
+            <section className="glass-card border border-white/10 rounded-2xl p-5 sm:p-6">
               <h2 className="text-white font-semibold text-lg sm:text-xl mb-2">
                 Noqonuniy kontent haqida shikoyat
               </h2>
@@ -67,7 +67,7 @@ export default function DmcaPage() {
               </p>
             </section>
 
-            <section className="bg-brand-card/50 border border-brand-border rounded-2xl p-5 sm:p-6">
+            <section className="glass-card border border-white/10 rounded-2xl p-5 sm:p-6">
               <h2 className="text-white font-semibold text-lg sm:text-xl mb-3">
                 Aloqa
               </h2>

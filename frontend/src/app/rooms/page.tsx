@@ -69,7 +69,7 @@ export default function PublicRoomsPage() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-brand-dark text-white">
+    <div className="min-h-screen text-white">
       <Navbar />
       <div className="max-w-7xl mx-auto px-4 pt-20 sm:pt-24 pb-8">
         <div className="flex items-center justify-between mb-6">
@@ -83,7 +83,7 @@ export default function PublicRoomsPage() {
           </div>
           <button
             onClick={() => load(false)}
-            className="px-3 py-2 bg-brand-card border border-brand-border rounded-lg flex items-center gap-2 text-sm hover:border-brand-red"
+            className="px-3 py-2 glass-card border border-white/10 rounded-lg flex items-center gap-2 text-sm hover:border-brand-red"
           >
             <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} /> Yangilash
           </button>
@@ -110,7 +110,7 @@ export default function PublicRoomsPage() {
         )}
 
         {!loading && rooms.length === 0 && (
-          <div className="bg-brand-card border border-brand-border rounded-xl p-12 text-center">
+          <div className="glass-card border border-white/10 rounded-xl p-12 text-center">
             <Users className="w-12 h-12 text-gray-600 mx-auto mb-3" />
             <p className="text-gray-400">Hozircha ochiq room yo&apos;q.</p>
             <p className="text-xs text-gray-500 mt-2">
@@ -131,7 +131,7 @@ export default function PublicRoomsPage() {
             return (
               <div
                 key={r.id}
-                className="bg-brand-card border border-brand-border rounded-xl p-3 flex gap-3"
+                className="glass-card border border-white/10 rounded-xl p-3 flex gap-3"
               >
                 {r.content_poster && (
                   <div className="w-16 h-24 shrink-0 rounded-md overflow-hidden">
@@ -207,7 +207,7 @@ function PremiereCard({ room: r, onJoin }: { room: PublicRoomListItem; onJoin: (
   const isUpcoming = countdown !== "";
   const full = r.member_count >= r.max_members;
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-yellow-500/30 bg-gradient-to-br from-brand-card to-brand-dark p-4 flex gap-4">
+    <div className="relative overflow-hidden rounded-2xl border border-yellow-500/30 glass-card p-4 flex gap-4">
       <span className="absolute top-3 right-3 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-300 flex items-center gap-1">
         <Sparkles className="w-3 h-3" /> PREMYERA
       </span>

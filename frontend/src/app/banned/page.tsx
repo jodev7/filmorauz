@@ -211,7 +211,7 @@ export default function BannedPage() {
           {/* Ban Details */}
           <div className="space-y-3">
             {/* Reason */}
-            <div className="flex items-start gap-3 p-4 bg-brand-dark/50 rounded-xl border border-brand-border/50">
+            <div className="flex items-start gap-3 p-4 bg-brand-dark/50 rounded-xl border border-white/5">
               <div className="w-10 h-10 rounded-lg bg-red-500/20 flex items-center justify-center flex-shrink-0">
                 <Shield className="w-5 h-5 text-red-400" />
               </div>
@@ -226,7 +226,7 @@ export default function BannedPage() {
             </div>
 
             {/* Banned By */}
-            <div className="flex items-start gap-3 p-4 bg-brand-dark/50 rounded-xl border border-brand-border/50">
+            <div className="flex items-start gap-3 p-4 bg-brand-dark/50 rounded-xl border border-white/5">
               <div className="w-10 h-10 rounded-lg bg-orange-500/20 flex items-center justify-center flex-shrink-0">
                 <User className="w-5 h-5 text-orange-400" />
               </div>
@@ -241,7 +241,7 @@ export default function BannedPage() {
             </div>
 
             {/* Banned At */}
-            <div className="flex items-start gap-3 p-4 bg-brand-dark/50 rounded-xl border border-brand-border/50">
+            <div className="flex items-start gap-3 p-4 bg-brand-dark/50 rounded-xl border border-white/5">
               <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center flex-shrink-0">
                 <Clock className="w-5 h-5 text-blue-400" />
               </div>
@@ -256,7 +256,7 @@ export default function BannedPage() {
             </div>
 
             {/* Expiry */}
-            <div className="flex items-start gap-3 p-4 bg-brand-dark/50 rounded-xl border border-brand-border/50">
+            <div className="flex items-start gap-3 p-4 bg-brand-dark/50 rounded-xl border border-white/5">
               <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
                 isPermanentBan ? "bg-red-500/20" : "bg-yellow-500/20"
               }`}>
@@ -296,7 +296,7 @@ export default function BannedPage() {
               <div className="mb-4">
                 <button
                   onClick={() => setAppealExpanded(!appealExpanded)}
-                  className="w-full flex items-center justify-between p-3 bg-brand-dark/50 rounded-xl border border-brand-border/50 hover:border-brand-red/30 transition-colors"
+                  className="w-full flex items-center justify-between p-3 bg-brand-dark/50 rounded-xl border border-white/5 hover:border-brand-red/30 transition-colors"
                 >
                   <div className="flex items-center gap-2">
                     <MessageSquare className="w-5 h-5 text-brand-red" />
@@ -314,7 +314,7 @@ export default function BannedPage() {
                     {myAppeals.map((appeal) => (
                       <div
                         key={appeal.id}
-                        className="p-3 bg-brand-dark/30 rounded-lg border border-brand-border/30"
+                        className="p-3 bg-brand-dark/30 rounded-lg border border-white/5"
                       >
                         <div className="flex items-center justify-between mb-2">
                           <span className={`text-sm font-medium px-2 py-1 rounded ${
@@ -331,7 +331,7 @@ export default function BannedPage() {
                         </div>
                         <p className="text-gray-300 text-sm mb-2">{appeal.message}</p>
                         {appeal.admin_note && (
-                          <div className="mt-2 p-2 bg-brand-card/50 rounded border border-brand-border/30">
+                          <div className="mt-2 p-2 glass-card rounded border border-white/5">
                             <p className="text-xs text-gray-500 mb-1">Admin izohi:</p>
                             <p className="text-sm text-gray-400">{appeal.admin_note}</p>
                           </div>
@@ -383,7 +383,7 @@ export default function BannedPage() {
                     value={appealMessage}
                     onChange={(e) => setAppealMessage(e.target.value)}
                     placeholder="Nega ban bekor qilinishini tushuntiring... (kamida 10 belgi)"
-                    className="w-full p-3 bg-brand-dark border border-brand-border rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-brand-red resize-none"
+                    className="w-full p-3 bg-brand-dark border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-brand-red resize-none"
                     rows={4}
                     minLength={10}
                     maxLength={2000}
@@ -443,7 +443,7 @@ export default function BannedPage() {
           {/* Logout Button */}
           <button
             onClick={handleLogout}
-            className="mt-6 w-full flex items-center justify-center gap-2 py-3 px-4 bg-brand-dark hover:bg-brand-border/50 text-gray-400 hover:text-white rounded-xl transition-colors border border-brand-border font-medium"
+            className="mt-6 w-full flex items-center justify-center gap-2 py-3 px-4 bg-brand-dark hover:bg-brand-border/50 text-gray-400 hover:text-white rounded-xl transition-colors border border-white/10 font-medium"
           >
             <LogOut size={18} />
             <span>Chiqish</span>

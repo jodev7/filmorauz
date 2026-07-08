@@ -73,7 +73,7 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
 
   return (
     <div
-      className="relative h-[60vh] min-h-[450px] max-h-[700px] overflow-hidden"
+      className="relative h-[58vh] min-h-[420px] max-h-[640px] overflow-hidden rounded-3xl border border-white/10 shadow-[0_24px_70px_rgba(0,0,0,0.5)]"
       aria-roledescription="carousel"
       aria-label={heroTitle ? `Hero: ${heroTitle}` : "Hero"}
       onMouseEnter={() => setIsPaused(true)}
@@ -108,51 +108,62 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
                     }`}
                   />
                 )}
-                {/* Gradient Overlays */}
-                <div className="absolute inset-0 bg-gradient-to-t from-brand-dark via-brand-dark/60 to-transparent" />
-                <div className="absolute inset-0 bg-gradient-to-r from-brand-dark/90 via-brand-dark/30 to-transparent" />
-                <div className="absolute inset-0 bg-black/30" />
+                {/* Gradient Overlays — deeper, cleaner falloff for a calm,
+                    Apple-like base that keeps text crisp. */}
+                <div className="absolute inset-0 bg-gradient-to-t from-brand-dark via-brand-dark/70 to-transparent" />
+                <div className="absolute inset-0 bg-gradient-to-r from-brand-dark via-brand-dark/40 to-transparent" />
+                <div className="absolute inset-0 bg-gradient-to-b from-brand-dark/60 via-transparent to-transparent" />
               </div>
 
               {/* Content */}
-              <div className="relative h-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-end pb-12 sm:pb-16">
-                <div className="max-w-xl sm:max-w-2xl">
+              <div className="relative h-full px-6 sm:px-10 lg:px-12 flex items-end pb-10 sm:pb-14">
+                <div className={`max-w-xl sm:max-w-2xl ${isActive ? "fade-up" : ""}`}>
+                  {/* Meta chips (year · quality · duration) */}
+                  <div className="mb-4 flex items-center gap-2 flex-wrap">
+                    {movie.year > 0 && (
+                      <span className="glass-pill rounded-full px-3 py-1 text-xs font-medium text-gray-200">
+                        {movie.year}
+                      </span>
+                    )}
+                    {movie.quality && (
+                      <span className="glass-pill rounded-full px-3 py-1 text-xs font-semibold text-orange-300">
+                        {movie.quality}
+                      </span>
+                    )}
+                    {movie.duration > 0 && (
+                      <span className="glass-pill rounded-full px-3 py-1 text-xs font-medium text-gray-200">
+                        {formatDuration(movie.duration)}
+                      </span>
+                    )}
+                  </div>
+
                   {/* Title */}
-                  <h1 className="font-display text-3xl sm:text-4xl md:text-5xl lg:text-6xl tracking-wide text-white leading-none mb-3">
+                  <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight text-white leading-[1.05] mb-4 [text-shadow:0_2px_30px_rgba(0,0,0,0.5)]">
                     {movie.title}
                   </h1>
 
                   {/* Description */}
-                  <p className="text-gray-300 text-sm sm:text-base leading-relaxed line-clamp-2 mb-5">
+                  <p className="text-gray-300/90 text-sm sm:text-base leading-relaxed line-clamp-2 mb-6 max-w-lg">
                     {movie.description}
                   </p>
 
-                  {/* Buttons & Meta */}
+                  {/* Buttons */}
                   <div className="flex items-center gap-3 flex-wrap">
                     <Link
                       href={`/movies/${movie.slug}?play=1`}
-                      className="flex items-center gap-2 bg-brand-red hover:bg-orange-700 text-white font-semibold px-5 py-2.5 rounded-lg transition-colors text-sm"
+                      className="glass-hover flex items-center gap-2 bg-white text-black hover:bg-white font-semibold px-6 py-3 rounded-full text-sm shadow-lg shadow-black/30"
                       aria-label={`Ko'rish: ${movie.title}`}
                     >
-                      <Play size={18} fill="white" aria-hidden="true" />
+                      <Play size={18} fill="currentColor" aria-hidden="true" />
                       Ko&apos;rish
                     </Link>
                     <Link
                       href={`/movies/${movie.slug}`}
-                      className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white font-medium px-5 py-2.5 rounded-lg backdrop-blur-sm transition-colors border border-white/10 text-sm"
+                      className="glass glass-hover flex items-center gap-2 text-white font-medium px-6 py-3 rounded-full text-sm"
                       aria-label={`Batafsil: ${movie.title}`}
                     >
                       Batafsil
                     </Link>
-                    <div className="flex items-center gap-3 text-sm text-gray-300 ml-2">
-                      <span>{movie.year}</span>
-                      {movie.quality && (
-                        <span className="border border-gray-500 px-2 py-0.5 rounded text-xs font-medium">
-                          {movie.quality}
-                        </span>
-                      )}
-                      {movie.duration > 0 && <span>{formatDuration(movie.duration)}</span>}
-                    </div>
                   </div>
                 </div>
               </div>
@@ -161,9 +172,9 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
         })}
       </div>
 
-      {/* Dots Pagination — larger hit target via invisible padding, visual unchanged */}
+      {/* Dots Pagination — floating glass capsule */}
       {movies.length > 1 && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex gap-2">
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 glass-pill flex gap-1.5 rounded-full px-3 py-2">
           {movies.map((movie, index) => (
             <button
               key={movie.id || movie.slug || `hero-${index}`}
@@ -171,15 +182,15 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
               onClick={() => goTo(index)}
               onMouseEnter={() => markLoaded(index)}
               onFocus={() => markLoaded(index)}
-              className="relative p-3 -m-1 flex items-center justify-center"
+              className="relative py-1 flex items-center justify-center"
               aria-label={`Slayd ${index + 1}`}
               aria-current={index === currentIndex ? "true" : undefined}
             >
               <span
-                className={`block h-2 rounded-full transition-all duration-300 ${
+                className={`block h-1.5 rounded-full transition-all duration-500 ease-out ${
                   index === currentIndex
-                    ? "bg-brand-red w-6"
-                    : "bg-white/60 hover:bg-white/80 w-2"
+                    ? "bg-white w-7"
+                    : "bg-white/40 hover:bg-white/70 w-1.5"
                 }`}
               />
             </button>

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { ChevronRight, Flame, Clapperboard, Sparkles, Film, Star, Layers } from "lucide-react";
+import { Flame, Clapperboard, Sparkles, Film, Star, Layers } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MovieCarousel from "@/components/MovieCarousel";
@@ -9,6 +9,9 @@ import SeriesCarousel from "@/components/SeriesCarousel";
 import HeroCarousel from "@/components/home/HeroCarousel";
 import QuickActionsBar from "@/components/home/QuickActionsBar";
 import TrendingSpotlight from "@/components/home/TrendingSpotlight";
+import SectionHeader from "@/components/home/SectionHeader";
+import WeeklyTop10 from "@/components/home/WeeklyTop10";
+import type { Movie } from "@/lib/api";
 import { getHomepageData } from "@/lib/api";
 import { getTranslations } from "@/lib/i18n-server";
 
@@ -66,30 +69,59 @@ export default async function HomePage() {
   const genreChips = homepage.genres || [];
   const genreRows = homepage.genre_rows || [];
 
+  // Weekly Top 10 — pool every movie the homepage already loaded, de-dupe by
+  // id, and rank by view count. Uses existing payload (no extra request).
+  const weeklyTop10 = (() => {
+    const pool: Movie[] = [
+      ...trending,
+      ...recent,
+      ...topRated,
+      ...(homepage.premium_movies || []),
+      ...genreRows.flatMap((r) => r.movies || []),
+    ];
+    const seen = new Set<string>();
+    const unique: Movie[] = [];
+    for (const m of pool) {
+      if (!m?.id || seen.has(m.id)) continue;
+      seen.add(m.id);
+      unique.push(m);
+    }
+    return unique
+      .sort((a, b) => (b.views || 0) - (a.views || 0))
+      .slice(0, 10);
+  })();
+
   return (
     <>
       <Navbar />
       <main className="min-h-screen">
-        {/* ── Hero Carousel (Latest Movies) ─────────────────────── */}
-        <HeroCarousel movies={latestMovies} />
+        {/* ── Hero Carousel (Latest Movies) ─────────────────────────
+            Inset rounded card that sits *below* the floating navbar island
+            so the backdrop is fully visible (nothing overlaps its top). */}
+        <div className="max-w-7xl mx-auto px-2 sm:px-4 pt-[calc(env(safe-area-inset-top)_+_92px)] sm:pt-[calc(env(safe-area-inset-top)_+_104px)]">
+          <HeroCarousel movies={latestMovies} />
+        </div>
 
         {/* ── Quick section entry points (under hero) ──────────────── */}
         <QuickActionsBar />
 
         {/* ── Genre Chips ──────────────────────────────────────────── */}
         <section className="max-w-7xl mx-auto px-4 mt-6 mb-4">
-          <div className="flex gap-2.5 overflow-x-auto pb-2 scrollbar-hide">
+          <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
             {genreChips.map((genre) => (
               <Link
                 key={genre.slug}
                 href={`/movies?genre=${genre.slug}`}
-                className="shrink-0 px-4 py-2 bg-[#12121a] border border-[#1e1e2e] text-gray-400 text-sm rounded-full hover:border-orange-500 hover:text-orange-500 transition-colors"
+                className="glass-pill glass-hover shrink-0 rounded-full px-4 py-2 text-sm font-medium text-gray-300 hover:text-white"
               >
                 {genre.label}
               </Link>
             ))}
           </div>
         </section>
+
+        {/* ── Weekly Top 10 (medal podium; ranked by views) ─────────── */}
+        <WeeklyTop10 movies={weeklyTop10} />
 
         {/* ── Continue Watching (logged-in users; self-hides when empty) ── */}
         <ContinueWatchingRow />
@@ -102,18 +134,7 @@ export default async function HomePage() {
         {/* ── New Movies — only carousel with priority posters (above-fold) ── */}
         {recent.length > 0 && (
           <section className="max-w-7xl mx-auto px-4 py-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Clapperboard size={20} className="text-orange-500" aria-hidden="true" />
-                Yangi filmlar
-              </h2>
-              <Link
-                href="/movies"
-                className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-400 transition-colors"
-              >
-                Hammasi <ChevronRight size={14} aria-hidden="true" />
-              </Link>
-            </div>
+            <SectionHeader title="Yangi filmlar" icon={Clapperboard} href="/movies" />
             <MovieCarousel movies={recent} priorityCount={4} />
           </section>
         )}
@@ -124,12 +145,7 @@ export default async function HomePage() {
         {/* ── Trending (rest) ──────────────────────────────── */}
         {trending.length > 1 && (
           <section className="max-w-7xl mx-auto px-4 py-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Flame size={20} className="text-orange-500" aria-hidden="true" />
-                Mashhur
-              </h2>
-            </div>
+            <SectionHeader title="Mashhur" icon={Flame} />
             <MovieCarousel movies={trending.slice(1)} />
           </section>
         )}
@@ -137,18 +153,12 @@ export default async function HomePage() {
         {/* ── Premium ─────────────────────────────────────── */}
         {(homepage.premium_movies || []).length > 0 && (
           <section className="max-w-7xl mx-auto px-4 py-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Sparkles size={20} className="text-yellow-500" aria-hidden="true" />
-                Premium
-              </h2>
-              <Link
-                href="/movies?premium=true"
-                className="flex items-center gap-1 text-xs text-yellow-500 hover:text-yellow-400 transition-colors"
-              >
-                Hammasi <ChevronRight size={14} aria-hidden="true" />
-              </Link>
-            </div>
+            <SectionHeader
+              title="Premium"
+              icon={Sparkles}
+              href="/movies?premium=true"
+              accent="yellow"
+            />
             <MovieCarousel movies={homepage.premium_movies || []} />
           </section>
         )}
@@ -159,18 +169,7 @@ export default async function HomePage() {
         {/* ── New Series ──────────────────────────────────── */}
         {seriesData.length > 0 && (
           <section className="max-w-7xl mx-auto px-4 py-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Film size={20} className="text-orange-500" aria-hidden="true" />
-                Yangi seriallar
-              </h2>
-              <Link
-                href="/series"
-                className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-400 transition-colors"
-              >
-                Hammasi <ChevronRight size={14} aria-hidden="true" />
-              </Link>
-            </div>
+            <SectionHeader title="Yangi seriallar" icon={Film} href="/series" />
             <SeriesCarousel series={seriesData.slice(0, 10)} />
           </section>
         )}
@@ -183,18 +182,13 @@ export default async function HomePage() {
         {/* ── Top Rated ─────────────────────────────────────── */}
         {topRated.length > 0 && (
           <section className="max-w-7xl mx-auto px-4 py-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Star size={20} className="text-yellow-500" aria-hidden="true" />
-                Eng yuqori baholangan
-              </h2>
-              <Link
-                href="/movies"
-                className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-400 transition-colors"
-              >
-                {t("common.seeAll")} <ChevronRight size={14} aria-hidden="true" />
-              </Link>
-            </div>
+            <SectionHeader
+              title="Eng yuqori baholangan"
+              icon={Star}
+              href="/movies"
+              linkLabel={t("common.seeAll")}
+              accent="yellow"
+            />
             <MovieCarousel movies={topRated} />
           </section>
         )}
@@ -202,18 +196,12 @@ export default async function HomePage() {
         {/* ── Genre discovery rows ──────────────────────────── */}
         {genreRows.map((row) => (
           <section key={row.slug} className="max-w-7xl mx-auto px-4 py-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white flex items-center gap-2">
-                <Layers size={20} className="text-orange-500" aria-hidden="true" />
-                {row.label}
-              </h2>
-              <Link
-                href={`/movies?genre=${row.slug}`}
-                className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-400 transition-colors"
-              >
-                {t("common.seeAll")} <ChevronRight size={14} aria-hidden="true" />
-              </Link>
-            </div>
+            <SectionHeader
+              title={row.label}
+              icon={Layers}
+              href={`/movies?genre=${row.slug}`}
+              linkLabel={t("common.seeAll")}
+            />
             <MovieCarousel movies={row.movies} />
           </section>
         ))}

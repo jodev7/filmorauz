@@ -666,7 +666,7 @@ export default function WatchRoomPage() {
         : `/watch-room/${roomID}`;
     return (
       <div className="min-h-screen flex items-center justify-center bg-brand-dark text-white px-4">
-        <div className="max-w-md w-full bg-brand-card border border-brand-border rounded-xl p-6 text-center space-y-4">
+        <div className="max-w-md w-full glass-card border border-white/10 rounded-xl p-6 text-center space-y-4">
           <Users className="w-12 h-12 text-brand-red mx-auto" />
           <h2 className="text-xl font-semibold">Birga ko&apos;rish room&apos;iga kirish</h2>
           <p className="text-sm text-gray-400">
@@ -763,13 +763,13 @@ export default function WatchRoomPage() {
         <div className="flex items-center gap-2 mb-3">
           <button
             onClick={() => router.back()}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm text-gray-300 bg-brand-card hover:bg-brand-card/70 border border-brand-border rounded-lg transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm text-gray-300 glass-card hover:glass-card border border-white/10 rounded-lg transition-colors"
           >
             <ArrowLeft className="w-4 h-4" /> Orqaga
           </button>
           <Link
             href="/"
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm text-gray-300 bg-brand-card hover:bg-brand-card/70 border border-brand-border rounded-lg transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm text-gray-300 glass-card hover:glass-card border border-white/10 rounded-lg transition-colors"
           >
             <Home className="w-4 h-4" /> Bosh sahifa
           </Link>
@@ -885,7 +885,7 @@ export default function WatchRoomPage() {
           <div className="lg:hidden flex gap-2">
             <button
               onClick={() => setShowMembers((v) => !v)}
-              className="flex-1 px-3 py-2 bg-brand-card border border-brand-border rounded-lg text-sm flex items-center justify-center gap-2"
+              className="flex-1 px-3 py-2 glass-card border border-white/10 rounded-lg text-sm flex items-center justify-center gap-2"
             >
               <Users className="w-4 h-4" />
               A'zolar ({displayMemberCount})
@@ -903,7 +903,7 @@ export default function WatchRoomPage() {
           {/* Series-room controls: host has an episode switcher; guests
               can nudge the host with a "next episode" request. */}
           {room.content_type === "series" && (
-            <div className="bg-brand-card border border-brand-border rounded-xl p-3 flex items-center gap-2 flex-wrap">
+            <div className="glass-card border border-white/10 rounded-xl p-3 flex items-center gap-2 flex-wrap">
               <span className="text-xs text-gray-400 mr-1">Hozir:</span>
               <span className="text-sm font-medium truncate flex-1 min-w-0">
                 {room.current_episode_title || "—"}
@@ -920,14 +920,14 @@ export default function WatchRoomPage() {
                           alert(err instanceof Error ? err.message : "Xato");
                         }
                       }}
-                      className="px-2.5 py-1.5 bg-brand-dark border border-brand-border hover:border-brand-red rounded-lg text-xs flex items-center gap-1.5"
+                      className="px-2.5 py-1.5 bg-brand-dark border border-white/10 hover:border-brand-red rounded-lg text-xs flex items-center gap-1.5"
                     >
                       <SkipForward className="w-3.5 h-3.5" /> Keyingisi
                     </button>
                   )}
                   <button
                     onClick={() => setShowEpisodes(true)}
-                    className="px-2.5 py-1.5 bg-brand-dark border border-brand-border hover:border-brand-red rounded-lg text-xs flex items-center gap-1.5"
+                    className="px-2.5 py-1.5 bg-brand-dark border border-white/10 hover:border-brand-red rounded-lg text-xs flex items-center gap-1.5"
                   >
                     <List className="w-3.5 h-3.5" /> Epizodlar
                   </button>
@@ -936,7 +936,7 @@ export default function WatchRoomPage() {
                 nextEp && (
                   <button
                     onClick={() => sendEpisodeRequest(nextEp.id, "next")}
-                    className="px-2.5 py-1.5 bg-brand-dark border border-brand-border hover:border-brand-red rounded-lg text-xs flex items-center gap-1.5"
+                    className="px-2.5 py-1.5 bg-brand-dark border border-white/10 hover:border-brand-red rounded-lg text-xs flex items-center gap-1.5"
                     title="Hostga keyingi epizodga o'tishni so'rash"
                   >
                     <SkipForward className="w-3.5 h-3.5" /> Keyingisini so&apos;rash
@@ -946,7 +946,7 @@ export default function WatchRoomPage() {
             </div>
           )}
 
-          <div className="bg-brand-card border border-brand-border rounded-xl p-3 sm:p-4">
+          <div className="glass-card border border-white/10 rounded-xl p-3 sm:p-4">
             <div className="flex items-start gap-3 sm:gap-4">
               {room.content_poster && (
                 <div className="w-14 h-20 sm:w-20 sm:h-28 shrink-0 overflow-hidden rounded-md">
@@ -980,7 +980,7 @@ export default function WatchRoomPage() {
         {/* ── Sidebar: members + chat ── */}
         <div className="flex flex-col gap-3 lg:max-h-[calc(100vh-2rem)]">
           {/* Members panel — collapsed on mobile unless toggled */}
-          <div className={`${showMembers ? "block" : "hidden"} lg:block bg-brand-card border border-brand-border rounded-xl p-3`}>
+          <div className={`${showMembers ? "block" : "hidden"} lg:block glass-card border border-white/10 rounded-xl p-3`}>
             <div className="flex items-center gap-2 text-sm font-medium">
               <Users className="w-4 h-4" /> A'zolar ({displayMemberCount})
             </div>
@@ -994,8 +994,8 @@ export default function WatchRoomPage() {
           </div>
 
           {/* Chat — always visible */}
-          <div className="flex-1 bg-brand-card border border-brand-border rounded-xl flex flex-col min-h-0 font-poppins">
-            <div className="px-3 py-2 border-b border-brand-border text-sm font-medium flex items-center justify-between">
+          <div className="flex-1 glass-card border border-white/10 rounded-xl flex flex-col min-h-0 font-poppins">
+            <div className="px-3 py-2 border-b border-white/10 text-sm font-medium flex items-center justify-between">
               <span>Chat</span>
               {typingNames.length > 0 && (
                 <span className="text-[11px] text-gray-400 italic truncate ml-2">
@@ -1031,14 +1031,14 @@ export default function WatchRoomPage() {
                 </div>
               ))}
             </div>
-            <div className="border-t border-brand-border p-2 relative">
+            <div className="border-t border-white/10 p-2 relative">
               {emojiOpen && (
-                <div className="absolute bottom-12 left-2 right-2 bg-brand-dark border border-brand-border rounded-lg p-2 grid grid-cols-6 gap-1 max-h-48 overflow-y-auto">
+                <div className="absolute bottom-12 left-2 right-2 bg-brand-dark border border-white/10 rounded-lg p-2 grid grid-cols-6 gap-1 max-h-48 overflow-y-auto">
                   {EMOJI_PALETTE.map((e) => (
                     <button
                       key={e}
                       onClick={() => handleSendEmoji(e)}
-                      className="text-2xl hover:bg-brand-card rounded p-1 font-emoji"
+                      className="text-2xl hover:glass-card rounded p-1 font-emoji"
                     >
                       {e}
                     </button>
@@ -1085,7 +1085,7 @@ export default function WatchRoomPage() {
                     if (e.key === "Enter") handleSendChat();
                   }}
                   placeholder="Xabar yozing…"
-                  className="flex-1 min-w-0 w-0 bg-brand-dark border border-brand-border rounded px-2 py-1.5 text-sm focus:outline-none focus:border-brand-red"
+                  className="flex-1 min-w-0 w-0 bg-brand-dark border border-white/10 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-brand-red"
                 />
                 <button
                   onClick={handleSendChat}
@@ -1108,10 +1108,10 @@ export default function WatchRoomPage() {
           onClick={() => setShowEpisodes(false)}
         >
           <div
-            className="bg-brand-card border border-brand-border rounded-xl w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden"
+            className="glass-card border border-white/10 rounded-xl w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-4 py-3 border-b border-brand-border flex items-center justify-between">
+            <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
               <h3 className="font-semibold">Epizodlar</h3>
               <button onClick={() => setShowEpisodes(false)} className="text-gray-400 hover:text-white">
                 <X className="w-5 h-5" />
@@ -1171,10 +1171,10 @@ export default function WatchRoomPage() {
           onClick={() => setThemePickerOpen(false)}
         >
           <div
-            className="bg-brand-card border border-yellow-700/60 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl"
+            className="glass-card border border-yellow-700/60 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-5 py-4 border-b border-brand-border flex items-center justify-between">
+            <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Palette className="w-5 h-5 text-yellow-400" />
                 <h3 className="font-semibold text-white">Room mavzusi</h3>
@@ -1197,7 +1197,7 @@ export default function WatchRoomPage() {
                       alert(err instanceof Error ? err.message : "Xato");
                     }
                   }}
-                  className="aspect-square rounded-lg border border-brand-border hover:border-yellow-500 transition-colors p-2 flex flex-col items-end justify-end text-[10px] text-white/90"
+                  className="aspect-square rounded-lg border border-white/10 hover:border-yellow-500 transition-colors p-2 flex flex-col items-end justify-end text-[10px] text-white/90"
                   style={{ backgroundImage: `linear-gradient(135deg, ${t.from}, ${t.to})` }}
                 >
                   {t.label}
@@ -1215,10 +1215,10 @@ export default function WatchRoomPage() {
           onClick={() => !closeBusy && setCloseConfirm(false)}
         >
           <div
-            className="bg-brand-card border border-red-700/60 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl"
+            className="glass-card border border-red-700/60 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-5 py-4 border-b border-brand-border flex items-center justify-between">
+            <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <XCircle className="w-5 h-5 text-red-400" />
                 <h3 className="font-semibold text-white">Roomni yopish</h3>
@@ -1257,7 +1257,7 @@ export default function WatchRoomPage() {
                 <button
                   disabled={closeBusy}
                   onClick={() => setCloseConfirm(false)}
-                  className="px-4 py-2.5 bg-brand-dark border border-brand-border rounded-lg text-sm text-gray-300 disabled:opacity-60"
+                  className="px-4 py-2.5 bg-brand-dark border border-white/10 rounded-lg text-sm text-gray-300 disabled:opacity-60"
                 >
                   Bekor qilish
                 </button>
@@ -1269,7 +1269,7 @@ export default function WatchRoomPage() {
 
       {/* Episode-request toast (host-only) */}
       {episodeRequestToast && isHost && (
-        <div className="fixed bottom-4 right-4 z-[60] bg-brand-card border border-brand-red rounded-xl p-3 max-w-xs shadow-2xl">
+        <div className="fixed bottom-4 right-4 z-[60] glass-card border border-brand-red rounded-xl p-3 max-w-xs shadow-2xl">
           <p className="text-sm">
             <span className="font-medium">{episodeRequestToast.userName}</span>{" "}
             {episodeRequestToast.reason === "next"
@@ -1295,7 +1295,7 @@ export default function WatchRoomPage() {
             )}
             <button
               onClick={() => setEpisodeRequestToast(null)}
-              className="px-3 py-1.5 bg-brand-dark border border-brand-border rounded text-xs"
+              className="px-3 py-1.5 bg-brand-dark border border-white/10 rounded text-xs"
             >
               Yopish
             </button>
@@ -1321,10 +1321,10 @@ export default function WatchRoomPage() {
           onClick={() => setLinkPopup(null)}
         >
           <div
-            className="bg-brand-card border border-brand-border rounded-xl w-full max-w-md overflow-hidden"
+            className="glass-card border border-white/10 rounded-xl w-full max-w-md overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-4 py-3 border-b border-brand-border flex items-center justify-between">
+            <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
               <h3 className="font-semibold">Taklif havolasi</h3>
               <button onClick={() => setLinkPopup(null)} className="text-gray-400 hover:text-white">
                 <X className="w-5 h-5" />
@@ -1335,7 +1335,7 @@ export default function WatchRoomPage() {
                 <p className="text-xs text-green-300">Havola nusxa olindi ✓</p>
               )}
               <p className="text-xs text-gray-400">Ushbu havolani do&apos;stlaringizga yuboring:</p>
-              <div className="bg-brand-dark border border-brand-border rounded p-2 text-xs break-all font-mono select-all">
+              <div className="bg-brand-dark border border-white/10 rounded p-2 text-xs break-all font-mono select-all">
                 {linkPopup.url}
               </div>
               <div className="flex gap-2">
@@ -1369,7 +1369,7 @@ export default function WatchRoomPage() {
                         /* user cancelled — ignore */
                       }
                     }}
-                    className="px-3 py-2 bg-brand-dark border border-brand-border rounded-lg text-sm flex items-center gap-1"
+                    className="px-3 py-2 bg-brand-dark border border-white/10 rounded-lg text-sm flex items-center gap-1"
                     title="Ulashish"
                   >
                     <Share2 className="w-4 h-4" />
@@ -1377,7 +1377,7 @@ export default function WatchRoomPage() {
                 )}
                 <button
                   onClick={() => setLinkPopup(null)}
-                  className="px-3 py-2 bg-brand-dark border border-brand-border rounded-lg text-sm"
+                  className="px-3 py-2 bg-brand-dark border border-white/10 rounded-lg text-sm"
                 >
                   Yopish
                 </button>
@@ -1607,10 +1607,10 @@ function InviteModal({
       onClick={onClose}
     >
       <div
-        className="bg-brand-card border border-brand-border rounded-xl w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden"
+        className="glass-card border border-white/10 rounded-xl w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-4 py-3 border-b border-brand-border flex items-center justify-between">
+        <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
           <h3 className="font-semibold">Taklif yuborish</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-white">
             <X className="w-5 h-5" />
@@ -1627,7 +1627,7 @@ function InviteModal({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="123456789 yoki Ali"
-              className="w-full bg-brand-dark border border-brand-border rounded px-3 py-2 text-sm focus:outline-none focus:border-brand-red"
+              className="w-full bg-brand-dark border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-brand-red"
             />
           </div>
           {error && <p className="text-xs text-red-400">{error}</p>}
@@ -1676,13 +1676,13 @@ function InviteModal({
               ))}
             </ul>
           </div>
-          <div className="border-t border-brand-border pt-3">
+          <div className="border-t border-white/10 pt-3">
             <button
               onClick={() => {
                 onLinkReady();
                 onClose();
               }}
-              className="w-full px-3 py-2 bg-brand-dark border border-brand-border hover:border-brand-red rounded-lg text-sm flex items-center justify-center gap-2"
+              className="w-full px-3 py-2 bg-brand-dark border border-white/10 hover:border-brand-red rounded-lg text-sm flex items-center justify-center gap-2"
             >
               <Copy className="w-4 h-4" /> Yoki taklif havolasini nusxa olish
             </button>

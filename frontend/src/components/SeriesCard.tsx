@@ -29,9 +29,9 @@ function SeriesCardImpl({ series }: SeriesCardProps) {
   return (
     <Link
       href={`/series/${series.slug}`}
-      className="series-card group relative bg-brand-card rounded-xl overflow-hidden border border-brand-border transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl block w-full h-full"
+      className="series-card group relative glass-card rounded-2xl overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:border-orange-500/30 block w-full h-full"
     >
-      <div className="relative aspect-[2/3] overflow-hidden bg-brand-border">
+      <div className="relative aspect-[2/3] overflow-hidden bg-white/5">
         <MediaImage
           src={series.poster_url}
           alt={series.title}

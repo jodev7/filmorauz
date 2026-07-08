@@ -69,11 +69,11 @@ export default function ShareButton({ movieId, movieTitle, movieSlug }: Props) {
             type="text"
             value={shareData.share_url}
             readOnly
-            className="flex-1 bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm"
+            className="flex-1 bg-brand-dark border border-white/10 rounded-lg px-3 py-2 text-white text-sm"
           />
           <button
             onClick={copyToClipboard}
-            className="p-2 bg-brand-card border border-brand-border rounded-lg text-white hover:bg-brand-border transition-colors"
+            className="p-2 glass-card border border-white/10 rounded-lg text-white hover:bg-brand-border transition-colors"
             title="Havolani nusxalash"
           >
             {copied ? <Check size={18} className="text-green-400" /> : <Copy size={18} />}
@@ -100,7 +100,7 @@ export default function ShareButton({ movieId, movieTitle, movieSlug }: Props) {
     <button
       onClick={handleShare}
       disabled={loading}
-      className="flex items-center gap-2 px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white hover:bg-brand-border transition-colors disabled:opacity-50"
+      className="flex items-center gap-2 px-4 py-2 glass-card border border-white/10 rounded-lg text-white hover:bg-brand-border transition-colors disabled:opacity-50"
     >
       <Share2 size={18} />
       {loading ? "Yaratilmoqda..." : "Ulashish"}

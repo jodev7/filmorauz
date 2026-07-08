@@ -13,16 +13,18 @@ const ACTIONS = [
 
 export default function QuickActionsBar() {
   return (
-    <section className="max-w-7xl mx-auto px-4 mt-6">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+    <section className="max-w-7xl mx-auto px-4 mt-8">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {ACTIONS.map(({ href, label, icon: Icon, accent }) => (
           <Link
             key={href}
             href={href}
-            className="flex items-center gap-2.5 px-4 py-3 bg-[#12121a] border border-[#1e1e2e] rounded-xl text-white text-sm font-medium hover:border-orange-500/50 hover:bg-[#161620] transition-colors"
+            className="glass glass-hover group flex items-center gap-3 px-4 py-3.5 rounded-2xl text-white text-sm font-medium"
           >
-            <Icon size={18} className={accent} aria-hidden="true" />
-            {label}
+            <span className="glass-pill inline-flex h-9 w-9 items-center justify-center rounded-xl">
+              <Icon size={18} className={accent} aria-hidden="true" />
+            </span>
+            <span className="tracking-tight">{label}</span>
           </Link>
         ))}
       </div>

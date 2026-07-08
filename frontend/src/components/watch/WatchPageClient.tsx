@@ -647,7 +647,7 @@ export default function WatchPageClient({
       {!embedded && (
         <>
           <div className="h-[env(safe-area-inset-top)]" />
-          <div className="bg-brand-dark/95 backdrop-blur-sm border-b border-brand-border px-3 sm:px-4 py-2 sm:py-3 flex items-center gap-3 sm:gap-4">
+          <div className="bg-brand-dark/95 backdrop-blur-sm border-b border-white/10 px-3 sm:px-4 py-2 sm:py-3 flex items-center gap-3 sm:gap-4">
             <Link
               href={backHref}
               className="flex items-center gap-1.5 text-xs sm:text-sm text-gray-400 hover:text-white transition-colors"
@@ -682,7 +682,7 @@ export default function WatchPageClient({
                   <WatchTogetherButton
                     contentType={isEp ? "episode" : "movie"}
                     contentID={cid}
-                    className="flex items-center gap-1.5 px-2 py-1.5 sm:px-3 bg-brand-card border border-brand-border hover:border-brand-red rounded-md text-[11px] sm:text-xs text-white transition-colors whitespace-nowrap"
+                    className="flex items-center gap-1.5 px-2 py-1.5 sm:px-3 glass-card border border-white/10 hover:border-brand-red rounded-md text-[11px] sm:text-xs text-white transition-colors whitespace-nowrap"
                   />
                 );
               })()}
@@ -729,7 +729,7 @@ export default function WatchPageClient({
             ) : resolvedPlaybackUrl ? (
               <>
                 {resumePromptVisible && (
-                  <div className="mb-3 flex flex-col gap-3 rounded-xl border border-brand-red/25 bg-brand-card/80 p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="mb-3 flex flex-col gap-3 rounded-xl border border-brand-red/25 glass-card p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="text-sm text-white">
                       Davom ettirish: {formatResumeTime(resumePosition)} dan
                     </div>
@@ -744,7 +744,7 @@ export default function WatchPageClient({
                       <button
                         type="button"
                         onClick={handleResumeFromStart}
-                        className="rounded-lg border border-brand-border bg-brand-dark px-4 py-2 text-sm font-medium text-gray-200"
+                        className="rounded-lg border border-white/10 bg-brand-dark px-4 py-2 text-sm font-medium text-gray-200"
                       >
                         Boshidan boshlash
                       </button>
@@ -810,7 +810,7 @@ export default function WatchPageClient({
         )}
 
         {movie.type === "episode" && (episodeNavigation?.previousEpisode || episodeNavigation?.nextEpisode) && (
-          <div className="mt-4 rounded-2xl border border-brand-border bg-brand-card/70 p-3 sm:p-4">
+          <div className="mt-4 rounded-2xl border border-white/10 glass-card p-3 sm:p-4">
             {showAutoNextCountdown && episodeNavigation?.nextEpisode && (
               <div className="mb-3 flex flex-col gap-3 rounded-xl border border-yellow-500/25 bg-yellow-500/10 p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="text-sm text-yellow-200">
@@ -841,7 +841,7 @@ export default function WatchPageClient({
               {episodeNavigation?.previousEpisode ? (
                 <Link
                   href={getEpisodeHref(episodeNavigation.previousEpisode)}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-brand-border bg-brand-dark px-4 py-3 text-sm font-medium text-white transition-colors hover:border-brand-red hover:text-brand-red sm:w-auto sm:min-w-[220px] sm:justify-start"
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-brand-dark px-4 py-3 text-sm font-medium text-white transition-colors hover:border-brand-red hover:text-brand-red sm:w-auto sm:min-w-[220px] sm:justify-start"
                 >
                   <ChevronLeft size={18} />
                   <span>Oldingi qism</span>
@@ -852,7 +852,7 @@ export default function WatchPageClient({
               {episodeNavigation?.nextEpisode ? (
                 <Link
                   href={getEpisodeHref(episodeNavigation.nextEpisode)}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-brand-border bg-brand-dark px-4 py-3 text-sm font-medium text-white transition-colors hover:border-brand-red hover:text-brand-red sm:w-auto sm:min-w-[220px] sm:justify-end"
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-brand-dark px-4 py-3 text-sm font-medium text-white transition-colors hover:border-brand-red hover:text-brand-red sm:w-auto sm:min-w-[220px] sm:justify-end"
                 >
                   <span>{`Keyingi qism: ${episodeNavigation.nextEpisode.episode_number}-qism`}</span>
                   <ChevronRight size={18} />
@@ -879,7 +879,7 @@ export default function WatchPageClient({
               {localizedGenres?.map((g) => (
                 <span
                   key={g}
-                  className="text-xs bg-brand-card border border-brand-border text-gray-400 px-2 py-0.5 rounded-full"
+                  className="text-xs glass-card border border-white/10 text-gray-400 px-2 py-0.5 rounded-full"
                 >
                   {g}
                 </span>
@@ -924,7 +924,7 @@ export default function WatchPageClient({
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors w-full justify-center ${
                   isFavorite
                     ? "bg-brand-red text-white"
-                    : "bg-brand-card border border-brand-border text-gray-300 hover:border-brand-red hover:text-brand-red"
+                    : "glass-card border border-white/10 text-gray-300 hover:border-brand-red hover:text-brand-red"
                 }`}
               >
                 <Heart size={14} fill={isFavorite ? "currentColor" : "none"} />
@@ -999,10 +999,10 @@ function EpisodesModal({
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-brand-border bg-brand-card shadow-2xl overflow-hidden"
+        className="relative w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-white/10 glass-card shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-brand-border">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
           <h3 className="font-display text-lg text-white">Sezonlar va qismlar</h3>
           <button
             type="button"
@@ -1014,7 +1014,7 @@ function EpisodesModal({
           </button>
         </div>
         {seasons.length > 1 && (
-          <div className="flex gap-2 overflow-x-auto px-5 py-3 border-b border-brand-border">
+          <div className="flex gap-2 overflow-x-auto px-5 py-3 border-b border-white/10">
             {seasons.map((s, idx) => (
               <button
                 key={s.season.id}
@@ -1048,7 +1048,7 @@ function EpisodesModal({
                 className={`flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors ${
                   isCurrent
                     ? "border-brand-red bg-brand-red/10 text-white"
-                    : "border-brand-border bg-white/[0.02] text-gray-200 hover:bg-white/[0.06] hover:text-white"
+                    : "border-white/10 bg-white/[0.02] text-gray-200 hover:bg-white/[0.06] hover:text-white"
                 }`}
               >
                 <span className="shrink-0 w-9 text-center text-sm font-semibold tabular-nums">

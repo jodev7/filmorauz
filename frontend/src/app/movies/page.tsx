@@ -183,7 +183,7 @@ export default async function MoviesPage({ searchParams }: Props) {
               {page > 1 && (
                 <Link
                   href={`/movies?${new URLSearchParams({ ...(genre && { genre }), page: String(page - 1) })}`}
-                  className="flex items-center gap-1 px-4 sm:px-5 py-2 bg-brand-card border border-brand-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-gray-500 transition-colors"
+                  className="flex items-center gap-1 px-4 sm:px-5 py-2 glass-card border border-white/10 rounded-lg text-sm text-gray-300 hover:text-white hover:border-gray-500 transition-colors"
                 >
                   <ChevronLeft size={16} />
                   Oldingi
@@ -193,7 +193,7 @@ export default async function MoviesPage({ searchParams }: Props) {
               {page < totalPages && (
                 <Link
                   href={`/movies?${new URLSearchParams({ ...(genre && { genre }), page: String(page + 1) })}`}
-                  className="flex items-center gap-1 px-4 sm:px-5 py-2 bg-brand-card border border-brand-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-gray-500 transition-colors"
+                  className="flex items-center gap-1 px-4 sm:px-5 py-2 glass-card border border-white/10 rounded-lg text-sm text-gray-300 hover:text-white hover:border-gray-500 transition-colors"
                 >
                   Keyingi
                   <ChevronRight size={16} />

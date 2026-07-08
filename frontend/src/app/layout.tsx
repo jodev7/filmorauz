@@ -152,6 +152,9 @@ export default function RootLayout({
         />
       </head>
       <body className="bg-brand-dark text-white font-body antialiased">
+        {/* Global ambient aurora — sits behind everything (z-index:-1). Admin
+            pages render their own opaque background so it stays hidden there. */}
+        <div className="ambient-bg" aria-hidden="true" />
         <AuthProvider>
           <I18nProvider>
             <AdSlotProvider>

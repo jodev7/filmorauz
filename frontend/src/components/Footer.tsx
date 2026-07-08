@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Film } from "lucide-react";
 import { getTranslations } from "@/lib/i18n-server";
+import Logo from "./Logo";
 
 const GENRE_FOOTER_LINKS = [
   { href: "/movies?genre=animation", label: "Multifilmlar" },
@@ -12,16 +13,15 @@ export default function Footer() {
   const { t } = getTranslations("uz");
   
   return (
-    <footer className="border-t border-brand-border bg-brand-dark mt-20">
-      <div className="max-w-7xl mx-auto px-4 py-10 sm:py-12">
+    <footer className="px-2 sm:px-4 mt-12 mb-4">
+      {/* Floating liquid-glass island, mirroring the navbar. */}
+      <div className="max-w-7xl mx-auto glass rounded-[28px] px-5 sm:px-8 py-10 sm:py-12">
         <div className="flex flex-col md:flex-row justify-between items-start gap-8">
           {/* Brand */}
           <div>
             <Link href="/" className="flex items-center gap-2 mb-3">
-              <Film className="text-brand-red" size={20} />
-              <span className="font-display text-2xl tracking-wider">
-                FILMORA<span className="text-brand-red">UZ</span>
-              </span>
+              <Film className="text-orange-500" size={20} />
+              <Logo className="text-2xl" />
             </Link>
             <p className="text-gray-500 text-sm max-w-xs">
               {t("footer.tagline")}
@@ -49,7 +49,7 @@ export default function Footer() {
           </div>
         </div>
 
-        <div className="mt-8 sm:mt-10 pt-6 border-t border-brand-border text-center text-xs text-gray-600">
+        <div className="mt-8 sm:mt-10 pt-6 border-t border-white/10 text-center text-xs text-gray-500">
           © {new Date().getFullYear()} FilmoraUz.net .{t("footer.rights")}
         </div>
       </div>

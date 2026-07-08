@@ -99,7 +99,7 @@ function ContinueWatchingRowImpl() {
               href={resumeHref(item)}
               className="group shrink-0 w-[220px] sm:w-[260px] snap-start"
             >
-              <div className="relative aspect-video overflow-hidden rounded-xl bg-[#1a1a24] border border-[#1e1e2e] group-hover:border-orange-500/40 transition-colors">
+              <div className="relative aspect-video overflow-hidden rounded-xl bg-[#1a1a24] border border-white/10 group-hover:border-orange-500/40 transition-colors">
                 <OptimizedImage
                   src={item.poster_url}
                   alt={item.title}

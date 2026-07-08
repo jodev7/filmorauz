@@ -12,6 +12,7 @@ import SuggestionModal from "./SuggestionModal";
 import NotificationBell from "./NotificationBell";
 import ActiveRoomBadge from "./ActiveRoomBadge";
 import { resolveIsPremium } from "./PremiumComponents";
+import Logo from "./Logo";
 import { getLocalizedTitle, getLocalizedGenres } from "@/lib/localization";
 import { DEFAULT_AVATAR_PLACEHOLDER, DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
@@ -124,15 +125,20 @@ export default function Navbar() {
   };
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-[70] bg-[#0a0a0f]/95 backdrop-blur-md border-b border-[#1e1e2e]">
-      <div className="h-[env(safe-area-inset-top)]" />
-      <nav className="w-full max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-2 sm:gap-3 lg:gap-4">
+    <header className="fixed top-0 left-0 right-0 z-[70] px-2 sm:px-4 pt-[env(safe-area-inset-top)]">
+      {/* Floating liquid-glass island — detached from the page edges with
+          oval (pill) sides. The nav bar and the mobile drawer live inside the
+          same rounded shell so the whole thing reads as one object. */}
+      <div
+        className={`max-w-7xl mx-auto mt-2 sm:mt-3 glass-strong transition-[border-radius] duration-300 ${
+          menuOpen ? "rounded-[28px]" : "rounded-full"
+        }`}
+      >
+      <nav className="w-full min-w-0 px-3 sm:px-5 h-16 flex items-center justify-between gap-1.5 sm:gap-3 lg:gap-4">
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-2 shrink-0">
-          <Film className="text-orange-500" size={22} />
-          <span className="font-display text-xl sm:text-2xl tracking-wider text-white">
-            FILMORA<span className="text-orange-500">UZ</span>
-          </span>
+        <Link href="/" className="flex items-center gap-1.5 sm:gap-2 shrink-0 min-w-0">
+          <Film className="text-orange-500 shrink-0" size={22} />
+          <Logo className="text-lg sm:text-2xl" />
           {resolveIsPremium(user) && (
             <span className="hidden sm:inline-flex items-center gap-1 text-xs bg-gradient-to-r from-yellow-500 to-amber-600 text-black px-2 py-0.5 rounded-full font-medium shadow-[0_0_10px_rgba(234,179,8,0.3)]">
               <Crown size={10} />
@@ -177,7 +183,7 @@ export default function Navbar() {
         </div>
 
         {/* Right side: Search + mobile menu */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
           {/* Search */}
           <div ref={searchRef} className="relative">
             {searchOpen ? (
@@ -188,7 +194,7 @@ export default function Navbar() {
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder={t("common.searchPlaceholder")}
-                  className="bg-[#12121a] border border-[#1e1e2e] rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-orange-500 w-44 sm:w-64 transition-all"
+                  className="bg-black/60 border border-white/15 rounded-full px-4 py-2 text-sm text-white placeholder-zinc-400 focus:outline-none focus:border-orange-500 w-44 sm:w-64 transition-all"
                 />
                 <button
                   type="button"
@@ -215,7 +221,7 @@ export default function Navbar() {
 
             {/* Search dropdown */}
             {results.length > 0 && (
-              <div className="absolute top-full right-0 mt-2 w-[calc(100vw-2rem)] max-w-[18rem] sm:w-72 bg-[#12121a] border border-[#1e1e2e] rounded-xl overflow-hidden shadow-2xl">
+              <div className="absolute top-full right-0 mt-2 w-[calc(100vw-2rem)] max-w-[18rem] sm:w-72 glass-strong rounded-2xl overflow-hidden shadow-2xl">
                 {searching && (
                   <div className="px-4 py-2 text-xs text-zinc-500">
                     {t("common.loading")}
@@ -270,7 +276,7 @@ export default function Navbar() {
                 <NotificationBell />
                 <button
                   onClick={() => setSuggestionModalOpen(true)}
-                  className="text-zinc-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                  className="hidden sm:flex text-zinc-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5"
                   aria-label="Kino tavsiya qilish"
                   title="Kino tavsiya qilish"
                 >
@@ -278,7 +284,7 @@ export default function Navbar() {
                 </button>
                 <Link
                   href="/user"
-                  className="flex items-center justify-center w-10 h-10 rounded-full bg-[#12121a] border border-[#1e1e2e] hover:border-orange-500/50 transition-colors relative"
+                  className="flex items-center justify-center w-10 h-10 rounded-full glass-card border border-white/10 hover:border-orange-500/50 transition-colors relative"
                   aria-label="Profile"
                 >
                   {(user?.profile_image_url || user?.photo_url) ? (() => {
@@ -305,7 +311,7 @@ export default function Navbar() {
             ) : (
               <button
                 onClick={() => setLoginModalOpen(true)}
-                className="flex items-center justify-center w-10 h-10 rounded-full bg-[#12121a] border border-[#1e1e2e] hover:border-orange-500/50 transition-colors"
+                className="flex items-center justify-center w-10 h-10 rounded-full glass-card border border-white/10 hover:border-orange-500/50 transition-colors"
                 aria-label="Login"
               >
                 <LogIn size={20} className="text-zinc-400" />
@@ -327,7 +333,7 @@ export default function Navbar() {
 
       {/* Mobile menu */}
       {menuOpen && (
-        <div className="lg:hidden border-t border-[#1e1e2e] bg-[#0a0a0f]/95 backdrop-blur-md px-4 py-4 flex flex-col gap-1">
+        <div className="lg:hidden border-t border-white/10 px-4 py-4 flex flex-col gap-1">
           {/* Mobile search */}
           <form
             onSubmit={handleSearchSubmit}
@@ -343,7 +349,7 @@ export default function Navbar() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={t("common.searchPlaceholder")}
-                className="w-full bg-[#12121a] border border-[#1e1e2e] rounded-lg pl-9 pr-4 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-orange-500 transition-colors"
+                className="w-full bg-black/60 border border-white/15 rounded-full pl-9 pr-4 py-2.5 text-sm text-white placeholder-zinc-400 focus:outline-none focus:border-orange-500 transition-colors"
               />
             </div>
             <button
@@ -356,14 +362,14 @@ export default function Navbar() {
 
           {/* Mobile search results */}
           {results.length > 0 && (
-            <div className="bg-[#12121a] border border-[#1e1e2e] rounded-xl overflow-hidden mb-3">
+            <div className="glass-strong rounded-2xl overflow-hidden mb-3">
               {results.slice(0, 4).map((item: any) => {
                 const posterSrc = item.poster_url;
                 return (
                 <button
                   key={item.id}
                   onClick={() => handleMovieClick(item.slug, item.target_type)}
-                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#1e1e2e] transition-colors text-left border-b border-[#1e1e2e]/50 last:border-0"
+                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#1e1e2e] transition-colors text-left border-b border-white/5 last:border-0"
                 >
                   <MediaImage
                     src={posterSrc}
@@ -442,6 +448,8 @@ export default function Navbar() {
           )}
         </div>
       )}
+      </div>
+      {/* ── end floating island ── */}
 
       {/* Telegram Login Modal */}
       <TelegramLoginModal

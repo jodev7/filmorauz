@@ -7,6 +7,13 @@
   --brand-dark: #0A0A0F;
   --brand-card: #12121A;
   --brand-border: #1E1E2E;
+
+  /* ── Liquid glass design tokens (Apple-inspired) ──────────────── */
+  --glass-bg: rgba(22, 22, 30, 0.38);
+  --glass-bg-strong: rgba(24, 24, 34, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --glass-highlight: rgba(255, 255, 255, 0.14);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.38);
 }
 
 * {
@@ -24,6 +31,16 @@
 
 html {
   scroll-behavior: smooth;
+}
+
+/* Belt-and-suspenders guard against horizontal overflow on mobile — a
+   single stray wide element should never make the whole page scroll
+   sideways. `clip` (unlike `hidden`) doesn't turn body into a scroll
+   container, so it won't break position: sticky descendants. */
+html,
+body {
+  overflow-x: clip;
+  max-width: 100%;
 }
 
 /* Custom scrollbar */
@@ -59,6 +76,103 @@ html {
 }
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
+}
+
+/* ── Liquid glass surfaces ─────────────────────────────────────────
+   Frosted, translucent panels with a soft top highlight and float
+   shadow. `.glass` is the base surface; modifiers tune weight and
+   interactivity. Reused across the redesigned homepage. */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
+}
+.glass-strong {
+  background: var(--glass-bg-strong);
+  backdrop-filter: blur(32px) saturate(190%);
+  -webkit-backdrop-filter: blur(32px) saturate(190%);
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
+}
+/* Lightweight pill/chip surface — cheaper blur for many instances. */
+.glass-pill {
+  background: rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+/* Card-weight glass — no backdrop-filter so pages with dozens of cards stay
+   smooth. A translucent top-lit gradient + hairline border reads as glass
+   without the per-element blur cost. Used by movie/series/collection cards. */
+.glass-card {
+  background: rgba(17, 17, 25, 0.55);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* Interactive lift + border brighten on hover. */
+.glass-hover {
+  transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.35s ease, background-color 0.35s ease,
+    box-shadow 0.35s ease;
+}
+.glass-hover:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 14px 40px rgba(0, 0, 0, 0.45);
+}
+
+/* Ambient aurora background — soft, low-opacity color fields that give
+   the flat dark page quiet depth without competing with content. Fixed
+   so it stays put while the page scrolls. */
+.ambient-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+}
+.ambient-bg::before,
+.ambient-bg::after {
+  content: "";
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(120px);
+}
+.ambient-bg::before {
+  width: 60vw;
+  height: 60vw;
+  top: -18vw;
+  left: -12vw;
+  background: radial-gradient(circle, rgba(249, 115, 22, 0.30), transparent 68%);
+}
+.ambient-bg::after {
+  width: 55vw;
+  height: 55vw;
+  top: 28vh;
+  right: -15vw;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.24), transparent 68%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .fade-up {
+    animation: fadeUp 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* MovieCard hover isolation - ensure only hovered card reacts */

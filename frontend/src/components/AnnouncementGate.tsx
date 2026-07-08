@@ -84,7 +84,7 @@ export default function AnnouncementGate() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="announcement-title"
-        className="relative w-full max-w-md rounded-2xl bg-[#15151f] border border-[#1e1e2e] shadow-2xl overflow-hidden"
+        className="relative w-full max-w-md rounded-2xl bg-[#15151f] border border-white/10 shadow-2xl overflow-hidden"
       >
         {current.dismissible && (
           <button

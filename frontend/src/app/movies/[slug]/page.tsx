@@ -254,7 +254,7 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
               <MoviePoster
                 src={movie.poster_url}
                 alt={localizedTitle}
-                className="w-36 sm:w-44 md:w-48 lg:w-56 rounded-xl shadow-2xl border border-brand-border"
+                className="w-36 sm:w-44 md:w-48 lg:w-56 rounded-xl shadow-2xl border border-white/10"
               />
             </div>
 
@@ -310,7 +310,7 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
                     <Link
                       key={g}
                       href={`/movies?genre=${encodeURIComponent(g.toLowerCase())}`}
-                      className="text-xs sm:text-sm bg-brand-card border border-brand-border text-gray-300 px-3 py-1 rounded-full hover:border-brand-red hover:text-brand-red transition-colors"
+                      className="text-xs sm:text-sm glass-card border border-white/10 text-gray-300 px-3 py-1 rounded-full hover:border-brand-red hover:text-brand-red transition-colors"
                     >
                       {localizeSingleGenre(g)}
                     </Link>
@@ -332,7 +332,7 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
                 <WatchTogetherButton
                   contentType="movie"
                   contentID={movie.id}
-                  className="inline-flex items-center gap-1.5 px-4 py-3 bg-brand-card border border-brand-border hover:border-brand-red rounded-xl text-sm text-white transition-colors"
+                  className="inline-flex items-center gap-1.5 px-4 py-3 glass-card border border-white/10 hover:border-brand-red rounded-xl text-sm text-white transition-colors"
                 />
 
                 <ShareButton
