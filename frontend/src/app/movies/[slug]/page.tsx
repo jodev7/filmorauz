@@ -14,6 +14,7 @@ import MovieCarousel from "@/components/MovieCarousel";
 import WatchButton from "@/components/WatchButton";
 import WatchTogetherButton from "@/components/WatchTogetherButton";
 import MovieWatchSection from "@/components/MovieWatchSection";
+import MediaTitle from "@/components/MediaTitle";
 import { WatchPlayerProvider } from "@/lib/watch-player-context";
 import { isMoviePremium, PremiumBadge } from "@/components/PremiumComponents";
 import { getMovie, getRecommendations } from "@/lib/api";
@@ -274,7 +275,7 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
               </div>
 
               <h1 className="font-display text-3xl sm:text-4xl md:text-5xl lg:text-6xl text-white tracking-wide leading-none mb-3 flex flex-wrap items-center gap-3">
-                {localizedTitle}
+                <MediaTitle title={localizedTitle} />
                 {isMoviePremium(movie) && (
                   <PremiumBadge size="default" showCrown />
                 )}

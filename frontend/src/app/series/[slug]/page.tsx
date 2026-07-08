@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import Script from "next/script";
 import { ChevronLeft, Calendar, Globe, Play } from "lucide-react";
+import MediaTitle from "@/components/MediaTitle";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MediaImage from "@/components/MediaImage";
@@ -191,7 +192,7 @@ export default async function SeriesDetailPage({ params }: Props) {
               )}
 
               <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-white tracking-wide leading-none mb-3 flex flex-wrap items-center gap-3">
-                {series.title}
+                <MediaTitle title={series.title} />
                 {series.is_premium && (
                   <span className="inline-flex items-center gap-1 text-xs bg-gradient-to-r from-yellow-500 to-amber-600 text-black px-2 py-1 rounded-full font-bold shadow-[0_0_10px_rgba(234,179,8,0.3)]">
                     PREMIUM

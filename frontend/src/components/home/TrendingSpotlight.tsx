@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Play, Flame, Eye } from "lucide-react";
 import { Movie } from "@/lib/api";
 import OptimizedImage from "@/components/OptimizedImage";
+import MediaTitle from "@/components/MediaTitle";
 
 interface TrendingSpotlightProps {
   movie: Movie;
@@ -35,7 +36,7 @@ export default function TrendingSpotlight({ movie }: TrendingSpotlightProps) {
               Hozir mashhur
             </span>
             <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight text-white leading-tight mb-4 line-clamp-2 [text-shadow:0_2px_20px_rgba(0,0,0,0.5)]">
-              {movie.title}
+              <MediaTitle title={movie.title} />
             </h2>
             <div className="flex items-center gap-2 mb-5 flex-wrap">
               {movie.year > 0 && (

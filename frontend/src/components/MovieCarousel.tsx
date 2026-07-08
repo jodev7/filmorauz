@@ -4,6 +4,7 @@ import { memo, useRef, useState, useEffect } from "react";
 import { ChevronRight, ChevronLeft } from "lucide-react";
 import { Movie } from "@/lib/api";
 import MovieCard from "./MovieCard";
+import { useDragScroll } from "@/lib/use-drag-scroll";
 
 interface MovieCarouselProps {
   movies: Movie[];
@@ -17,6 +18,7 @@ interface MovieCarouselProps {
 
 function MovieCarouselImpl({ movies, priorityCount = 0 }: MovieCarouselProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const dragHandlers = useDragScroll(scrollRef);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(true);
 
@@ -77,7 +79,8 @@ function MovieCarouselImpl({ movies, priorityCount = 0 }: MovieCarouselProps) {
       {/* Carousel Container */}
       <div
         ref={scrollRef}
-        className="flex gap-3 overflow-x-auto scrollbar-hide pb-2 snap-x snap-mandatory isolate"
+        {...dragHandlers}
+        className="flex gap-3 overflow-x-auto scrollbar-hide pb-2 snap-x snap-mandatory isolate sm:cursor-grab sm:active:cursor-grabbing"
         style={{
           scrollbarWidth: "none",
           msOverflowStyle: "none",

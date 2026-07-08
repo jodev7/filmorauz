@@ -194,15 +194,24 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 	}
 
 	// Weekly Top 10 — most-viewed titles across BOTH movies and series, ranked
-	// by view count. Built from the already-loaded recency pools (60 movies +
-	// 10 series) so it costs no extra queries. Each item carries a "type" so
-	// the frontend links to the right route (/movies vs /series).
+	// purely by view count. Uses dedicated view-sorted queries (not the recency
+	// pools) so the ranking is correct and series naturally mix in when they
+	// out-rank movies. Each item carries a "type" for frontend routing.
+	topMoviesPool, err := h.movieService.ListMostViewed(12)
+	if err != nil {
+		topMoviesPool = []models.Movie{}
+	}
+	topSeriesPool, err := h.seriesService.ListMostViewed(12)
+	if err != nil {
+		topSeriesPool = []models.Series{}
+	}
 	type rankedItem struct {
 		card  gin.H
 		views int64
 	}
-	ranked := make([]rankedItem, 0, len(movies)+len(seriesList))
-	for _, m := range movies {
+	ranked := make([]rankedItem, 0, len(topMoviesPool)+len(topSeriesPool))
+	for i := range topMoviesPool {
+		m := &topMoviesPool[i]
 		ranked = append(ranked, rankedItem{
 			views: m.Views,
 			card: gin.H{
@@ -210,12 +219,13 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 				"type":       "movie",
 				"title":      m.Title,
 				"slug":       m.Slug,
-				"poster_url": m.PosterURL,
+				"poster_url": protectMediaURL(m.PosterURL),
 				"views":      m.Views,
 			},
 		})
 	}
-	for _, s := range seriesList {
+	for i := range topSeriesPool {
+		s := &topSeriesPool[i]
 		ranked = append(ranked, rankedItem{
 			views: s.Views,
 			card: gin.H{
@@ -223,7 +233,7 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 				"type":       "series",
 				"title":      s.Title,
 				"slug":       s.Slug,
-				"poster_url": s.PosterURL,
+				"poster_url": protectMediaURL(s.PosterURL),
 				"views":      s.Views,
 			},
 		})

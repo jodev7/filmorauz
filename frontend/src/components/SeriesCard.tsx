@@ -4,6 +4,7 @@ import { memo } from "react";
 import Link from "next/link";
 import { Play, Star, Tv } from "lucide-react";
 import MediaImage from "@/components/MediaImage";
+import MediaTitle from "@/components/MediaTitle";
 import type { Series } from "@/lib/series-api";
 import { localizeSingleGenre } from "@/lib/localization";
 
@@ -81,7 +82,7 @@ function SeriesCardImpl({ series }: SeriesCardProps) {
 
       <div className="p-3">
         <h3 className="font-medium text-white text-sm truncate group-hover:text-brand-red transition-colors">
-          {series.title}
+          <MediaTitle title={series.title} />
         </h3>
         <div className="flex items-center gap-2 mt-1 text-xs text-gray-400 flex-wrap">
           <span>{series.year}</span>
