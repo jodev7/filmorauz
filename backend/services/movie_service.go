@@ -439,6 +439,11 @@ func (s *MovieService) ListMovies(genre string, page, limit int) ([]models.Movie
 	return s.repo.List(genre, page, limit)
 }
 
+// ListMostViewed returns the most-viewed published movies.
+func (s *MovieService) ListMostViewed(limit int) ([]models.Movie, error) {
+	return s.repo.ListMostViewed(limit)
+}
+
 // ListTopRated returns the highest-rated published movies.
 func (s *MovieService) ListTopRated(limit int) ([]models.Movie, error) {
 	return s.repo.ListTopRated(limit)

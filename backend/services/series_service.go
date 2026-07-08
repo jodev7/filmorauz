@@ -271,6 +271,11 @@ func (s *SeriesService) CountSeries(genre string) (int64, error) {
 	return s.seriesRepo.CountList(genre)
 }
 
+// ListMostViewed returns the most-viewed published series (homepage Top 10).
+func (s *SeriesService) ListMostViewed(limit int) ([]models.Series, error) {
+	return s.seriesRepo.ListMostViewed(limit)
+}
+
 // UpdateSeries updates a series
 func (s *SeriesService) UpdateSeries(id primitive.ObjectID, input *models.SeriesInput) (*models.Series, error) {
 	series, err := s.seriesRepo.GetByID(id)

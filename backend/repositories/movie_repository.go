@@ -723,6 +723,49 @@ func (r *MovieRepository) ListTopRated(limit int) ([]models.Movie, error) {
 	return movies, nil
 }
 
+// ListMostViewed returns published movies sorted by view count, highest first.
+// Used to build the homepage "Weekly Top 10" widget.
+func (r *MovieRepository) ListMostViewed(limit int) ([]models.Movie, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if limit < 1 || limit > 50 {
+		limit = 12
+	}
+
+	filter := bson.M{
+		"$or": []bson.M{
+			{"is_published": true},
+			{"is_published": bson.M{"$exists": false}},
+		},
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "views", Value: -1}, {Key: "_id", Value: 1}}).
+		SetLimit(int64(limit))
+
+	cursor, err := r.col.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("find most viewed movies: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var rawDocs []bson.M
+	if err := cursor.All(ctx, &rawDocs); err != nil {
+		return nil, fmt.Errorf("decode most viewed movies: %w", err)
+	}
+
+	movies := make([]models.Movie, 0, len(rawDocs))
+	for _, doc := range rawDocs {
+		movie, err := normalizeMovieFromBSON(doc)
+		if err != nil {
+			continue
+		}
+		movies = append(movies, *movie)
+	}
+	return movies, nil
+}
+
 // ListByGenre returns published movies for a single genre, newest first.
 func (r *MovieRepository) ListByGenre(genre string, limit int) ([]models.Movie, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

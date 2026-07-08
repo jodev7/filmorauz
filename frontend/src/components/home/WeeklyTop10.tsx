@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Trophy, Medal, Eye, Tv, Film } from "lucide-react";
 import { WeeklyTopItem } from "@/lib/api";
 import OptimizedImage from "@/components/OptimizedImage";
+import MediaTitle from "@/components/MediaTitle";
 import SectionHeader from "./SectionHeader";
 
 interface WeeklyTop10Props {
@@ -109,7 +110,7 @@ export default function WeeklyTop10({ items }: WeeklyTop10Props) {
                 </div>
 
                 <h3 className="mt-2 line-clamp-1 w-full break-words text-center text-xs sm:text-sm font-semibold tracking-tight text-white">
-                  {item.title}
+                  <MediaTitle title={item.title} />
                 </h3>
                 {item.views > 0 && (
                   <span className="mt-0.5 flex items-center gap-1 text-[10px] sm:text-xs text-gray-400">
@@ -155,7 +156,7 @@ export default function WeeklyTop10({ items }: WeeklyTop10Props) {
                 </div>
                 <div className="min-w-0 flex-1">
                   <h3 className="line-clamp-2 break-words text-sm font-medium leading-tight text-white group-hover:text-orange-400 transition-colors">
-                    {item.title}
+                    <MediaTitle title={item.title} />
                   </h3>
                   <span className="mt-0.5 flex items-center gap-2 text-xs text-gray-400">
                     <span className="flex items-center gap-0.5">

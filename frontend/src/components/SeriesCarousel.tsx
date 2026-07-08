@@ -4,6 +4,7 @@ import { memo, useRef, useState, useEffect } from "react";
 import { ChevronRight, ChevronLeft } from "lucide-react";
 import { Series } from "@/lib/series-api";
 import SeriesCard from "@/components/SeriesCard";
+import { useDragScroll } from "@/lib/use-drag-scroll";
 
 interface SeriesCarouselProps {
   series: Series[];
@@ -11,6 +12,7 @@ interface SeriesCarouselProps {
 
 function SeriesCarouselImpl({ series }: SeriesCarouselProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const dragHandlers = useDragScroll(scrollRef);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(true);
 
@@ -67,7 +69,8 @@ function SeriesCarouselImpl({ series }: SeriesCarouselProps) {
       {/* Cards Container */}
       <div
         ref={scrollRef}
-        className="flex gap-4 overflow-x-auto scrollbar-hide pb-2 px-2"
+        {...dragHandlers}
+        className="flex gap-4 overflow-x-auto scrollbar-hide pb-2 px-2 sm:cursor-grab sm:active:cursor-grabbing"
         style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
         {series.map((s) => (

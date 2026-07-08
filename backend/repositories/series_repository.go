@@ -467,6 +467,46 @@ func (r *SeriesRepository) List(limit, skip int, genre string) ([]models.Series,
 	return seriesList, nil
 }
 
+// ListMostViewed returns published series sorted by view count, highest first.
+// Lean fetch (no genre filter / rating summaries) for the homepage Top 10.
+func (r *SeriesRepository) ListMostViewed(limit int) ([]models.Series, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if limit < 1 || limit > 50 {
+		limit = 12
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "views", Value: -1}, {Key: "_id", Value: 1}}).
+		SetLimit(int64(limit))
+
+	publicFilter := bson.M{
+		"$or": []bson.M{
+			{"is_published": true},
+			{"is_published": bson.M{"$exists": false}},
+		},
+	}
+
+	cursor, err := r.seriesCol.Find(ctx, publicFilter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var seriesList []models.Series
+	if err := cursor.All(ctx, &seriesList); err != nil {
+		return nil, err
+	}
+	if seriesList == nil {
+		seriesList = []models.Series{}
+	}
+	for i := range seriesList {
+		seriesList[i].Genre = normalizeSeriesGenres(seriesList[i].Genre)
+	}
+	return seriesList, nil
+}
+
 // CountList returns the number of publicly-visible series matching the same
 // filter as List (optionally narrowed by genre). Used for paginating /series.
 func (r *SeriesRepository) CountList(genre string) (int64, error) {

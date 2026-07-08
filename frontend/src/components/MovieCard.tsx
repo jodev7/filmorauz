@@ -8,6 +8,7 @@ import { getIsNew, formatRelativeAddedTime, formatDuration } from "@/lib/movie-u
 import { isMoviePremium, PremiumBadge } from "./PremiumComponents";
 import { getLocalizedTitle, getLocalizedGenres } from "@/lib/localization";
 import OptimizedImage from "./OptimizedImage";
+import MediaTitle from "./MediaTitle";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 
 interface Props {
@@ -144,7 +145,7 @@ function MovieCardImpl({ movie, priority = false, showSkeleton = true }: Props) 
         <h3 className={`font-semibold text-xs sm:text-sm leading-tight line-clamp-2 break-words text-white group-hover:transition-colors ${
           premium ? "group-hover:text-yellow-400" : "group-hover:text-orange-500"
         }`}>
-          {cardTitle}
+          <MediaTitle title={cardTitle} />
         </h3>
         {episodeSubtitle && (
           <p className="mt-1 text-[11px] leading-tight text-zinc-400 line-clamp-2">

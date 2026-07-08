@@ -22,6 +22,7 @@ import { useI18n } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { isMoviePremium, isUserPremium, PremiumLockOverlay, PremiumButton } from "@/components/PremiumComponents";
 import { getLocalizedTitle, getLocalizedDescription, getLocalizedGenres, getLocalizedCountry } from "@/lib/localization";
+import MediaTitle from "@/components/MediaTitle";
 import { formatDuration } from "@/lib/movie-utils";
 import type { EpisodeLink, SeasonWithEpisodes } from "@/lib/series-api";
 import { buildBestEpisodePath } from "@/lib/content-routes";
@@ -272,7 +273,7 @@ function RecommendationsRow({ movies }: { movies: Movie[] }) {
               )}
             </div>
             <p className="text-white text-xs mt-2 line-clamp-2 group-hover:text-brand-red transition-colors">
-              {getLocalizedTitle(movie)}
+              <MediaTitle title={getLocalizedTitle(movie)} />
             </p>
           </a>
           );
@@ -657,7 +658,7 @@ export default function WatchPageClient({
             </Link>
             <div className="h-4 sm:h-5 w-px bg-brand-border" />
             <h1 className="font-display text-sm sm:text-xl text-white tracking-wide truncate max-w-[200px] sm:max-w-none">
-              {localizedTitle}
+              <MediaTitle title={localizedTitle} />
             </h1>
             <div className="flex items-center gap-3 sm:gap-4 ml-auto text-xs text-gray-500 shrink-0">
               {movie.year && (

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Play } from "lucide-react";
 import { Movie } from "@/lib/api";
 import MediaImage from "@/components/MediaImage";
+import MediaTitle from "@/components/MediaTitle";
 import { formatDuration } from "@/lib/movie-utils";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 
@@ -155,7 +156,7 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
 
                   {/* Title */}
                   <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight text-white leading-[1.05] mb-4 [text-shadow:0_2px_30px_rgba(0,0,0,0.5)]">
-                    {movie.title}
+                    <MediaTitle title={movie.title} />
                   </h1>
 
                   {/* Description */}
