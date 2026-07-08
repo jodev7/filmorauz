@@ -24,7 +24,7 @@ export default function MovieCode({ code, label = "🎟 Kino kodi:" }: MovieCode
   if (!code) return null;
 
   return (
-    <div className="inline-flex items-center gap-2 bg-brand-card border border-brand-border rounded-lg px-3 py-2">
+    <div className="inline-flex items-center gap-2 glass-card border border-white/10 rounded-lg px-3 py-2">
       <span className="text-sm text-gray-400">
         {label}
       </span>

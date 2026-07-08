@@ -92,10 +92,10 @@ export default function SeasonList({
     <div className="space-y-4">
       {/* Header with totals */}
       <div className="flex items-center gap-4 text-gray-400 text-sm mb-6">
-        <span className="bg-brand-card px-3 py-1 rounded-full border border-brand-border">
+        <span className="glass-card px-3 py-1 rounded-full border border-white/10">
           {safeSeasons.length} {safeSeasons.length === 1 ? "fasl" : "fasl"}
         </span>
-        <span className="bg-brand-card px-3 py-1 rounded-full border border-brand-border">
+        <span className="glass-card px-3 py-1 rounded-full border border-white/10">
           {totalEpisodes} {totalEpisodes === 1 ? "epizod" : "epizod"}
         </span>
       </div>
@@ -110,8 +110,8 @@ export default function SeasonList({
         return (
           <div 
             key={season.id} 
-            className={`bg-brand-card rounded-lg border overflow-hidden transition-colors ${
-              isCurrentSeason ? "border-brand-red" : "border-brand-border"
+            className={`glass-card rounded-lg border overflow-hidden transition-colors ${
+              isCurrentSeason ? "border-brand-red" : "border-white/10"
             }`}
           >
             {/* Season header - clickable */}
@@ -148,7 +148,7 @@ export default function SeasonList({
 
             {/* Episodes grid - collapsible */}
             {isOpen && (
-              <div className="border-t border-brand-border">
+              <div className="border-t border-white/10">
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 p-4">
                   {episodes.map((episode) => {
                     const isActive = episode.id === currentEpisodeId;
@@ -171,7 +171,7 @@ export default function SeasonList({
                         className={`group block rounded-lg overflow-hidden transition-all ${
                           isActive 
                             ? "bg-brand-red/20 border border-brand-red" 
-                            : "bg-brand-dark hover:bg-brand-dark/80 border border-transparent hover:border-brand-border"
+                            : "bg-brand-dark hover:bg-brand-dark/80 border border-transparent hover:border-white/10"
                         }`}
                       >
                         {/* Thumbnail */}

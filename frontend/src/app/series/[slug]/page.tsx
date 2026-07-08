@@ -163,7 +163,7 @@ export default async function SeriesDetailPage({ params }: Props) {
             {/* Poster */}
             <div className="shrink-0">
               {series.poster_url && (
-                <div className="relative w-36 sm:w-44 md:w-48 lg:w-56 aspect-[2/3] rounded-xl shadow-2xl border border-brand-border overflow-hidden">
+                <div className="relative w-36 sm:w-44 md:w-48 lg:w-56 aspect-[2/3] rounded-xl shadow-2xl border border-white/10 overflow-hidden">
                   <MediaImage
                     src={series.poster_url}
                     alt={series.title}
@@ -223,7 +223,7 @@ export default async function SeriesDetailPage({ params }: Props) {
                     <Link
                       key={g}
                       href={`/series?genre=${encodeURIComponent(g.toLowerCase())}`}
-                      className="text-xs sm:text-sm bg-brand-card border border-brand-border text-gray-300 px-3 py-1 rounded-full hover:border-brand-red hover:text-brand-red transition-colors"
+                      className="text-xs sm:text-sm glass-card border border-white/10 text-gray-300 px-3 py-1 rounded-full hover:border-brand-red hover:text-brand-red transition-colors"
                     >
                       {localizeSingleGenre(g)}
                     </Link>

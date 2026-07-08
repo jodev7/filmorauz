@@ -120,14 +120,14 @@ export default function NotificationsPage() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-brand-dark flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin w-10 h-10 border-3 border-brand-red border-t-transparent rounded-full" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-brand-dark">
+    <div className="min-h-screen">
       <div className="max-w-3xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
@@ -144,7 +144,7 @@ export default function NotificationsPage() {
           {unreadCount > 0 && (
             <button
               onClick={handleMarkAllAsRead}
-              className="flex items-center gap-2 px-4 py-2 bg-brand-card hover:bg-brand-border text-white rounded-lg transition-colors"
+              className="flex items-center gap-2 px-4 py-2 glass-card hover:bg-brand-border text-white rounded-lg transition-colors"
             >
               <CheckCheck className="w-4 h-4" />
               <span>Hammasini o'qilgan deb belgilash</span>
@@ -159,7 +159,7 @@ export default function NotificationsPage() {
             className={`px-4 py-2 rounded-lg transition-colors ${
               filter === "all"
                 ? "bg-brand-red text-white"
-                : "bg-brand-card text-gray-400 hover:text-white"
+                : "glass-card text-gray-400 hover:text-white"
             }`}
           >
             Barchasi ({total})
@@ -169,7 +169,7 @@ export default function NotificationsPage() {
             className={`px-4 py-2 rounded-lg transition-colors ${
               filter === "unread"
                 ? "bg-brand-red text-white"
-                : "bg-brand-card text-gray-400 hover:text-white"
+                : "glass-card text-gray-400 hover:text-white"
             }`}
           >
             O'qilmagan ({unreadCount})
@@ -182,7 +182,7 @@ export default function NotificationsPage() {
             <div className="animate-spin w-10 h-10 border-3 border-brand-red border-t-transparent rounded-full" />
           </div>
         ) : filteredNotifications.length === 0 ? (
-          <div className="bg-brand-card border border-brand-border rounded-xl p-12 text-center">
+          <div className="glass-card border border-white/10 rounded-xl p-12 text-center">
             <Bell className="w-16 h-16 text-gray-600 mx-auto mb-4" />
             <h2 className="text-xl text-white mb-2">
               {filter === "unread" ? "O'qilmagan bildirishnomalar yo'q" : "Hozircha bildirishnomalar yo'q"}
@@ -194,13 +194,13 @@ export default function NotificationsPage() {
             </p>
           </div>
         ) : (
-          <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden">
+          <div className="glass-card border border-white/10 rounded-xl overflow-hidden">
             {filteredNotifications.map((notification, index) => (
               <div
                 key={notification.id}
                 className={`flex items-start gap-4 p-4 hover:bg-brand-dark/50 cursor-pointer transition-colors ${
                   !notification.is_read ? "bg-brand-dark/30" : ""
-                } ${index !== filteredNotifications.length - 1 ? "border-b border-brand-border/50" : ""}`}
+                } ${index !== filteredNotifications.length - 1 ? "border-b border-white/5" : ""}`}
                 onClick={() => handleNotificationClick(notification)}
               >
                 {/* Icon */}

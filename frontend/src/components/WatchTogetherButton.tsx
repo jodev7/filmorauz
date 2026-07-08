@@ -99,7 +99,7 @@ export default function WatchTogetherButton({ contentType, contentID, className 
         disabled={busy}
         className={
           className ||
-          "px-4 py-2 bg-brand-card border border-brand-border hover:border-brand-red rounded-lg flex items-center gap-2 text-white transition-colors disabled:opacity-50"
+          "px-4 py-2 glass-card border border-white/10 hover:border-brand-red rounded-lg flex items-center gap-2 text-white transition-colors disabled:opacity-50"
         }
       >
         {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Users className="w-4 h-4" />}
@@ -112,10 +112,10 @@ export default function WatchTogetherButton({ contentType, contentID, className 
           onClick={() => !busy && setOpen(false)}
         >
           <div
-            className="bg-brand-card border border-brand-border rounded-xl w-full max-w-md overflow-hidden"
+            className="glass-card border border-white/10 rounded-xl w-full max-w-md overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-4 py-3 border-b border-brand-border flex items-center justify-between">
+            <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
               <h3 className="font-semibold">Birga ko&apos;rish room&apos;i</h3>
               <button onClick={() => !busy && setOpen(false)} className="text-gray-400 hover:text-white">
                 <X className="w-5 h-5" />
@@ -130,7 +130,7 @@ export default function WatchTogetherButton({ contentType, contentID, className 
                     className={`p-3 rounded-lg border text-left transition-colors ${
                       visibility === "private"
                         ? "border-brand-red bg-brand-red/10"
-                        : "border-brand-border hover:border-gray-500"
+                        : "border-white/10 hover:border-gray-500"
                     }`}
                   >
                     <div className="flex items-center gap-2 text-sm font-medium">
@@ -145,7 +145,7 @@ export default function WatchTogetherButton({ contentType, contentID, className 
                     className={`p-3 rounded-lg border text-left transition-colors ${
                       visibility === "public"
                         ? "border-brand-red bg-brand-red/10"
-                        : "border-brand-border hover:border-gray-500"
+                        : "border-white/10 hover:border-gray-500"
                     }`}
                   >
                     <div className="flex items-center gap-2 text-sm font-medium">
@@ -209,10 +209,10 @@ export default function WatchTogetherButton({ contentType, contentID, className 
           onClick={() => setQuotaPopup(false)}
         >
           <div
-            className="bg-brand-card border border-brand-red rounded-2xl w-full max-w-md overflow-hidden shadow-2xl"
+            className="glass-card border border-brand-red rounded-2xl w-full max-w-md overflow-hidden shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-5 py-4 border-b border-brand-border flex items-center justify-between">
+            <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Crown className="w-5 h-5 text-yellow-400" />
                 <h3 className="font-semibold text-white">Kunlik limit tugadi</h3>
@@ -244,7 +244,7 @@ export default function WatchTogetherButton({ contentType, contentID, className 
                 </Link>
                 <button
                   onClick={() => setQuotaPopup(false)}
-                  className="px-4 py-2.5 bg-brand-dark border border-brand-border rounded-lg text-sm text-gray-300"
+                  className="px-4 py-2.5 bg-brand-dark border border-white/10 rounded-lg text-sm text-gray-300"
                 >
                   Keyinroq
                 </button>
@@ -267,10 +267,10 @@ export default function WatchTogetherButton({ contentType, contentID, className 
           onClick={() => setExistingRoomID(null)}
         >
           <div
-            className="bg-brand-card border border-brand-red rounded-2xl w-full max-w-md overflow-hidden shadow-2xl"
+            className="glass-card border border-brand-red rounded-2xl w-full max-w-md overflow-hidden shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-5 py-4 border-b border-brand-border flex items-center justify-between">
+            <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Users className="w-5 h-5 text-brand-red" />
                 <h3 className="font-semibold text-white">Sizda allaqachon ochiq room bor</h3>
@@ -296,7 +296,7 @@ export default function WatchTogetherButton({ contentType, contentID, className 
                 )}
                 <button
                   onClick={() => setExistingRoomID(null)}
-                  className="px-4 py-2.5 bg-brand-dark border border-brand-border rounded-lg text-sm text-gray-300"
+                  className="px-4 py-2.5 bg-brand-dark border border-white/10 rounded-lg text-sm text-gray-300"
                 >
                   Yopish
                 </button>

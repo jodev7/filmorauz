@@ -328,7 +328,7 @@ export default function UserPage() {
 
   // Get dynamic profile card classes
   const getProfileCardClasses = () => {
-    if (!displayIsPremium) return 'bg-brand-card border-brand-border';
+    if (!displayIsPremium) return 'glass-card border-white/10';
     if (isGoldDarkTheme) return 'bg-gradient-to-br from-[#12121A] via-[#151520] to-[#1a1525] border-yellow-500/40 shadow-[0_0_60px_rgba(234,179,8,0.15)]';
     if (isPurpleGradient) return 'bg-gradient-to-br from-[#12121A] via-[#15152A] to-[#1a1535] border-purple-500/40 shadow-[0_0_60px_rgba(168,85,247,0.15)]';
     return 'bg-gradient-to-br from-[#12121A] via-[#151520] to-[#1a1525] border-yellow-500/30 shadow-[0_0_40px_rgba(234,179,8,0.1)]';
@@ -456,7 +456,7 @@ export default function UserPage() {
         <main className="min-h-screen pt-20 sm:pt-24">
           <div className="max-w-7xl mx-auto px-4">
             <div className="py-24 text-center">
-              <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-brand-card border border-brand-border mb-6">
+              <div className="inline-flex items-center justify-center w-20 h-20 rounded-full glass-card border border-white/10 mb-6">
                 <UserIcon className="w-10 h-10 text-gray-500" />
               </div>
               <h1 className="font-display text-3xl sm:text-4xl text-white mb-4 tracking-wide">
@@ -490,7 +490,7 @@ export default function UserPage() {
           <div className={`relative rounded-2xl border p-8 mb-8 overflow-hidden text-center premium-card-hover ${
             displayIsPremium 
               ? 'bg-gradient-to-br from-[#12121A] via-[#151520] to-[#1a1525] border-yellow-500/40 shadow-[0_0_60px_rgba(234,179,8,0.15)]' 
-              : 'bg-brand-card border-brand-border'
+              : 'glass-card border-white/10'
           }`}>
             {/* Premium decorative glow effects - pointer-events: none to not block clicks */}
             {displayIsPremium && (
@@ -594,7 +594,7 @@ export default function UserPage() {
                     type="text"
                     value={editedName}
                     onChange={(e) => setEditedName(e.target.value)}
-                    className="bg-brand-dark border border-brand-border rounded-lg px-3 py-1.5 text-white text-xl font-body text-center focus:outline-none focus:border-brand-red max-w-[220px]"
+                    className="bg-brand-dark border border-white/10 rounded-lg px-3 py-1.5 text-white text-xl font-body text-center focus:outline-none focus:border-brand-red max-w-[220px]"
                     placeholder="Ismingizni kiriting"
                   />
                   <button
@@ -628,7 +628,7 @@ export default function UserPage() {
                     className={`p-1.5 rounded-lg transition-colors z-10 ${
                       displayIsPremium 
                         ? 'bg-yellow-500/20 border border-yellow-500/30 hover:border-yellow-500/50 text-yellow-400 hover:text-yellow-300' 
-                        : 'bg-brand-dark/50 border border-brand-border/50 hover:border-brand-red/50 text-gray-400 hover:text-white'
+                        : 'bg-brand-dark/50 border border-white/5 hover:border-brand-red/50 text-gray-400 hover:text-white'
                     }`}
                     title="Ismni o&apos;zgartirish"
                   >
@@ -693,11 +693,11 @@ export default function UserPage() {
 
             {/* Quick stats */}
             <div className="flex items-center justify-center gap-4">
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-brand-dark/50 rounded-lg border border-brand-border/50">
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-brand-dark/50 rounded-lg border border-white/5">
                 <Heart size={14} className="text-brand-red" />
                 <span className="text-sm text-gray-300">{favorites.length} Sevimli</span>
               </div>
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-brand-dark/50 rounded-lg border border-brand-border/50">
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-brand-dark/50 rounded-lg border border-white/5">
                 <History size={14} className="text-blue-500" />
                 <span className="text-sm text-gray-300">{watchHistory.length} Tarix</span>
               </div>
@@ -706,7 +706,7 @@ export default function UserPage() {
             {/* Suggestion button */}
             <button
               onClick={() => setSuggestionModalOpen(true)}
-              className="mt-4 w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-brand-dark hover:bg-brand-border rounded-lg border border-brand-border text-gray-300 hover:text-white transition-colors"
+              className="mt-4 w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-brand-dark hover:bg-brand-border rounded-lg border border-white/10 text-gray-300 hover:text-white transition-colors"
             >
               <Lightbulb size={18} className="text-yellow-400" />
               Kino tavsiya qilish
@@ -717,7 +717,7 @@ export default function UserPage() {
           <div className={`rounded-2xl border p-6 mb-8 ${
             displayIsPremium 
               ? 'bg-gradient-to-br from-[#12121A] via-[#151520] to-[#1a1525] border-yellow-500/20' 
-              : 'bg-brand-card border-brand-border'
+              : 'glass-card border-white/10'
           }`}>
             <h3 className="font-display text-lg text-white mb-4 flex items-center gap-2">
               <Shield size={16} className={displayIsPremium ? 'text-yellow-500' : 'text-gray-400'} />
@@ -731,7 +731,7 @@ export default function UserPage() {
                   ? isSuperAdmin 
                     ? 'bg-purple-500/10 border-purple-500/30' 
                     : 'bg-brand-red/10 border-brand-red/30'
-                  : 'bg-brand-dark/50 border-brand-border/50'
+                  : 'bg-brand-dark/50 border-white/5'
               }`}>
                 <div className={`flex items-center gap-2 text-xs uppercase tracking-wide mb-1 ${
                   isAdmin ? (isSuperAdmin ? 'text-purple-400' : 'text-brand-red') : 'text-gray-500'
@@ -751,7 +751,7 @@ export default function UserPage() {
               </div>
 
               {/* Ro'yxatdan o'tgan */}
-              <div className="p-3 bg-brand-dark/50 rounded-xl border border-brand-border/50">
+              <div className="p-3 bg-brand-dark/50 rounded-xl border border-white/5">
                 <div className="flex items-center gap-2 text-gray-500 text-xs uppercase tracking-wide mb-1">
                   <Calendar size={12} />
                   Ro&apos;yxatdan o&apos;tgan
@@ -762,7 +762,7 @@ export default function UserPage() {
               </div>
 
               {/* Oxirgi kirish */}
-              <div className="p-3 bg-brand-dark/50 rounded-xl border border-brand-border/50">
+              <div className="p-3 bg-brand-dark/50 rounded-xl border border-white/5">
                 <div className="flex items-center gap-2 text-gray-500 text-xs uppercase tracking-wide mb-1">
                   <Clock size={12} />
                   Oxirgi kirish
@@ -774,7 +774,7 @@ export default function UserPage() {
 
               {/* Telegram */}
               {displayUser?.username && (
-                <div className="p-3 bg-brand-dark/50 rounded-xl border border-brand-border/50">
+                <div className="p-3 bg-brand-dark/50 rounded-xl border border-white/5">
                   <div className="flex items-center gap-2 text-gray-500 text-xs uppercase tracking-wide mb-1">
                     <Send size={12} />
                     Telegram
@@ -786,7 +786,7 @@ export default function UserPage() {
               )}
 
               {/* Telegram ID */}
-              <div className="p-3 bg-brand-dark/50 rounded-xl border border-brand-border/50">
+              <div className="p-3 bg-brand-dark/50 rounded-xl border border-white/5">
                 <div className="flex items-center gap-2 text-gray-500 text-xs uppercase tracking-wide mb-1">
                   <Hash size={12} />
                   ID
@@ -901,7 +901,7 @@ export default function UserPage() {
             </div>
 
             {/* Wallet balance row */}
-            <div className="mt-4 flex items-center justify-between p-4 bg-brand-dark/60 rounded-xl border border-brand-border">
+            <div className="mt-4 flex items-center justify-between p-4 bg-brand-dark/60 rounded-xl border border-white/10">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-lg bg-yellow-500/10 flex items-center justify-center">
                   <Star size={16} className="text-yellow-400" />
@@ -961,7 +961,7 @@ export default function UserPage() {
                             className={`px-4 py-2 rounded-lg border transition-all ${
                               selectedFrame === frame
                                 ? 'bg-yellow-500/20 border-yellow-500/50 text-yellow-400'
-                                : 'bg-brand-dark/50 border-brand-border/50 text-gray-400 hover:border-yellow-500/30'
+                                : 'bg-brand-dark/50 border-white/5 text-gray-400 hover:border-yellow-500/30'
                             }`}
                           >
                             {frame === "none" ? "Yo'q" : "🔶 Oltin"}
@@ -984,7 +984,7 @@ export default function UserPage() {
                             className={`px-4 py-2 rounded-lg border transition-all ${
                               selectedTheme === theme.value
                                 ? 'bg-yellow-500/20 border-yellow-500/50 text-yellow-400'
-                                : 'bg-brand-dark/50 border-brand-border/50 text-gray-400 hover:border-yellow-500/30'
+                                : 'bg-brand-dark/50 border-white/5 text-gray-400 hover:border-yellow-500/30'
                             }`}
                           >
                             {theme.label}
@@ -1010,7 +1010,7 @@ export default function UserPage() {
                                 ? grad.value === "purple"
                                   ? 'bg-purple-500/20 border-purple-500/50 text-purple-400'
                                   : 'bg-yellow-500/20 border-yellow-500/50 text-yellow-400'
-                                : 'bg-brand-dark/50 border-brand-border/50 text-gray-400 hover:border-yellow-500/30'
+                                : 'bg-brand-dark/50 border-white/5 text-gray-400 hover:border-yellow-500/30'
                             }`}
                           >
                             {grad.label}
@@ -1039,7 +1039,7 @@ export default function UserPage() {
                   </div>
                   
                   {/* Privacy Section */}
-                  <div className="pt-4 border-t border-brand-border/30">
+                  <div className="pt-4 border-t border-white/5">
                     <h4 className="text-sm font-medium text-gray-300 flex items-center gap-2 mb-4">
                       <Lock size={14} className="text-yellow-500" />
                       Maxfiylik
@@ -1082,7 +1082,7 @@ export default function UserPage() {
           )}
 
           {/* Logout button */}
-          <div className="mt-8 pt-6 border-t border-brand-border">
+          <div className="mt-8 pt-6 border-t border-white/10">
             <button
               onClick={async () => {
                 await logout();
@@ -1152,7 +1152,7 @@ export default function UserPage() {
                 {favorites.length > 0 ? (
                   <MovieCarousel movies={favorites} />
                 ) : (
-                  <div className="py-10 text-center bg-brand-card/50 rounded-xl border border-brand-border/50">
+                  <div className="py-10 text-center glass-card rounded-xl border border-white/5">
                     <Heart className="w-8 h-8 text-gray-600 mx-auto mb-2" />
                     <p className="text-gray-500 text-sm">{t("user.noFavorites")}</p>
                     <p className="text-gray-600 text-xs mt-1">
@@ -1183,7 +1183,7 @@ export default function UserPage() {
                     movies={watchHistory.map((item) => item.movie || item)} 
                   />
                 ) : (
-                  <div className="py-10 text-center bg-brand-card/50 rounded-xl border border-brand-border/50">
+                  <div className="py-10 text-center glass-card rounded-xl border border-white/5">
                     <History className="w-8 h-8 text-gray-600 mx-auto mb-2" />
                     <p className="text-gray-500 text-sm">{t("user.noWatchHistory")}</p>
                     <p className="text-gray-600 text-xs mt-1">

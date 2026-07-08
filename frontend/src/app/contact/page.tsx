@@ -39,7 +39,7 @@ export default function ContactPage() {
   return (
     <>
       <Navbar />
-      <main className="min-h-screen pt-20 sm:pt-24 bg-brand-dark">
+      <main className="min-h-screen pt-20 sm:pt-24">
         <div className="max-w-3xl mx-auto px-4 py-10 sm:py-14">
           <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-white tracking-wider mb-6">
             Aloqa
@@ -48,7 +48,7 @@ export default function ContactPage() {
             Bizga savol, taklif yoki shikoyat bo&apos;lsa, Telegram orqali yozing.
           </p>
 
-          <div className="bg-brand-card/50 border border-brand-border rounded-2xl p-6 sm:p-8 mb-8">
+          <div className="glass-card border border-white/10 rounded-2xl p-6 sm:p-8 mb-8">
             <p className="text-gray-300 text-sm sm:text-base mb-4">
               Asosiy aloqa kanali — Telegram. Xabarlar kunlik rejimda
               ko&apos;rib chiqiladi.
@@ -73,7 +73,7 @@ export default function ContactPage() {
               return (
                 <div
                   key={topic.title}
-                  className="bg-brand-card/50 border border-brand-border rounded-2xl p-5 hover:border-brand-red/50 transition-colors"
+                  className="glass-card border border-white/10 rounded-2xl p-5 hover:border-brand-red/50 transition-colors"
                 >
                   <div className="inline-flex items-center justify-center w-10 h-10 rounded-lg bg-brand-red/15 text-brand-red mb-3">
                     <Icon size={18} />

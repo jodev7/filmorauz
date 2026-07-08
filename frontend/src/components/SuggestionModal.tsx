@@ -151,7 +151,7 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
       />
       <div className="flex items-center justify-center min-h-full p-4 sm:p-6">
         <div 
-          className="relative bg-brand-card border border-brand-border rounded-2xl p-6 w-full max-w-lg max-h-[calc(100vh-2rem)] sm:max-h-[90vh] overflow-y-auto shadow-2xl"
+          className="relative glass-strong rounded-2xl p-6 w-full max-w-lg max-h-[calc(100vh-2rem)] sm:max-h-[90vh] overflow-y-auto shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
           <button
@@ -187,7 +187,7 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
                     className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg border transition-colors ${
                       formData.type === "movie"
                         ? "bg-brand-red border-brand-red text-white"
-                        : "bg-brand-dark border-brand-border text-gray-400 hover:text-white"
+                        : "bg-brand-dark border-white/10 text-gray-400 hover:text-white"
                     }`}
                   >
                     <Film size={18} />
@@ -199,7 +199,7 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
                     className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg border transition-colors ${
                       formData.type === "series"
                         ? "bg-brand-red border-brand-red text-white"
-                        : "bg-brand-dark border-brand-border text-gray-400 hover:text-white"
+                        : "bg-brand-dark border-white/10 text-gray-400 hover:text-white"
                     }`}
                   >
                     <Tv size={18} />
@@ -216,7 +216,7 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
                   type="text"
                   value={formData.title}
                   onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                  className="w-full px-4 py-3 bg-brand-dark border border-brand-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
+                  className="w-full px-4 py-3 bg-brand-dark border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
                   placeholder="Kino nomini kiriting"
                   required
                 />
@@ -229,7 +229,7 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
                 <textarea
                   value={formData.message}
                   onChange={(e) => setFormData({ ...formData, message: e.target.value })}
-                  className="w-full px-4 py-3 bg-brand-dark border border-brand-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-brand-red resize-none"
+                  className="w-full px-4 py-3 bg-brand-dark border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-brand-red resize-none"
                   rows={3}
                   placeholder="Nima uchun bu kino/serialni tavsiya qilmoqchisiz?"
                   required
@@ -246,7 +246,7 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
                     type="url"
                     value={formData.source_url}
                     onChange={(e) => setFormData({ ...formData, source_url: e.target.value })}
-                    className="w-full pl-10 pr-4 py-3 bg-brand-dark border border-brand-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
+                    className="w-full pl-10 pr-4 py-3 bg-brand-dark border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
                     placeholder="https://..."
                   />
                 </div>
@@ -264,7 +264,7 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
                     <MediaImage
                       src={imagePreview}
                       alt="Preview"
-                      className="w-full max-h-48 object-contain rounded-lg border border-brand-border bg-brand-dark"
+                      className="w-full max-h-48 object-contain rounded-lg border border-white/10 bg-brand-dark"
                     />
                     <button
                       type="button"
@@ -275,7 +275,7 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
                     </button>
                   </div>
                 ) : (
-                  <label className="flex items-center justify-center w-full h-24 border-2 border-dashed border-brand-border rounded-lg cursor-pointer hover:border-brand-red/50 hover:bg-brand-dark/50 transition-colors">
+                  <label className="flex items-center justify-center w-full h-24 border-2 border-dashed border-white/10 rounded-lg cursor-pointer hover:border-brand-red/50 hover:bg-brand-dark/50 transition-colors">
                     <input
                       ref={fileInputRef}
                       type="file"

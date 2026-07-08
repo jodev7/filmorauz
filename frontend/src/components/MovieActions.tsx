@@ -102,7 +102,7 @@ export default function MovieActions({ movie }: MovieActionsProps) {
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors ${
             isFavorite 
               ? "bg-brand-red text-white" 
-              : "bg-brand-card border border-brand-border text-gray-300 hover:border-brand-red hover:text-brand-red"
+              : "glass-card border border-white/10 text-gray-300 hover:border-brand-red hover:text-brand-red"
           }`}
         >
           {isLoading || isInitialLoading ? (
@@ -118,7 +118,7 @@ export default function MovieActions({ movie }: MovieActionsProps) {
         <button
           onClick={handleToggleFavorite}
           disabled={true}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-card border border-brand-border text-gray-500 cursor-not-allowed opacity-50"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg glass-card border border-white/10 text-gray-500 cursor-not-allowed opacity-50"
         >
           <Heart size={16} />
           <span className="text-sm">{t("movie.addToFavorites")}</span>

@@ -107,7 +107,7 @@ export function PremiumLockOverlay({
     <div 
       className={`
         flex flex-col items-center justify-center gap-4
-        bg-brand-card/95 backdrop-blur-sm rounded-xl p-8
+        glass-card backdrop-blur-sm rounded-xl p-8
         border border-yellow-500/30
         shadow-[0_0_30px_rgba(234,179,8,0.1)]
         ${className}

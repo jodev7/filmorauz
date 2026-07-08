@@ -182,7 +182,7 @@ export default async function UserProfilePage({ params }: PageProps) {
           <div className={`relative rounded-2xl border p-8 mb-8 overflow-hidden text-center ${
             isPremiumUser 
               ? 'bg-gradient-to-br from-[#12121A] via-[#151520] to-[#1a1525] border-yellow-500/30 shadow-[0_0_40px_rgba(234,179,8,0.1)]' 
-              : 'bg-brand-card border-brand-border'
+              : 'glass-card border-white/10'
           }`}>
             {/* Premium decorative glow */}
             {isPremiumUser && (
@@ -281,7 +281,7 @@ export default async function UserProfilePage({ params }: PageProps) {
             <div className={`rounded-2xl border p-6 mb-8 ${
               isPremiumUser 
                 ? 'bg-gradient-to-br from-[#12121A] via-[#151520] to-[#1a1525] border-yellow-500/20' 
-                : 'bg-brand-card border-brand-border'
+                : 'glass-card border-white/10'
             }`}>
               <h3 className="font-display text-lg text-white mb-4 flex items-center gap-2">
                 <Shield size={16} className={isPremiumUser ? 'text-yellow-500' : 'text-gray-400'} />
@@ -294,7 +294,7 @@ export default async function UserProfilePage({ params }: PageProps) {
                     ? profileIsSuperAdmin 
                       ? 'bg-purple-500/10 border-purple-500/30' 
                       : 'bg-brand-red/10 border-brand-red/30'
-                    : 'bg-brand-dark/50 border-brand-border/50'
+                    : 'bg-brand-dark/50 border-white/5'
                 }`}>
                   <div className={`flex items-center gap-2 text-xs uppercase tracking-wide mb-1 ${
                     profileIsAdmin ? (profileIsSuperAdmin ? 'text-purple-400' : 'text-brand-red') : 'text-gray-500'
@@ -314,7 +314,7 @@ export default async function UserProfilePage({ params }: PageProps) {
                 </div>
 
                 {/* Ro'yxatdan o'tgan */}
-                <div className="p-3 bg-brand-dark/50 rounded-xl border border-brand-border/50">
+                <div className="p-3 bg-brand-dark/50 rounded-xl border border-white/5">
                   <div className="flex items-center gap-2 text-gray-500 text-xs uppercase tracking-wide mb-1">
                     <UserIcon size={12} />
                     Ro&apos;yxatdan o&apos;tgan
@@ -326,7 +326,7 @@ export default async function UserProfilePage({ params }: PageProps) {
 
                 {/* Telegram */}
                 {profile.username && (
-                  <div className="p-3 bg-brand-dark/50 rounded-xl border border-brand-border/50">
+                  <div className="p-3 bg-brand-dark/50 rounded-xl border border-white/5">
                     <div className="flex items-center gap-2 text-gray-500 text-xs uppercase tracking-wide mb-1">
                       <Send size={12} />
                       Telegram
@@ -338,7 +338,7 @@ export default async function UserProfilePage({ params }: PageProps) {
                 )}
 
                 {/* ID */}
-                <div className="p-3 bg-brand-dark/50 rounded-xl border border-brand-border/50">
+                <div className="p-3 bg-brand-dark/50 rounded-xl border border-white/5">
                   <div className="flex items-center gap-2 text-gray-500 text-xs uppercase tracking-wide mb-1">
                     <Hash size={12} />
                     ID
@@ -370,7 +370,7 @@ export default async function UserProfilePage({ params }: PageProps) {
                     {/* BUG FIX: Premium boshlangan - Only visible to profile OWNER or admin/superadmin */}
                     {(viewerIsOwner || viewerIsAdmin) && (
                       <>
-                        <div className="p-3 bg-brand-dark/50 rounded-xl border border-brand-border/50">
+                        <div className="p-3 bg-brand-dark/50 rounded-xl border border-white/5">
                           <div className="flex items-center gap-2 text-gray-500 text-xs uppercase tracking-wide mb-1">
                             <Calendar size={12} />
                             Boshlangan
@@ -381,7 +381,7 @@ export default async function UserProfilePage({ params }: PageProps) {
                         </div>
                         
                         {/* Premium tugaydi */}
-                        <div className="p-3 bg-brand-dark/50 rounded-xl border border-brand-border/50">
+                        <div className="p-3 bg-brand-dark/50 rounded-xl border border-white/5">
                           <div className="flex items-center gap-2 text-gray-500 text-xs uppercase tracking-wide mb-1">
                             <Clock size={12} />
                             Tugaydi
@@ -394,7 +394,7 @@ export default async function UserProfilePage({ params }: PageProps) {
                     )}
                   </>
                 ) : (
-                  <div className="p-3 bg-brand-dark/50 rounded-xl border border-brand-border/50">
+                  <div className="p-3 bg-brand-dark/50 rounded-xl border border-white/5">
                     <div className="flex items-center gap-2 text-gray-500 text-xs uppercase tracking-wide mb-1">
                       <Crown size={12} />
                       Premium holati

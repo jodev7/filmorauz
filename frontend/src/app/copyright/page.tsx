@@ -15,7 +15,7 @@ export default function CopyrightPage() {
   return (
     <>
       <Navbar />
-      <main className="min-h-screen pt-20 sm:pt-24 bg-brand-dark">
+      <main className="min-h-screen pt-20 sm:pt-24">
         <div className="max-w-3xl mx-auto px-4 py-10 sm:py-14">
           <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-white tracking-wider mb-6">
             Mualliflik huquqi
@@ -25,7 +25,7 @@ export default function CopyrightPage() {
           </p>
 
           <div className="space-y-6 text-gray-300 text-sm sm:text-base leading-relaxed">
-            <section className="bg-brand-card/50 border border-brand-border rounded-2xl p-5 sm:p-6">
+            <section className="glass-card border border-white/10 rounded-2xl p-5 sm:p-6">
               <h2 className="text-white font-semibold text-lg sm:text-xl mb-2">
                 Kontentga bo&apos;lgan huquqlar
               </h2>
@@ -38,7 +38,7 @@ export default function CopyrightPage() {
               </p>
             </section>
 
-            <section className="bg-brand-card/50 border border-brand-border rounded-2xl p-5 sm:p-6">
+            <section className="glass-card border border-white/10 rounded-2xl p-5 sm:p-6">
               <h2 className="text-white font-semibold text-lg sm:text-xl mb-2">
                 Sayt maqsadi
               </h2>
@@ -51,7 +51,7 @@ export default function CopyrightPage() {
               </p>
             </section>
 
-            <section className="bg-brand-card/50 border border-brand-border rounded-2xl p-5 sm:p-6">
+            <section className="glass-card border border-white/10 rounded-2xl p-5 sm:p-6">
               <h2 className="text-white font-semibold text-lg sm:text-xl mb-2">
                 Kontentni olib tashlash
               </h2>
@@ -68,7 +68,7 @@ export default function CopyrightPage() {
               </p>
             </section>
 
-            <section className="bg-brand-card/50 border border-brand-border rounded-2xl p-5 sm:p-6">
+            <section className="glass-card border border-white/10 rounded-2xl p-5 sm:p-6">
               <h2 className="text-white font-semibold text-lg sm:text-xl mb-3">
                 Murojaat
               </h2>

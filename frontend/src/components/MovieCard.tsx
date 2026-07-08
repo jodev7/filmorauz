@@ -71,9 +71,9 @@ function MovieCardImpl({ movie, priority = false, showSkeleton = true }: Props) 
   return (
     <Link
       href={href}
-      className={`movie-card group relative bg-[#12121a] rounded-2xl overflow-hidden border border-[#1e1e2e] transition-all duration-300 hover:-translate-y-1 hover:shadow-lg block h-full flex flex-col ${
-        premium 
-          ? "hover:border-yellow-500/40 hover:shadow-yellow-500/10" 
+      className={`movie-card group relative glass-card rounded-2xl overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:shadow-xl block h-full flex flex-col ${
+        premium
+          ? "hover:border-yellow-500/40 hover:shadow-yellow-500/10"
           : "hover:border-orange-500/30 hover:shadow-orange-500/10"
       }`}
       data-movie-id={movie.id}

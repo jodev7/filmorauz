@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import Logo from "@/components/Logo";
 import TelegramLoginModal from "@/components/TelegramLoginModal";
 import { useAuth } from "@/lib/auth-context";
 import { buyPremium, createPremiumStarsSession } from "@/lib/api";
@@ -330,7 +331,7 @@ export default function PremiumPage() {
   return (
     <>
       <Navbar />
-      <main className="min-h-screen pt-20 sm:pt-24 bg-brand-dark">
+      <main className="min-h-screen pt-20 sm:pt-24">
         {/* Hero Section */}
         <section className="relative overflow-hidden">
           {/* Background glow effects */}
@@ -345,8 +346,11 @@ export default function PremiumPage() {
             </div>
 
             {/* Title */}
-            <h1 className="font-display text-4xl sm:text-5xl md:text-6xl text-white mb-4 tracking-wider">
-              FILMORA<span className="text-brand-red">UZ</span> PREMIUM
+            <h1 className="mb-4 font-poppins font-semibold tracking-tight text-4xl sm:text-5xl md:text-6xl">
+              <Logo className="text-4xl sm:text-5xl md:text-6xl" />{" "}
+              <span className="bg-gradient-to-r from-yellow-400 to-amber-500 bg-clip-text text-transparent">
+                PREMIUM
+              </span>
             </h1>
 
             {/* Subtitle */}
@@ -380,7 +384,7 @@ export default function PremiumPage() {
                 )}
               </div>
             ) : requiresLogin ? (
-              <div className="inline-flex flex-col items-center gap-4 px-8 py-5 bg-brand-card/60 border border-brand-border rounded-2xl">
+              <div className="inline-flex flex-col items-center gap-4 px-8 py-5 glass-card border border-white/10 rounded-2xl">
                 <p className="text-sm text-gray-300">Premium olish uchun avval saytga kiring.</p>
                 <button
                   onClick={handleLoginRequired}
@@ -390,7 +394,7 @@ export default function PremiumPage() {
                 </button>
               </div>
             ) : requiresTelegramLink ? (
-              <div className="inline-flex flex-col items-center gap-4 px-8 py-5 bg-brand-card/60 border border-yellow-500/20 rounded-2xl">
+              <div className="inline-flex flex-col items-center gap-4 px-8 py-5 glass-card border border-yellow-500/20 rounded-2xl">
                 <p className="text-sm text-gray-300">Stars orqali premium olish uchun profilingizni Telegram bilan bog&apos;lang.</p>
                 <button
                   onClick={handleLoginRequired}
@@ -423,36 +427,36 @@ export default function PremiumPage() {
             {/* Birga ko'rish (room) comparison — Free vs Premium. Sits
                 inside the Features section so a user weighing the upgrade
                 immediately sees what changes for their movie-night flow. */}
-            <div className="mb-10 rounded-2xl border border-brand-border bg-brand-card/50 backdrop-blur-sm overflow-hidden">
-              <div className="px-5 py-4 border-b border-brand-border flex items-center gap-2">
+            <div className="mb-10 rounded-2xl border border-white/10 glass-card backdrop-blur-sm overflow-hidden">
+              <div className="px-5 py-4 border-b border-white/10 flex items-center gap-2">
                 <Users className="w-5 h-5 text-brand-red" />
                 <h3 className="font-semibold text-white">Birga ko&apos;rish (Watch Together) limitlari</h3>
               </div>
               <div className="grid grid-cols-3 text-sm">
-                <div className="px-4 py-2 text-xs uppercase tracking-wider text-gray-500 border-b border-brand-border">
+                <div className="px-4 py-2 text-xs uppercase tracking-wider text-gray-500 border-b border-white/10">
                   Imkoniyat
                 </div>
-                <div className="px-4 py-2 text-xs uppercase tracking-wider text-gray-500 border-b border-brand-border text-center">
+                <div className="px-4 py-2 text-xs uppercase tracking-wider text-gray-500 border-b border-white/10 text-center">
                   Free
                 </div>
-                <div className="px-4 py-2 text-xs uppercase tracking-wider text-brand-red border-b border-brand-border text-center font-semibold">
+                <div className="px-4 py-2 text-xs uppercase tracking-wider text-brand-red border-b border-white/10 text-center font-semibold">
                   Premium
                 </div>
                 {roomLimitRows.map((row, i) => (
                   <div key={row.label} className="contents">
-                    <div className={`px-4 py-3 text-gray-300 ${i < roomLimitRows.length - 1 ? "border-b border-brand-border/50" : ""}`}>
+                    <div className={`px-4 py-3 text-gray-300 ${i < roomLimitRows.length - 1 ? "border-b border-white/5" : ""}`}>
                       {row.label}
                     </div>
-                    <div className={`px-4 py-3 text-center text-gray-400 ${i < roomLimitRows.length - 1 ? "border-b border-brand-border/50" : ""}`}>
+                    <div className={`px-4 py-3 text-center text-gray-400 ${i < roomLimitRows.length - 1 ? "border-b border-white/5" : ""}`}>
                       {row.free}
                     </div>
-                    <div className={`px-4 py-3 text-center text-brand-red font-medium ${i < roomLimitRows.length - 1 ? "border-b border-brand-border/50" : ""}`}>
+                    <div className={`px-4 py-3 text-center text-brand-red font-medium ${i < roomLimitRows.length - 1 ? "border-b border-white/5" : ""}`}>
                       {row.premium}
                     </div>
                   </div>
                 ))}
               </div>
-              <p className="px-5 py-3 text-[11px] text-gray-500 border-t border-brand-border bg-black/20">
+              <p className="px-5 py-3 text-[11px] text-gray-500 border-t border-white/10 bg-black/20">
                 Free hisobda kunlik 3 room limiti tugasa, &quot;Birga ko&apos;rish&quot;
                 tugmasi cheklov xabarini ko&apos;rsatadi. Premium hisobda esa
                 kuniga ochiladigan roomlar soni cheklanmagan.
@@ -463,7 +467,7 @@ export default function PremiumPage() {
               {features.map((feature, index) => (
                 <div
                   key={index}
-                  className="group relative p-6 bg-brand-card/50 backdrop-blur-sm border border-brand-border rounded-2xl hover:border-brand-red/50 transition-all duration-300 hover:bg-brand-card/70"
+                  className="group relative p-6 glass-card backdrop-blur-sm border border-white/10 rounded-2xl hover:border-brand-red/50 transition-all duration-300 hover:glass-card"
                 >
                   {/* Glow effect on hover */}
                   <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-brand-red/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -490,7 +494,7 @@ export default function PremiumPage() {
         <section id="telegram-stars" className="py-12 sm:py-16 scroll-mt-28">
           <div className="max-w-6xl mx-auto px-4">
             {requiresLogin && (
-              <div className="max-w-2xl mx-auto mb-8 rounded-2xl border border-brand-border bg-brand-card/50 p-5 text-center">
+              <div className="max-w-2xl mx-auto mb-8 rounded-2xl border border-white/10 glass-card p-5 text-center">
                 <p className="text-white font-medium mb-3">Premium olish uchun avval saytga kiring.</p>
                 <button
                   onClick={handleLoginRequired}
@@ -556,7 +560,7 @@ export default function PremiumPage() {
               {starsPackages.map((pkg) => (
                 <div
                   key={pkg.id}
-                  className="relative rounded-2xl p-6 bg-brand-card/50 border border-brand-border hover:border-yellow-500/50 transition-all duration-300"
+                  className="relative rounded-2xl p-6 glass-card border border-white/10 hover:border-yellow-500/50 transition-all duration-300"
                 >
                   {pkg.badge && (
                     <div className="absolute -top-3 right-4 px-3 py-1 rounded-full text-xs font-bold bg-gradient-to-r from-green-500 to-emerald-600 text-white">
@@ -604,7 +608,7 @@ export default function PremiumPage() {
             </p>
 
             {requiresLogin && (
-              <div className="max-w-2xl mx-auto mb-8 rounded-2xl border border-brand-border bg-brand-card/50 p-5 text-center">
+              <div className="max-w-2xl mx-auto mb-8 rounded-2xl border border-white/10 glass-card p-5 text-center">
                 <p className="text-white font-medium mb-3">Premium olish uchun avval saytga kiring.</p>
                 <button
                   onClick={handleLoginRequired}
@@ -617,7 +621,7 @@ export default function PremiumPage() {
 
             {/* Wallet balance card */}
             {isLoggedIn && (
-              <div id="manual-topup-card" className="max-w-md mx-auto mb-10 p-5 bg-brand-card/60 border border-brand-border rounded-2xl flex items-center justify-between gap-4">
+              <div id="manual-topup-card" className="max-w-md mx-auto mb-10 p-5 glass-card border border-white/10 rounded-2xl flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-yellow-500/20 to-amber-500/20 flex items-center justify-center">
                     <Wallet className="w-5 h-5 text-yellow-400" />
@@ -664,7 +668,7 @@ export default function PremiumPage() {
                     className={`relative rounded-2xl p-6 transition-all duration-300 ${
                       isHighlighted
                         ? 'bg-gradient-to-br from-[#1a1a24] to-[#12121A] border-2 border-brand-red shadow-[0_0_30px_rgba(249,115,22,0.2)] scale-[1.02]'
-                        : 'bg-brand-card/50 border border-brand-border hover:border-brand-red/50'
+                        : 'glass-card border border-white/10 hover:border-brand-red/50'
                     }`}
                   >
                     {/* Badge */}
@@ -712,7 +716,7 @@ export default function PremiumPage() {
                     </div>
 
                     {/* Divider */}
-                    <div className="border-t border-brand-border/50 my-4" />
+                    <div className="border-t border-white/5 my-4" />
 
                     {/* Features */}
                     <ul className="space-y-3 mb-6">
@@ -736,7 +740,7 @@ export default function PremiumPage() {
                       <button
                         type="button"
                         onClick={handleLoginRequired}
-                        className="w-full py-3 rounded-xl border border-brand-border text-gray-300 text-sm font-semibold hover:border-brand-red/40 hover:text-white transition-colors"
+                        className="w-full py-3 rounded-xl border border-white/10 text-gray-300 text-sm font-semibold hover:border-brand-red/40 hover:text-white transition-colors"
                       >
                         Kirish
                       </button>
@@ -779,7 +783,7 @@ export default function PremiumPage() {
               {faqs.map((faq, index) => (
                 <div
                   key={index}
-                  className="border border-brand-border rounded-xl overflow-hidden bg-brand-card/30 backdrop-blur-sm transition-colors hover:border-brand-red/30"
+                  className="border border-white/10 rounded-xl overflow-hidden glass-card backdrop-blur-sm transition-colors hover:border-brand-red/30"
                 >
                   <button
                     onClick={() => toggleFaq(index)}
@@ -857,8 +861,6 @@ export default function PremiumPage() {
           </div>
         </section>
 
-        {/* Bottom padding */}
-        <div className="pb-12" />
       </main>
       <Footer />
       <TelegramLoginModal

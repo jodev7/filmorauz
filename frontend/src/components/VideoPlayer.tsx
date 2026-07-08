@@ -1321,7 +1321,7 @@ function HLSPlayer({
 
       {showPremiumPrompt && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-sm rounded-2xl border border-yellow-500/30 bg-brand-card/95 p-5 text-center shadow-[0_0_30px_rgba(234,179,8,0.12)] backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl border border-yellow-500/30 glass-card p-5 text-center shadow-[0_0_30px_rgba(234,179,8,0.12)] backdrop-blur-sm">
             <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-yellow-500 to-amber-600">
               <Crown size={26} className="text-black" />
             </div>
@@ -1332,7 +1332,7 @@ function HLSPlayer({
             <div className="flex flex-col gap-3 sm:flex-row">
               <button
                 onClick={() => setShowPremiumPrompt(false)}
-                className="inline-flex flex-1 items-center justify-center rounded-xl border border-brand-border bg-brand-dark px-4 py-3 text-sm font-medium text-white transition-colors hover:border-brand-red"
+                className="inline-flex flex-1 items-center justify-center rounded-xl border border-white/10 bg-brand-dark px-4 py-3 text-sm font-medium text-white transition-colors hover:border-brand-red"
               >
                 Yopish
               </button>

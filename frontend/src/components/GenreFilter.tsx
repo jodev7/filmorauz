@@ -49,7 +49,7 @@ export default function GenreFilter({ basePath = "/movies" }: GenreFilterProps) 
             className={`px-3 sm:px-4 py-1.5 rounded-full text-xs sm:text-sm font-medium transition-all whitespace-nowrap ${
               active
                 ? "bg-brand-red text-white"
-                : "bg-brand-card border border-brand-border text-gray-400 hover:text-white hover:border-gray-500"
+                : "glass-card border border-white/10 text-gray-400 hover:text-white hover:border-gray-500"
             }`}
           >
             {getDisplayName(genre)}

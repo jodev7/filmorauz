@@ -3,7 +3,7 @@ import { Film } from "lucide-react";
 
 export default function NotFound() {
   return (
-    <div className="min-h-screen bg-brand-dark flex items-center justify-center px-4">
+    <div className="min-h-screen flex items-center justify-center px-4">
       <div className="text-center">
         <Film size={48} className="text-brand-red mx-auto mb-6" />
         <h1 className="font-display text-6xl sm:text-8xl text-white tracking-wide mb-4">
@@ -21,7 +21,7 @@ export default function NotFound() {
           </Link>
           <Link
             href="/movies"
-            className="bg-brand-card border border-brand-border hover:border-gray-500 text-white font-semibold px-6 py-3 rounded-xl transition-colors"
+            className="glass-card border border-white/10 hover:border-gray-500 text-white font-semibold px-6 py-3 rounded-xl transition-colors"
           >
             Kinolarni ko'rish
           </Link>

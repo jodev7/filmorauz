@@ -127,7 +127,7 @@ export default function TelegramLoginModal({ isOpen, onClose }: TelegramLoginMod
       />
 
       {/* Modal */}
-      <div className="relative bg-brand-card border border-brand-border rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl">
+      <div className="relative glass-strong rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl">
         {/* Close button */}
         <button
           onClick={handleClose}

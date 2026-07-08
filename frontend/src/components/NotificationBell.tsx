@@ -162,12 +162,12 @@ export default function NotificationBell() {
       ref={dropdownRef}
       className={
         isMobile
-          ? "fixed top-[72px] left-1/2 z-[99999] box-border w-[calc(100vw-24px)] max-w-[420px] -translate-x-1/2 overflow-x-hidden overflow-y-auto rounded-xl border border-brand-border bg-brand-card p-3 shadow-2xl max-h-[calc(100vh-90px)]"
-          : "absolute right-0 top-full mt-2 z-[99999] box-border w-[420px] max-w-[calc(100vw-24px)] overflow-x-hidden overflow-y-auto rounded-xl border border-brand-border bg-brand-card p-3 shadow-2xl max-h-[calc(100vh-90px)]"
+          ? "fixed top-[72px] left-1/2 z-[99999] box-border w-[calc(100vw-24px)] max-w-[420px] -translate-x-1/2 overflow-x-hidden overflow-y-auto rounded-2xl glass-strong p-3 shadow-2xl max-h-[calc(100vh-90px)]"
+          : "absolute right-0 top-full mt-2 z-[99999] box-border w-[420px] max-w-[calc(100vw-24px)] overflow-x-hidden overflow-y-auto rounded-2xl glass-strong p-3 shadow-2xl max-h-[calc(100vh-90px)]"
       }
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-1 py-3 border-b border-brand-border shrink-0">
+      <div className="flex items-center justify-between px-1 py-3 border-b border-white/10 shrink-0">
         <h3 className="text-white font-medium">Bildirishnomalar</h3>
         {unreadNotificationCount > 0 && (
           <button
@@ -206,7 +206,7 @@ export default function NotificationBell() {
                 }`}
               >
                 {isRoomInvite && poster ? (
-                  <div className="w-12 h-16 shrink-0 rounded-md overflow-hidden bg-brand-dark border border-brand-border">
+                  <div className="w-12 h-16 shrink-0 rounded-md overflow-hidden bg-brand-dark border border-white/10">
                     {/* MediaImage handles B2 key → CDN URL conversion
                         and gives a placeholder when the URL is bad,
                         so raw <img> URLs that previously rendered
@@ -262,7 +262,7 @@ export default function NotificationBell() {
 
       {/* Footer */}
       {notifications.length > 0 && (
-        <div className="px-1 py-3 border-t border-brand-border">
+        <div className="px-1 py-3 border-t border-white/10">
           <button
             onClick={() => {
               router.push("/notifications");
