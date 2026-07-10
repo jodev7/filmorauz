@@ -461,6 +461,7 @@ const SOURCES = [
   { id: "uzmedia", name: "Uzmedia", url: "uzmedia.tv", icon: Film },
   { id: "kinolar", name: "Kinolar", url: "kinolar.tv", icon: Film },
   { id: "uzbeklar", name: "Uzbeklar", url: "uzbeklar.biz", icon: Film },
+  { id: "seezntv", name: "SeeznTV", url: "seezntv.uz", icon: Film },
   { id: "manual", name: "Manual", url: "", icon: Link },
 ];
 
@@ -2781,6 +2782,13 @@ export default function IngestionPage() {
         {activeTab === "uzbeklar" && (
           <CatalogTab
             source={SOURCES[6]}
+            token={token}
+            onImportSuccess={handleImportSuccess}
+          />
+        )}
+        {activeTab === "seezntv" && (
+          <CatalogTab
+            source={SOURCES[7]}
             token={token}
             onImportSuccess={handleImportSuccess}
           />
