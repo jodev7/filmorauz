@@ -81,10 +81,9 @@ type clipTarget struct {
 	// DisplayLabel is used in human-readable [CLIP] log lines.
 	DisplayLabel string
 
-	// Drawtext overlay strings. Callers must already escape ffmpeg-sensitive
-	// characters (":", "\", etc.) before setting these.
-	TopText    string
-	BottomText string
+	// Drawtext overlay string (the code label). Callers must already escape
+	// ffmpeg-sensitive characters (":", "\", etc.) before setting it.
+	TopText string
 
 	// Movie fields — only populated when Kind == "movie".
 	MovieID    interface{}
@@ -976,12 +975,13 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 		movieSlug = sanitizeSlug(movieResult.DisplayTitle)
 	}
 
-	// Overlay CTA word depends on content: animated movies say "Multfilm
-	// profilda!", everything else "Kino profilda!". Series use "Serial" (see
-	// generateEpisodeClips). The on-clip code label stays "Kino kodi".
-	bottomText := "Kino profilda\\!"
+	// The only on-clip overlay text is the code label — no bottom CTA line.
+	// The label reflects content type: animated films show "Multifilm kodi",
+	// everything else "Kino kodi". Series use "Serial kodi" (see
+	// generateEpisodeClips).
+	codeLabel := "Kino kodi"
 	if p.movieIsAnimation(ctx, movieResult.MovieID) {
-		bottomText = "Multfilm profilda\\!"
+		codeLabel = "Multifilm kodi"
 	}
 
 	target := clipTarget{
@@ -989,8 +989,7 @@ func (p *Pipeline) generateClips(ctx context.Context, canonicalFolderName string
 		FilenameSlug:  movieSlug,
 		FolderSubpath: canonicalFolderName,
 		DisplayLabel:  fmt.Sprintf("Movie: %s (code: %s)", movieResult.DisplayTitle, movieCode),
-		TopText:       fmt.Sprintf("Kino kodi\\: %s", movieCode),
-		BottomText:    bottomText,
+		TopText:       fmt.Sprintf("%s\\: %s", codeLabel, movieCode),
 		MovieID:       movieResult.MovieID,
 		MovieTitle:    movieResult.DisplayTitle,
 		MovieSlug:     movieResult.Slug,
@@ -1025,7 +1024,13 @@ func (p *Pipeline) movieIsAnimation(ctx context.Context, movieID interface{}) bo
 	if err := p.config.DB.Collection("movies").FindOne(lookupCtx, bson.M{"_id": oid}).Decode(&doc); err != nil {
 		return false
 	}
-	animationGenres := []string{"multfilm", "multifilm", "animatsiya", "animation", "cartoon", "мультфильм", "анимация"}
+	// Match on substrings (not exact equality) so genre spelling variants all
+	// count: "multfilm"/"multifilm"/"multfilmlar", "animatsiya"/"animatsion"/
+	// "animation", plus the Cyrillic "мульт"/"аним" stems. This maximises how
+	// many cartoons we catch, but it can only work off the genre the movie was
+	// actually tagged with — an untagged cartoon has no signal here and falls
+	// back to the "Kino kodi" label (see caller).
+	animationTokens := []string{"mult", "anim", "cartoon", "мульт", "аним"}
 	for _, field := range []string{"genre", "genres_uz"} {
 		raw, ok := doc[field]
 		if !ok {
@@ -1040,9 +1045,9 @@ func (p *Pipeline) movieIsAnimation(ctx context.Context, movieID interface{}) bo
 			if !ok {
 				continue
 			}
-			gl := strings.TrimSpace(gs)
-			for _, ag := range animationGenres {
-				if strings.EqualFold(gl, ag) {
+			gl := strings.ToLower(strings.TrimSpace(gs))
+			for _, tok := range animationTokens {
+				if strings.Contains(gl, tok) {
 					return true
 				}
 			}
@@ -1115,7 +1120,6 @@ func (p *Pipeline) generateEpisodeClips(ctx context.Context, job *models.Ingesti
 		FolderSubpath: folderSubpath,
 		DisplayLabel:  fmt.Sprintf("Series: %s S%02dE%02d", seriesTitle, job.SeasonNumber, job.EpisodeNumber),
 		TopText:       fmt.Sprintf("Serial kodi\\: %s", firstNonEmptyString(seriesCode, "—")),
-		BottomText:    "Serial profilda\\!",
 		SeriesID:      job.SeriesID,
 		SeriesTitle:   seriesTitle,
 		SeriesSlug:    job.SeriesSlug,
@@ -1547,7 +1551,6 @@ func (p *Pipeline) generateClipsForTarget(ctx context.Context, target clipTarget
 	log.Printf("[CLIP] Starting clip generation for %d selected moments (gemini=%v)...", len(moments), geminiActive)
 
 	topText := target.TopText
-	bottomText := target.BottomText
 
 	var generatedClips []ClipInfo
 	var failedClips []int
@@ -1647,11 +1650,10 @@ func (p *Pipeline) generateClipsForTarget(ctx context.Context, target clipTarget
 			log.Printf("[CLIP] Layout: CTA y=1300, logo y=1390, canvas=1080×1920")
 			filterComplex := fmt.Sprintf(
 				"[0:v]scale=1080:-2,pad=1080:1920:0:(oh-ih)/2:color=black,%s"+
-					"drawtext=text='%s':x=(w-text_w)/2:y=580:fontsize=48:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=8,"+
-					"drawtext=text='%s':x=(w-text_w)/2:y=1300:fontsize=44:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=8[vt];"+
+					"drawtext=text='%s':x=(w-text_w)/2:y=580:fontsize=48:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=8[vt];"+
 					"[1:v]scale=840:-1[logo];"+
 					"[vt][logo]overlay=x=(W-w)/2:y=1390:shortest=1[out]",
-				subFilter, topText, bottomText,
+				subFilter, topText,
 			)
 			args = []string{
 				"-y",
@@ -1675,9 +1677,8 @@ func (p *Pipeline) generateClipsForTarget(ctx context.Context, target clipTarget
 			// Same layout without logo: scale+pad to 1080×1920 with centered movie, text in dark bands.
 			textFilter := fmt.Sprintf(
 				"scale=1080:-2,pad=1080:1920:0:(oh-ih)/2:color=black,%s"+
-					"drawtext=text='%s':x=(w-text_w)/2:y=580:fontsize=48:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=8,"+
-					"drawtext=text='%s':x=(w-text_w)/2:y=1300:fontsize=44:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=8",
-				subFilter, topText, bottomText,
+					"drawtext=text='%s':x=(w-text_w)/2:y=580:fontsize=48:fontcolor=white:box=1:boxcolor=black@0.7:boxborderw=8",
+				subFilter, topText,
 			)
 			args = []string{
 				"-y",
