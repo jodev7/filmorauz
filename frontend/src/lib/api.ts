@@ -2080,6 +2080,11 @@ export interface ParsedMetadata {
   duration: number;
   video_page_url: string;
   video_urls: VideoSource[];
+  // Populated by the parser /details endpoint (no download performed).
+  type?: "movie" | "serial" | string;
+  available_qualities?: string[];
+  selected_quality?: string;
+  source_quality?: string;
 }
 
 export interface IngestionJob {
