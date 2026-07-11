@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -26,7 +26,51 @@ import {
   uploadCollectionPoster,
 } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
+import { localizeSingleGenre } from "@/lib/localization";
 import MediaImage from "@/components/ui/MediaImage";
+
+// Catalog items (Movie / AdminSeries) share the fields we filter on.
+type Filterable = { title: string; year?: number; genre?: string[]; country?: string };
+
+// Country strings in the DB are often multi-valued ("Canada,Ispaniya,Meksika"
+// or "Daniya, Belgiya"), so split on comma/slash and trim.
+function splitCountries(raw?: string): string[] {
+  return (raw || "")
+    .split(/[,/]/)
+    .map((c) => c.trim())
+    .filter(Boolean);
+}
+
+function distinctCountries(items: Filterable[]): string[] {
+  const set = new Set<string>();
+  items.forEach((it) => splitCountries(it.country).forEach((c) => set.add(c)));
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
+}
+
+function distinctYears(items: Filterable[]): number[] {
+  const set = new Set<number>();
+  items.forEach((it) => { if (it.year && it.year > 0) set.add(it.year); });
+  return Array.from(set).sort((a, b) => b - a);
+}
+
+function distinctGenres(items: Filterable[]): string[] {
+  const set = new Set<string>();
+  items.forEach((it) => (it.genre || []).forEach((g) => { const t = (g || "").trim(); if (t) set.add(t); }));
+  return Array.from(set).sort((a, b) => localizeSingleGenre(a).localeCompare(localizeSingleGenre(b)));
+}
+
+type CatalogFilters = { search: string; country: string; year: string; genre: string };
+
+function matchesFilters(item: Filterable, f: CatalogFilters): boolean {
+  if (f.search.trim() && !item.title.toLowerCase().includes(f.search.trim().toLowerCase())) return false;
+  if (f.country && !splitCountries(item.country).includes(f.country)) return false;
+  if (f.year && item.year !== Number(f.year)) return false;
+  if (f.genre && !(item.genre || []).includes(f.genre)) return false;
+  return true;
+}
+
+// How many candidates to show in the picker list after filtering.
+const PICKER_LIMIT = 50;
 
 export default function EditCollectionPage() {
   const { token } = useAuth();
@@ -40,13 +84,27 @@ export default function EditCollectionPage() {
   const [uploadingPoster, setUploadingPoster] = useState(false);
   const [movies, setMovies] = useState<Movie[]>([]);
   const [movieSearch, setMovieSearch] = useState("");
+  const [movieCountry, setMovieCountry] = useState("");
+  const [movieYear, setMovieYear] = useState("");
+  const [movieGenre, setMovieGenre] = useState("");
   const [filteredMovies, setFilteredMovies] = useState<Movie[]>([]);
   const [showMovieSearch, setShowMovieSearch] = useState(false);
 
   const [seriesList, setSeriesList] = useState<AdminSeries[]>([]);
   const [seriesSearch, setSeriesSearch] = useState("");
+  const [seriesCountry, setSeriesCountry] = useState("");
+  const [seriesYear, setSeriesYear] = useState("");
+  const [seriesGenre, setSeriesGenre] = useState("");
   const [filteredSeries, setFilteredSeries] = useState<AdminSeries[]>([]);
   const [showSeriesSearch, setShowSeriesSearch] = useState(false);
+
+  // Filter option lists derived from the loaded catalog (stay in sync w/ data).
+  const movieCountries = useMemo(() => distinctCountries(movies), [movies]);
+  const movieYears = useMemo(() => distinctYears(movies), [movies]);
+  const movieGenres = useMemo(() => distinctGenres(movies), [movies]);
+  const seriesCountries = useMemo(() => distinctCountries(seriesList), [seriesList]);
+  const seriesYears = useMemo(() => distinctYears(seriesList), [seriesList]);
+  const seriesGenres = useMemo(() => distinctGenres(seriesList), [seriesList]);
 
   const [form, setForm] = useState<CollectionInput>({
     title: "",
@@ -95,33 +153,17 @@ export default function EditCollectionPage() {
       .catch(console.error);
   }, [token]);
 
-  // Filter movies
+  // Filter movies by search + country + year + genre
   useEffect(() => {
-    if (!movieSearch.trim()) {
-      setFilteredMovies(movies.slice(0, 20));
-    } else {
-      const q = movieSearch.toLowerCase();
-      setFilteredMovies(
-        movies
-          .filter((m) => m.title.toLowerCase().includes(q))
-          .slice(0, 20)
-      );
-    }
-  }, [movieSearch, movies]);
+    const f: CatalogFilters = { search: movieSearch, country: movieCountry, year: movieYear, genre: movieGenre };
+    setFilteredMovies(movies.filter((m) => matchesFilters(m, f)).slice(0, PICKER_LIMIT));
+  }, [movieSearch, movieCountry, movieYear, movieGenre, movies]);
 
-  // Filter series
+  // Filter series by search + country + year + genre
   useEffect(() => {
-    if (!seriesSearch.trim()) {
-      setFilteredSeries(seriesList.slice(0, 20));
-    } else {
-      const q = seriesSearch.toLowerCase();
-      setFilteredSeries(
-        seriesList
-          .filter((s) => s.title.toLowerCase().includes(q))
-          .slice(0, 20)
-      );
-    }
-  }, [seriesSearch, seriesList]);
+    const f: CatalogFilters = { search: seriesSearch, country: seriesCountry, year: seriesYear, genre: seriesGenre };
+    setFilteredSeries(seriesList.filter((s) => matchesFilters(s, f)).slice(0, PICKER_LIMIT));
+  }, [seriesSearch, seriesCountry, seriesYear, seriesGenre, seriesList]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -375,6 +417,51 @@ export default function EditCollectionPage() {
                   className="w-full pl-10 pr-4 py-2 bg-brand-dark border border-brand-border rounded-lg text-white text-sm focus:outline-none focus:border-brand-red"
                 />
               </div>
+              {/* Filters: country / year / genre */}
+              <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <select
+                  value={movieCountry}
+                  onChange={(e) => setMovieCountry(e.target.value)}
+                  className="px-2 py-2 bg-brand-dark border border-brand-border rounded-lg text-white text-sm focus:outline-none focus:border-brand-red"
+                >
+                  <option value="">Barcha davlatlar</option>
+                  {movieCountries.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+                <select
+                  value={movieYear}
+                  onChange={(e) => setMovieYear(e.target.value)}
+                  className="px-2 py-2 bg-brand-dark border border-brand-border rounded-lg text-white text-sm focus:outline-none focus:border-brand-red"
+                >
+                  <option value="">Barcha yillar</option>
+                  {movieYears.map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+                <select
+                  value={movieGenre}
+                  onChange={(e) => setMovieGenre(e.target.value)}
+                  className="px-2 py-2 bg-brand-dark border border-brand-border rounded-lg text-white text-sm focus:outline-none focus:border-brand-red"
+                >
+                  <option value="">Barcha janrlar</option>
+                  {movieGenres.map((g) => (
+                    <option key={g} value={g}>{localizeSingleGenre(g)}</option>
+                  ))}
+                </select>
+              </div>
+              {(movieCountry || movieYear || movieGenre || movieSearch) && (
+                <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
+                  <span>{filteredMovies.filter((m) => !form.movie_ids?.includes(m.id)).length} ta topildi</span>
+                  <button
+                    type="button"
+                    onClick={() => { setMovieSearch(""); setMovieCountry(""); setMovieYear(""); setMovieGenre(""); }}
+                    className="text-brand-red hover:text-orange-400"
+                  >
+                    Tozalash
+                  </button>
+                </div>
+              )}
               <div className="mt-2 max-h-48 overflow-y-auto space-y-1">
                 {filteredMovies
                   .filter((m) => !form.movie_ids?.includes(m.id))
@@ -383,12 +470,19 @@ export default function EditCollectionPage() {
                       key={movie.id}
                       type="button"
                       onClick={() => addMovie(movie.id)}
-                      className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-brand-border rounded flex items-center justify-between"
+                      className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-brand-border rounded flex items-center justify-between gap-2"
                     >
-                      <span>{movie.title}</span>
-                      <Plus size={14} />
+                      <span className="truncate">
+                        {movie.title}
+                        {movie.year ? <span className="text-gray-500 ml-1">({movie.year})</span> : null}
+                        {movie.country ? <span className="text-gray-600 ml-1">· {movie.country}</span> : null}
+                      </span>
+                      <Plus size={14} className="flex-shrink-0" />
                     </button>
                   ))}
+                {filteredMovies.filter((m) => !form.movie_ids?.includes(m.id)).length === 0 && (
+                  <p className="text-gray-500 text-sm px-3 py-2">Hech narsa topilmadi</p>
+                )}
               </div>
             </div>
           )}
@@ -468,6 +562,51 @@ export default function EditCollectionPage() {
                   className="w-full pl-10 pr-4 py-2 bg-brand-dark border border-brand-border rounded-lg text-white text-sm focus:outline-none focus:border-brand-red"
                 />
               </div>
+              {/* Filters: country / year / genre */}
+              <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <select
+                  value={seriesCountry}
+                  onChange={(e) => setSeriesCountry(e.target.value)}
+                  className="px-2 py-2 bg-brand-dark border border-brand-border rounded-lg text-white text-sm focus:outline-none focus:border-brand-red"
+                >
+                  <option value="">Barcha davlatlar</option>
+                  {seriesCountries.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+                <select
+                  value={seriesYear}
+                  onChange={(e) => setSeriesYear(e.target.value)}
+                  className="px-2 py-2 bg-brand-dark border border-brand-border rounded-lg text-white text-sm focus:outline-none focus:border-brand-red"
+                >
+                  <option value="">Barcha yillar</option>
+                  {seriesYears.map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+                <select
+                  value={seriesGenre}
+                  onChange={(e) => setSeriesGenre(e.target.value)}
+                  className="px-2 py-2 bg-brand-dark border border-brand-border rounded-lg text-white text-sm focus:outline-none focus:border-brand-red"
+                >
+                  <option value="">Barcha janrlar</option>
+                  {seriesGenres.map((g) => (
+                    <option key={g} value={g}>{localizeSingleGenre(g)}</option>
+                  ))}
+                </select>
+              </div>
+              {(seriesCountry || seriesYear || seriesGenre || seriesSearch) && (
+                <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
+                  <span>{filteredSeries.filter((s) => !form.series_ids?.includes(s.id)).length} ta topildi</span>
+                  <button
+                    type="button"
+                    onClick={() => { setSeriesSearch(""); setSeriesCountry(""); setSeriesYear(""); setSeriesGenre(""); }}
+                    className="text-brand-red hover:text-orange-400"
+                  >
+                    Tozalash
+                  </button>
+                </div>
+              )}
               <div className="mt-2 max-h-48 overflow-y-auto space-y-1">
                 {filteredSeries
                   .filter((s) => !form.series_ids?.includes(s.id))
@@ -476,12 +615,19 @@ export default function EditCollectionPage() {
                       key={series.id}
                       type="button"
                       onClick={() => addSeries(series.id)}
-                      className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-brand-border rounded flex items-center justify-between"
+                      className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-brand-border rounded flex items-center justify-between gap-2"
                     >
-                      <span>{series.title}</span>
-                      <Plus size={14} />
+                      <span className="truncate">
+                        {series.title}
+                        {series.year ? <span className="text-gray-500 ml-1">({series.year})</span> : null}
+                        {series.country ? <span className="text-gray-600 ml-1">· {series.country}</span> : null}
+                      </span>
+                      <Plus size={14} className="flex-shrink-0" />
                     </button>
                   ))}
+                {filteredSeries.filter((s) => !form.series_ids?.includes(s.id)).length === 0 && (
+                  <p className="text-gray-500 text-sm px-3 py-2">Hech narsa topilmadi</p>
+                )}
               </div>
             </div>
           )}
