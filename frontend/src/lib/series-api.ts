@@ -1,6 +1,13 @@
 import type { VideoSourceType } from "@/lib/api";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
+// Browser requests use the public API URL; server-side rendering reaches the
+// backend directly over localhost (INTERNAL_API_URL) to avoid hairpinning SSR
+// fetches back out through the public domain / CDN (which intermittently
+// connect-times-out and makes pages render empty). Mirrors lib/api.ts.
+const API_URL =
+  (typeof window === "undefined" ? process.env.INTERNAL_API_URL : "") ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:8080/api";
 
 export interface Series {
   id: string;
@@ -120,6 +127,21 @@ export async function getSeriesBySlug(slug: string): Promise<SeriesWithSeasons> 
   });
   if (!res.ok) throw new Error("Failed to fetch series");
   return res.json();
+}
+
+// Content-similar series for the "Sizga yoqishi mumkin" row. Scored server-side
+// by shared genre / country / year / popularity, seeded from the given series.
+export async function getSeriesRecommendations(seriesID: string, limit: number = 12): Promise<Series[]> {
+  try {
+    const res = await fetch(`${API_URL}/series-by-id/${seriesID}/recommendations?limit=${limit}`, {
+      next: { revalidate: 60 },
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    return json.data || [];
+  } catch {
+    return [];
+  }
 }
 
 // Get all seasons + episodes for a series by ID. Used by the watch-room

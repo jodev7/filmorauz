@@ -13,7 +13,7 @@ import MovieCode from "@/components/MovieCode";
 import SeasonList from "@/components/SeasonList";
 import WatchTogetherButton from "@/components/WatchTogetherButton";
 import SeriesCarousel from "@/components/SeriesCarousel";
-import { getSeriesBySlug, getSeries } from "@/lib/series-api";
+import { getSeriesBySlug, getSeriesRecommendations } from "@/lib/series-api";
 import { localizeSingleGenre } from "@/lib/localization";
 import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 import { buildSeriesUrl } from "@/lib/content-routes";
@@ -85,12 +85,12 @@ export default async function SeriesDetailPage({ params }: Props) {
     notFound();
   }
 
-  // Fetch related series
+  // Fetch content-similar series (by genre / country / year), seeded from this
+  // series — the "Sizga yoqishi mumkin" row.
   try {
-    const res = await getSeries(1, 20);
-    relatedSeries = (res.data || []).filter(s => s.slug !== slug).slice(0, 10);
+    relatedSeries = await getSeriesRecommendations(seriesData.series.id, 12);
   } catch {
-    // Silently handle
+    // Silently handle — the row just won't render.
   }
 
   const { series, seasons } = seriesData;
@@ -266,11 +266,11 @@ export default async function SeriesDetailPage({ params }: Props) {
             </section>
           )}
 
-          {/* Related Series */}
+          {/* Content-similar series — "Sizga yoqishi mumkin" */}
           {relatedSeries.length > 0 && (
             <section className="pb-12">
               <h2 className="font-display text-2xl sm:text-3xl tracking-wide text-white mb-6">
-                BOSHQA SERIALLAR
+                SIZGA YOQISHI MUMKIN
               </h2>
               <SeriesCarousel series={relatedSeries} />
             </section>

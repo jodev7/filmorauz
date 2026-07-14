@@ -265,6 +265,22 @@ func (s *SeriesService) ListSeries(limit, skip int, genre string) ([]models.Seri
 	return seriesList, nil
 }
 
+// GetRecommendations returns content-similar series to the given one (by genre,
+// country, year, popularity), used for the "Sizga yoqishi mumkin" row on series
+// and episode pages.
+func (s *SeriesService) GetRecommendations(seriesID string, limit int) ([]models.Series, error) {
+	seriesList, err := s.seriesRepo.GetRecommendations(seriesID, limit)
+	if err != nil {
+		return nil, err
+	}
+	for i := range seriesList {
+		if err := s.ensureSeriesCode(&seriesList[i]); err != nil {
+			return nil, err
+		}
+	}
+	return seriesList, nil
+}
+
 // CountSeries returns the total number of publicly-visible series (optionally
 // filtered by genre) for pagination.
 func (s *SeriesService) CountSeries(genre string) (int64, error) {

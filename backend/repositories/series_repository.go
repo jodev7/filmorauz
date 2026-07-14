@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -465,6 +466,187 @@ func (r *SeriesRepository) List(limit, skip int, genre string) ([]models.Series,
 	}
 
 	return seriesList, nil
+}
+
+// GetRecommendations returns content-similar series to the given one, scored by
+// shared genres, matching country, year proximity, quality/premium alignment,
+// popularity and recency — the same hybrid strategy used for movie
+// recommendations. Falls back to newest published series when similarity is thin
+// so the row is always filled.
+func (r *SeriesRepository) GetRecommendations(currentSeriesID string, limit int) ([]models.Series, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if limit <= 0 || limit > 30 {
+		limit = 12
+	}
+
+	// Seed series — the title we're finding lookalikes for.
+	var current models.Series
+	var currentObjID primitive.ObjectID
+	if currentSeriesID != "" {
+		if objID, err := primitive.ObjectIDFromHex(currentSeriesID); err == nil {
+			currentObjID = objID
+			r.seriesCol.FindOne(ctx, bson.M{"_id": objID}).Decode(&current)
+		}
+	}
+	current.Genre = normalizeSeriesGenres(current.Genre)
+
+	publicFilter := bson.M{
+		"$or": []bson.M{
+			{"is_published": true},
+			{"is_published": bson.M{"$exists": false}},
+		},
+	}
+	if !currentObjID.IsZero() {
+		publicFilter["_id"] = bson.M{"$ne": currentObjID}
+	}
+
+	// Pull a wider candidate pool than we render so scoring has material to rank.
+	candidatesLimit := limit * 5
+	if candidatesLimit < 50 {
+		candidatesLimit = 50
+	}
+	opts := options.Find().
+		SetSort(bson.D{{Key: "views", Value: -1}, {Key: "updated_at", Value: -1}}).
+		SetLimit(int64(candidatesLimit))
+
+	cursor, err := r.seriesCol.Find(ctx, publicFilter, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var candidates []models.Series
+	if err := cursor.All(ctx, &candidates); err != nil {
+		return nil, err
+	}
+
+	type scored struct {
+		series models.Series
+		score  int
+	}
+	scoredList := make([]scored, 0, len(candidates))
+	for _, s := range candidates {
+		s.Genre = normalizeSeriesGenres(s.Genre)
+		score := 0
+		// Shared genres — the strongest similarity signal (+5 each).
+		for _, cg := range s.Genre {
+			for _, mg := range current.Genre {
+				if strings.EqualFold(cg, mg) {
+					score += 5
+				}
+			}
+		}
+		// Same country (+3).
+		if s.Country != "" && current.Country != "" && strings.EqualFold(s.Country, current.Country) {
+			score += 3
+		}
+		// Year proximity — same era feels related.
+		if current.Year > 0 && s.Year > 0 {
+			yearDiff := s.Year - current.Year
+			if yearDiff < 0 {
+				yearDiff = -yearDiff
+			}
+			if yearDiff <= 1 {
+				score += 2
+			} else if yearDiff <= 3 {
+				score += 1
+			}
+		}
+		// Quality / premium alignment (+1 each).
+		if s.Quality != "" && s.Quality == current.Quality {
+			score++
+		}
+		if s.IsPremium == current.IsPremium {
+			score++
+		}
+		// Popularity boost.
+		if s.Views > 10000 {
+			score += 2
+		} else if s.Views > 1000 {
+			score++
+		}
+		// Recency — updated within the last month.
+		if s.UpdatedAt.After(time.Now().AddDate(0, -1, 0)) {
+			score++
+		}
+		scoredList = append(scoredList, scored{series: s, score: score})
+	}
+
+	sort.SliceStable(scoredList, func(i, j int) bool {
+		if scoredList[i].score != scoredList[j].score {
+			return scoredList[i].score > scoredList[j].score
+		}
+		return scoredList[i].series.Views > scoredList[j].series.Views
+	})
+
+	// Diversity — cap how many of any one genre cluster at the top so the row
+	// isn't all-comedy just because comedy is the biggest bucket.
+	const maxPerGenre = 4
+	genreCount := make(map[string]int)
+	result := make([]models.Series, 0, limit)
+	for _, sm := range scoredList {
+		if len(result) >= limit {
+			break
+		}
+		over := false
+		for _, g := range sm.series.Genre {
+			if genreCount[strings.ToLower(g)] >= maxPerGenre {
+				over = true
+				break
+			}
+		}
+		if over {
+			continue
+		}
+		result = append(result, sm.series)
+		for _, g := range sm.series.Genre {
+			genreCount[strings.ToLower(g)]++
+		}
+	}
+
+	// Fallback — pad with newest published series if similarity was thin, so the
+	// carousel is never left half-empty.
+	if len(result) < limit {
+		excluded := make([]primitive.ObjectID, 0, len(result)+1)
+		if !currentObjID.IsZero() {
+			excluded = append(excluded, currentObjID)
+		}
+		for _, s := range result {
+			excluded = append(excluded, s.ID)
+		}
+		fbFilter := bson.M{
+			"$or": []bson.M{
+				{"is_published": true},
+				{"is_published": bson.M{"$exists": false}},
+			},
+		}
+		if len(excluded) > 0 {
+			fbFilter["_id"] = bson.M{"$nin": excluded}
+		}
+		fbOpts := options.Find().
+			SetSort(bson.D{{Key: "created_at", Value: -1}}).
+			SetLimit(int64(limit - len(result)))
+		if fbCursor, ferr := r.seriesCol.Find(ctx, fbFilter, fbOpts); ferr == nil {
+			defer fbCursor.Close(ctx)
+			var fb []models.Series
+			if fbCursor.All(ctx, &fb) == nil {
+				result = append(result, fb...)
+			}
+		}
+	}
+
+	for i := range result {
+		result[i].Genre = normalizeSeriesGenres(result[i].Genre)
+	}
+	if err := r.applyEpisodeRatingSummaries(ctx, result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = []models.Series{}
+	}
+	return result, nil
 }
 
 // ListMostViewed returns published series sorted by view count, highest first.

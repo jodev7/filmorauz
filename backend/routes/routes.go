@@ -493,6 +493,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	seriesByID := api.Group("/series-by-id")
 	{
 		seriesByID.GET("/:id/seasons", seriesHandler.GetSeasons)
+		seriesByID.GET("/:id/recommendations", seriesHandler.GetRecommendations)
 	}
 
 	// Series routes - least specific (just /series and /series/:slug)
