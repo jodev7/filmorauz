@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -780,12 +781,15 @@ func (r *MovieRepository) ListByGenre(genre string, limit int) ([]models.Movie, 
 		limit = 12
 	}
 
+	// Stored genre values are inconsistently cased (e.g. "Comedy" vs "comedy"),
+	// so match case-insensitively. A regex query on an array field matches when
+	// any element matches, so this still selects movies tagged with the genre.
 	filter := bson.M{
 		"$or": []bson.M{
 			{"is_published": true},
 			{"is_published": bson.M{"$exists": false}},
 		},
-		"genre": bson.M{"$in": []string{genre}},
+		"genre": primitive.Regex{Pattern: "^" + regexp.QuoteMeta(genre) + "$", Options: "i"},
 	}
 
 	opts := options.Find().
