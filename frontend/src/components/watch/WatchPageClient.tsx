@@ -446,14 +446,19 @@ export default function WatchPageClient({
   }, [user, token, progressTargetId]);
 
   // Fetch recommendations — skipped when embedded (the movie page already
-  // renders its own recommendations server-side).
+  // renders its own recommendations server-side) and for episodes (movie.id is
+  // an episode id, not a movie; the episode page renders its own similar-series
+  // row instead).
   useEffect(() => {
-    if (embedded) return;
+    if (embedded || movie.type === "episode") {
+      setIsLoadingRecommendations(false);
+      return;
+    }
     getRecommendations(movie.id, 12)
       .then(setRecommendations)
       .catch(console.error)
       .finally(() => setIsLoadingRecommendations(false));
-  }, [movie.id, embedded]);
+  }, [movie.id, movie.type, embedded]);
 
   const persistProgress = useCallback((force: boolean = false) => {
     if (!user || !token || !progressTargetId) return;
@@ -648,7 +653,11 @@ export default function WatchPageClient({
       {!embedded && (
         <>
           <div className="h-[env(safe-area-inset-top)]" />
-          <div className="bg-brand-dark/95 backdrop-blur-sm border-b border-white/10 px-3 sm:px-4 py-2 sm:py-3 flex items-center gap-3 sm:gap-4">
+          {/* Floating liquid-glass control bar — mirrors the navbar's glass
+              island, aligned to the player's content width so it reads as part
+              of the content group rather than a bolted-on toolbar. */}
+          <div className="max-w-6xl mx-auto px-3 sm:px-4">
+            <div className="glass-strong rounded-2xl px-3 sm:px-5 py-2.5 sm:py-3 flex items-center gap-3 sm:gap-4">
             <Link
               href={backHref}
               className="flex items-center gap-1.5 text-xs sm:text-sm text-gray-400 hover:text-white transition-colors"
@@ -687,6 +696,7 @@ export default function WatchPageClient({
                   />
                 );
               })()}
+            </div>
             </div>
           </div>
         </>
