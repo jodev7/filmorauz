@@ -3,7 +3,16 @@
 
 import { logger } from "./logger";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
+// Browser requests must go to the public API URL. Server-side rendering (ISR /
+// server components), however, should reach the backend directly over localhost:
+// routing SSR fetches back out through the public domain (Cloudflare) causes
+// intermittent connect timeouts that make pages render empty and poison the ISR
+// cache with a blank homepage. INTERNAL_API_URL is a server-only override (no
+// NEXT_PUBLIC_ prefix, so it is never bundled into client code).
+const API_URL =
+  (typeof window === "undefined" ? process.env.INTERNAL_API_URL : "") ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:8080/api";
 const WORKER_URL = process.env.NEXT_PUBLIC_WORKER_URL || "http://localhost:8083";
 
 interface UploadURLResponse {
