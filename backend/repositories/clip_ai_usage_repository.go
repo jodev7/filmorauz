@@ -22,13 +22,13 @@ func NewClipAIUsageRepository(db *mongo.Database) *ClipAIUsageRepository {
 
 // AIUsageTotals is the aggregate across every recorded analysis.
 type AIUsageTotals struct {
-	CostUSD      float64 `json:"cost_usd"`
-	TotalTokens  int64   `json:"total_tokens"`
-	AudioTokens  int64   `json:"audio_tokens"`
-	TextTokens   int64   `json:"text_tokens"`
-	OutputTokens int64   `json:"output_tokens"`
-	ClipCount    int64   `json:"clip_count"`
-	Analyses     int64   `json:"analyses"`
+	CostUSD      float64 `json:"cost_usd" bson:"cost_usd"`
+	TotalTokens  int64   `json:"total_tokens" bson:"total_tokens"`
+	AudioTokens  int64   `json:"audio_tokens" bson:"audio_tokens"`
+	TextTokens   int64   `json:"text_tokens" bson:"text_tokens"`
+	OutputTokens int64   `json:"output_tokens" bson:"output_tokens"`
+	ClipCount    int64   `json:"clip_count" bson:"clip_count"`
+	Analyses     int64   `json:"analyses" bson:"analyses"`
 }
 
 // AIUsageItem is the spend rolled up per piece of content (movie or episode).

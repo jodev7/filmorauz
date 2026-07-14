@@ -68,7 +68,6 @@ func TestGenerateInterstellarClips(t *testing.T) {
 		FolderSubpath: "interstellar",
 		DisplayLabel:  "Movie: Interstellar (code: 9999)",
 		TopText:       "Kino kodi\\: 9999",
-		BottomText:    "Kino profilda\\!",
 		MovieID:       primitive.NewObjectID(),
 		MovieTitle:    "Interstellar",
 		MovieSlug:     "interstellar",

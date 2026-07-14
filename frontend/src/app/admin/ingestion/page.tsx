@@ -9,11 +9,11 @@ import {
   Power, ChevronDown, ChevronRight as ChevronRightIcon, Database, Trash2
 } from "lucide-react";
 import {
-  searchSource, createIngestionJob, getIngestionJobs,
+  searchSource, createIngestionJob, getIngestionJobs, getSourceDetails,
   retryIngestionJob, deleteIngestionJob, deleteIngestionSeries, IngestionJob, SearchResult, IngestionStatus,
   listCatalog, listCatalogCategories, CatalogItem, CatalogResponse, CatalogCategory,
   createManualImport, importFromCatalog, ImportConfirmationError, ImportConfirmationResponse,
-  bulkImport
+  CatalogImportInput, bulkImport
 } from "@/lib/api";
 import MediaImage from "@/components/ui/MediaImage";
 
@@ -40,6 +40,29 @@ type PendingImportConfirmation = {
   };
   response: ImportConfirmationResponse;
 };
+
+// Quality gate: shown before the real import starts so the admin can bail out
+// on low-quality sources (e.g. a movie whose best available stream is 480p).
+type QualityConfirmation = {
+  input: CatalogImportInput;
+  contentType: "movie" | "serial" | "";
+  // Best available quality the source offers (e.g. "1080p"), "" if unknown.
+  selectedQuality: string;
+  // Full list of available qualities, highest first when the parser sorts them.
+  availableQualities: string[];
+};
+
+// Rank a quality label like "1080p"/"720p" to an integer height for comparison.
+function qualityRank(q: string): number {
+  const m = (q || "").match(/(\d{3,4})/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+// Pick the highest-resolution label from a list of quality strings.
+function highestQuality(qualities: string[]): string {
+  if (!qualities || qualities.length === 0) return "";
+  return [...qualities].sort((a, b) => qualityRank(b) - qualityRank(a))[0];
+}
 
 function getSearchResultContentType(result: SearchResult): "movie" | "serial" | "" {
   const rawType = (((result as any).type || (result as any).content_type || "") + "").toLowerCase();
@@ -461,6 +484,7 @@ const SOURCES = [
   { id: "uzmedia", name: "Uzmedia", url: "uzmedia.tv", icon: Film },
   { id: "kinolar", name: "Kinolar", url: "kinolar.tv", icon: Film },
   { id: "uzbeklar", name: "Uzbeklar", url: "uzbeklar.biz", icon: Film },
+  { id: "seezntv", name: "SeeznTV", url: "seezntv.uz", icon: Film },
   { id: "manual", name: "Manual", url: "", icon: Link },
 ];
 
@@ -956,6 +980,9 @@ function CatalogTab({
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [error, setError] = useState("");
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingImportConfirmation | null>(null);
+  // Quality gate before the real import (probe result + which item is probing).
+  const [qualityConfirm, setQualityConfirm] = useState<QualityConfirmation | null>(null);
+  const [qualityProbing, setQualityProbing] = useState<string | null>(null);
   const [directUrl, setDirectUrl] = useState("");
   const [directImporting, setDirectImporting] = useState(false);
   const [categories, setCategories] = useState<CatalogCategory[]>([]);
@@ -1023,20 +1050,84 @@ function CatalogTab({
     }
   };
 
-  const handleImportCatalog = async (item: CatalogItem) => {
+  // Runs the real import once the admin has accepted the quality gate. Holds
+  // the ImportConfirmationError (identity mismatch) fallback so both modals can
+  // coexist. `isDirect` toggles the direct-URL spinner + input reset.
+  const doImport = async (input: CatalogImportInput, isDirect = false) => {
     if (!token) return;
-    
-    setImporting(item.source_id);
+    const key = input.source_id || input.detail_url;
+    setImporting(key);
+    if (isDirect) setDirectImporting(true);
     setError("");
     setPendingConfirmation(null);
-    
+    try {
+      await importFromCatalog(token, input);
+      onImportSuccess();
+      if (isDirect) setDirectUrl("");
+    } catch (err) {
+      if (err instanceof ImportConfirmationError) {
+        setPendingConfirmation({ input, response: err.response });
+        setError("");
+      } else {
+        setError(err instanceof Error ? err.message : "Import failed");
+      }
+    } finally {
+      setImporting(null);
+      if (isDirect) setDirectImporting(false);
+    }
+  };
+
+  // Probe the source for the best available quality WITHOUT downloading (parser
+  // /details), then open the confirmation modal. Lets the admin skip low-quality
+  // sources (e.g. a movie whose best stream is only 480p) before any work runs.
+  const requestQualityConfirmation = async (input: CatalogImportInput, probeKey: string) => {
+    if (!token) return;
+    setError("");
+    setPendingConfirmation(null);
+    setQualityConfirm(null);
+    setQualityProbing(probeKey);
+    try {
+      const details = await getSourceDetails(input.source, input.source_id, input.detail_url);
+      const available = Array.isArray(details.available_qualities) ? details.available_qualities : [];
+      const selected = details.selected_quality || details.source_quality || highestQuality(available);
+      const rawType = (details.type || input.type || "").toLowerCase();
+      const contentType: "movie" | "serial" | "" =
+        rawType === "serial" || rawType === "series" ? "serial"
+        : rawType === "movie" ? "movie" : "";
+      setQualityConfirm({
+        // Backfill the parser-detected type so the real import doesn't re-guess.
+        input: { ...input, type: contentType || input.type },
+        contentType,
+        selectedQuality: selected || "",
+        availableQualities: available,
+      });
+    } catch {
+      // Probe failed — don't hard-block; open the modal with unknown quality so
+      // the admin can still choose to proceed.
+      setQualityConfirm({
+        input,
+        contentType: (input.type as "movie" | "serial") || "",
+        selectedQuality: "",
+        availableQualities: [],
+      });
+    } finally {
+      setQualityProbing(null);
+    }
+  };
+
+  const confirmQualityImport = async () => {
+    if (!qualityConfirm) return;
+    const { input } = qualityConfirm;
+    const isDirect = !input.source_id && !!input.detail_url;
+    setQualityConfirm(null);
+    await doImport(input, isDirect);
+  };
+
+  const handleImportCatalog = (item: CatalogItem) => {
     const rawType = (item.type || "").toLowerCase();
     const importType = (rawType === "movie" || rawType === "serial" || rawType === "series") ? rawType : "";
-    try {
-      // Send empty type when parser flagged it "unknown" so the backend re-
-      // detects via /details (which fetches the page and runs the strong
-      // soup heuristics) instead of refusing the import.
-      const input = {
+    void requestQualityConfirmation(
+      {
         source: source.id,
         source_id: item.source_id,
         detail_url: item.detail_url,
@@ -1044,42 +1135,15 @@ function CatalogTab({
         year: item.year,
         poster: item.poster,
         type: importType as "movie" | "serial",
-      };
-      await importFromCatalog(token, input);
-      onImportSuccess();
-    } catch (err) {
-      if (err instanceof ImportConfirmationError) {
-        setPendingConfirmation({
-          input: {
-            source: source.id,
-            source_id: item.source_id,
-            detail_url: item.detail_url,
-            title: item.title,
-            year: item.year,
-            poster: item.poster,
-            type: importType as "movie" | "serial",
-          },
-          response: err.response,
-        });
-        setError("");
-      } else {
-        setError(err instanceof Error ? err.message : "Import failed");
-      }
-    } finally {
-      setImporting(null);
-    }
+      },
+      item.source_id,
+    );
   };
 
-  const handleImportSearch = async (result: SearchResult) => {
-    if (!token) return;
-    
-    setImporting(result.source_id);
-    setError("");
-    setPendingConfirmation(null);
-    
+  const handleImportSearch = (result: SearchResult) => {
     const importType = getSearchResultContentType(result);
-    try {
-      const input = {
+    void requestQualityConfirmation(
+      {
         source: result.source,
         source_id: result.source_id,
         detail_url: result.detail_url,
@@ -1087,58 +1151,24 @@ function CatalogTab({
         year: result.year,
         poster: result.poster || result.img,
         type: importType as "movie" | "serial",
-      };
-      await importFromCatalog(token, input);
-      onImportSuccess();
-    } catch (err) {
-      if (err instanceof ImportConfirmationError) {
-        setPendingConfirmation({
-          input: {
-            source: result.source,
-            source_id: result.source_id,
-            detail_url: result.detail_url,
-            title: result.title,
-            year: result.year,
-            poster: result.poster || result.img,
-            type: importType as "movie" | "serial",
-          },
-          response: err.response,
-        });
-        setError("");
-      } else {
-        setError(err instanceof Error ? err.message : "Import failed");
-      }
-    } finally {
-      setImporting(null);
-    }
+      },
+      result.source_id,
+    );
   };
 
-  const handleDirectUrlImport = async () => {
-    if (!token || !directUrl.trim()) return;
-    
-    setDirectImporting(true);
-    setError("");
-    setPendingConfirmation(null);
-    
-    try {
-      await importFromCatalog(token, {
+  const handleDirectUrlImport = () => {
+    if (!directUrl.trim()) return;
+    void requestQualityConfirmation(
+      {
         source: source.id,
         source_id: "",
         detail_url: directUrl.trim(),
         title: "",
-        // Empty type → backend hits /details, parser detects movie/serial.
-        // Backend rejects with "Content type could not be detected" if unknown.
+        // Empty type → parser detects movie/serial during the probe.
         type: "" as unknown as "movie" | "serial",
-      });
-      onImportSuccess();
-      setDirectUrl("");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Havola orqali import xatosiz";
-      // Surface backend's structured "Content type could not be detected" error verbatim
-      setError(msg);
-    } finally {
-      setDirectImporting(false);
-    }
+      },
+      directUrl.trim(),
+    );
   };
 
   const handleForceConfirmImport = async () => {
@@ -1222,10 +1252,10 @@ function CatalogTab({
           />
           <button
             onClick={handleDirectUrlImport}
-            disabled={directImporting || !directUrl.trim()}
+            disabled={directImporting || qualityProbing === directUrl.trim() || !directUrl.trim()}
             className="bg-brand-red hover:bg-orange-700 disabled:opacity-60 px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
           >
-            {directImporting ? (
+            {directImporting || qualityProbing === directUrl.trim() ? (
               <Loader2 className="w-5 h-5 animate-spin" />
             ) : (
               <>
@@ -1305,15 +1335,15 @@ function CatalogTab({
                     </div>
                     <button
                       onClick={() => handleImportSearch(result)}
-                      disabled={importing === result.source_id}
+                      disabled={importing === result.source_id || qualityProbing === result.source_id}
                       className="mt-2 w-full bg-brand-red hover:bg-orange-700 disabled:opacity-60 py-1.5 rounded text-sm flex items-center justify-center gap-2 transition-colors"
                     >
-                      {importing === result.source_id ? (
+                      {importing === result.source_id || qualityProbing === result.source_id ? (
                         <Loader2 className="w-3 h-3 animate-spin" />
                       ) : (
                         <Plus className="w-3 h-3" />
                       )}
-                      Import
+                      {qualityProbing === result.source_id ? "Tekshirilmoqda…" : "Import"}
                     </button>
                   </div>
                 </div>
@@ -1326,6 +1356,64 @@ function CatalogTab({
           )}
         </div>
       )}
+
+      {/* Quality gate — shown before the real import starts */}
+      {qualityConfirm && (() => {
+        const best = qualityConfirm.selectedQuality || highestQuality(qualityConfirm.availableQualities);
+        const bestRank = qualityRank(best);
+        const isLow = bestRank > 0 && bestRank < 720;      // 480p or lower
+        const unknown = !best;
+        const typeLabel = qualityConfirm.contentType === "serial" ? "Serial" : qualityConfirm.contentType === "movie" ? "Kino" : "Kontent";
+        const noun = qualityConfirm.contentType === "serial" ? "Serial epizodlari" : "Kino";
+        return (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4" onClick={() => setQualityConfirm(null)}>
+            <div
+              className="w-full max-w-md bg-brand-card border border-brand-border rounded-2xl p-6 space-y-4 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-2">
+                <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${qualityConfirm.contentType === "serial" ? "bg-blue-600" : "bg-green-600"} text-white`}>{typeLabel}</span>
+                <h3 className="font-semibold text-white text-base line-clamp-1">{qualityConfirm.input.title || qualityConfirm.input.detail_url}</h3>
+              </div>
+
+              <div className={`rounded-xl px-4 py-4 text-center border ${isLow ? "bg-amber-500/10 border-amber-500/40" : unknown ? "bg-gray-500/10 border-gray-500/30" : "bg-green-500/10 border-green-500/30"}`}>
+                <p className="text-xs text-gray-400 mb-1">Eng yuqori mavjud sifat</p>
+                <p className={`text-3xl font-bold ${isLow ? "text-amber-300" : unknown ? "text-gray-300" : "text-green-400"}`}>
+                  {unknown ? "Aniqlanmadi" : best}
+                </p>
+                {qualityConfirm.availableQualities.length > 0 && (
+                  <p className="text-xs text-gray-500 mt-2">Mavjud: {qualityConfirm.availableQualities.join(", ")}</p>
+                )}
+              </div>
+
+              <p className="text-sm text-gray-300 text-center">
+                {unknown ? (
+                  <>Sifatni aniqlab bo'lmadi. Baribir import qilinsinmi?</>
+                ) : (
+                  <><span className="font-semibold text-white">{noun}</span> <span className="font-semibold text-white">{best}</span> sifatda yuklab olinadi.{isLow ? " Bu past sifat." : ""}</>
+                )}
+              </p>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={confirmQualityImport}
+                  disabled={!!importing || !!directImporting}
+                  className={`flex-1 ${isLow ? "bg-amber-600 hover:bg-amber-700" : "bg-brand-red hover:bg-orange-700"} disabled:opacity-60 px-4 py-2.5 rounded-lg text-sm font-medium text-white flex items-center justify-center gap-2 transition-colors`}
+                >
+                  {(!!importing || !!directImporting) && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Baribir import qilish
+                </button>
+                <button
+                  onClick={() => setQualityConfirm(null)}
+                  className="flex-1 bg-brand-dark border border-brand-border hover:bg-gray-700 px-4 py-2.5 rounded-lg text-sm text-gray-300 transition-colors"
+                >
+                  Bekor qilish
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Error display */}
       {pendingConfirmation && (
@@ -1457,15 +1545,15 @@ function CatalogTab({
                   )}
                   <button
                     onClick={() => handleImportCatalog(item)}
-                    disabled={importing === item.source_id}
+                    disabled={importing === item.source_id || qualityProbing === item.source_id}
                     className="mt-3 w-full bg-brand-red hover:bg-orange-700 disabled:opacity-60 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors"
                   >
-                    {importing === item.source_id ? (
+                    {importing === item.source_id || qualityProbing === item.source_id ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
                     ) : (
                       <Plus className="w-4 h-4" />
                     )}
-                    Import
+                    {qualityProbing === item.source_id ? "Tekshirilmoqda…" : "Import"}
                   </button>
                 </div>
               </div>
@@ -2781,6 +2869,13 @@ export default function IngestionPage() {
         {activeTab === "uzbeklar" && (
           <CatalogTab
             source={SOURCES[6]}
+            token={token}
+            onImportSuccess={handleImportSuccess}
+          />
+        )}
+        {activeTab === "seezntv" && (
+          <CatalogTab
+            source={SOURCES[7]}
             token={token}
             onImportSuccess={handleImportSuccess}
           />

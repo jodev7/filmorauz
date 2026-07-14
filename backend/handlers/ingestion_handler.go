@@ -382,6 +382,7 @@ func (h *IngestionHandler) SearchSource(c *gin.Context) {
 		"kinochilar": true,
 		"uzmedia":    true,
 		"uzbeklar":   true,
+		"seezntv":    true,
 		"manual":     true,
 	}
 	if !validSources[source] {
@@ -544,6 +545,7 @@ func (h *IngestionHandler) GetMovieDetails(c *gin.Context) {
 		"kinochilar": true,
 		"uzmedia":    true,
 		"uzbeklar":   true,
+		"seezntv":    true,
 		"manual":     true,
 	}
 	if !validSources[source] {
@@ -704,6 +706,7 @@ func (h *IngestionHandler) CreateIngestionJob(c *gin.Context) {
 		"kinochilar": true,
 		"uzmedia":    true,
 		"uzbeklar":   true,
+		"seezntv":    true,
 		"manual":     true,
 	}
 	if !validSources[input.Source] {
@@ -1629,6 +1632,7 @@ func (h *IngestionHandler) ListCatalog(c *gin.Context) {
 		"uzmedia":    true,
 		"kinolar":    true,
 		"uzbeklar":   true,
+		"seezntv":    true,
 	}
 	if !validSources[source] {
 		log.Printf("[INGESTION] CATALOG: invalid source=%s", source)
@@ -1771,6 +1775,7 @@ func (h *IngestionHandler) GetCatalogCategories(c *gin.Context) {
 		"uzmedia":    true,
 		"kinolar":    true,
 		"uzbeklar":   true,
+		"seezntv":    true,
 	}
 	if !validSources[source] {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid source. valid: uzmovi, freekino, asilmedia, kinochilar, uzmedia, kinolar"})
@@ -2070,6 +2075,7 @@ func (h *IngestionHandler) ImportFromCatalog(c *gin.Context) {
 		"kinochilar": true,
 		"uzmedia":    true,
 		"uzbeklar":   true,
+		"seezntv":    true,
 		"manual":     true,
 	}
 	if !validSources[input.Source] {

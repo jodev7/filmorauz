@@ -97,6 +97,17 @@ SOURCES = {
         "search_params": {},
         "search_param_key": "q",
     },
+    "seezntv": {
+        # seezntv.uz is a Next.js SPA backed by a JSON REST API at
+        # v2.seezntv.uz. The parser (seezntv.py) talks to that API directly and
+        # does NOT use the generic HTML search infra below — this entry only
+        # supplies base_url for metadata normalisation / logging.
+        "base_url": "https://seezntv.uz",
+        "search_paths": [],
+        "search_method": "NONE",
+        "search_params": {},
+        "search_param_key": "",
+    },
     "manual": {
         "base_url": "",
         "search_paths": [],

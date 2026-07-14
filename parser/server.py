@@ -1027,6 +1027,7 @@ from kinolar import KinolarParser
 from kinochilar import KinochilarParser
 from uzbeklar import UzbeklarParser
 from uzmedia import UzmediaParser
+from seezntv import SeezntvParser
 from asilmedia_serial import AsilmediaSerialParser
 from freekino_serial import FreekinoSerialParser
 from uzmovi_serial import UzmoviSerialParser
@@ -1034,6 +1035,7 @@ from kinochilar_serial import KinochilarSerialParser
 from kinolar_serial import KinolarSerialParser
 from uzbeklar_serial import UzbeklarSerialParser
 from uzmedia_serial import UzmediaSerialParser
+from seezntv_serial import SeezntvSerialParser
 from downloader_service import DownloaderService, _validate_download_target, report_progress_to_backend
 from uzmovi_browser_downloader import download_uzmovi_video
 from metadata_normalizer import normalize_metadata, validate_metadata, create_worker_payload
@@ -1067,7 +1069,7 @@ N_M3U8DL_BINARY = require_binary()
 logger.info(f"[SERVER] N_m3u8DL-RE binary confirmed: {N_M3U8DL_BINARY}")
 
 # Available sources (including manual which doesn't need a parser)
-AVAILABLE_SOURCES = ["uzmovi", "freekino", "asilmedia", "kinolar", "kinochilar", "uzbeklar", "uzmedia", "manual"]
+AVAILABLE_SOURCES = ["uzmovi", "freekino", "asilmedia", "kinolar", "kinochilar", "uzbeklar", "uzmedia", "seezntv", "manual"]
 
 # Initialize parsers (manual source doesn't have a parser - it receives direct URLs)
 PARSERS = {
@@ -1078,6 +1080,7 @@ PARSERS = {
     "kinochilar": KinochilarParser(),
     "uzbeklar": UzbeklarParser(),
     "uzmedia": UzmediaParser(),
+    "seezntv": SeezntvParser(),
 }
 
 # Provider-specific serial parsers. Distinct from PARSERS because serial
@@ -1090,6 +1093,7 @@ SERIAL_PARSERS = {
     "kinolar": KinolarSerialParser(),
     "uzbeklar": UzbeklarSerialParser(),
     "uzmedia": UzmediaSerialParser(),
+    "seezntv": SeezntvSerialParser(),
 }
 
 
@@ -1110,6 +1114,8 @@ def _detect_serial_provider(url: str) -> str:
         return "uzbeklar"
     if "uzmedia." in u:
         return "uzmedia"
+    if "seezntv." in u:
+        return "seezntv"
     return ""
 
 # Initialize downloader service
