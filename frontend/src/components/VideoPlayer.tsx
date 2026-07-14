@@ -1174,7 +1174,7 @@ function HLSPlayer({
         isPremiumUser
           ? "bg-black ring-1 ring-yellow-500/30 shadow-[0_0_30px_rgba(234,179,8,0.12)]"
           : "bg-black"
-      }`}
+      } ${showControls ? "" : "cursor-none"}`}
       onMouseMove={resetControlsTimer}
       onMouseLeave={() => setShowControls(false)}
       onMouseEnter={() => setShowControls(true)}
@@ -1320,8 +1320,11 @@ function HLSPlayer({
       )}
 
       {showPremiumPrompt && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-sm rounded-2xl border border-yellow-500/30 glass-card p-5 text-center shadow-[0_0_30px_rgba(234,179,8,0.12)] backdrop-blur-sm">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4" onClick={() => setShowPremiumPrompt(false)}>
+          <div
+            className="w-full max-w-sm rounded-2xl border border-yellow-500/30 glass-card p-5 text-center shadow-[0_0_30px_rgba(234,179,8,0.12)] backdrop-blur-sm"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-yellow-500 to-amber-600">
               <Crown size={26} className="text-black" />
             </div>
