@@ -1122,6 +1122,51 @@ def _detect_serial_provider(url: str) -> str:
 DOWNLOAD_DIR = os.path.abspath(os.environ.get("DOWNLOAD_DIR", str(Path(__file__).parent / "downloads")))
 downloader_service = DownloaderService(DOWNLOAD_DIR)
 
+# ---------------------------------------------------------------------------
+# Universal media jobs (Telegram bot superadmin "paste any link" flow).
+# In-process registry, independent of the worker ingestion queue. Each job
+# holds: status(downloading|completed|failed), percent, file_path/name/size, error.
+# ---------------------------------------------------------------------------
+_media_jobs = {}
+_media_jobs_lock = threading.Lock()
+
+
+def _media_job_set(job_id, **fields):
+    with _media_jobs_lock:
+        st = _media_jobs.setdefault(job_id, {})
+        st.update(fields)
+
+
+def _media_job_get(job_id):
+    with _media_jobs_lock:
+        st = _media_jobs.get(job_id)
+        return dict(st) if st else None
+
+
+def _new_media_job_id():
+    return f"media_{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
+
+
+def _run_media_download(job_id, url, height, audio_lang, output_name):
+    """Background worker: yt-dlp download with live percent into the registry."""
+    try:
+        _media_job_set(job_id, status="downloading", percent=0.0)
+
+        def _cb(pct):
+            _media_job_set(job_id, percent=pct)
+
+        result = downloader_service.download_media(
+            url, output_name, height=height, audio_lang=audio_lang, progress_callback=_cb,
+        )
+        _media_job_set(
+            job_id, status="completed", percent=100.0,
+            file_path=result["file_path"], file_name=result["file_name"],
+            file_size=result["file_size"],
+        )
+    except Exception as exc:  # noqa: BLE001 — surface any failure to the poller
+        logger.exception(f"[MEDIA] job {job_id} failed")
+        _media_job_set(job_id, status="failed", error=str(exc)[:300])
+
 # Active download registry for non-blocking downloads
 # Key: job_id, Value: DownloadState object
 _active_downloads = {}
@@ -2909,6 +2954,68 @@ class ParserHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "status": "ok", "service": "parser"})
             return
 
+        # Universal media probe — list available qualities + audio languages
+        # for any yt-dlp-supported URL (vk.com / YouTube / etc). Used by the
+        # Telegram bot's superadmin download flow.
+        elif path == "/media/probe":
+            media_url = query.get("url", [""])[0].strip()
+            if not media_url:
+                self._send_error("url is required", 400)
+                return
+            try:
+                info = downloader_service.probe_media(media_url)
+                self._send_json(info)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[MEDIA] probe failed: {exc}")
+                self._send_error(f"probe failed: {exc}", 502)
+            return
+
+        # Media download status poll.
+        elif path == "/media/status":
+            job_id = query.get("job_id", [""])[0].strip()
+            st = _media_job_get(job_id)
+            if not st:
+                self._send_error("unknown job_id", 404)
+                return
+            self._send_json({
+                "status": st.get("status", "unknown"),
+                "percent": st.get("percent", 0.0),
+                "file_size": st.get("file_size", 0),
+                "error": st.get("error", ""),
+            })
+            return
+
+        # Stream the finished media file back to the caller (the bot).
+        elif path == "/media/file":
+            job_id = query.get("job_id", [""])[0].strip()
+            st = _media_job_get(job_id)
+            if not st or st.get("status") != "completed":
+                self._send_error("file not ready", 404)
+                return
+            file_path = st.get("file_path", "")
+            if not file_path or not os.path.exists(file_path):
+                self._send_error("file missing on disk", 410)
+                return
+            try:
+                file_size = os.path.getsize(file_path)
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(file_size))
+                self.send_header(
+                    "Content-Disposition",
+                    f'attachment; filename="{os.path.basename(file_path)}"',
+                )
+                self.end_headers()
+                with open(file_path, "rb") as fh:
+                    while True:
+                        chunk = fh.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # bot disconnected mid-stream
+            return
+
         # Host-level health snapshot consumed by the backend admin
         # dashboard. Gated by X-Internal-Token (same token the backend
         # uses for bot ↔ backend internal calls) so machine metrics don't
@@ -4282,6 +4389,36 @@ class ParserHandler(BaseHTTPRequestHandler):
         path = parsed.path
 
         logger.info(f"[SERVER] {self.command} {self.path}")
+
+        # Start a universal media download (Telegram bot superadmin flow).
+        # Body: {url, height?, audio_lang?, output_name?}. Returns {job_id}.
+        if path == "/media/download":
+            try:
+                body = self._read_json_body()
+            except Exception as exc:  # noqa: BLE001
+                self._send_error(f"invalid JSON body: {exc}", 400)
+                return
+            media_url = (body.get("url", "") or "").strip()
+            if not media_url:
+                self._send_error("url is required", 400)
+                return
+            height = body.get("height")
+            try:
+                height = int(height) if height else None
+            except (TypeError, ValueError):
+                height = None
+            audio_lang = (body.get("audio_lang", "") or "").strip() or None
+            output_name = (body.get("output_name", "") or "").strip() or _new_media_job_id()
+
+            job_id = _new_media_job_id()
+            _media_job_set(job_id, status="queued", percent=0.0)
+            threading.Thread(
+                target=_run_media_download,
+                args=(job_id, media_url, height, audio_lang, output_name),
+                daemon=True,
+            ).start()
+            self._send_json({"job_id": job_id, "status": "queued"})
+            return
 
         if path == "/serial/extract/start":
             try:

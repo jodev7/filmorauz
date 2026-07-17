@@ -23,6 +23,70 @@ from helpers import isValidStreamUrl, is_youtube_url
 
 logger = logging.getLogger(__name__)
 
+
+def _install_vk_subs_patch():
+    """Work around an upstream yt-dlp bug in the VK extractor.
+
+    In yt_dlp/extractor/vk.py the subtitle loop does
+        'ext': sub.get('title', '.srt').split('.')[-1]
+    which crashes with "'NoneType' object has no attribute 'split'" whenever a
+    subtitle entry has an explicit ``title: null``. That aborts extraction of
+    the *entire* video (audio tracks included), so multi-audio vk.com films
+    cannot be probed or downloaded.
+
+    Rather than editing the third-party package, we wrap VKIE._real_extract and
+    sanitise the JSON it downloads (both the cookies `al_video` path via
+    _download_json and the anonymous playerParams path via _parse_json),
+    replacing any None subtitle title with a safe default. Guarded so a future
+    yt-dlp refactor can never break parser startup.
+    """
+    try:
+        from yt_dlp.extractor.vk import VKIE
+    except Exception as exc:  # pragma: no cover - yt-dlp layout changed
+        logger.warning(f"[VK PATCH] skipped (import failed): {exc}")
+        return
+    if getattr(VKIE, "_filmora_subs_patched", False):
+        return
+
+    def _sanitize(obj):
+        # Fix subtitle-like dicts ({lang?, title: None, url}) in place.
+        if isinstance(obj, dict):
+            if "url" in obj and "title" in obj and obj.get("title") is None:
+                obj["title"] = ".srt"
+            for v in obj.values():
+                _sanitize(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                _sanitize(v)
+        return obj
+
+    orig_real_extract = VKIE._real_extract
+
+    def patched_real_extract(self, url):
+        orig_dj = self._download_json
+        orig_pj = self._parse_json
+
+        def dj(*a, **k):
+            return _sanitize(orig_dj(*a, **k))
+
+        def pj(*a, **k):
+            return _sanitize(orig_pj(*a, **k))
+
+        self._download_json = dj
+        self._parse_json = pj
+        try:
+            return orig_real_extract(self, url)
+        finally:
+            self._download_json = orig_dj
+            self._parse_json = orig_pj
+
+    VKIE._real_extract = patched_real_extract
+    VKIE._filmora_subs_patched = True
+    logger.info("[VK PATCH] applied null-subtitle-title workaround")
+
+
+_install_vk_subs_patch()
+
 # DDownloader Integration
 # Use DDownloader for HLS/DASH/ISM streams (N_m3u8DL-RE) and aria2c for MP4
 USE_DDOWNLOADER = os.environ.get("USE_DDOWNLOADER", "true").lower() == "true"
@@ -1776,6 +1840,166 @@ class DownloaderService:
         file_size = os.path.getsize(local_path)
         logger.info(f"[YTDLP] Download complete: {local_path} ({file_size} bytes)")
 
+        return {
+            "success": True,
+            "type": "mp4",
+            "file_path": local_path,
+            "file_name": os.path.basename(local_path),
+            "file_size": file_size,
+        }
+
+    # ------------------------------------------------------------------
+    # Universal (yt-dlp) media probe + download — used by the Telegram bot's
+    # superadmin "paste any link" flow (vk.com / YouTube / any yt-dlp site).
+    # These are independent of the worker ingestion queue.
+    # ------------------------------------------------------------------
+
+    def _ytdlp_api_opts(self) -> dict:
+        """Common yt-dlp Python-API options for probe + universal download.
+
+        Uses the in-process API (not a subprocess) so the VK null-subtitle
+        monkeypatch in _install_vk_subs_patch() actually applies. A desktop
+        user-agent is used by default: the Android UA in YTDLP_USER_AGENT is a
+        YouTube-specific tweak (paired with player_client=android) that makes
+        vk.com return a player payload without `params` and breaks extraction.
+        """
+        import os
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "http_headers": {
+                "User-Agent": os.environ.get(
+                    "MEDIA_USER_AGENT",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                ),
+            },
+        }
+        cookies_path = os.environ.get("YTDLP_COOKIES_FILE", "") or os.environ.get("YTDLP_COOKIE_FILE", "")
+        if cookies_path and os.path.exists(cookies_path):
+            opts["cookiefile"] = cookies_path
+        proxy = os.environ.get("YTDLP_PROXY", "")
+        if proxy:
+            opts["proxy"] = proxy
+        return opts
+
+    def probe_media(self, url: str) -> dict:
+        """Enumerate available qualities + audio languages for any yt-dlp URL.
+
+        Returns:
+            {
+              "title": str, "duration": int|None, "extractor": str,
+              "qualities": [1080, 720, ...],            # distinct heights, desc
+              "audio_langs": [{"code": "ru", "name": "ru"}, ...],
+            }
+        """
+        import yt_dlp
+
+        opts = self._ytdlp_api_opts()
+        opts["skip_download"] = True
+
+        logger.info(f"[YTDLP PROBE] {url[:80]}")
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.sanitize_info(ydl.extract_info(url, download=False))
+        except Exception as exc:
+            raise DownloadError("probe failed: " + str(exc)[:300])
+
+        formats = info.get("formats") or []
+        heights = set()
+        langs = {}
+        for f in formats:
+            vcodec = (f.get("vcodec") or "none")
+            acodec = (f.get("acodec") or "none")
+            h = f.get("height")
+            if vcodec != "none" and h:
+                heights.add(int(h))
+            # Audio tracks (either audio-only or muxed) that carry a language tag
+            if acodec != "none":
+                lang = f.get("language")
+                if lang:
+                    langs.setdefault(str(lang), str(lang))
+
+        qualities = sorted(heights, reverse=True)
+        audio_langs = [{"code": c, "name": n} for c, n in langs.items()]
+
+        return {
+            "title": info.get("title") or "video",
+            "duration": info.get("duration"),
+            "extractor": info.get("extractor_key") or info.get("extractor") or "",
+            "qualities": qualities,
+            "audio_langs": audio_langs,
+        }
+
+    def download_media(
+        self,
+        url: str,
+        output_name: str,
+        height: int | None = None,
+        audio_lang: str | None = None,
+        progress_callback=None,
+    ) -> dict:
+        """Download a URL with yt-dlp at the chosen height / audio language.
+
+        progress_callback(percent: float) is invoked as download proceeds.
+        Returns the same dict shape as _download_youtube.
+        """
+        import os
+        import yt_dlp
+
+        os.makedirs(self.download_dir, exist_ok=True)
+        base_name = output_name.rsplit(".", 1)[0] if "." in output_name else output_name
+        output_template = os.path.join(self.download_dir, base_name + ".%(ext)s")
+
+        # Build format selector from the picked quality + audio language.
+        hf = f"[height<={int(height)}]" if height else ""
+        af = f"[language={audio_lang}]" if audio_lang else ""
+        fmt = (
+            f"bv*{hf}+ba{af}/"      # best video ≤height + best audio in lang
+            f"bv*{hf}+ba/"          # …fall back to any audio
+            f"b{hf}/"               # …best muxed ≤height
+            f"best"                 # …last resort
+        )
+
+        def _hook(d):
+            if not progress_callback or d.get("status") != "downloading":
+                return
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            done = d.get("downloaded_bytes") or 0
+            if total > 0:
+                try:
+                    progress_callback(min(100.0, done * 100.0 / total))
+                except Exception:
+                    pass
+
+        opts = self._ytdlp_api_opts()
+        opts.update({
+            "format": fmt,
+            "merge_output_format": "mp4",
+            "outtmpl": output_template,
+            "progress_hooks": [_hook],
+            "socket_timeout": 60,
+        })
+
+        logger.info(f"[YTDLP DL] fmt={fmt} url={url[:80]}")
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+        except Exception as exc:
+            raise DownloadError("yt-dlp failed: " + str(exc)[:300])
+
+        local_path = None
+        for ext in ("mp4", "mkv", "webm", "m4v"):
+            candidate = os.path.join(self.download_dir, f"{base_name}.{ext}")
+            if os.path.exists(candidate):
+                local_path = _ensure_absolute_file_path(candidate)
+                break
+        if not local_path:
+            raise DownloadError("download completed but output file not found")
+
+        file_size = os.path.getsize(local_path)
+        logger.info(f"[YTDLP DL] complete: {local_path} ({file_size} bytes)")
         return {
             "success": True,
             "type": "mp4",
