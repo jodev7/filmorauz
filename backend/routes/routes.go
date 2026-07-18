@@ -196,6 +196,17 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		v1Movies.GET("/:id/watch", movieHandler.GetMovieWatchSource)
 	}
 
+	// Source MP4 downloads — highest quality (1080p/720p). These accept the JWT
+	// via `?token=` too, so a browser-native <a download> link can stream the
+	// file straight to disk. Access is enforced inside the handler:
+	// admins/superadmins always, premium users too.
+	v1Download := api.Group("/v1")
+	v1Download.Use(middleware.RequireAuthAllowQueryToken(authService))
+	{
+		v1Download.GET("/movies/:id/download", movieHandler.DownloadMovie)
+		v1Download.GET("/episodes/:id/download", seriesHandler.DownloadEpisode)
+	}
+
 	// Movie rating routes (v1)
 	v1 := api.Group("/v1")
 	{
@@ -342,6 +353,8 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 
 		// Live activity stats (online users + DAU/WAU/MAU)
 		admin.GET("/stats/online", presenceHandler.OnlineStats)
+		// Paginated list of live sessions (IP, device, clickable name).
+		admin.GET("/stats/online/sessions", presenceHandler.OnlineSessionsList)
 
 		// Aggregated VPS status across the fleet.
 		admin.GET("/system/status", systemHandler.AdminSystemStatus)

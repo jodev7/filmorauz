@@ -125,7 +125,7 @@ export default function Navbar() {
   };
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-[70] px-2 sm:px-4 pt-[env(safe-area-inset-top)]">
+    <header className="fixed top-[var(--site-alert-h)] left-0 right-0 z-[70] px-2 sm:px-4 pt-[env(safe-area-inset-top)]">
       {/* Floating liquid-glass island — detached from the page edges with
           oval (pill) sides. The nav bar and the mobile drawer live inside the
           same rounded shell so the whole thing reads as one object. */}

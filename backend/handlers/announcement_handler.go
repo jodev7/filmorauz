@@ -117,6 +117,7 @@ func (h *AnnouncementHandler) AdminCreate(c *gin.Context) {
 		return
 	}
 	a := &models.Announcement{
+		Type:        models.NormalizeAnnouncementType(input.Type),
 		Title:       strings.TrimSpace(input.Title),
 		Body:        input.Body,
 		LinkURL:     strings.TrimSpace(input.LinkURL),

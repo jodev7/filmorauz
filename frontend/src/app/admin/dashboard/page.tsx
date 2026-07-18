@@ -2,12 +2,26 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Film, PlusCircle, List, ExternalLink, Users, UserPlus, Share2, Eye, Star, Tv, Wifi, UserCheck, Globe, Activity, CalendarDays, CalendarRange } from "lucide-react";
+import { Film, PlusCircle, List, ExternalLink, Users, UserPlus, Share2, Eye, Star, Tv, Wifi, UserCheck, Globe, Activity, CalendarDays, CalendarRange, Monitor, MapPin, ChevronLeft, ChevronRight, User as UserIcon } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { adminGetMovies, Movie, getAdminDashboardStats, getAdminShareStats, getAdminUserMetrics, getAdminTopMovies, getAdminTopSeries, getAdminOnlineStats, DashboardStats, AdminShareStats, UserMetrics, TopContentItem, OnlineStats } from "@/lib/api";
+import { adminGetMovies, Movie, getAdminDashboardStats, getAdminShareStats, getAdminUserMetrics, getAdminTopMovies, getAdminTopSeries, getAdminOnlineStats, getAdminOnlineSessions, DashboardStats, AdminShareStats, UserMetrics, TopContentItem, OnlineStats, OnlineSessionsPage } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
 import SystemStatusBlock from "@/components/admin/SystemStatusBlock";
+
+// Short Uzbek relative-time label for the live-session "last seen" column.
+function formatRelativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "—";
+  const diffSec = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (diffSec < 10) return "hozir";
+  if (diffSec < 60) return `${diffSec} soniya oldin`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} daqiqa oldin`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour} soat oldin`;
+  return `${Math.floor(diffHour / 24)} kun oldin`;
+}
 
 export default function AdminDashboard() {
   const { token, user } = useAuth();
@@ -27,6 +41,11 @@ export default function AdminDashboard() {
 
   // Live activity (online + DAU/WAU/MAU). Refreshed on a short interval.
   const [onlineStats, setOnlineStats] = useState<OnlineStats | null>(null);
+
+  // Detailed live-session list (paginated: IP, device, clickable name).
+  const [sessions, setSessions] = useState<OnlineSessionsPage | null>(null);
+  const [sessionsPage, setSessionsPage] = useState(1);
+  const SESSIONS_PER_PAGE = 20;
 
   useEffect(() => {
     if (!token) return;
@@ -68,6 +87,24 @@ export default function AdminDashboard() {
       clearInterval(t);
     };
   }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    const load = () => {
+      getAdminOnlineSessions(token, sessionsPage, SESSIONS_PER_PAGE)
+        .then((data) => {
+          if (!cancelled) setSessions(data);
+        })
+        .catch(() => {});
+    };
+    load();
+    const t = setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [token, sessionsPage]);
 
   const recentMovies = movies.slice(0, 5);
 
@@ -209,6 +246,114 @@ export default function AdminDashboard() {
             </p>
           </div>
         </div>
+      </div>
+
+      {/* Live sessions — detailed paginated list (IP, device, name) */}
+      <div className="mb-8 sm:mb-10">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-base sm:text-lg font-semibold text-white">
+            Onlayn sessiyalar
+          </h2>
+          <span className="text-xs text-gray-500">
+            {sessions ? `${sessions.total} ta faol sessiya` : "Yuklanmoqda..."}
+          </span>
+        </div>
+
+        <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden">
+          {/* Header row (desktop only) */}
+          <div className="hidden sm:grid grid-cols-[1.6fr_1fr_1.2fr_0.9fr] gap-3 px-4 py-2.5 border-b border-brand-border text-[11px] uppercase tracking-wide text-gray-500">
+            <span>Foydalanuvchi</span>
+            <span>IP manzil</span>
+            <span>Qurilma</span>
+            <span className="text-right">Oxirgi faollik</span>
+          </div>
+
+          {sessions && sessions.sessions.length === 0 && (
+            <div className="px-4 py-8 text-center text-sm text-gray-500">
+              Hozircha faol sessiya yo'q
+            </div>
+          )}
+
+          {sessions?.sessions.map((s) => (
+            <div
+              key={s.session_id}
+              className="grid grid-cols-2 sm:grid-cols-[1.6fr_1fr_1.2fr_0.9fr] gap-2 sm:gap-3 px-4 py-3 border-b border-brand-border/50 last:border-b-0 items-center text-sm"
+            >
+              {/* User / anonymous */}
+              <div className="flex items-center gap-2 min-w-0 col-span-2 sm:col-span-1">
+                {s.type === "authenticated" ? (
+                  <>
+                    <span className="w-2 h-2 rounded-full bg-blue-400 shrink-0" />
+                    {s.user_id ? (
+                      <Link
+                        href={`/user/${s.user_id}`}
+                        className="text-blue-400 hover:text-blue-300 hover:underline truncate font-medium"
+                      >
+                        {s.name || "Foydalanuvchi"}
+                      </Link>
+                    ) : (
+                      <span className="text-white truncate">{s.name}</span>
+                    )}
+                    {s.role && s.role !== "user" && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-brand-red/15 text-brand-red uppercase shrink-0">
+                        {s.role === "superadmin" ? "SA" : "admin"}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
+                    <span className="flex items-center gap-1.5 text-gray-400 truncate">
+                      <UserIcon size={13} /> Anonim
+                    </span>
+                  </>
+                )}
+              </div>
+
+              {/* IP */}
+              <div className="flex items-center gap-1.5 text-gray-300 min-w-0">
+                <MapPin size={13} className="text-gray-500 shrink-0 sm:hidden" />
+                <span className="truncate font-mono text-xs">{s.ip || "—"}</span>
+              </div>
+
+              {/* Device */}
+              <div className="flex items-center gap-1.5 text-gray-300 min-w-0">
+                <Monitor size={13} className="text-gray-500 shrink-0" />
+                <span className="truncate text-xs">{s.device}</span>
+              </div>
+
+              {/* Last seen */}
+              <div className="text-right text-xs text-gray-500 col-span-2 sm:col-span-1">
+                {formatRelativeTime(s.last_seen)}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Pagination */}
+        {sessions && sessions.total_pages > 1 && (
+          <div className="flex items-center justify-center gap-3 mt-4">
+            <button
+              onClick={() => setSessionsPage((p) => Math.max(1, p - 1))}
+              disabled={sessionsPage <= 1}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-brand-border text-sm text-gray-300 hover:border-brand-red disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronLeft size={16} /> Oldingi
+            </button>
+            <span className="text-sm text-gray-400">
+              {sessions.page} / {sessions.total_pages}
+            </span>
+            <button
+              onClick={() =>
+                setSessionsPage((p) => Math.min(sessions.total_pages, p + 1))
+              }
+              disabled={sessionsPage >= sessions.total_pages}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-brand-border text-sm text-gray-300 hover:border-brand-red disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Keyingi <ChevronRight size={16} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Movie Stats */}

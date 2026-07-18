@@ -32,6 +32,28 @@ type pendingLogin struct {
 	FirstName string
 	LastName  string
 }
+
+// pendingMediaSession tracks a superadmin's in-progress link download between
+// the quality/language button presses and the actual download.
+type pendingMediaSession struct {
+	chatID      int64
+	userID      int64
+	url         string
+	title       string
+	probe       *services.ProbeResult
+	height      int    // chosen quality (0 = not yet chosen / best)
+	audioLang   string // chosen audio language ("" = default)
+	promptMsgID int    // message holding the inline keyboard, edited as we go
+	createdAt   time.Time
+}
+
+const (
+	mediaQualityPrefix = "mq:" // mq:<token>:<height>
+	mediaLangPrefix    = "ml:" // ml:<token>:<langcode>
+	mediaCancelPrefix  = "mx:" // mx:<token>
+	pendingMediaTTL    = 15 * time.Minute
+)
+
 type pendingInvoice struct {
 	chatID    int64
 	userID    int64
@@ -47,11 +69,15 @@ type Bot struct {
 	subscriptionService *services.SubscriptionService
 	authClient          *services.AuthClient
 	premiumClient       *services.PremiumClient
+	mediaClient         *services.MediaClient
 	httpClient          *http.Client
 
-	pendingMu           sync.Mutex
-	pendingInvoices     map[string]*pendingInvoice
-	pendingLoginByUser  map[int64]*pendingLogin
+	pendingMu          sync.Mutex
+	pendingInvoices    map[string]*pendingInvoice
+	pendingLoginByUser map[int64]*pendingLogin
+
+	mediaMu      sync.Mutex
+	pendingMedia map[string]*pendingMediaSession // token → session
 }
 
 // MovieCodeResponse represents the response from backend API
@@ -152,7 +178,16 @@ func NewBot(cfg *config.Config) (*Bot, error) {
 		log.Fatal("TELEGRAM_BOT_TOKEN is required in .env")
 	}
 
-	api, err := tgbotapi.NewBotAPI(cfg.TelegramBotToken)
+	var api *tgbotapi.BotAPI
+	var err error
+	if cfg.TelegramBotAPIURL != "" {
+		// Self-hosted Bot API server raises the upload limit to 2GB.
+		endpoint := strings.TrimRight(cfg.TelegramBotAPIURL, "/") + "/bot%s/%s"
+		api, err = tgbotapi.NewBotAPIWithAPIEndpoint(cfg.TelegramBotToken, endpoint)
+		log.Printf("Using self-hosted Telegram Bot API: %s", cfg.TelegramBotAPIURL)
+	} else {
+		api, err = tgbotapi.NewBotAPI(cfg.TelegramBotToken)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bot API: %w", err)
 	}
@@ -171,15 +206,19 @@ func NewBot(cfg *config.Config) (*Bot, error) {
 
 	premiumClient := services.NewPremiumClient(cfg.BackendBaseURL, cfg.BotInternalToken)
 
+	mediaClient := services.NewMediaClient(cfg.ParserBaseURL)
+
 	return &Bot{
 		api:                 api,
 		config:              cfg,
 		subscriptionService: subService,
 		authClient:          authClient,
 		premiumClient:       premiumClient,
+		mediaClient:         mediaClient,
 		httpClient:          &http.Client{Timeout: 10 * time.Second},
 		pendingInvoices:     make(map[string]*pendingInvoice),
 		pendingLoginByUser:  make(map[int64]*pendingLogin),
+		pendingMedia:        make(map[string]*pendingMediaSession),
 	}, nil
 }
 
@@ -282,9 +321,35 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 		return
 	}
 
+	// Superadmin universal downloader: a bare http(s) link from a superadmin
+	// starts the "download this video" flow. Checked before the unknown-command
+	// fallback so ordinary users still get the usual reply.
+	if b.isSuperAdmin(userID) && isHTTPURL(strings.TrimSpace(msg.Text)) {
+		b.handleMediaLink(chatID, userID, strings.TrimSpace(msg.Text))
+		return
+	}
+
 	// Handle unknown commands
 	log.Printf("Unknown command from user %d: %s", userID, msg.Text)
 	b.sendMessage(chatID, "❌ Noto'g'ri buyruq. /start yoki /code buyrug'ini yuboring.")
+}
+
+// isSuperAdmin reports whether the Telegram user ID is a configured superadmin.
+func (b *Bot) isSuperAdmin(userID int64) bool {
+	for _, id := range b.config.SuperAdminTelegramIDs {
+		if id == userID {
+			return true
+		}
+	}
+	return false
+}
+
+// isHTTPURL is a cheap check for a bare http(s) URL message.
+func isHTTPURL(text string) bool {
+	if strings.ContainsAny(text, " \n\t") {
+		return false // must be a single token, not a sentence
+	}
+	return strings.HasPrefix(text, "http://") || strings.HasPrefix(text, "https://")
 }
 
 // handleStart handles the /start command
@@ -752,6 +817,25 @@ func (b *Bot) handleCallback(callback *tgbotapi.CallbackQuery) {
 		}
 		b.answerCallback(callback.ID, "Bekor qilindi", false)
 		b.sendMessage(chatID, "Premium xaridi bekor qilindi.")
+		return
+	}
+	if strings.HasPrefix(data, mediaQualityPrefix) {
+		b.answerCallback(callback.ID, "", false)
+		b.handleMediaQualityPick(callback, strings.TrimPrefix(data, mediaQualityPrefix))
+		return
+	}
+	if strings.HasPrefix(data, mediaLangPrefix) {
+		b.answerCallback(callback.ID, "", false)
+		b.handleMediaLangPick(callback, strings.TrimPrefix(data, mediaLangPrefix))
+		return
+	}
+	if strings.HasPrefix(data, mediaCancelPrefix) {
+		b.answerCallback(callback.ID, "Bekor qilindi", false)
+		token := strings.TrimPrefix(data, mediaCancelPrefix)
+		b.mediaMu.Lock()
+		delete(b.pendingMedia, token)
+		b.mediaMu.Unlock()
+		b.editText(chatID, callback.Message.MessageID, "❌ Bekor qilindi.")
 		return
 	}
 

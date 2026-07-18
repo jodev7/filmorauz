@@ -51,7 +51,11 @@ export default function AnnouncementGate() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
 
-  const current = items.find((a) => !dismissed.includes(a.id));
+  // Only modal-type announcements are shown here; "alert" types render as a
+  // top banner via AlertBanner instead.
+  const current = items.find(
+    (a) => a.type !== "alert" && !dismissed.includes(a.id),
+  );
   if (!current) return null;
 
   const dismissNow = () => {

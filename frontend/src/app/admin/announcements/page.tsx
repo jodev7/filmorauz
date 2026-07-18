@@ -39,6 +39,7 @@ function statusBadge(a: Announcement): { text: string; color: string } {
 }
 
 const EMPTY_INPUT: AnnouncementInput = {
+  type: "modal",
   title: "",
   body: "",
   link_url: "",
@@ -102,6 +103,7 @@ export default function AdminAnnouncementsPage() {
   const openEdit = (a: Announcement) => {
     setEditId(a.id);
     setForm({
+      type: a.type === "alert" ? "alert" : "modal",
       title: a.title,
       body: a.body,
       link_url: a.link_url || "",
@@ -214,6 +216,11 @@ export default function AdminAnnouncementsPage() {
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
+                    {a.type === "alert" ? (
+                      <span className="text-xs px-2 py-0.5 rounded bg-red-600/20 text-red-300">Alert</span>
+                    ) : (
+                      <span className="text-xs px-2 py-0.5 rounded bg-blue-500/15 text-blue-300">Modal</span>
+                    )}
                     <span className={`text-xs px-2 py-0.5 rounded ${badge.color}`}>{badge.text}</span>
                     {a.dismissible ? (
                       <span className="text-xs px-2 py-0.5 rounded bg-white/5 text-gray-300">yopiladi</span>
@@ -292,7 +299,41 @@ export default function AdminAnnouncementsPage() {
 
             <div className="space-y-3">
               <div>
-                <label className="block text-xs text-gray-400 mb-1">Sarlavha *</label>
+                <label className="block text-xs text-gray-400 mb-1">Turi</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, type: "modal" })}
+                    className={`px-3 py-2 rounded-lg border text-sm transition-colors ${
+                      form.type !== "alert"
+                        ? "border-brand-red bg-brand-red/10 text-white"
+                        : "border-white/10 bg-black/40 text-gray-400 hover:border-white/30"
+                    }`}
+                  >
+                    Modal (popup)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, type: "alert" })}
+                    className={`px-3 py-2 rounded-lg border text-sm transition-colors ${
+                      form.type === "alert"
+                        ? "border-red-500 bg-red-600/15 text-white"
+                        : "border-white/10 bg-black/40 text-gray-400 hover:border-white/30"
+                    }`}
+                  >
+                    Alert (tepada qizil chiziq)
+                  </button>
+                </div>
+                {form.type === "alert" && (
+                  <p className="mt-1.5 text-[11px] text-gray-500">
+                    Har bir sahifa tepasida qizil, kichik shriftli chiziq. Belgilangan vaqt oralig'ida ko'rinadi.
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">
+                  {form.type === "alert" ? "Alert matni *" : "Sarlavha *"}
+                </label>
                 <input
                   type="text"
                   value={form.title}
@@ -335,28 +376,30 @@ export default function AdminAnnouncementsPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">Link URL (ixtiyoriy)</label>
-                  <input
-                    type="url"
-                    value={form.link_url}
-                    onChange={(e) => setForm({ ...form, link_url: e.target.value })}
-                    placeholder="https://..."
-                    className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white"
-                  />
+              {form.type !== "alert" && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Link URL (ixtiyoriy)</label>
+                    <input
+                      type="url"
+                      value={form.link_url}
+                      onChange={(e) => setForm({ ...form, link_url: e.target.value })}
+                      placeholder="https://..."
+                      className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Tugma matni</label>
+                    <input
+                      type="text"
+                      value={form.link_label}
+                      onChange={(e) => setForm({ ...form, link_label: e.target.value })}
+                      placeholder="Batafsil"
+                      className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">Tugma matni</label>
-                  <input
-                    type="text"
-                    value={form.link_label}
-                    onChange={(e) => setForm({ ...form, link_label: e.target.value })}
-                    placeholder="Batafsil"
-                    className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-lg text-white"
-                  />
-                </div>
-              </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
                 <label className="flex items-center gap-2 text-sm text-gray-200">

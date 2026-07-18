@@ -51,6 +51,7 @@ func (r *AnnouncementRepository) Create(ctx context.Context, a *models.Announcem
 func (r *AnnouncementRepository) Update(ctx context.Context, id primitive.ObjectID, input *models.AnnouncementInput) (*models.Announcement, error) {
 	now := time.Now()
 	update := bson.M{"$set": bson.M{
+		"type":         models.NormalizeAnnouncementType(input.Type),
 		"title":        input.Title,
 		"body":         input.Body,
 		"link_url":     input.LinkURL,
