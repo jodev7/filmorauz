@@ -4420,6 +4420,38 @@ class ParserHandler(BaseHTTPRequestHandler):
             self._send_json({"job_id": job_id, "status": "queued"})
             return
 
+        # Delete a completed media download's file from disk. The bot calls this
+        # after the video has been delivered to Telegram so downloaded files
+        # don't pile up in the downloads dir. Idempotent: unknown/already-gone
+        # jobs return ok=true.
+        if path == "/media/cleanup":
+            job_id = parse_qs(parsed.query).get("job_id", [""])[0].strip()
+            if not job_id:
+                try:
+                    body = self._read_json_body()
+                    job_id = (body.get("job_id", "") or "").strip()
+                except Exception:  # noqa: BLE001
+                    job_id = ""
+            if not job_id:
+                self._send_error("job_id is required", 400)
+                return
+            removed = False
+            st = _media_job_get(job_id)
+            if st:
+                fp = st.get("file_path", "")
+                if fp and os.path.exists(fp):
+                    try:
+                        os.remove(fp)
+                        removed = True
+                        logger.info(f"[MEDIA] cleaned up job={job_id} file={fp}")
+                    except OSError as exc:
+                        logger.warning(f"[MEDIA] cleanup failed job={job_id}: {exc}")
+                # Drop the job from the in-memory registry either way.
+                with _media_jobs_lock:
+                    _media_jobs.pop(job_id, None)
+            self._send_json({"ok": True, "removed": removed})
+            return
+
         if path == "/serial/extract/start":
             try:
                 body = self._read_json_body()
