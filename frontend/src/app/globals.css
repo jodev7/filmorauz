@@ -14,6 +14,11 @@
   --glass-border: rgba(255, 255, 255, 0.12);
   --glass-highlight: rgba(255, 255, 255, 0.14);
   --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.38);
+
+  /* Height of the site-wide alert banner (0 when none active). Set by
+     AlertBanner at runtime; declared here so the fixed Navbar's
+     `top: var(--site-alert-h)` resolves correctly on first paint / SSR. */
+  --site-alert-h: 0px;
 }
 
 * {
@@ -41,6 +46,16 @@ html,
 body {
   overflow-x: clip;
   max-width: 100%;
+}
+
+/* Site-wide alert banner offset. AlertBanner (a fixed red bar at top-0)
+   publishes its height into --site-alert-h; the body shifts down by that
+   amount and the fixed Navbar reads the same variable for its `top`, so the
+   whole page moves down by exactly the banner height with no overlap.
+   Defaults to 0 when no alert is active. */
+body {
+  padding-top: var(--site-alert-h, 0px);
+  transition: padding-top 0.2s ease;
 }
 
 /* Custom scrollbar */
