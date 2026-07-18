@@ -69,6 +69,26 @@ func (h *SeriesHandler) ListSeries(c *gin.Context) {
 	})
 }
 
+// GET /api/series-by-id/:id/recommendations?limit=12 - content-similar series
+// for the "Sizga yoqishi mumkin" row on series and episode pages.
+func (h *SeriesHandler) GetRecommendations(c *gin.Context) {
+	id := c.Param("id")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "12"))
+	if limit < 1 || limit > 30 {
+		limit = 12
+	}
+
+	seriesList, err := h.seriesService.GetRecommendations(id, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get series recommendations"})
+		return
+	}
+	for i := range seriesList {
+		protectSeriesMedia(&seriesList[i])
+	}
+	c.JSON(http.StatusOK, gin.H{"data": seriesList})
+}
+
 // GET /api/series/:slug - Get series by slug
 func (h *SeriesHandler) GetSeriesBySlug(c *gin.Context) {
 	slug := c.Param("slug")

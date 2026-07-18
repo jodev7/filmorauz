@@ -3,18 +3,29 @@ import Footer from "@/components/Footer";
 import WatchPageClient from "@/components/watch/WatchPageClient";
 import Comments from "@/components/Comments";
 import StarRating from "@/components/StarRating";
+import SeriesCarousel from "@/components/SeriesCarousel";
 import type { EpisodePageData } from "@/lib/episode-page-data";
 import Link from "next/link";
 import Script from "next/script";
 import { buildEpisodeJsonLd } from "@/lib/episode-page-data";
 import { buildSeriesPath } from "@/lib/content-routes";
+import { getSeriesRecommendations } from "@/lib/series-api";
 
 interface EpisodePageViewProps {
   data: EpisodePageData;
 }
 
-export default function EpisodePageView({ data }: EpisodePageViewProps) {
+export default async function EpisodePageView({ data }: EpisodePageViewProps) {
   const { episode, series, previousEpisode, nextEpisode } = data;
+
+  // Content-similar series (by genre / country / year), seeded from the parent
+  // series — the "Sizga yoqishi mumkin" row for episode pages.
+  let relatedSeries: Awaited<ReturnType<typeof getSeriesRecommendations>> = [];
+  try {
+    relatedSeries = await getSeriesRecommendations(series.series.id, 12);
+  } catch {
+    // Silently handle — the row just won't render.
+  }
 
   const movieData = {
     id: episode.id,
@@ -107,6 +118,14 @@ export default function EpisodePageView({ data }: EpisodePageViewProps) {
           </div>
         </div>
       </section>
+      {relatedSeries.length > 0 && (
+        <section className="max-w-6xl mx-auto px-3 sm:px-4 pb-8">
+          <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white mb-4">
+            SIZGA YOQISHI MUMKIN
+          </h2>
+          <SeriesCarousel series={relatedSeries} />
+        </section>
+      )}
       <section className="max-w-6xl mx-auto px-3 sm:px-4 pb-12">
         <Comments targetType="episode" targetId={episode.id} />
       </section>

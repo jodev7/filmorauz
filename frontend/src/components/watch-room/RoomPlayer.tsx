@@ -18,7 +18,9 @@ import {
   FastForward,
   RefreshCw,
 } from "lucide-react";
+import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
+import { isUserPremium } from "@/components/PremiumComponents";
 
 type QualityLevel = { index: number; label: string; height: number };
 
@@ -98,6 +100,14 @@ export default function RoomPlayer({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const { user } = useAuth();
+  // 720p/1080p are Premium-only. Free viewers get a locked entry in the quality
+  // picker and an upsell prompt; their auto/manual quality is capped at 480p.
+  const isPremiumViewer = isUserPremium(user);
+  const isPremiumRef = useRef(isPremiumViewer);
+  useEffect(() => {
+    isPremiumRef.current = isPremiumViewer;
+  }, [isPremiumViewer]);
+  const [showPremiumPrompt, setShowPremiumPrompt] = useState(false);
 
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -269,6 +279,22 @@ export default function RoomPlayer({
     };
     hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
       setFromHls(buildLevels(data.levels));
+      // Free viewers: cap auto/manual selection at the highest ≤480p level so
+      // Premium-only resolutions are never served, even on Auto.
+      if (!isPremiumRef.current) {
+        let capIdx = -1;
+        let capHeight = -1;
+        data.levels.forEach((l, i) => {
+          if (l.height <= 480 && l.height > capHeight) {
+            capHeight = l.height;
+            capIdx = i;
+          }
+        });
+        if (capIdx >= 0) {
+          hls.autoLevelCapping = capIdx;
+          hls.nextAutoLevel = capIdx;
+        }
+      }
       syncSelectedLevelFromHls(hls);
     });
     hls.on(Hls.Events.LEVEL_LOADED, () => {
@@ -719,6 +745,13 @@ export default function RoomPlayer({
   };
 
   const setQuality = (idx: number) => {
+    // Gate Premium-only resolutions (>480p) for free viewers.
+    const requested = qualities.find((q) => q.index === idx);
+    if (!isPremiumViewer && requested && requested.height > 480) {
+      setShowPremiumPrompt(true);
+      setShowSettings(false);
+      return;
+    }
     const hls = hlsRef.current;
     if (!hls) {
       setSelectedLevel(-1);
@@ -820,7 +853,7 @@ export default function RoomPlayer({
       ref={containerRef}
       className={`relative w-full h-full bg-black select-none group ${
         isMoviePremium ? "ring-2 ring-yellow-500/40" : ""
-      }`}
+      } ${controlsVisible ? "" : "cursor-none"}`}
       onMouseMove={showControls}
       onMouseLeave={() => playing && setControlsVisible(false)}
       onClick={() => {
@@ -1117,19 +1150,22 @@ export default function RoomPlayer({
                     >
                       ‹ Sifat
                     </button>
-                    {qualities.map((q) => (
-                      <button
-                        key={q.index}
-                        type="button"
-                        onPointerDown={(e) => e.stopPropagation()}
-                        onClick={(e) => { e.stopPropagation(); setQuality(q.index); }}
-                        className={`block w-full px-3 py-1.5 text-left hover:bg-white/10 ${
-                          isQualitySelected(q) ? "text-brand-red font-semibold" : "text-white"
-                        }`}
-                      >
-                        {q.label}
-                      </button>
-                    ))}
+                    {qualities.map((q) => {
+                      const locked = !isPremiumViewer && q.height > 480;
+                      return (
+                        <button
+                          key={q.index}
+                          type="button"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => { e.stopPropagation(); setQuality(q.index); }}
+                          className={`block w-full px-3 py-1.5 text-left hover:bg-white/10 ${
+                            isQualitySelected(q) ? "text-brand-red font-semibold" : "text-white"
+                          }`}
+                        >
+                          {locked ? `${q.label} 🔒 Premium` : q.label}
+                        </button>
+                      );
+                    })}
                     {qualities.length <= 1 && (
                       <div className="px-3 py-2 text-[10px] text-gray-500 border-t border-white/10">
                         Bu video uchun boshqa sifat mavjud emas
@@ -1239,6 +1275,42 @@ export default function RoomPlayer({
       {isFullscreen && fullscreenOverlay && (
         <div className="absolute top-12 right-3 z-10 pointer-events-none w-72 max-w-[50%]">
           {fullscreenOverlay}
+        </div>
+      )}
+
+      {/* Premium quality upsell — fixed inset-0 so it fills the viewport (and the
+          fullscreen area) rather than being clipped inside a small mobile player. */}
+      {showPremiumPrompt && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4"
+          onClick={(e) => { e.stopPropagation(); setShowPremiumPrompt(false); }}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-yellow-500/30 glass-card p-5 text-center shadow-[0_0_30px_rgba(234,179,8,0.12)] backdrop-blur-sm"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-yellow-500 to-amber-600">
+              <Crown size={26} className="text-black" />
+            </div>
+            <h3 className="mb-2 text-lg font-semibold text-white">Premium sifat</h3>
+            <p className="mb-4 text-sm text-gray-300">
+              720p va 1080p faqat Premium foydalanuvchilar uchun mavjud.
+            </p>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowPremiumPrompt(false); }}
+                className="inline-flex flex-1 items-center justify-center rounded-xl border border-white/10 bg-brand-dark px-4 py-3 text-sm font-medium text-white transition-colors hover:border-brand-red"
+              >
+                Yopish
+              </button>
+              <Link
+                href="/premium"
+                className="inline-flex flex-1 items-center justify-center rounded-xl bg-gradient-to-r from-yellow-500 to-amber-600 px-4 py-3 text-sm font-semibold text-black transition-opacity hover:opacity-90"
+              >
+                Premium olish
+              </Link>
+            </div>
+          </div>
         </div>
       )}
     </div>
