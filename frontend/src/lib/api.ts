@@ -456,6 +456,19 @@ export async function getMovieById(id: string): Promise<Movie> {
   return movieWithViews;
 }
 
+// Build a browser-native download URL for the highest-quality source MP4 of a
+// movie or episode. The JWT rides in the query string because a plain <a
+// download> navigation can't set an Authorization header; the backend gates
+// access (admins/superadmins + premium users) inside the handler.
+export function buildVideoDownloadUrl(
+  kind: "movie" | "episode",
+  id: string,
+  token: string,
+): string {
+  const seg = kind === "episode" ? "episodes" : "movies";
+  return `${API_URL}/v1/${seg}/${id}/download?token=${encodeURIComponent(token)}`;
+}
+
 export async function searchMovies(q: string): Promise<Movie[]> {
   const res = await fetch(`${API_URL}/search?q=${encodeURIComponent(q)}`, {
     cache: "no-store",
@@ -2647,6 +2660,42 @@ export async function getAdminOnlineStats(token: string): Promise<OnlineStats> {
     cache: "no-store",
   });
   if (!res.ok) throw new Error("Failed to fetch online stats");
+  return res.json();
+}
+
+// A single live session row for the admin "Jonli faollik" list.
+export interface OnlineSessionItem {
+  session_id: string;
+  type: "authenticated" | "anonymous";
+  ip: string;
+  device: string;
+  user_agent: string;
+  first_seen: string;
+  last_seen: string;
+  user_id?: string;
+  name?: string;
+  avatar_url?: string;
+  role?: string;
+}
+
+export interface OnlineSessionsPage {
+  sessions: OnlineSessionItem[];
+  page: number;
+  limit: number;
+  total: number;
+  total_pages: number;
+}
+
+export async function getAdminOnlineSessions(
+  token: string,
+  page = 1,
+  limit = 20,
+): Promise<OnlineSessionsPage> {
+  const res = await fetch(
+    `${API_URL}/admin/stats/online/sessions?page=${page}&limit=${limit}`,
+    { headers: authHeaders(token), cache: "no-store" },
+  );
+  if (!res.ok) throw new Error("Failed to fetch online sessions");
   return res.json();
 }
 
@@ -5065,8 +5114,11 @@ export async function getAdminSystemStatus(token: string): Promise<{ hosts: Syst
 
 // ── Announcements (site-wide modal) ─────────────────────────────────────
 
+export type AnnouncementType = "modal" | "alert";
+
 export interface Announcement {
   id: string;
+  type: AnnouncementType;
   title: string;
   body: string;
   link_url?: string;
@@ -5103,6 +5155,7 @@ export async function adminListAnnouncements(token: string): Promise<Announcemen
 }
 
 export interface AnnouncementInput {
+  type: AnnouncementType;
   title: string;
   body: string;
   link_url: string;

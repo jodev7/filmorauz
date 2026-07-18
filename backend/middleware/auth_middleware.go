@@ -54,23 +54,41 @@ func isBannedFlowAllowed(fullPath string) bool {
 
 // RequireAuth validates JWT token from Authorization header
 func RequireAuth(authService *services.AuthService) gin.HandlerFunc {
+	return requireAuth(authService, false)
+}
+
+// RequireAuthAllowQueryToken behaves like RequireAuth but also accepts the JWT
+// via a `?token=` query parameter when the Authorization header is absent. This
+// is needed for browser-native downloads (a plain <a download> link streams the
+// file straight to disk but cannot set request headers), mirroring how the
+// watch-room WebSocket upgrade takes its token from the query string.
+func RequireAuthAllowQueryToken(authService *services.AuthService) gin.HandlerFunc {
+	return requireAuth(authService, true)
+}
+
+func requireAuth(authService *services.AuthService, allowQueryToken bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
+		var rawToken string
+		if authHeader := c.GetHeader("Authorization"); authHeader != "" {
+			// Expect "Bearer <token>"
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) != 2 || parts[0] != "Bearer" {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization format"})
+				c.Abort()
+				return
+			}
+			rawToken = parts[1]
+		} else if allowQueryToken {
+			rawToken = strings.TrimSpace(c.Query("token"))
+		}
+
+		if rawToken == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "authorization header required"})
 			c.Abort()
 			return
 		}
 
-		// Expect "Bearer <token>"
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization format"})
-			c.Abort()
-			return
-		}
-
-		claims, err := authService.ValidateToken(parts[1])
+		claims, err := authService.ValidateToken(rawToken)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
 			c.Abort()

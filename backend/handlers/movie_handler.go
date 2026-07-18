@@ -610,6 +610,35 @@ func protectMovieMedia(movie *models.Movie) {
 	movie.MasterPlaylistURL = protectMediaURL(movie.MasterPlaylistURL)
 }
 
+// DownloadMovie streams the highest-quality HLS rendition of a movie as a
+// downloadable MP4. Access is gated by canDownload (admins/superadmins always,
+// premium users too). The frontend currently only exposes the button for
+// admins/superadmins.
+func (h *MovieHandler) DownloadMovie(c *gin.Context) {
+	if !canDownload(c) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+
+	movieID := c.Param("id")
+	if movieID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "movie id is required"})
+		return
+	}
+
+	movie, err := h.movieService.GetMovieByID(movieID)
+	if err != nil || movie == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "movie not found"})
+		return
+	}
+
+	base := movie.Slug
+	if base == "" {
+		base = movie.Title
+	}
+	streamHLSAsMP4(c, movie.SourceType, movie.MasterPlaylistURL, getPlaybackQualities(movie), base)
+}
+
 func getPlaybackQualities(movie *models.Movie) []string {
 	if movie == nil {
 		return nil

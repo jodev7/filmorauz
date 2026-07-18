@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
-import { ChevronLeft, ChevronRight, Clock, Calendar, Heart, Eye, Crown } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clock, Calendar, Heart, Eye, Crown, Download } from "lucide-react";
 // Code-split the player (which pulls in the heavy hls.js bundle) out of the
 // watch route's initial JS. The page shell — poster, title, info, ads —
 // paints immediately while the player chunk streams in behind a skeleton.
@@ -14,7 +14,7 @@ const VideoPlayer = dynamic(() => import("@/components/VideoPlayer"), {
   loading: () => <div className="w-full aspect-video bg-black rounded-xl animate-pulse" />,
 });
 import WatchTogetherButton from "@/components/WatchTogetherButton";
-import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveUnifiedWatchProgress, getWatchProgress, resetWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, getProtectedMediaAccess, Ad, Movie } from "@/lib/api";
+import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveUnifiedWatchProgress, getWatchProgress, resetWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, getProtectedMediaAccess, buildVideoDownloadUrl, Ad, Movie } from "@/lib/api";
 import { pickWeightedRandomAd } from "@/lib/ads-utils";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { useAuth } from "@/lib/auth-context";
@@ -696,6 +696,26 @@ export default function WatchPageClient({
                   />
                 );
               })()}
+              {/* Source MP4 download — admins/superadmins only for now. The
+                  backend also permits premium users, but no button is exposed
+                  to them yet. Only HLS sources have a downloadable file. */}
+              {movie && token &&
+                (user?.role === "admin" || user?.role === "superadmin") &&
+                movie.source_type === "direct_hls" &&
+                (() => {
+                  const isEp = (movie as unknown as { type?: string }).type === "episode";
+                  const cid = isEp ? (progressTargetIdProp || movie.id) : movie.id;
+                  return (
+                    <a
+                      href={buildVideoDownloadUrl(isEp ? "episode" : "movie", cid, token)}
+                      className="flex items-center gap-1.5 px-2 py-1.5 sm:px-3 glass-card border border-white/10 hover:border-brand-red rounded-md text-[11px] sm:text-xs text-white transition-colors whitespace-nowrap"
+                      title="Eng yuqori sifatda yuklab olish"
+                    >
+                      <Download size={14} />
+                      <span className="hidden sm:inline">Yuklab olish</span>
+                    </a>
+                  );
+                })()}
             </div>
             </div>
           </div>

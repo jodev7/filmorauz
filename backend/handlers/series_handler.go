@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -155,6 +156,43 @@ func (h *SeriesHandler) GetEpisodes(c *gin.Context) {
 }
 
 // GET /api/episodes/:id - Get episode by ID
+// DownloadEpisode streams the highest-quality HLS rendition of an episode as a
+// downloadable MP4. Access is gated by canDownload (admins/superadmins always,
+// premium users too). The frontend currently only exposes the button for
+// admins/superadmins.
+func (h *SeriesHandler) DownloadEpisode(c *gin.Context) {
+	if !canDownload(c) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode id"})
+		return
+	}
+
+	episode, err := h.seriesService.GetEpisodeByID(id)
+	if err != nil || episode == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "episode not found"})
+		return
+	}
+
+	qualities := episode.AvailableQualities
+	if len(qualities) == 0 {
+		qualities = episode.GeneratedQualities
+	}
+
+	// Build a descriptive filename: <series-slug>-s<season>e<episode>.
+	base := episode.Title
+	if series, sErr := h.seriesService.GetSeriesByID(episode.SeriesID); sErr == nil && series != nil && series.Slug != "" {
+		base = fmt.Sprintf("%s-e%d", series.Slug, episode.EpisodeNumber)
+	}
+
+	streamHLSAsMP4(c, episode.SourceType, episode.MasterPlaylistURL, qualities, base)
+}
+
 func (h *SeriesHandler) GetEpisode(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := primitive.ObjectIDFromHex(idStr)
