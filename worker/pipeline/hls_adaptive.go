@@ -3,6 +3,7 @@ package pipeline
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -243,6 +244,35 @@ func (p *Pipeline) processAdaptiveHLS(jobID, inputPath, outputDir, hlsFolderName
 	streamingUploader := newStreamingUploader(p.storage, b2Root, hlsFolderName, renditions, segmentUploadWorkers, segmentUploadRetries, outputDir)
 	streamingUploader.start()
 	log.Printf("[STAGE] streaming_upload start — folder: %s, renditions: %d, workers: %d, retries: %d", hlsFolderName, len(renditions), segmentUploadWorkers, segmentUploadRetries)
+
+	// Heartbeat goroutine: multi-rendition ffmpeg generation followed by the
+	// segment upload drain (stopAndWait) routinely exceeds the 10-minute
+	// "processing stalled" watchdog window (RecoverStaleJobs). Without a
+	// heartbeat, updated_at goes stale during the final upload drain and the
+	// watchdog resets the job to ready_to_process mid-flight, looping until
+	// retry_count hits the limit and the job gets stuck un-claimable. Bump
+	// updated_at only (no status/progress change) so the ffmpeg progress bar
+	// isn't disturbed. Mirrors the heartbeat used during HLS ParallelUpload.
+	doneHeartbeat := make(chan struct{})
+	var stopHeartbeatOnce sync.Once
+	stopHeartbeat := func() { stopHeartbeatOnce.Do(func() { close(doneHeartbeat) }) }
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				log.Printf("[HLS] streaming_upload heartbeat job=%s (keeping updated_at fresh during rendition generation + segment upload)", jobID)
+				if err := p.jobRepo.Heartbeat(context.Background(), jobID); err != nil {
+					log.Printf("[HLS] streaming_upload heartbeat error job=%s: %v", jobID, err)
+				}
+			case <-doneHeartbeat:
+				return
+			}
+		}
+	}()
+	// Guarantees the goroutine is torn down on every return path (incl. errors).
+	defer stopHeartbeat()
 
 	type renditionJob struct {
 		index        int
