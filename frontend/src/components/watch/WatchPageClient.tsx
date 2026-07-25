@@ -20,6 +20,7 @@ import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
+import { useReportPresenceActivity } from "@/lib/presence-activity";
 import { isMoviePremium, isUserPremium, PremiumLockOverlay, PremiumButton } from "@/components/PremiumComponents";
 import { getLocalizedTitle, getLocalizedDescription, getLocalizedGenres, getLocalizedCountry } from "@/lib/localization";
 import MediaTitle from "@/components/MediaTitle";
@@ -356,6 +357,20 @@ export default function WatchPageClient({
       ? `/series/${movie.series_slug}`
       : "/series"
     : `/movies/${movie.slug}`;
+
+  // Report the open content with the presence heartbeat so the admin "Onlayn
+  // sessiyalar" list can show which movie/episode each live session is on.
+  // Cleared automatically when this page unmounts.
+  useReportPresenceActivity({
+    type: targetType,
+    content_id: progressTargetId,
+    title:
+      targetType === "episode" && movie.series_title
+        ? `${movie.series_title} — ${localizedTitle}`
+        : localizedTitle,
+    slug: movie.slug,
+    url: pathname || backHref,
+  });
 
   useEffect(() => {
     let cancelled = false;

@@ -1,6 +1,9 @@
 package handlers
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseDevice(t *testing.T) {
 	cases := []struct {
@@ -37,5 +40,38 @@ func TestParseDevice(t *testing.T) {
 				t.Fatalf("parseDevice(%q) = %q, want %q", tc.ua, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestToSessionActivity(t *testing.T) {
+	if got := toSessionActivity(nil); got != nil {
+		t.Fatalf("nil payload should stay nil, got %+v", got)
+	}
+	if got := toSessionActivity(&heartbeatContent{Type: "homepage", Title: "x"}); got != nil {
+		t.Fatalf("unknown type should be rejected, got %+v", got)
+	}
+	if got := toSessionActivity(&heartbeatContent{Type: "movie"}); got != nil {
+		t.Fatalf("empty payload should be rejected, got %+v", got)
+	}
+
+	// Absolute/protocol-relative URLs are dropped so nobody can plant an
+	// off-site link in the admin panel.
+	got := toSessionActivity(&heartbeatContent{
+		Type: "MOVIE", ContentID: "m1", Title: " Interstellar ", Slug: "interstellar",
+		URL: "https://evil.example/x",
+	})
+	if got == nil || got.Type != "movie" || got.Title != "Interstellar" || got.URL != "" {
+		t.Fatalf("unexpected activity: %+v", got)
+	}
+	if got := toSessionActivity(&heartbeatContent{Type: "movie", Slug: "a", URL: "//evil.example"}); got.URL != "" {
+		t.Fatalf("protocol-relative URL kept: %q", got.URL)
+	}
+	if got := toSessionActivity(&heartbeatContent{Type: "episode", Slug: "a", URL: "/episode/1"}); got.URL != "/episode/1" {
+		t.Fatalf("relative URL dropped: %q", got.URL)
+	}
+
+	long := toSessionActivity(&heartbeatContent{Type: "movie", Title: strings.Repeat("a", 500)})
+	if len(long.Title) != maxActivityField {
+		t.Fatalf("title len = %d, want %d", len(long.Title), maxActivityField)
 	}
 }

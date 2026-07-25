@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useAuth } from "@/lib/auth-context";
+import { getPresenceActivity, PRESENCE_ACTIVITY_EVENT } from "@/lib/presence-activity";
 
 // NEXT_PUBLIC_API_URL already includes the /api prefix (see lib/api.ts), so
 // only the route path is appended here. The previous version double-prefixed
@@ -42,7 +43,12 @@ export default function PresencePinger() {
       fetch(`${API_URL}/presence/heartbeat`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ session_id: sessionId }),
+        // activity tells the admin panel which movie/episode this tab has open;
+        // null on every other page, which clears the previous report.
+        body: JSON.stringify({
+          session_id: sessionId,
+          activity: getPresenceActivity(),
+        }),
         keepalive: true,
       }).catch(() => {});
     };
@@ -53,9 +59,11 @@ export default function PresencePinger() {
       if (!document.hidden) ping();
     };
     document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener(PRESENCE_ACTIVITY_EVENT, ping);
     return () => {
       clearInterval(t);
       document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener(PRESENCE_ACTIVITY_EVENT, ping);
     };
   }, [token]);
 

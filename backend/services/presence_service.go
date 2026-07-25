@@ -19,8 +19,21 @@ type presenceEntry struct {
 	UserID    string // empty for anonymous visitors
 	IP        string
 	UserAgent string
+	Activity  *SessionActivity // what the session is watching right now (nil = nothing)
 	FirstSeen time.Time
 	LastSeen  time.Time
+}
+
+// SessionActivity describes the content a session currently has open — the
+// movie or episode watch page it is sitting on. Reported by the client with
+// every heartbeat; absent on non-watch pages.
+type SessionActivity struct {
+	Type      string `json:"type"` // "movie" | "episode"
+	ContentID string `json:"content_id"`
+	Title     string `json:"title"`
+	Slug      string `json:"slug"`
+	URL       string `json:"url"`
+	Since     time.Time
 }
 
 // OnlineSession is an immutable snapshot of a single live session, returned by
@@ -30,6 +43,7 @@ type OnlineSession struct {
 	UserID    string // empty for anonymous
 	IP        string
 	UserAgent string
+	Activity  *SessionActivity
 	FirstSeen time.Time
 	LastSeen  time.Time
 }
@@ -48,11 +62,19 @@ func NewPresenceService() *PresenceService {
 // Touch records a heartbeat for a given session. userID may be empty for
 // anonymous visitors. ip and userAgent are refreshed on every heartbeat so the
 // admin list reflects the visitor's current network/device.
-func (p *PresenceService) Touch(sessionID, userID, ip, userAgent string) {
+//
+// activity is the content the session currently has open; a nil activity means
+// the visitor is not on a watch page, and clears any previously reported one.
+// Since is preserved while the session stays on the same content, so the admin
+// list can show how long they have been watching it.
+func (p *PresenceService) Touch(sessionID, userID, ip, userAgent string, activity *SessionActivity) {
 	if sessionID == "" {
 		return
 	}
 	now := time.Now()
+	if activity != nil && activity.Since.IsZero() {
+		activity.Since = now
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if entry, ok := p.sessions[sessionID]; ok {
@@ -67,15 +89,28 @@ func (p *PresenceService) Touch(sessionID, userID, ip, userAgent string) {
 		if userID != "" && entry.UserID == "" {
 			entry.UserID = userID
 		}
+		if activity != nil && entry.Activity != nil && sameContent(entry.Activity, activity) {
+			activity.Since = entry.Activity.Since
+		}
+		entry.Activity = activity
 		return
 	}
 	p.sessions[sessionID] = &presenceEntry{
 		UserID:    userID,
 		IP:        ip,
 		UserAgent: userAgent,
+		Activity:  activity,
 		FirstSeen: now,
 		LastSeen:  now,
 	}
+}
+
+// sameContent reports whether two activities point at the same movie/episode.
+func sameContent(a, b *SessionActivity) bool {
+	if a.ContentID != "" || b.ContentID != "" {
+		return a.Type == b.Type && a.ContentID == b.ContentID
+	}
+	return a.Type == b.Type && a.Slug == b.Slug
 }
 
 // OnlineCounts returns current online counts: authed, anonymous, total.
@@ -117,6 +152,7 @@ func (p *PresenceService) OnlineSessions() []OnlineSession {
 			UserID:    e.UserID,
 			IP:        e.IP,
 			UserAgent: e.UserAgent,
+			Activity:  e.Activity,
 			FirstSeen: e.FirstSeen,
 			LastSeen:  e.LastSeen,
 		})

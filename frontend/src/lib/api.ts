@@ -2676,6 +2676,15 @@ export interface OnlineSessionItem {
   name?: string;
   avatar_url?: string;
   role?: string;
+  // Content the session currently has open; absent outside watch pages.
+  watching?: {
+    type: "movie" | "episode";
+    content_id?: string;
+    title?: string;
+    slug?: string;
+    url?: string;
+    since?: string;
+  };
 }
 
 export interface OnlineSessionsPage {
