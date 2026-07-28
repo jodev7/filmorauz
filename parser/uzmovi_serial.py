@@ -78,6 +78,11 @@ class UzmoviSerialParser:
     def __init__(self) -> None:
         self._movie = UzmoviParser()
         self.base_url = getattr(self._movie, "BASE_URL", None) or "https://uzmovi.net"
+        # Lazily-opened Playwright handles, shared across every episode of one
+        # parse() call so we pay browser startup once instead of per episode.
+        self._pw = None
+        self._pw_browser = None
+        self._pw_ctx = None
 
     @property
     def session(self):
@@ -85,6 +90,17 @@ class UzmoviSerialParser:
         return self._movie.session
 
     def parse(self, url: str, progress_callback: Optional[Callable[[Dict], None]] = None) -> Dict:
+        """Public entry point — guarantees the shared browser is torn down.
+
+        _parse_impl has several early returns; closing here rather than at each
+        of them keeps a failed parse from leaking a chromium process.
+        """
+        try:
+            return self._parse_impl(url, progress_callback)
+        finally:
+            self._close_browser()
+
+    def _parse_impl(self, url: str, progress_callback: Optional[Callable[[Dict], None]] = None) -> Dict:
         m_sid = re.search(r"/(\d+)-[^/]+\.html", url) or re.search(r"id=(\d+)", url)
         source_id = m_sid.group(1) if m_sid else ""
         logger.info(f"[UZMOVI SERIAL] parse start url={url} source_id={source_id}")
@@ -200,10 +216,24 @@ class UzmoviSerialParser:
             if in_top:
                 eps_in_top = [ep for (_, ep) in in_top.keys()]
                 min_ep, max_ep = min(eps_in_top), max(eps_in_top)
+                # Episode URLs hang off the serial's own path
+                # (/jangari/816-slug/episode/<gid>/<n>.html); the same path at
+                # the site root 404s, so derive the prefix from a real one
+                # instead of assuming base_url.
+                sample_url = next(iter(in_top.values()))["episode_url"]
+                m_pref = re.match(
+                    rf"(.*/episode/{re.escape(str(top_group_id))}/)\d+\.html", sample_url
+                )
+                ep_prefix = (
+                    m_pref.group(1) if m_pref
+                    else f"{self.base_url.rstrip('/')}/episode/{top_group_id}/"
+                )
                 detected_expected_max = self._detect_expected_episode_max(resp.text, episode_candidates, max_ep)
                 # Probe upward past the observed max (cap probe range for safety).
                 probe_target = max(max_ep + 30, detected_expected_max)
-                probe_max = self._probe_upper_bound(top_group_id, max_ep, hard_cap=probe_target)
+                probe_max = self._probe_upper_bound(
+                    top_group_id, max_ep, hard_cap=probe_target, url_prefix=ep_prefix
+                )
                 final_max = max(max_ep, detected_expected_max, probe_max)
                 if final_max > max_ep:
                     logger.info(
@@ -221,7 +251,7 @@ class UzmoviSerialParser:
                     if key in {(it["season"], it["episode"]) for it in inventory}:
                         continue
 
-                    href = f"{self.base_url.rstrip('/')}/episode/{top_group_id}/{n}.html"
+                    href = f"{ep_prefix}{n}.html"
                     entry = {
                             "season": fill_season,
                             "episode": n,
@@ -766,14 +796,20 @@ class UzmoviSerialParser:
             flat.extend(gmap.values())
         return flat, counts
 
-    def _probe_upper_bound(self, group_id: str, observed_max: int, hard_cap: int) -> int:
-        """HEAD-probe sequential episode URLs past observed_max; stop after 3 consecutive misses."""
+    def _probe_upper_bound(self, group_id: str, observed_max: int, hard_cap: int,
+                           url_prefix: str = "") -> int:
+        """HEAD-probe sequential episode URLs past observed_max; stop after 3 consecutive misses.
+
+        url_prefix is the "…/episode/<gid>/" stem taken from a real episode
+        link; without it the probe builds root-relative URLs that always 404.
+        """
         best = observed_max
         misses = 0
         n = observed_max + 1
         referer = getattr(self, "_serial_url", self.base_url)
+        prefix = url_prefix or f"{self.base_url.rstrip('/')}/episode/{group_id}/"
         while n <= hard_cap and misses < 3:
-            url = f"{self.base_url.rstrip('/')}/episode/{group_id}/{n}.html"
+            url = f"{prefix}{n}.html"
             ok = False
             try:
                 r = self.session.head(url, timeout=10, allow_redirects=True, headers={"Referer": referer})
@@ -835,7 +871,14 @@ class UzmoviSerialParser:
         uzmovi.net injects the episode-button block via JavaScript after
         page load, so a plain requests.get can never see it. We share the
         same Playwright path the movie downloader uses (no-sandbox for
-        root, settle for ~6s to let the player JS attach episode links).
+        root, settle for ~8s to let the player JS attach episode links).
+
+        Waits on "domcontentloaded", not "networkidle": the page embeds ad
+        iframes on hosts that never resolve, so the network never goes idle
+        and goto() would always throw at the timeout — discarding a DOM that
+        already had every episode link in it. If goto still times out we read
+        page.content() anyway rather than giving up.
+
         Returns an empty string on any failure so the caller can fall
         through to the standard "no episodes" error.
         """
@@ -854,8 +897,14 @@ class UzmoviSerialParser:
                     ),
                 )
                 page = ctx.new_page()
-                page.goto(url, wait_until="networkidle", timeout=45000)
-                page.wait_for_timeout(6000)
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                except Exception as nav_err:
+                    logger.warning(
+                        f"[uzmovi serial] playwright goto did not settle ({nav_err}); "
+                        "reading whatever rendered"
+                    )
+                page.wait_for_timeout(8000)
                 html = page.content()
                 browser.close()
                 logger.info(f"[uzmovi serial] playwright rendered html_len={len(html)}")
@@ -901,6 +950,140 @@ class UzmoviSerialParser:
         except Exception:
             return raw_url
 
+    # Hosts that serve the pre-roll advert rather than the episode itself.
+    # uzmovi always attaches one of these to the player before the real source
+    # resolves, so accepting the first media URL we see yields a 30s advert.
+    _AD_MEDIA_HOSTS = (
+        "sova.live", "adriver", "moe.video", "adtec", "bumlam",
+        "ad.mail.ru", "adx.com.ru", "/ads/", "vast",
+    )
+
+    @staticmethod
+    def _is_ad_media(u: str) -> bool:
+        low = (u or "").lower()
+        return any(h in low for h in UzmoviSerialParser._AD_MEDIA_HOSTS)
+
+    def _ensure_browser(self):
+        """Open (once) a shared headless context for episode rendering.
+
+        Returns the context, or None if Playwright is unavailable.
+        """
+        if self._pw_ctx is not None:
+            return self._pw_ctx
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.warning("[uzmovi serial] playwright not installed; episode rendering unavailable")
+            return None
+        try:
+            self._pw = sync_playwright().start()
+            self._pw_browser = self._pw.chromium.launch(headless=True, args=["--no-sandbox"])
+            self._pw_ctx = self._pw_browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+            )
+            # Ad/analytics hosts are the reason plain navigation never settles,
+            # and none of them carry the episode source. Drop them outright:
+            # it makes each episode page load in a couple of seconds.
+            self._pw_ctx.route(
+                "**/*",
+                lambda route: route.abort()
+                if (
+                    self._is_ad_media(route.request.url)
+                    or route.request.resource_type in ("image", "font", "media")
+                )
+                else route.continue_(),
+            )
+            return self._pw_ctx
+        except Exception as e:
+            logger.error(f"[uzmovi serial] could not start playwright: {e}")
+            self._close_browser()
+            return None
+
+    def _close_browser(self) -> None:
+        for attr, closer in (
+            ("_pw_ctx", "close"), ("_pw_browser", "close"), ("_pw", "stop"),
+        ):
+            obj = getattr(self, attr, None)
+            if obj is not None:
+                try:
+                    getattr(obj, closer)()
+                except Exception:
+                    pass
+            setattr(self, attr, None)
+
+    # Reads whatever the player has actually been handed, from both the DOM
+    # and the video.js instance (the <source> element is the reliable one —
+    # video.src is a blob: URL once MSE takes over).
+    _MEDIA_PROBE_JS = """
+    () => {
+      const out = [];
+      try {
+        if (window.videojs && videojs.getPlayers) {
+          for (const p of Object.values(videojs.getPlayers())) {
+            try {
+              const c = p.currentSrc && p.currentSrc();
+              if (c) out.push(c);
+              (p.currentSources ? p.currentSources() : []).forEach(s => s && s.src && out.push(s.src));
+            } catch (e) {}
+          }
+        }
+      } catch (e) {}
+      document.querySelectorAll('video[src], video source[src]').forEach(
+        v => out.push(v.getAttribute('src'))
+      );
+      return out.filter(Boolean);
+    }
+    """
+
+    def _extract_episode_video_rendered(self, episode_url: str) -> str:
+        """Headless-render one episode page and read the player's source.
+
+        The episode page ships no media URL in its HTML — video.js is handed
+        the .m3u8 by script after load — so this is the only path that sees
+        the real stream.
+        """
+        ctx = self._ensure_browser()
+        if ctx is None:
+            return ""
+        page = None
+        try:
+            page = ctx.new_page()
+            try:
+                page.goto(episode_url, wait_until="domcontentloaded", timeout=45000)
+            except Exception as nav_err:
+                logger.debug(f"[uzmovi serial] episode goto unsettled ({nav_err}); continuing")
+
+            deadline = 25
+            waited = 0
+            while waited < deadline:
+                page.wait_for_timeout(1500)
+                waited += 1.5
+                try:
+                    found = page.evaluate(self._MEDIA_PROBE_JS)
+                except Exception:
+                    found = []
+                for cand in found:
+                    if not cand or cand.startswith(("blob:", "data:")):
+                        continue
+                    if ".m3u8" not in cand and ".mp4" not in cand:
+                        continue
+                    if self._is_ad_media(cand):
+                        continue
+                    return self._sanitize_video_url(cand)
+            return ""
+        except Exception as e:
+            logger.warning(f"[uzmovi serial] episode render error url={episode_url} err={e}")
+            return ""
+        finally:
+            if page is not None:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+
     def _extract_episode_video(self, episode_url: str) -> str:
         try:
             resp = self._get_with_retry(episode_url, label="episode")
@@ -934,11 +1117,15 @@ class UzmoviSerialParser:
             # Script/player config on the episode page.
             m = _FILE_RE.search(resp.text)
             if m:
-                return self._sanitize_video_url(m.group(1).strip())
-            return ""
+                candidate = m.group(1).strip()
+                if not self._is_ad_media(candidate):
+                    return self._sanitize_video_url(candidate)
         except Exception as e:
             logger.warning(f"[UZMOVI SERIAL] episode fetch error url={episode_url} err={e}")
-            return ""
+
+        # Nothing in the static HTML — uzmovi hands video.js the stream from
+        # script, so fall back to rendering the page.
+        return self._extract_episode_video_rendered(episode_url)
 
     def _extract_video_from_embed(self, embed_src: str, episode_url: str) -> str:
         if embed_src.startswith("//"):

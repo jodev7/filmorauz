@@ -380,8 +380,13 @@ def create_debug_summary(
     }
 
 
-def detect_content_type(url: str, source: str, soup=None) -> tuple:
+def detect_content_type(url: str, source: str, soup=None, title: str = "") -> tuple:
     """Detect movie vs serial.
+
+    `title` is the caller's best-known full title. Search-result cards render
+    a CSS/JS-truncated label ("... uzbek tilida barcha…") while the untruncated
+    string only lives in the anchor's title attribute, so relying on visible
+    text alone misses the "barcha qismlar" serial marker.
 
     Returns: (content_type, reason) where content_type is "movie" | "serial" | "unknown"
     and reason is a short string explaining the decision (used in logs).
@@ -390,6 +395,7 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
 
     u = (url or "").lower()
     src = (source or "").lower()
+    title_lower = (title or "").lower()
 
     # 1. Check URL first for obvious indicators.
     # Includes both singular ("/serial/") and plural ("seriallar",
@@ -403,6 +409,12 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
         "/dorama", "/serialy/",
     ]):
         return ("serial", "URL pattern match")
+
+    # 2. Caller-supplied title (search cards pass the full, untruncated string).
+    if title_lower and any(kw in title_lower for kw in (
+        "barcha qismlar", "barcha qismlari", "serial", "сериал",
+    )):
+        return ("serial", "title contains serial keyword")
 
     # ── Soup signals ────────────────────────────────────────────────
     if soup is not None:
@@ -423,6 +435,25 @@ def detect_content_type(url: str, source: str, soup=None) -> tuple:
             text_lower = analysis_root.get_text(" ", strip=True).lower() if analysis_root else ""
         except Exception:
             text_lower = ""
+
+        # Card labels are truncated in the visible text but complete in the
+        # title=/alt= attributes. Only harvest attributes off anchors that
+        # point at the URL being classified — a related-news carousel is full
+        # of *other* titles and would otherwise poison the decision.
+        try:
+            attr_bits = []
+            for a in analysis_root.find_all("a", href=True):
+                if a["href"].rstrip("/").lower() != u.rstrip("/"):
+                    continue
+                for el in [a] + a.find_all(attrs=True):
+                    for attr in ("title", "alt"):
+                        val = el.get(attr)
+                        if isinstance(val, str) and val:
+                            attr_bits.append(val)
+            if attr_bits:
+                text_lower = (text_lower + " " + " ".join(attr_bits)).lower()
+        except Exception:
+            pass
 
         # Check for serial-specific metadata/badges
         serial_badges = analysis_root.select(".badge--series, .serial-badge, .fasl-badge, .qism-badge")
