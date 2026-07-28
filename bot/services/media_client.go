@@ -152,3 +152,20 @@ func (c *MediaClient) FileStream(jobID string) (io.ReadCloser, int64, error) {
 	}
 	return resp.Body, resp.ContentLength, nil
 }
+
+// Cleanup asks the parser to delete the finished download's file from disk.
+// Called after delivery so downloaded videos don't accumulate on the parser
+// VPS. Best-effort: errors are returned for logging but aren't fatal.
+func (c *MediaClient) Cleanup(jobID string) error {
+	u := fmt.Sprintf("%s/media/cleanup?job_id=%s", c.baseURL, url.QueryEscape(jobID))
+	resp, err := c.http.Post(u, "application/json", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("cleanup failed (status %d): %s", resp.StatusCode, string(body))
+	}
+	return nil
+}

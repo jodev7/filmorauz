@@ -170,6 +170,15 @@ func (b *Bot) runMediaDownloadAndDeliver(s *pendingMediaSession, jobID string) {
 
 // deliverMediaFile sends the downloaded file, or explains if it is too large.
 func (b *Bot) deliverMediaFile(s *pendingMediaSession, jobID string, fileSize int64) {
+	// Delete the parser-side source file once we're done with it — on every
+	// exit path (delivered, failed, or too large) so downloads don't pile up on
+	// the parser VPS. Best-effort.
+	defer func() {
+		if err := b.mediaClient.Cleanup(jobID); err != nil {
+			log.Printf("[MEDIA] cleanup failed job=%s: %v", jobID, err)
+		}
+	}()
+
 	if fileSize > b.config.MediaMaxUploadBytes {
 		b.editText(s.chatID, s.promptMsgID, fmt.Sprintf(
 			"⚠️ Fayl juda katta (%s). Telegram bot orqali yuborib bo'lmaydi.\n\n"+

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Film, PlusCircle, List, ExternalLink, Users, UserPlus, Share2, Eye, Star, Tv, Wifi, UserCheck, Globe, Activity, CalendarDays, CalendarRange, Monitor, MapPin, ChevronLeft, ChevronRight, User as UserIcon } from "lucide-react";
+import { Film, PlusCircle, List, ExternalLink, Users, UserPlus, Share2, Eye, Star, Tv, Wifi, UserCheck, Globe, Activity, CalendarDays, CalendarRange, Monitor, MapPin, PlayCircle, ChevronLeft, ChevronRight, User as UserIcon } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { adminGetMovies, Movie, getAdminDashboardStats, getAdminShareStats, getAdminUserMetrics, getAdminTopMovies, getAdminTopSeries, getAdminOnlineStats, getAdminOnlineSessions, DashboardStats, AdminShareStats, UserMetrics, TopContentItem, OnlineStats, OnlineSessionsPage } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
@@ -261,10 +261,11 @@ export default function AdminDashboard() {
 
         <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden">
           {/* Header row (desktop only) */}
-          <div className="hidden sm:grid grid-cols-[1.6fr_1fr_1.2fr_0.9fr] gap-3 px-4 py-2.5 border-b border-brand-border text-[11px] uppercase tracking-wide text-gray-500">
+          <div className="hidden sm:grid grid-cols-[1.4fr_0.9fr_1fr_1.4fr_0.9fr] gap-3 px-4 py-2.5 border-b border-brand-border text-[11px] uppercase tracking-wide text-gray-500">
             <span>Foydalanuvchi</span>
             <span>IP manzil</span>
             <span>Qurilma</span>
+            <span>Ko'rmoqda</span>
             <span className="text-right">Oxirgi faollik</span>
           </div>
 
@@ -277,7 +278,7 @@ export default function AdminDashboard() {
           {sessions?.sessions.map((s) => (
             <div
               key={s.session_id}
-              className="grid grid-cols-2 sm:grid-cols-[1.6fr_1fr_1.2fr_0.9fr] gap-2 sm:gap-3 px-4 py-3 border-b border-brand-border/50 last:border-b-0 items-center text-sm"
+              className="grid grid-cols-2 sm:grid-cols-[1.4fr_0.9fr_1fr_1.4fr_0.9fr] gap-2 sm:gap-3 px-4 py-3 border-b border-brand-border/50 last:border-b-0 items-center text-sm"
             >
               {/* User / anonymous */}
               <div className="flex items-center gap-2 min-w-0 col-span-2 sm:col-span-1">
@@ -320,6 +321,35 @@ export default function AdminDashboard() {
               <div className="flex items-center gap-1.5 text-gray-300 min-w-0">
                 <Monitor size={13} className="text-gray-500 shrink-0" />
                 <span className="truncate text-xs">{s.device}</span>
+              </div>
+
+              {/* Currently watching (movie or episode) */}
+              <div className="flex items-center gap-1.5 min-w-0 col-span-2 sm:col-span-1">
+                {s.watching ? (
+                  <>
+                    <PlayCircle size={13} className="text-brand-red shrink-0" />
+                    {s.watching.url ? (
+                      <Link
+                        href={s.watching.url}
+                        className="text-xs text-gray-200 hover:text-white hover:underline truncate"
+                        title={s.watching.title}
+                      >
+                        {s.watching.title || s.watching.slug}
+                      </Link>
+                    ) : (
+                      <span className="text-xs text-gray-200 truncate" title={s.watching.title}>
+                        {s.watching.title || s.watching.slug}
+                      </span>
+                    )}
+                    {s.watching.type === "episode" && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-brand-border text-gray-300 shrink-0">
+                        qism
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-xs text-gray-600">—</span>
+                )}
               </div>
 
               {/* Last seen */}

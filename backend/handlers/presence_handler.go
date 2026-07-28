@@ -25,7 +25,59 @@ func NewPresenceHandler(presence *services.PresenceService, userRepo *repositori
 }
 
 type heartbeatRequest struct {
-	SessionID string `json:"session_id"`
+	SessionID string            `json:"session_id"`
+	Activity  *heartbeatContent `json:"activity"`
+}
+
+// heartbeatContent is what the client reports it currently has open. Sent only
+// from movie/episode watch pages; omitted everywhere else.
+type heartbeatContent struct {
+	Type      string `json:"type"` // "movie" | "episode"
+	ContentID string `json:"content_id"`
+	Title     string `json:"title"`
+	Slug      string `json:"slug"`
+	URL       string `json:"url"`
+}
+
+// maxActivityField caps client-supplied activity strings so a hostile client
+// cannot grow the in-memory presence map with huge titles/URLs.
+const maxActivityField = 200
+
+func truncateField(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > maxActivityField {
+		return s[:maxActivityField]
+	}
+	return s
+}
+
+// toSessionActivity validates and normalizes a reported activity. It returns
+// nil when the payload is missing or carries nothing identifiable, which clears
+// any previously reported content for that session.
+func toSessionActivity(in *heartbeatContent) *services.SessionActivity {
+	if in == nil {
+		return nil
+	}
+	kind := strings.ToLower(strings.TrimSpace(in.Type))
+	if kind != "movie" && kind != "episode" {
+		return nil
+	}
+	act := &services.SessionActivity{
+		Type:      kind,
+		ContentID: truncateField(in.ContentID),
+		Title:     truncateField(in.Title),
+		Slug:      truncateField(in.Slug),
+		URL:       truncateField(in.URL),
+	}
+	if act.ContentID == "" && act.Slug == "" && act.Title == "" {
+		return nil
+	}
+	// Only same-site relative paths are accepted as links — an absolute URL from
+	// a client would let anyone plant an arbitrary link in the admin panel.
+	if !strings.HasPrefix(act.URL, "/") || strings.HasPrefix(act.URL, "//") {
+		act.URL = ""
+	}
+	return act
 }
 
 // Heartbeat is called periodically by every browser tab (authed or anonymous).
@@ -48,7 +100,7 @@ func (h *PresenceHandler) Heartbeat(c *gin.Context) {
 			userID = s
 		}
 	}
-	h.presence.Touch(req.SessionID, userID, c.ClientIP(), c.GetHeader("User-Agent"))
+	h.presence.Touch(req.SessionID, userID, c.ClientIP(), c.GetHeader("User-Agent"), toSessionActivity(req.Activity))
 
 	// Bump last_active_at for authed users (fire-and-forget; ignore errors).
 	if userID != "" {
@@ -141,6 +193,16 @@ func (h *PresenceHandler) OnlineSessionsList(c *gin.Context) {
 			"first_seen": s.FirstSeen,
 			"last_seen":  s.LastSeen,
 			"type":       "anonymous",
+		}
+		if a := s.Activity; a != nil {
+			item["watching"] = gin.H{
+				"type":       a.Type,
+				"content_id": a.ContentID,
+				"title":      a.Title,
+				"slug":       a.Slug,
+				"url":        a.URL,
+				"since":      a.Since,
+			}
 		}
 		if s.UserID != "" {
 			item["type"] = "authenticated"

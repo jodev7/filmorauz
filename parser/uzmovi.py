@@ -114,7 +114,7 @@ class UzmoviParser(BaseParser):
         from helpers import detect_content_type
         
         # If we have a card, use it as soup to scope the search
-        ct, reason = detect_content_type(detail_url, "uzmovi", soup=card or soup)
+        ct, reason = detect_content_type(detail_url, "uzmovi", soup=card or soup, title=title)
         if ct != "unknown":
             return ct
             
@@ -655,7 +655,7 @@ class UzmoviParser(BaseParser):
         
         # Determine type via shared detector (URL + soup signals)
         from helpers import detect_content_type as _detect_ct
-        movie_type, _ct_reason = _detect_ct(url, "uzmovi", soup=soup)
+        movie_type, _ct_reason = _detect_ct(url, "uzmovi", soup=soup, title=title)
         if movie_type == "unknown":
             # Conservative legacy fallback for previously-working uzmovi flow
             movie_type = "serial" if ("/serial/" in url or "/tv-series/" in url) else "movie"
