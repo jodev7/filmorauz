@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from typing import Callable, Dict, List, Optional
 
 from bs4 import BeautifulSoup
@@ -80,9 +81,15 @@ class UzmoviSerialParser:
         self.base_url = getattr(self._movie, "BASE_URL", None) or "https://uzmovi.net"
         # Lazily-opened Playwright handles, shared across every episode of one
         # parse() call so we pay browser startup once instead of per episode.
-        self._pw = None
-        self._pw_browser = None
-        self._pw_ctx = None
+        #
+        # Kept per-thread: server.py holds ONE parser instance in
+        # SERIAL_PARSERS, but /serial-details (HTTP handler thread) and
+        # /serial/extract/start (extraction worker thread) can run at the same
+        # time. Playwright's sync API is greenlet-bound to the thread that
+        # created it, so a context opened by one thread and reused by another
+        # raises "greenlet.error: Cannot switch to a different thread" on every
+        # episode — which is how a whole serial resolves 0/N videos.
+        self._tls = threading.local()
 
     @property
     def session(self):
@@ -964,21 +971,22 @@ class UzmoviSerialParser:
         return any(h in low for h in UzmoviSerialParser._AD_MEDIA_HOSTS)
 
     def _ensure_browser(self):
-        """Open (once) a shared headless context for episode rendering.
+        """Open (once per thread) a shared headless context for episode rendering.
 
         Returns the context, or None if Playwright is unavailable.
         """
-        if self._pw_ctx is not None:
-            return self._pw_ctx
+        ctx = getattr(self._tls, "pw_ctx", None)
+        if ctx is not None:
+            return ctx
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
             logger.warning("[uzmovi serial] playwright not installed; episode rendering unavailable")
             return None
         try:
-            self._pw = sync_playwright().start()
-            self._pw_browser = self._pw.chromium.launch(headless=True, args=["--no-sandbox"])
-            self._pw_ctx = self._pw_browser.new_context(
+            self._tls.pw = sync_playwright().start()
+            self._tls.pw_browser = self._tls.pw.chromium.launch(headless=True, args=["--no-sandbox"])
+            self._tls.pw_ctx = self._tls.pw_browser.new_context(
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -987,7 +995,7 @@ class UzmoviSerialParser:
             # Ad/analytics hosts are the reason plain navigation never settles,
             # and none of them carry the episode source. Drop them outright:
             # it makes each episode page load in a couple of seconds.
-            self._pw_ctx.route(
+            self._tls.pw_ctx.route(
                 "**/*",
                 lambda route: route.abort()
                 if (
@@ -996,23 +1004,24 @@ class UzmoviSerialParser:
                 )
                 else route.continue_(),
             )
-            return self._pw_ctx
+            return self._tls.pw_ctx
         except Exception as e:
             logger.error(f"[uzmovi serial] could not start playwright: {e}")
             self._close_browser()
             return None
 
     def _close_browser(self) -> None:
+        """Tear down this thread's browser. Other threads keep their own."""
         for attr, closer in (
-            ("_pw_ctx", "close"), ("_pw_browser", "close"), ("_pw", "stop"),
+            ("pw_ctx", "close"), ("pw_browser", "close"), ("pw", "stop"),
         ):
-            obj = getattr(self, attr, None)
+            obj = getattr(self._tls, attr, None)
             if obj is not None:
                 try:
                     getattr(obj, closer)()
                 except Exception:
                     pass
-            setattr(self, attr, None)
+            setattr(self._tls, attr, None)
 
     # Reads whatever the player has actually been handed, from both the DOM
     # and the video.js instance (the <source> element is the reliable one —
