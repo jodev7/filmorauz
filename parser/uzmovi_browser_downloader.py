@@ -49,6 +49,93 @@ async (url) => {
 """
 
 
+# Same signed channel as _FETCH_SEGMENT_JS, but for text (manifests).
+_FETCH_TEXT_JS = """
+async (url) => {
+  return await new Promise(resolve => {
+    if (typeof videojs === 'undefined' || !videojs.xhr) {
+      return resolve({error: 'videojs.xhr unavailable'});
+    }
+    videojs.xhr({uri: url, timeout: 20000}, function(err, resp, body){
+      if (err) return resolve({error: String(err)});
+      if (!resp || resp.statusCode !== 200) return resolve({status: resp ? resp.statusCode : 0});
+      resolve({status: 200, text: String(body || '')});
+    });
+  });
+}
+"""
+
+# Reads what the player has actually been handed. video.src is a blob: URL
+# once MSE takes over, so currentSources()/<source> are the reliable ones.
+_PLAYER_SRC_JS = r"""
+() => {
+  const out = [];
+  try {
+    if (window.videojs && videojs.getPlayers) {
+      for (const p of Object.values(videojs.getPlayers())) {
+        try {
+          const c = p.currentSrc && p.currentSrc();
+          if (c) out.push(c);
+          (p.currentSources ? p.currentSources() : []).forEach(s => s && s.src && out.push(s.src));
+        } catch (e) {}
+      }
+    }
+  } catch (e) {}
+  document.querySelectorAll('video[src], video source[src]').forEach(
+    v => out.push(v.getAttribute('src'))
+  );
+  return out.filter(Boolean);
+}
+"""
+
+# Pre-roll/ad players live on these hosts and would otherwise be downloaded
+# as if they were the episode.
+_AD_MEDIA_HOSTS = ("sova.live", "doubleclick", "googlesyndication", "adservice")
+
+
+def _is_ad_media(url: str) -> bool:
+    low = (url or "").lower()
+    return any(h in low for h in _AD_MEDIA_HOSTS)
+
+
+def _collect_player_manifest_urls(page) -> list:
+    """Manifest URLs the player itself is pointing at, de-duplicated."""
+    try:
+        raw = page.evaluate(_PLAYER_SRC_JS) or []
+    except Exception as e:
+        logger.warning(f"[uzmovi-bd] player src scan failed: {e}")
+        return []
+    urls = []
+    for u in raw:
+        if not isinstance(u, str) or not u:
+            continue
+        if u.startswith(("blob:", "data:")) or _is_ad_media(u):
+            continue
+        if ".m3u8" not in u.lower() and ".mpd" not in u.lower():
+            continue
+        if u not in urls:
+            urls.append(u)
+    return urls
+
+
+def _fetch_manifest_via_player(page, url: str) -> str:
+    """Fetch a manifest through videojs.xhr (uzmovi request signing applied).
+
+    Returns the manifest text, or "" when the URL does not answer with one.
+    """
+    try:
+        res = page.evaluate(_FETCH_TEXT_JS, url) or {}
+    except Exception as e:
+        logger.warning(f"[uzmovi-bd] player fetch failed url={url[:120]} err={e}")
+        return ""
+    if res.get("error") or res.get("status") != 200:
+        logger.info(f"[uzmovi-bd] player fetch url={url[:120]} "
+                    f"status={res.get('status')} err={res.get('error')}")
+        return ""
+    text = res.get("text") or ""
+    return text if text.lstrip().startswith("#EXTM3U") else ""
+
+
 def download_uzmovi_video(
     detail_url: str,
     output_path: str,
@@ -98,7 +185,7 @@ def download_uzmovi_video(
         # Used as a wider candidate pool than the manifests the player
         # actually loaded.
         seen_mpd_refs = set()
-        _mpd_url_re = re.compile(r"https?://[^\s\"'<>\\]+\.mpd[^\s\"'<>\\]*")
+        _mpd_url_re = re.compile(r"https?://[^\s\"'<>\\]+\.(?:mpd|m3u8)[^\s\"'<>\\]*")
 
         def _on_response(resp):
             try:
@@ -106,9 +193,11 @@ def download_uzmovi_video(
                 if resp.status != 200:
                     return
                 lower_u = u.lower()
-                if ".mpd" in lower_u:
+                if _is_ad_media(lower_u):
+                    return
+                if ".mpd" in lower_u or ".m3u8" in lower_u:
                     seen_mpd_refs.add(u)
-                if "uzdown" not in lower_u or ".mpd" not in lower_u:
+                if "uzdown" not in lower_u or not (".mpd" in lower_u or ".m3u8" in lower_u):
                     # Still scan smaller text bodies for embedded .mpd refs
                     try:
                         ct = (resp.headers or {}).get("content-type", "").lower()
@@ -139,12 +228,39 @@ def download_uzmovi_video(
         page.on("response", _on_response)
 
         logger.info(f"[uzmovi-bd] navigating: {detail_url}")
+        # "domcontentloaded", never "networkidle": the page embeds ad iframes
+        # on hosts that never resolve, so the network never goes idle and every
+        # navigation burns the full timeout before throwing — with the DOM and
+        # the player already fully in place. An unsettled navigation is normal
+        # here, so keep going and let the manifest check below be the verdict.
         try:
-            page.goto(detail_url, wait_until="networkidle", timeout=page_load_timeout_ms)
+            page.goto(detail_url, wait_until="domcontentloaded", timeout=page_load_timeout_ms)
         except Exception as e:
-            browser.close()
-            return _failure(f"page navigation failed: {e}", started, segments_total, segments_done, bytes_done)
-        page.wait_for_timeout(settle_ms)
+            logger.info(f"[uzmovi-bd] navigation unsettled ({str(e)[:120]}); continuing")
+
+        # Wait for the player to hand itself a source instead of sleeping a
+        # fixed settle_ms — most episodes are ready in a couple of seconds.
+        deadline = time.time() + (settle_ms / 1000.0)
+        player_urls = []
+        while time.time() < deadline:
+            page.wait_for_timeout(1000)
+            player_urls = _collect_player_manifest_urls(page)
+            if captured_manifests or player_urls:
+                break
+
+        # Passive capture alone is not enough on serial episodes: the browser's
+        # own request for the media playlist answers 301 (no body to read) and
+        # the signed .mpd rewrite the player follows answers 502. The same URL
+        # fetched through videojs.xhr — which injects uzmovi's x-path/x-match
+        # signing — returns the real #EXTM3U. So pull whatever the player is
+        # actually pointing at through that channel.
+        for purl in player_urls:
+            if any(purl == u for u, _ in captured_manifests):
+                continue
+            body = _fetch_manifest_via_player(page, purl)
+            if body:
+                logger.info(f"[uzmovi-bd] manifest via videojs.xhr: {purl[:120]}")
+                captured_manifests.append((purl, body))
 
         if not captured_manifests:
             browser.close()
@@ -330,16 +446,17 @@ def _parse_master_variants(master_url: str, master_body: str):
 _DOM_MPD_SCAN_JS = r"""
 () => {
   const urls = new Set();
+  const isManifest = u => /\.(mpd|m3u8)/i.test(u || '');
   document.querySelectorAll('source').forEach(s => {
-    if (s.src && /\.mpd/i.test(s.src)) urls.add(s.src);
+    if (isManifest(s.src)) urls.add(s.src);
     const ds = s.getAttribute('data-src') || s.getAttribute('data-file');
-    if (ds && /\.mpd/i.test(ds)) urls.add(ds);
+    if (isManifest(ds)) urls.add(ds);
   });
   document.querySelectorAll('video').forEach(v => {
-    if (v.src && /\.mpd/i.test(v.src)) urls.add(v.src);
+    if (isManifest(v.src)) urls.add(v.src);
   });
   const html = document.documentElement.outerHTML;
-  const re = /https?:\/\/[^"'\s<>\\]+\.mpd[^"'\s<>\\]*/g;
+  const re = /https?:\/\/[^"'\s<>\\]+\.(?:mpd|m3u8)[^"'\s<>\\]*/g;
   let m;
   while ((m = re.exec(html)) !== null) urls.add(m[0]);
   return Array.from(urls);
@@ -350,23 +467,34 @@ _DOM_MPD_SCAN_JS = r"""
 def _collect_mpd_urls_from_dom(page) -> list:
     try:
         urls = page.evaluate(_DOM_MPD_SCAN_JS) or []
-        return [u for u in urls if isinstance(u, str)]
+        return [u for u in urls if isinstance(u, str) and not _is_ad_media(u)]
     except Exception as e:
         logger.warning(f"[uzmovi-bd] DOM scan failed: {e}")
         return []
 
 
 def _fetch_manifest(page, url: str):
-    """Fetch an HLS manifest via the browser context (cookies + headers
-    preserved). Returns (status, text) or (None, None) on error."""
+    """Fetch an HLS manifest, preferring the browser context (cookies +
+    headers preserved) and falling back to videojs.xhr.
+
+    The context request is the cheaper path but the uzdown CDN rejects it for
+    media playlists (301 with no body, or an outright ECONNRESET) — only
+    requests signed by the page's own player JS are answered in full.
+
+    Returns (status, text) or (None, None) on error."""
+    status = None
     try:
         resp = page.context.request.get(url, timeout=20000)
-        if resp.status != 200:
-            return resp.status, None
-        return 200, resp.text()
+        status = resp.status
+        if status == 200:
+            return 200, resp.text()
     except Exception as e:
-        logger.warning(f"[uzmovi-bd] manifest fetch failed url={url[:120]} err={e}")
-        return None, None
+        logger.info(f"[uzmovi-bd] context fetch failed url={url[:120]} err={str(e)[:120]}")
+
+    body = _fetch_manifest_via_player(page, url)
+    if body:
+        return 200, body
+    return status, None
 
 
 def _first_segment_url(manifest_url: str, manifest_body: str):
