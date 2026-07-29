@@ -65,6 +65,10 @@ async (url) => {
 }
 """
 
+# Wait between segment retries, in ms. Measured: a 502 clears on the next
+# attempt ~3s later; the longer steps cover a slower edge hiccup.
+_SEGMENT_RETRY_BACKOFF_MS = (2_000, 5_000, 10_000, 20_000)
+
 # Reads what the player has actually been handed. video.src is a blob: URL
 # once MSE takes over, so currentSources()/<source> are the reliable ones.
 _PLAYER_SRC_JS = r"""
@@ -142,7 +146,7 @@ def download_uzmovi_video(
     progress_cb: Optional[Callable[[int, int, int], None]] = None,
     page_load_timeout_ms: int = 60_000,
     settle_ms: int = 8_000,
-    max_retries_per_segment: int = 2,
+    max_retries_per_segment: int = 4,
 ) -> dict:
     """Download a full uzmovi.net video into ``output_path`` (mp4).
 
@@ -325,6 +329,14 @@ def download_uzmovi_video(
                         except Exception as e:
                             last_err = str(e)
                         logger.warning(f"[uzmovi-bd] seg[{i}] attempt {attempt+1} failed: {last_err}")
+                        # The uzdown edge 502s a segment now and then and serves
+                        # the very same URL fine seconds later. Retrying three
+                        # times inside one second (what this used to do) just
+                        # burns the attempts inside the same blip and fails a
+                        # download that was otherwise healthy, so back off.
+                        if attempt < max_retries_per_segment:
+                            page.wait_for_timeout(_SEGMENT_RETRY_BACKOFF_MS[
+                                min(attempt, len(_SEGMENT_RETRY_BACKOFF_MS) - 1)])
                     else:
                         browser.close()
                         try:
