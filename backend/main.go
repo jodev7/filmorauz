@@ -411,6 +411,13 @@ func main() {
 			} else if n > 0 {
 				log.Printf("[serial finalize] finalized %d parent(s)", n)
 			}
+			// Second pass: episode jobs that completed after their parent was
+			// already finalized would otherwise never get Episode rows.
+			if n, err := ingestionHandler.BackfillOrphanedEpisodeJobs(ctx); err != nil {
+				log.Printf("[serial backfill] sweep error: %v", err)
+			} else if n > 0 {
+				log.Printf("[serial backfill] materialized %d late episode(s)", n)
+			}
 			cancel()
 		}
 	}()
