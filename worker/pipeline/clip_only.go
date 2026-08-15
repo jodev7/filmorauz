@@ -3,16 +3,135 @@ package pipeline
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/filmorauz/worker/models"
 )
+
+const (
+	// Ceiling on any single network read/write inside the HLS pull. Passed to
+	// ffmpeg as -rw_timeout so a CDN connection that goes silent surfaces as an
+	// error instead of an indefinite block.
+	clipHLSRWTimeout = 30 * time.Second
+)
+
+// Stall-watchdog timings. Vars rather than consts so tests can shorten them.
+var (
+	// How often the stall watchdog samples the growing mp4.
+	clipHLSStallPollInterval = 30 * time.Second
+	// If the mp4 has not grown at all for this long the pull is declared dead
+	// and ffmpeg is killed.
+	clipHLSStallTimeout = 10 * time.Minute
+	// Absolute cap on one HLS pull, however healthy it looks. A full episode
+	// copy-mux runs in minutes; anything near this is pathological.
+	clipHLSPullMaxDuration = 2 * time.Hour
+	// How long cmd.Run may still block on outstanding I/O after the kill.
+	clipHLSKillGrace = 15 * time.Second
+)
+
+// downloadHLSToMP4 pulls an HLS playlist into a local mp4 via stream copy.
+//
+// Three guards wrap the ffmpeg call. They were added after clip_only pulls were
+// found wedged for over a day against a CDN that had silently dropped the
+// connection: ffmpeg sat in a blocking read with the output file frozen, and
+// because those jobs go on heartbeating, RecoverStaleJobs never reclaimed them.
+// Each wedged pull permanently consumed one of PROCESS_CONCURRENCY slots, so
+// three of them starved the processing queue outright.
+func (p *Pipeline) downloadHLSToMP4(ctx context.Context, jobID, masterURL, mp4Path string) error {
+	pullCtx, cancelPull := context.WithTimeout(ctx, clipHLSPullMaxDuration)
+	defer cancelPull()
+
+	cmd := exec.CommandContext(pullCtx, "ffmpeg",
+		"-y",
+		"-hide_banner",
+		"-loglevel", "error",
+		"-rw_timeout", strconv.FormatInt(clipHLSRWTimeout.Microseconds(), 10),
+		"-i", masterURL,
+		"-c", "copy",
+		"-bsf:a", "aac_adtstoasc",
+		mp4Path,
+	)
+	// Run ffmpeg in its own process group and kill the group on cancel. Killing
+	// only the direct child leaves any grandchild holding the stderr pipe open,
+	// and cmd.Run blocks on that EOF long after the kill — which would defeat
+	// the whole point of the watchdog. WaitDelay is the last-resort backstop if
+	// the group kill still leaves I/O outstanding.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	cmd.WaitDelay = clipHLSKillGrace
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	// -rw_timeout covers a hung socket, but not every wedge reaches ffmpeg as a
+	// stuck read — watch actual output progress as the backstop.
+	stalled := make(chan struct{})
+	watchdogDone := make(chan struct{})
+	go func() {
+		defer close(watchdogDone)
+		ticker := time.NewTicker(clipHLSStallPollInterval)
+		defer ticker.Stop()
+
+		lastSize := int64(-1)
+		lastGrowth := time.Now()
+		for {
+			select {
+			case <-pullCtx.Done():
+				return
+			case <-ticker.C:
+			}
+
+			var size int64
+			if fi, err := os.Stat(mp4Path); err == nil {
+				size = fi.Size()
+			}
+			if size != lastSize {
+				lastSize = size
+				lastGrowth = time.Now()
+				continue
+			}
+			if time.Since(lastGrowth) >= clipHLSStallTimeout {
+				log.Printf("[CLIP_ONLY] stalled job=%s: output frozen at %d bytes for %s, killing ffmpeg",
+					jobID, size, clipHLSStallTimeout)
+				close(stalled)
+				cancelPull()
+				return
+			}
+		}
+	}()
+
+	runErr := cmd.Run()
+	cancelPull()
+	<-watchdogDone
+
+	if runErr == nil {
+		return nil
+	}
+	select {
+	case <-stalled:
+		return fmt.Errorf("ffmpeg HLS→mp4 stalled: no output growth for %s: %s",
+			clipHLSStallTimeout, stderr.String())
+	default:
+	}
+	if errors.Is(pullCtx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("ffmpeg HLS→mp4 exceeded %s: %s", clipHLSPullMaxDuration, stderr.String())
+	}
+	return fmt.Errorf("ffmpeg HLS→mp4 failed: %v: %s", runErr, stderr.String())
+}
 
 // processClipOnlyJob handles ingestion jobs whose ContentType is "clip_only".
 // These are enqueued by the backend serial finalizer after the Episode row is
@@ -70,19 +189,8 @@ func (p *Pipeline) processClipOnlyJob(ctx context.Context, job *models.Ingestion
 	mp4Path := filepath.Join(tmpDir, "source.mp4")
 	log.Printf("[CLIP_ONLY] downloading HLS → %s", mp4Path)
 
-	cmd := exec.CommandContext(ctx, "ffmpeg",
-		"-y",
-		"-hide_banner",
-		"-loglevel", "error",
-		"-i", job.MasterPlaylistURL,
-		"-c", "copy",
-		"-bsf:a", "aac_adtstoasc",
-		mp4Path,
-	)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("ffmpeg HLS→mp4 failed: %v: %s", err, stderr.String())
+	if err := p.downloadHLSToMP4(ctx, jobID, job.MasterPlaylistURL, mp4Path); err != nil {
+		return err
 	}
 
 	fi, err := os.Stat(mp4Path)
