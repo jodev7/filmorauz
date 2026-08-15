@@ -532,6 +532,11 @@ func (r *JobRepository) ListTerminalFailedWithLocalArtifacts(ctx context.Context
 	return jobs, nil
 }
 
+// failedArtifactGracePeriod is how long a failed-but-retryable job's downloaded
+// media stays protected from the orphan sweep, so a retry can reuse the file
+// instead of re-downloading gigabytes from the source.
+const failedArtifactGracePeriod = 24 * time.Hour
+
 // ListActiveDownloadBasenames returns the set of basenames (e.g.
 // "6a1048b6fbd321b2b41f5b7f.mp4") that belong to jobs still in non-terminal
 // states. The orphan-file sweep uses this as an allowlist — anything in
@@ -539,21 +544,39 @@ func (r *JobRepository) ListTerminalFailedWithLocalArtifacts(ctx context.Context
 // max-age threshold.
 func (r *JobRepository) ListActiveDownloadBasenames(ctx context.Context) (map[string]struct{}, error) {
 	filter := bson.M{
-		"status": bson.M{"$in": bson.A{
-			models.IngestionStatusQueued,
-			models.IngestionStatusDownloading,
-			models.IngestionStatusDownloaded,
-			models.IngestionStatusReadyToProcess,
-			models.IngestionStatusProcessing,
-			models.IngestionStatusUploading,
-			models.IngestionStatusParsing,
-			models.IngestionStatusEnrichingMetadata,
-			models.IngestionStatusCreatingMovie,
-			models.IngestionStatusSendingNotification,
-			models.IngestionStatusHLSProcessing,
-			models.IngestionStatusFinalizingStorage,
-		}},
 		"local_path": bson.M{"$exists": true, "$ne": ""},
+		"$or": []bson.M{
+			{"status": bson.M{"$in": bson.A{
+				models.IngestionStatusQueued,
+				models.IngestionStatusDownloading,
+				models.IngestionStatusDownloaded,
+				models.IngestionStatusReadyToProcess,
+				models.IngestionStatusProcessing,
+				models.IngestionStatusUploading,
+				models.IngestionStatusParsing,
+				models.IngestionStatusEnrichingMetadata,
+				models.IngestionStatusCreatingMovie,
+				models.IngestionStatusSendingNotification,
+				models.IngestionStatusHLSProcessing,
+				models.IngestionStatusFinalizingStorage,
+			}}},
+			// Recently-failed jobs that still have retry budget keep their
+			// media protected for a window. The sweep judges files by file
+			// age, so without this a job whose download had been on disk
+			// longer than the orphan threshold lost multi-GB media on the very
+			// next hourly sweep the instant it left an active status — the
+			// exact moment a retry needs that file. The janitor still reaps
+			// media once retries are genuinely exhausted (retry_count >= 3).
+			{
+				"status": bson.M{"$in": bson.A{
+					models.IngestionStatusFailed,
+					models.IngestionStatusDownloadFailed,
+					models.IngestionStatusNeedsManual,
+				}},
+				"retry_count": bson.M{"$lt": 3},
+				"updated_at":  bson.M{"$gte": time.Now().Add(-failedArtifactGracePeriod)},
+			},
+		},
 	}
 	cursor, err := r.collection.Find(ctx, filter, options.Find().SetProjection(bson.M{"local_path": 1}))
 	if err != nil {
