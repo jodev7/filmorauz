@@ -20,8 +20,42 @@ import (
 var nonFilenameChars = regexp.MustCompile(`[^\w\s-]`)
 var repeatedSeparators = regexp.MustCompile(`[-\s]+`)
 
+// downloaderSidecarSuffixes are the control/partial files our downloaders leave
+// next to (or in place of) the real media while a transfer is still running.
+// aria2c writes "<target>.aria2" and only removes it once the download is
+// verified complete, so its presence is a definitive "not finished yet".
+var downloaderSidecarSuffixes = []string{".aria2", ".part", ".tmp", ".download", ".ytdl"}
+
+// isDownloaderSidecar reports whether a path is a downloader control/partial
+// file rather than a playable artifact. Needed because the job-ID glob in
+// resolveExistingDownloadedArtifact would otherwise happily hand back a
+// 506-byte "<jobID>.mp4.aria2" as the movie.
+func isDownloaderSidecar(path string) bool {
+	name := strings.ToLower(filepath.Base(path))
+	for _, suffix := range downloaderSidecarSuffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// downloadStillRunning reports whether a downloader control file sits next to
+// the candidate, meaning the bytes on disk are incomplete. aria2c preallocates
+// the full target size up front, so a stat() alone looks like a finished
+// multi-GB download seconds after the transfer starts — that is exactly how a
+// truncated file reached ffprobe and died on "moov atom not found".
+func downloadStillRunning(path string) bool {
+	for _, suffix := range downloaderSidecarSuffixes {
+		if _, err := os.Stat(path + suffix); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 func resolveExistingLocalPath(path string) string {
-	if path == "" {
+	if path == "" || isDownloaderSidecar(path) {
 		return ""
 	}
 	candidates := []string{path}
@@ -31,9 +65,15 @@ func resolveExistingLocalPath(path string) string {
 		}
 	}
 	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Size() > 0 {
-			return candidate
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() || info.Size() == 0 {
+			continue
 		}
+		if downloadStillRunning(candidate) {
+			log.Printf("[DOWNLOAD] skipping in-progress artifact %s (downloader control file present)", candidate)
+			continue
+		}
+		return candidate
 	}
 	return ""
 }
@@ -398,8 +438,29 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 	verifiedPath := resolveExistingDownloadedArtifact(job.ID.Hex(), job.LocalPath, "")
 	if verifiedPath == "" {
 		log.Printf("[PROCESS] skipped job=%s reason=missing local_path", job.ID.Hex())
-		if job.Progress >= 100 {
-			log.Printf("[PROCESS] deferred failure job=%s progress=100 waiting for repair", job.ID.Hex())
+		// The job was already flipped to "processing" by the claim above, so we
+		// cannot just walk away: abandoning it here leaves it mid-status until
+		// RecoverStaleJobs requeues it, which burns one retry every watchdog
+		// window until the job hits the cap and becomes permanently un-claimable.
+		// The media is genuinely gone (cleanup/orphan sweep), so the only real
+		// recovery is to fetch it again.
+		if job.Progress >= 100 && job.DownloadRequeuedAt == nil {
+			log.Printf("[PROCESS] job=%s progress=100 but media gone -> requeueing download", job.ID.Hex())
+			_, _ = r.collection.UpdateByID(ctx, job.ID, bson.M{
+				"$set": bson.M{
+					"status":               models.IngestionStatusQueued,
+					"stage":                "download",
+					"steps.download":       false,
+					"steps.process":        false,
+					"steps.upload":         false,
+					"local_path":           "",
+					"progress":             0,
+					"error":                "",
+					"download_requeued_at": time.Now(),
+					"updated_at":           time.Now(),
+				},
+				"$unset": bson.M{"locked_until": "", "processing_started_at": ""},
+			})
 			return nil, nil
 		}
 		_ = r.SetError(ctx, job.ID.Hex(), "download completed but local_path missing/file not found")
@@ -597,6 +658,29 @@ func (r *JobRepository) ListActiveDownloadBasenames(ctx context.Context) (map[st
 		out[filepath.Base(doc.LocalPath)] = struct{}{}
 	}
 	return out, nil
+}
+
+// MarkReadyToProcessNoDownload moves a job that owns no downloadable source
+// (currently clip_only, whose media is an already-published HLS on the CDN)
+// out of the download queue and into the processing queue.
+func (r *JobRepository) MarkReadyToProcessNoDownload(ctx context.Context, id string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid id")
+	}
+
+	now := time.Now()
+	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
+		"$set": bson.M{
+			"status":         models.IngestionStatusReadyToProcess,
+			"stage":          "ready_to_process",
+			"steps.download": true,
+			"error":          "",
+			"updated_at":     now,
+		},
+		"$unset": bson.M{"locked_until": ""},
+	})
+	return err
 }
 
 func (r *JobRepository) RepairCompletedDownloads(ctx context.Context, downloadDir string) (int64, error) {

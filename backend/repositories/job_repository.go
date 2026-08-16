@@ -456,6 +456,36 @@ func (r *JobRepository) ClearError(ctx context.Context, id string) error {
 	return err
 }
 
+// ResetRetryState clears everything that makes a job un-claimable by the
+// worker, so an admin-triggered retry actually runs again.
+//
+// The worker's claim filters require retry_count < 3 AND steps.process != true
+// AND an expired/absent lock. A retry that only flipped `status` left all three
+// untouched, so a job that had burned its retries came back as
+// ready_to_process, got counted by CountPendingJobs (process_needed=1) and was
+// then skipped by ClaimNextProcessingJob forever — a silent permanent stall.
+func (r *JobRepository) ResetRetryState(ctx context.Context, id string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid id")
+	}
+
+	_, err = r.collection.UpdateByID(ctx, objID, bson.M{
+		"$set": bson.M{
+			"retry_count":   0,
+			"steps.process": false,
+			"steps.upload":  false,
+			"updated_at":    time.Now(),
+		},
+		"$unset": bson.M{
+			"locked_until":         "",
+			"processing_started_at": "",
+			"worker_id":            "",
+		},
+	})
+	return err
+}
+
 // IncrementRetry increments the retry count for a job
 func (r *JobRepository) IncrementRetry(ctx context.Context, id string) error {
 	objID, err := primitive.ObjectIDFromHex(id)

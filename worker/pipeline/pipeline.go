@@ -334,6 +334,18 @@ func (p *Pipeline) ProcessDownloadJob(ctx context.Context, job *models.Ingestion
 	jobID := job.ID.Hex()
 	log.Printf("[WORKER] download worker processing job_id=%s source=%s source_id=%s", jobID, job.Source, job.SourceID)
 
+	// clip_only jobs have nothing to download: their source is an episode HLS
+	// that is already published on the CDN, and their SourceID is a synthetic
+	// key ("<serialID>:s04e01:clip") with no detail URL behind it. Sending one
+	// through /details makes the parser try to fetch that key as a URL and
+	// return 500 ("No connection adapters were found"), failing a job that only
+	// ever needed the processing lane. Hand it straight to that lane.
+	if job.ContentType == "clip_only" {
+		log.Printf("[WORKER] clip_only job_id=%s skips download stage -> ready_to_process (master=%s)",
+			jobID, job.MasterPlaylistURL)
+		return p.jobRepo.MarkReadyToProcessNoDownload(ctx, jobID)
+	}
+
 	metadata, localPath, err := p.parseMovieDetailsWithRetry(job)
 	if err != nil {
 		return p.failDownloadJob(jobID, fmt.Errorf("parse details failed: %w", err))

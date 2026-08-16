@@ -1224,7 +1224,16 @@ func (h *IngestionHandler) RetryIngestionJob(c *gin.Context) {
 		log.Printf("[INGESTION] WARNING: failed to clear error: %v", err)
 	}
 
-	log.Printf("[INGESTION] RETRY: Job %s restarted - status=%s", id, newStatus)
+	// Flipping the status alone is not enough: the worker also refuses to claim
+	// jobs at the retry cap, with steps.process already true, or still holding a
+	// lock. Without this the job looks queued in the admin UI but no worker will
+	// ever touch it.
+	if err := h.jobRepo.ResetRetryState(ctx, id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to reset job retry state"})
+		return
+	}
+
+	log.Printf("[INGESTION] RETRY: Job %s restarted - status=%s, retry_count reset to 0", id, newStatus)
 
 	c.JSON(http.StatusOK, gin.H{"message": "job retry initiated", "status": newStatus})
 }

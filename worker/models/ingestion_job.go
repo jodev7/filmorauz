@@ -72,6 +72,12 @@ type IngestionJob struct {
 	ProcessingStartedAt   *time.Time `bson:"processing_started_at,omitempty" json:"processing_started_at,omitempty"`
 	ProcessingFinishedAt  *time.Time `bson:"processing_finished_at,omitempty" json:"processing_finished_at,omitempty"`
 
+	// Stamped when a ready_to_process job whose media had vanished was sent back
+	// to the download stage. Bounds that recovery to a single attempt so a source
+	// that downloads "successfully" without producing a file cannot ping-pong
+	// between the download and processing queues forever.
+	DownloadRequeuedAt *time.Time `bson:"download_requeued_at,omitempty" json:"download_requeued_at,omitempty"`
+
 	// Download progress fields (populated during download)
 	DownloadedBytes int64      `bson:"downloaded_bytes,omitempty" json:"downloaded_bytes,omitempty"`
 	TotalBytes      int64      `bson:"total_bytes,omitempty" json:"total_bytes,omitempty"`
