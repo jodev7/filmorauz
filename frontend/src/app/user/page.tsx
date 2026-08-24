@@ -13,6 +13,7 @@ import { Heart, History, User as UserIcon, Crown, Calendar, Shield, Clock, Camer
 import { PremiumBadge, PremiumButton, PremiumAvatarRing, resolveIsPremium, resolvePremiumStatus } from "@/components/PremiumComponents";
 import { getFavorites, getWatchHistory, getCurrentUser, updateProfile, uploadProfileImage, updateProfileStyle, updatePrivacySettings, ProfileStyle } from "@/lib/api";
 import SuggestionModal from "@/components/SuggestionModal";
+import TelegramLoginModal from "@/components/TelegramLoginModal";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { CurrentUser } from "@/lib/api";
 import { DEFAULT_AVATAR_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
@@ -145,6 +146,7 @@ export default function UserPage() {
   const router = useRouter();
   const { user, isAuthenticated, token, refreshUser, logout } = useAuth();
   const { t } = useI18n();
+  const [loginModalOpen, setLoginModalOpen] = useState(false);
   const [favorites, setFavorites] = useState<any[]>([]);
   const [watchHistory, setWatchHistory] = useState<any[]>([]);
   const [recentWatched, setRecentWatched] = useState<any[]>([]);
@@ -465,16 +467,29 @@ export default function UserPage() {
               <p className="text-gray-500 mb-8 max-w-md mx-auto">
                 Sevimli filmlaringizni saqlash va tomosha tarixingizni ko&apos;rish uchun tizimga kiring.
               </p>
-              <Link 
-                href="/" 
-                className="inline-flex items-center gap-2 px-6 py-3 bg-brand-red text-white rounded-lg hover:bg-orange-600 transition-colors font-medium"
-              >
-                Bosh sahifaga
-              </Link>
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+                <button
+                  onClick={() => setLoginModalOpen(true)}
+                  className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-brand-red text-white rounded-lg hover:bg-orange-600 transition-colors font-medium w-full sm:w-auto"
+                >
+                  <Send className="w-5 h-5" />
+                  Telegram orqali kirish
+                </button>
+                <Link
+                  href="/"
+                  className="inline-flex items-center justify-center gap-2 px-6 py-3 glass-card border border-white/10 text-gray-300 rounded-lg hover:text-white hover:border-white/20 transition-colors font-medium w-full sm:w-auto"
+                >
+                  Bosh sahifaga
+                </Link>
+              </div>
             </div>
           </div>
         </main>
         <Footer />
+        <TelegramLoginModal
+          isOpen={loginModalOpen}
+          onClose={() => setLoginModalOpen(false)}
+        />
       </>
     );
   }
