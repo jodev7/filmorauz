@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
-import { ChevronLeft, ChevronRight, Clock, Calendar, Heart, Eye, Crown, Download } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clock, Calendar, Heart, Eye, Crown, Download, Lock, Send } from "lucide-react";
 // Code-split the player (which pulls in the heavy hls.js bundle) out of the
 // watch route's initial JS. The page shell — poster, title, info, ads —
 // paints immediately while the player chunk streams in behind a skeleton.
@@ -14,6 +14,7 @@ const VideoPlayer = dynamic(() => import("@/components/VideoPlayer"), {
   loading: () => <div className="w-full aspect-video bg-black rounded-xl animate-pulse" />,
 });
 import WatchTogetherButton from "@/components/WatchTogetherButton";
+import TelegramLoginModal from "@/components/TelegramLoginModal";
 import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveUnifiedWatchProgress, getWatchProgress, resetWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, getProtectedMediaAccess, buildVideoDownloadUrl, Ad, Movie } from "@/lib/api";
 import { pickWeightedRandomAd } from "@/lib/ads-utils";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
@@ -306,7 +307,8 @@ export default function WatchPageClient({
   }
 
   const { t } = useI18n();
-  const { user, token } = useAuth();
+  const { user, token, isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const [loginModalOpen, setLoginModalOpen] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
   const [isFavorite, setIsFavorite] = useState(false);
@@ -389,6 +391,9 @@ export default function WatchPageClient({
       setResolvedPlaybackUrl(publicSrc || null);
       return;
     }
+
+    // Guests can't watch (login gate below), so don't mint a media token.
+    if (!token) return;
 
     const loadProtectedPlayback = async () => {
       try {
@@ -743,8 +748,43 @@ export default function WatchPageClient({
             );
           })()}
 
-        {/* Premium access control */}
-        {isMoviePremium(movie) && !isUserPremium(user) ? (
+        {/* Login gate — guests can't watch. Episode pages have no separate
+            "watch" button (the player renders straight away), so this is the
+            login CTA for episodes and for ?play=1 movie links. */}
+        {isAuthLoading ? (
+          <div className="flex aspect-video items-center justify-center rounded-xl bg-gray-900">
+            <div className="h-10 w-10 animate-spin rounded-full border-2 border-white border-t-transparent" />
+          </div>
+        ) : !isAuthenticated ? (
+          <div className="relative aspect-video rounded-xl overflow-hidden bg-brand-dark">
+            <div
+              className="absolute inset-0 bg-cover bg-center blur-xl scale-110"
+              style={{ backgroundImage: `url(${normalizeMediaUrl(movie.backdrop_url || movie.poster_url, DEFAULT_POSTER_PLACEHOLDER)})` }}
+            />
+            <div className="absolute inset-0 bg-black/60" />
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 sm:gap-4 px-6 text-center">
+              <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-brand-red/90 flex items-center justify-center">
+                <Lock className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
+              </div>
+              <div>
+                <h3 className="text-base sm:text-lg font-semibold text-white mb-1">
+                  Tomosha qilish uchun tizimga kiring
+                </h3>
+                <p className="text-gray-300 text-xs sm:text-sm">
+                  Telegram orqali bir necha soniyada kirishingiz mumkin.
+                </p>
+              </div>
+              <button
+                onClick={() => setLoginModalOpen(true)}
+                className="inline-flex items-center gap-2 bg-brand-red hover:bg-orange-700 text-white font-semibold px-6 py-2.5 sm:py-3 rounded-xl transition-colors text-sm sm:text-base"
+              >
+                <Send size={18} />
+                Kirish
+              </button>
+            </div>
+            <TelegramLoginModal isOpen={loginModalOpen} onClose={() => setLoginModalOpen(false)} />
+          </div>
+        ) : isMoviePremium(movie) && !isUserPremium(user) ? (
           <div className="relative aspect-video rounded-xl overflow-hidden bg-brand-dark">
             {/* Blurred poster background */}
             <div
