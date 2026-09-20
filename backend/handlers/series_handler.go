@@ -108,6 +108,17 @@ func (h *SeriesHandler) GetSeriesBySlug(c *gin.Context) {
 		return
 	}
 	protectSeriesWithSeasonsMedia(series)
+	// Watching requires an account — guests get the episode list without the
+	// playback sources.
+	if !isAuthedRequest(c) {
+		for i := range series.Seasons {
+			for j := range series.Seasons[i].Episodes {
+				ep := &series.Seasons[i].Episodes[j]
+				ep.SourceType = resolveEpisodeSourceType(ep)
+				stripEpisodePlayback(ep)
+			}
+		}
+	}
 
 	// Increment views
 	h.seriesService.IncrementSeriesViews(series.Series.ID)
@@ -150,6 +161,8 @@ func (h *SeriesHandler) GetEpisodes(c *gin.Context) {
 	}
 	for i := range episodes {
 		protectEpisodeMedia(&episodes[i])
+		episodes[i].SourceType = resolveEpisodeSourceType(&episodes[i])
+		stripEpisodePlaybackForGuests(c, &episodes[i])
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": episodes})
@@ -264,6 +277,13 @@ func (h *SeriesHandler) GetEpisode(c *gin.Context) {
 		}
 	}
 
+	// Resolve the source type before the playback sources are stripped — it is
+	// inferred from the video URL and the player needs it either way.
+	episodeSourceType := resolveEpisodeSourceType(episode)
+
+	// Watching requires an account — hold back the playback sources for guests.
+	stripEpisodePlaybackForGuests(c, episode)
+
 	// Return episode with series slug
 	episodeResponse := gin.H{
 		"id":             episode.ID,
@@ -275,7 +295,7 @@ func (h *SeriesHandler) GetEpisode(c *gin.Context) {
 		"thumbnail_url":  protectMediaURL(episode.ThumbnailURL),
 		"video_url":      protectMediaURL(episode.VideoURL),
 		"embed_url":      episode.EmbedURL,
-		"source_type":    resolveEpisodeSourceType(episode),
+		"source_type":    episodeSourceType,
 		"duration":       episode.Duration,
 		"views":          episode.Views,
 		"air_date":       episode.AirDate,

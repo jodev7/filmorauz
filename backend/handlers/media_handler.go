@@ -35,17 +35,18 @@ func (h *MediaHandler) GetMediaToken(c *gin.Context) {
 
 	var (
 		sourceURL string
+		embedURL  string
 		err       error
 	)
 
 	if movieID := strings.TrimSpace(c.Query("movie_id")); movieID != "" {
-		sourceURL, err = h.resolveMovieMediaURL(movieID, user)
+		sourceURL, embedURL, err = h.resolveMovieMediaURL(movieID, user)
 		if err != nil {
 			h.handleAccessError(c, err)
 			return
 		}
 	} else if episodeID := strings.TrimSpace(c.Query("episode_id")); episodeID != "" {
-		sourceURL, err = h.resolveEpisodeMediaURL(episodeID, user)
+		sourceURL, embedURL, err = h.resolveEpisodeMediaURL(episodeID, user)
 		if err != nil {
 			h.handleAccessError(c, err)
 			return
@@ -58,6 +59,20 @@ func (h *MediaHandler) GetMediaToken(c *gin.Context) {
 		}
 	} else {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "movie_id, episode_id or path is required"})
+		return
+	}
+
+	// Iframe sources have nothing to sign — the embed URL itself is the source,
+	// and it's held back from the public payload, so hand it over here instead.
+	if sourceURL == "" && embedURL != "" {
+		c.JSON(http.StatusOK, gin.H{
+			"success":      true,
+			"protected":    false,
+			"embed":        true,
+			"playback_url": embedURL,
+			"embed_url":    embedURL,
+			"expires_at":   time.Now().UTC().Format(time.RFC3339),
+		})
 		return
 	}
 
@@ -79,46 +94,62 @@ func (h *MediaHandler) GetMediaToken(c *gin.Context) {
 	})
 }
 
-func (h *MediaHandler) resolveMovieMediaURL(movieID string, user *models.User) (string, error) {
+// resolveMovieMediaURL returns the streamable source, or — for iframe titles —
+// the embed URL as the second value.
+func (h *MediaHandler) resolveMovieMediaURL(movieID string, user *models.User) (string, string, error) {
+	// Watching requires an account — guests never get a playback token.
+	if user == nil {
+		return "", "", errUnauthorized("Tomosha qilish uchun tizimga kiring")
+	}
 	movie, err := h.movieService.GetMovieByID(movieID)
 	if err != nil {
-		return "", errNotFound("movie not found")
+		return "", "", errNotFound("movie not found")
 	}
 	if !movie.IsPublished {
-		return "", errNotFound("movie not found")
+		return "", "", errNotFound("movie not found")
 	}
 	if !models.CanAccessMovie(user, movie) {
-		return "", errForbidden("premium_required", "Premium subscription required to watch this content")
+		return "", "", errForbidden("premium_required", "Premium subscription required to watch this content")
 	}
 	if movie.MasterPlaylistURL != "" {
-		return movie.MasterPlaylistURL, nil
+		return movie.MasterPlaylistURL, "", nil
 	}
 	if movie.VideoURL != "" {
-		return movie.VideoURL, nil
+		return movie.VideoURL, "", nil
 	}
-	return "", errBadRequest("media source not available")
+	if movie.EmbedURL != "" {
+		return "", movie.EmbedURL, nil
+	}
+	return "", "", errBadRequest("media source not available")
 }
 
-func (h *MediaHandler) resolveEpisodeMediaURL(episodeID string, user *models.User) (string, error) {
+// resolveEpisodeMediaURL mirrors resolveMovieMediaURL for episodes.
+func (h *MediaHandler) resolveEpisodeMediaURL(episodeID string, user *models.User) (string, string, error) {
+	if user == nil {
+		return "", "", errUnauthorized("Tomosha qilish uchun tizimga kiring")
+	}
 	oid, err := primitive.ObjectIDFromHex(episodeID)
 	if err != nil {
-		return "", errBadRequest("invalid episode id")
+		return "", "", errBadRequest("invalid episode id")
 	}
 	episode, err := h.seriesService.GetEpisodeByID(oid)
 	if err != nil {
-		return "", errNotFound("episode not found")
+		return "", "", errNotFound("episode not found")
 	}
 	series, err := h.seriesService.GetSeriesByID(episode.SeriesID)
 	if err != nil || series == nil || !series.IsPublished {
-		return "", errNotFound("episode not found")
+		return "", "", errNotFound("episode not found")
 	}
 	if !models.CanAccessSeries(user, series) {
-		return "", errForbidden("premium_required", "Premium subscription required to watch this content")
+		return "", "", errForbidden("premium_required", "Premium subscription required to watch this content")
 	}
-	if episode.VideoURL == "" {
-		return "", errBadRequest("media source not available")
+	if episode.VideoURL != "" {
+		return episode.VideoURL, "", nil
 	}
-	return episode.VideoURL, nil
+	if episode.EmbedURL != "" {
+		return "", episode.EmbedURL, nil
+	}
+	return "", "", errBadRequest("media source not available")
 }
 
 func (h *MediaHandler) resolvePublicAssetPath(mediaPath string) (string, error) {
@@ -280,6 +311,10 @@ func (e *mediaHTTPError) Error() string {
 
 func errForbidden(code, message string) error {
 	return &mediaHTTPError{status: http.StatusForbidden, code: code, message: message}
+}
+
+func errUnauthorized(message string) error {
+	return &mediaHTTPError{status: http.StatusUnauthorized, code: "auth_required", message: message}
 }
 
 func errNotFound(message string) error {

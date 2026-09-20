@@ -181,9 +181,11 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	// server-side. Cached 5m to spare the GIPHY quota on repeat searches.
 	api.GET("/gifs/search", middleware.CacheResponse(5*time.Minute), gifHandler.SearchGifs)
 	// Movie by slug (must come before :id routes to avoid slug being treated as id)
-	api.GET("/movies/slug/:slug", movieHandler.GetMovieBySlug)
+	// OptionalAuth: the payload is public, but the playback sources inside it
+	// are only filled in for logged-in users (see playback_gate.go).
+	api.GET("/movies/slug/:slug", middleware.OptionalAuth(authService), movieHandler.GetMovieBySlug)
 	// Movie by ID and recommendations
-	api.GET("/movies/:id", movieHandler.GetMovieByID)
+	api.GET("/movies/:id", middleware.OptionalAuth(authService), movieHandler.GetMovieByID)
 	api.GET("/movies/recommendations", movieHandler.GetRecommendations) // ?movie_id=xxx&limit=12
 	api.GET("/movies/:id/recommendations", movieHandler.GetRecommendations)
 	api.GET("/search", movieHandler.SearchMovies)
@@ -493,13 +495,13 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	// Season routes - must come before series/:slug
 	seasons := api.Group("/seasons")
 	{
-		seasons.GET("/:id/episodes", seriesHandler.GetEpisodes)
+		seasons.GET("/:id/episodes", middleware.OptionalAuth(authService), seriesHandler.GetEpisodes)
 	}
 
 	// Episode routes
 	episodes := api.Group("/episodes")
 	{
-		episodes.GET("/:id", seriesHandler.GetEpisode)
+		episodes.GET("/:id", middleware.OptionalAuth(authService), seriesHandler.GetEpisode)
 	}
 
 	// Series by ID routes - must come before /series/:slug
@@ -513,7 +515,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	series := api.Group("/series")
 	{
 		series.GET("", seriesHandler.ListSeries)
-		series.GET("/:slug", seriesHandler.GetSeriesBySlug)
+		series.GET("/:slug", middleware.OptionalAuth(authService), seriesHandler.GetSeriesBySlug)
 	}
 
 	// Admin series management

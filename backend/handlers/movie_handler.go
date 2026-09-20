@@ -70,6 +70,8 @@ func (h *MovieHandler) ListMovies(c *gin.Context) {
 			log.Printf("[ListMovies] Mapped movie[%d] source_type: %q -> %q", i, originalType, movies[i].SourceType)
 		}
 		protectMovieMedia(&movies[i])
+		// Listings are a catalogue, not a player — never ship playback sources.
+		stripMoviePlayback(&movies[i])
 	}
 	if mappedCount > 0 {
 		log.Printf("[ListMovies] Total mapped: %d/%d movies", mappedCount, len(movies))
@@ -133,6 +135,9 @@ func (h *MovieHandler) GetMovieBySlug(c *gin.Context) {
 		user, _ = h.userRepo.FindByHex(userIDStr)
 	}
 
+	// Watching requires an account — hold back the playback sources for guests.
+	stripMoviePlaybackForGuests(c, movie)
+
 	// Get access info
 	access := models.GetMovieAccessInfo(user, movie)
 	log.Printf("[MOVIE API] GetMovieBySlug slug=%s db_genres=%v response_genres=%v", slug, movie.Genre, movie.Genre)
@@ -185,6 +190,8 @@ func (h *MovieHandler) GetMovieByID(c *gin.Context) {
 	if userIDStr != "" {
 		user, _ = h.userRepo.FindByHex(userIDStr)
 	}
+
+	stripMoviePlaybackForGuests(c, movie)
 
 	// Get access info
 	access := models.GetMovieAccessInfo(user, movie)
@@ -519,6 +526,7 @@ func (h *MovieHandler) GetRecommendations(c *gin.Context) {
 
 	for i := range recommendations {
 		protectMovieMedia(&recommendations[i])
+		stripMoviePlayback(&recommendations[i])
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": recommendations})

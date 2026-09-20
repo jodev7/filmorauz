@@ -55,6 +55,9 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 	}
 	for i := range movies {
 		protectMovieMedia(&movies[i])
+		// Homepage rows are a catalogue (and the response is cached across
+		// users), so playback sources never belong in it.
+		stripMoviePlayback(&movies[i])
 	}
 	for i := range featuredCollections {
 		featuredCollections[i].PosterURL = protectMediaURL(featuredCollections[i].PosterURL)
@@ -133,6 +136,7 @@ func (h *HomepageHandler) GetHomepageData(c *gin.Context) {
 			continue
 		}
 		protectMovieMedia(&topRatedPool[i])
+		stripMoviePlayback(&topRatedPool[i])
 		topRated = append(topRated, topRatedPool[i])
 		used[id] = true
 		if len(topRated) >= 12 {
@@ -340,6 +344,7 @@ func (h *HomepageHandler) buildGenreRows() []gin.H {
 		}
 		for i := range list {
 			protectMovieMedia(&list[i])
+			stripMoviePlayback(&list[i])
 		}
 		rows = append(rows, gin.H{
 			"label":  label,

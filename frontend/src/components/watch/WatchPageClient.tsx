@@ -321,6 +321,7 @@ export default function WatchPageClient({
   const [viewCount, setViewCount] = useState(movie.views ?? 0);
   const [episodesModalOpen, setEpisodesModalOpen] = useState(false);
   const [resolvedPlaybackUrl, setResolvedPlaybackUrl] = useState<string | null>(null);
+  const [resolvedEmbedUrl, setResolvedEmbedUrl] = useState<string | null>(null);
   const [playbackAccessError, setPlaybackAccessError] = useState<string | null>(null);
   const [autoNextCountdown, setAutoNextCountdown] = useState(5);
   const [showAutoNextCountdown, setShowAutoNextCountdown] = useState(false);
@@ -378,11 +379,44 @@ export default function WatchPageClient({
     let cancelled = false;
     setPlaybackAccessError(null);
     setResolvedPlaybackUrl(null);
+    setResolvedEmbedUrl(null);
 
     if (movie.source_type !== "direct_hls" && movie.source_type !== "direct_mp4") {
       const nonProtectedUrl = movie.embed_url || movie.video_url || null;
-      setResolvedPlaybackUrl(nonProtectedUrl);
-      return;
+      if (nonProtectedUrl) {
+        setResolvedEmbedUrl(nonProtectedUrl);
+        setResolvedPlaybackUrl(nonProtectedUrl);
+        return;
+      }
+      // The public payload withholds playback sources from guests, so an embed
+      // title arrives here without a URL — ask the media endpoint for it, which
+      // hands it over once the request carries a session.
+      if (!token) return;
+      const loadEmbedSource = async () => {
+        try {
+          const response = await getProtectedMediaAccess({
+            movieId: movie.type === "episode" ? undefined : movie.id,
+            episodeId: movie.type === "episode" ? movie.id : undefined,
+            token,
+          });
+          const embedSrc = response.embed_url || response.playback_url || "";
+          if (!embedSrc) throw new Error("Embed source is empty");
+          if (!cancelled) {
+            setResolvedEmbedUrl(embedSrc);
+            setResolvedPlaybackUrl(embedSrc);
+          }
+        } catch (error) {
+          console.error("Failed to resolve embed media URL:", error);
+          if (!cancelled) {
+            setPlaybackAccessError("Video manbasi olinmadi.");
+            setResolvedPlaybackUrl(null);
+          }
+        }
+      };
+      loadEmbedSource();
+      return () => {
+        cancelled = true;
+      };
     }
 
     if (MEDIA_ACCESS_MODE !== "protected") {
@@ -844,7 +878,7 @@ export default function WatchPageClient({
                 <VideoPlayer
                   videoUrl={resolvedPlaybackUrl}
                   premiumStreamUrl={resolvedPlaybackUrl}
-                  embedUrl={movie.embed_url}
+                  embedUrl={resolvedEmbedUrl || movie.embed_url}
                   sourceType={movie.source_type}
                   title={localizedTitle}
                   posterUrl={normalizeMediaUrl(movie.backdrop_url || movie.poster_url, DEFAULT_POSTER_PLACEHOLDER)}

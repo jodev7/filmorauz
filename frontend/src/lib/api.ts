@@ -1454,6 +1454,9 @@ export interface MediaAccessResponse {
   playback_url: string;
   expires_at: string;
   cookie_name?: string;
+  // Set for iframe titles: nothing to sign, the embed URL is the source.
+  embed?: boolean;
+  embed_url?: string;
 }
 
 export async function getProtectedMediaAccess(params: {

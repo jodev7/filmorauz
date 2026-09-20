@@ -171,9 +171,11 @@ export default function WatchRoomPage() {
           if (!playableID) {
             // Series with no current episode — nothing to play yet.
           } else if (playableType === "movie") {
-            const m = await fetch(`${apiBase}/movies/${playableID}`).then((res) =>
-              res.ok ? res.json() : null,
-            );
+            // Playback sources are only served to authenticated requests, so
+            // the session token has to ride along here.
+            const m = await fetch(`${apiBase}/movies/${playableID}`, {
+              headers: token ? { Authorization: `Bearer ${token}` } : {},
+            }).then((res) => (res.ok ? res.json() : null));
             if (m) {
               rawMaster =
                 m.master_playlist_url ||
@@ -183,9 +185,9 @@ export default function WatchRoomPage() {
                 "";
             }
           } else {
-            const ep = await fetch(`${apiBase}/episodes/${playableID}`).then((res) =>
-              res.ok ? res.json() : null,
-            );
+            const ep = await fetch(`${apiBase}/episodes/${playableID}`, {
+              headers: token ? { Authorization: `Bearer ${token}` } : {},
+            }).then((res) => (res.ok ? res.json() : null));
             if (ep) {
               // /episodes/:id returns {episode, previous_episode, next_episode}
               const epDoc = ep.episode || ep;
