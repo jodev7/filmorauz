@@ -90,7 +90,7 @@ setup-parser:
 
 # ── Development ───────────────────────────────────────────────
 backend:
-	cd $(ROOT_DIR)backend && go run main.go
+	cd $(ROOT_DIR)backend && go run .
 
 frontend:
 	cd $(ROOT_DIR)frontend && npm run dev

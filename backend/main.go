@@ -201,6 +201,7 @@ func main() {
 		log.Printf("Warning: Failed to ensure analytics indexes: %v", err)
 	}
 	analyticsHandler := handlers.NewAnalyticsHandler(analyticsRepo)
+	movieHandler.SetAnalyticsRepository(analyticsRepo)
 	
 	userHandler := handlers.NewUserHandler(watchHistoryRepo, favoriteRepo, movieRepo, seriesRepo, userRepo, analyticsRepo)
 	collectionHandler := handlers.NewCollectionHandler(collectionService)
