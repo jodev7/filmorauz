@@ -195,7 +195,14 @@ func main() {
 	presenceHandler := handlers.NewPresenceHandler(presenceService, userRepo)
 	systemHandler := handlers.NewSystemHandler(cfg, db, getParserURL())
 	gifHandler := handlers.NewGifHandler(cfg)
-	userHandler := handlers.NewUserHandler(watchHistoryRepo, favoriteRepo, movieRepo, seriesRepo, userRepo)
+	
+	analyticsRepo := repositories.NewAnalyticsRepository(db)
+	if err := analyticsRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure analytics indexes: %v", err)
+	}
+	analyticsHandler := handlers.NewAnalyticsHandler(analyticsRepo)
+	
+	userHandler := handlers.NewUserHandler(watchHistoryRepo, favoriteRepo, movieRepo, seriesRepo, userRepo, analyticsRepo)
 	collectionHandler := handlers.NewCollectionHandler(collectionService)
 	ratingHandler := handlers.NewRatingHandler(ratingService)
 
@@ -363,7 +370,7 @@ func main() {
 	// Register routes
 	deleteJobHandler := handlers.NewDeleteJobHandler(repositories.NewDeleteJobRepository(db))
 
-	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler, deleteJobHandler, expenseHandler, announcementHandler, gifHandler)
+	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler, deleteJobHandler, expenseHandler, announcementHandler, gifHandler, analyticsHandler)
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)
 	seoNotifier := buildSEONotifier(cfg, db)

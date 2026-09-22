@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { Film, LayoutDashboard, List, LogOut, PlusCircle, Download, Users, FolderHeart, Folder, MessageSquare, Settings, Tv, Ban, History, MessageCircle, Video, Megaphone, Send, Lightbulb, Globe, Wallet, Bell } from "lucide-react";
+import { Film, LayoutDashboard, List, LogOut, PlusCircle, Download, Users, FolderHeart, Folder, MessageSquare, Settings, Tv, Ban, History, MessageCircle, Video, Megaphone, Send, Lightbulb, Globe, Wallet, Bell, Activity } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 
 export default function AdminLayout({
@@ -65,6 +65,7 @@ export default function AdminLayout({
 
   const navItems = [
     { href: "/admin/dashboard", icon: LayoutDashboard, label: "Dashboard" },
+    { href: "/admin/analytics", icon: Activity, label: "Analitika" },
     { href: "/admin/movies", icon: List, label: "Movies" },
     { href: "/admin/movies/new", icon: PlusCircle, label: "Add Movie" },
     { href: "/admin/series", icon: Tv, label: "Series" },

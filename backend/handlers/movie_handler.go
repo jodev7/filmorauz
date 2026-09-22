@@ -21,6 +21,7 @@ type MovieHandler struct {
 	movieService    *services.MovieService
 	seriesService   *services.SeriesService
 	userRepo        *repositories.UserRepository
+	analyticsRepo   *repositories.AnalyticsRepository
 	telegramService *services.TelegramService
 	db              *mongo.Database
 }
@@ -32,6 +33,10 @@ func NewMovieHandler(movieService *services.MovieService, seriesService *service
 // SetTelegramService wires the Telegram service after initialization.
 func (h *MovieHandler) SetTelegramService(svc *services.TelegramService) {
 	h.telegramService = svc
+}
+
+func (h *MovieHandler) SetAnalyticsRepository(repo *repositories.AnalyticsRepository) {
+	h.analyticsRepo = repo
 }
 
 // --- Public Handlers ---
@@ -260,6 +265,23 @@ func (h *MovieHandler) SearchMovies(c *gin.Context) {
 			Quality:    s.Quality,
 			TargetType: "series",
 			Code:       s.Code,
+		})
+	}
+
+	if h.analyticsRepo != nil && strings.TrimSpace(query) != "" {
+		var userOID *primitive.ObjectID
+		if userID := c.GetString("user_id"); userID != "" {
+			if oid, err := primitive.ObjectIDFromHex(userID); err == nil {
+				userOID = &oid
+			}
+		}
+		_ = h.analyticsRepo.RecordSearchEvent(c.Request.Context(), models.SearchEvent{
+			Query:       strings.ToLower(strings.TrimSpace(query)),
+			UserID:      userOID,
+			IP:          c.ClientIP(),
+			UserAgent:   c.GetHeader("User-Agent"),
+			ResultCount: len(results),
+			CreatedAt:   time.Now(),
 		})
 	}
 

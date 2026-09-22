@@ -9,7 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler, contentHandler *handlers.ContentHandler, systemHandler *handlers.SystemHandler, deleteJobHandler *handlers.DeleteJobHandler, expenseHandler *handlers.ExpenseHandler, announcementHandler *handlers.AnnouncementHandler, gifHandler *handlers.GifHandler) {
+func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler, contentHandler *handlers.ContentHandler, systemHandler *handlers.SystemHandler, deleteJobHandler *handlers.DeleteJobHandler, expenseHandler *handlers.ExpenseHandler, announcementHandler *handlers.AnnouncementHandler, gifHandler *handlers.GifHandler, analyticsHandler *handlers.AnalyticsHandler) {
 	r.GET("/sitemap.xml", sitemapHandler.GetSitemapIndex)
 	r.GET("/sitemap-static.xml", sitemapHandler.GetSitemapStatic)
 	r.GET("/sitemap-genres.xml", sitemapHandler.GetSitemapGenres)
@@ -173,6 +173,10 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	// Public user profile (optional auth — needed to enforce privacy for owner/admin)
 	api.GET("/users/:id", middleware.OptionalAuth(authService), userHandler.GetPublicProfile)
 	api.GET("/media/access-token", middleware.OptionalAuth(authService), mediaHandler.GetMediaToken)
+
+	// Analytics endpoints
+	api.POST("/analytics/playback-report", middleware.OptionalAuth(authService), analyticsHandler.CreatePlaybackReport)
+	api.POST("/analytics/premium-event", middleware.RequireAuth(authService), analyticsHandler.RecordPremiumEvent)
 
 	// Public movie routes
 	api.GET("/homepage", middleware.CacheResponse(30*time.Second), homepageHandler.GetHomepageData)
@@ -442,6 +446,13 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		admin.GET("/suggestions/stats", suggestionHandler.AdminGetStats)
 		admin.GET("/suggestions/:id", suggestionHandler.AdminGetSuggestion)
 		admin.PATCH("/suggestions/:id", suggestionHandler.AdminUpdateSuggestion)
+
+		// Analytics management
+		admin.GET("/analytics/search-summary", analyticsHandler.AdminSearchSummary)
+		admin.GET("/analytics/top-content", analyticsHandler.AdminTopContentByPeriod)
+		admin.GET("/analytics/completion-summary", analyticsHandler.AdminCompletionSummary)
+		admin.GET("/analytics/premium-funnel", analyticsHandler.AdminPremiumFunnel)
+		admin.GET("/analytics/playback-reports", analyticsHandler.AdminPlaybackReports)
 	}
 
 	// Public collection routes

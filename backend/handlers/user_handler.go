@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
@@ -21,6 +22,7 @@ type UserHandler struct {
 	movieRepo        *repositories.MovieRepository
 	seriesRepo       *repositories.SeriesRepository
 	userRepo         *repositories.UserRepository
+	analyticsRepo    *repositories.AnalyticsRepository
 }
 
 func NewUserHandler(
@@ -29,6 +31,7 @@ func NewUserHandler(
 	movieRepo *repositories.MovieRepository,
 	seriesRepo *repositories.SeriesRepository,
 	userRepo *repositories.UserRepository,
+	analyticsRepo *repositories.AnalyticsRepository,
 ) *UserHandler {
 	return &UserHandler{
 		watchHistoryRepo: watchHistoryRepo,
@@ -36,6 +39,7 @@ func NewUserHandler(
 		movieRepo:        movieRepo,
 		seriesRepo:       seriesRepo,
 		userRepo:         userRepo,
+		analyticsRepo:    analyticsRepo,
 	}
 }
 
@@ -736,6 +740,7 @@ func (h *UserHandler) RecordView(c *gin.Context) {
 		return
 	}
 
+	targetType := "movie"
 	if _, err = h.movieRepo.FindByID(movieID); err == nil {
 		err = h.movieRepo.IncrementViews(movieID)
 	} else if err == mongo.ErrNoDocuments {
@@ -744,12 +749,30 @@ func (h *UserHandler) RecordView(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "content not found"})
 			return
 		}
+		targetType = "episode"
 		err = h.seriesRepo.IncrementEpisodeViews(movieID)
 	}
 	if err != nil {
 		log.Printf("[USER HANDLER] Failed to increment views: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record view"})
 		return
+	}
+
+	if h.analyticsRepo != nil {
+		var userOID *primitive.ObjectID
+		if userID := c.GetString("user_id"); userID != "" {
+			if oid, parseErr := primitive.ObjectIDFromHex(userID); parseErr == nil {
+				userOID = &oid
+			}
+		}
+		_ = h.analyticsRepo.RecordContentView(c.Request.Context(), models.ContentViewEvent{
+			TargetType: targetType,
+			TargetID:   movieID,
+			UserID:     userOID,
+			IP:         c.ClientIP(),
+			UserAgent:  c.GetHeader("User-Agent"),
+			CreatedAt:  time.Now(),
+		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "view recorded"})

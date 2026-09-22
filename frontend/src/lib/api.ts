@@ -5207,3 +5207,95 @@ export async function adminDeleteAnnouncement(token: string, id: string): Promis
   });
   if (!res.ok) throw new Error("Failed to delete");
 }
+
+// --- Analytics ---
+
+export interface SearchTermStat {
+  query: string;
+  count: number;
+  avg_results: number;
+  zero_results: number;
+}
+
+export interface TopContentPeriodStat {
+  target_type: string;
+  target_id: string;
+  title: string;
+  slug?: string;
+  poster_url?: string;
+  views: number;
+  period_days: number;
+}
+
+export interface CompletionStat {
+  target_type: string;
+  target_id: string;
+  title: string;
+  slug?: string;
+  poster_url?: string;
+  starts: number;
+  completed: number;
+  avg_progress: number;
+  completion_rate: number;
+}
+
+export interface PremiumFunnelSummary {
+  period_days: number;
+  lock_views: number;
+  cta_clicks: number;
+  sessions_started: number;
+  paid_sessions: number;
+  stars_revenue: number;
+}
+
+export interface PlaybackReport {
+  id: string;
+  target_type: string;
+  target_id: string;
+  title: string;
+  url: string;
+  reason: string;
+  note: string;
+  status: string;
+  created_at: string;
+}
+
+export async function getAdminSearchSummary(token: string, days = 30) {
+  const res = await fetch(`${API_URL}/admin/analytics/search-summary?days=${days}`, {
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error("Failed to load search summary");
+  return res.json() as Promise<{ top: SearchTermStat[]; zero_results: SearchTermStat[] }>;
+}
+
+export async function getAdminTopContent(token: string, days = 7) {
+  const res = await fetch(`${API_URL}/admin/analytics/top-content?days=${days}`, {
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error("Failed to load top content");
+  return res.json() as Promise<{ data: TopContentPeriodStat[] }>;
+}
+
+export async function getAdminCompletionSummary(token: string) {
+  const res = await fetch(`${API_URL}/admin/analytics/completion-summary`, {
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error("Failed to load completion summary");
+  return res.json() as Promise<{ data: CompletionStat[] }>;
+}
+
+export async function getAdminPremiumFunnel(token: string, days = 30) {
+  const res = await fetch(`${API_URL}/admin/analytics/premium-funnel?days=${days}`, {
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error("Failed to load premium funnel");
+  return res.json() as Promise<PremiumFunnelSummary>;
+}
+
+export async function getAdminPlaybackReports(token: string, status = "new") {
+  const res = await fetch(`${API_URL}/admin/analytics/playback-reports?status=${status}`, {
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error("Failed to load playback reports");
+  return res.json() as Promise<{ reports: PlaybackReport[]; counts: Record<string, number> }>;
+}
