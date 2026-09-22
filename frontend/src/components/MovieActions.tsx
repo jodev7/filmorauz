@@ -37,8 +37,10 @@ export default function MovieActions({ movie }: MovieActionsProps) {
       .finally(() => setIsInitialLoading(false));
   }, [isAuthenticated, token, movie.id]);
 
-  // Record view on mount (public) - only once per browser session
+  // Record view on mount (authenticated) - only once per browser session
   useEffect(() => {
+    if (!isAuthenticated || !token) return;
+
     // Use sessionStorage to prevent multiple view increments on page reload
     const viewKey = `viewed_${movie.id}`;
     if (sessionStorage.getItem(viewKey)) {
@@ -47,8 +49,8 @@ export default function MovieActions({ movie }: MovieActionsProps) {
     
     // Mark as viewed and record
     sessionStorage.setItem(viewKey, "true");
-    recordView(movie.id).catch(console.error);
-  }, [movie.id]);
+    recordView(token, movie.id).catch(console.error);
+  }, [isAuthenticated, token, movie.id]);
 
   // Record watch history on mount (authenticated)
   const handleRecordHistory = useCallback(() => {

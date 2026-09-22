@@ -364,16 +364,20 @@ export default function WatchPageClient({
   // Report the open content with the presence heartbeat so the admin "Onlayn
   // sessiyalar" list can show which movie/episode each live session is on.
   // Cleared automatically when this page unmounts.
-  useReportPresenceActivity({
-    type: targetType,
-    content_id: progressTargetId,
-    title:
-      targetType === "episode" && movie.series_title
-        ? `${movie.series_title} — ${localizedTitle}`
-        : localizedTitle,
-    slug: movie.slug,
-    url: pathname || backHref,
-  });
+  useReportPresenceActivity(
+    user && token
+      ? {
+          type: targetType,
+          content_id: progressTargetId,
+          title:
+            targetType === "episode" && movie.series_title
+              ? `${movie.series_title} — ${localizedTitle}`
+              : localizedTitle,
+          slug: movie.slug,
+          url: pathname || backHref,
+        }
+      : null
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -608,15 +612,14 @@ export default function WatchPageClient({
     if (hasRecorded.current) return;
     hasRecorded.current = true;
 
-    // Record public view count (no auth required)
-    recordView(movie.id)
-      .then(() => setViewCount((prev) => prev + 1))
-      .catch((err) => {
-      console.error("Failed to record view:", err);
-    });
-
-    // Record watch history for authenticated users
+    // Record views/history only for authenticated users. Guests can reach the
+    // watch page login gate, but they are not counted as watching.
     if (user && token) {
+      recordView(token, movie.id)
+        .then(() => setViewCount((prev) => prev + 1))
+        .catch((err) => {
+          console.error("Failed to record view:", err);
+        });
       recordWatchHistory(token, movie.id, { targetType }).catch((err) => {
         console.error("Failed to record watch history:", err);
       });

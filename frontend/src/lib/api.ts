@@ -1156,10 +1156,11 @@ export async function checkIsFavorite(token: string, targetId: string, options?:
   });
 }
 
-// Record view (public - no auth required)
-export async function recordView(targetId: string): Promise<void> {
+// Record view (authenticated)
+export async function recordView(token: string, targetId: string): Promise<void> {
   await fetch(`${API_URL}/movies/${targetId}/view`, {
     method: "POST",
+    headers: authHeaders(token),
   });
 }
 
@@ -5206,4 +5207,3 @@ export async function adminDeleteAnnouncement(token: string, id: string): Promis
   });
   if (!res.ok) throw new Error("Failed to delete");
 }
-

@@ -165,8 +165,10 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		watch.POST("/:movieId/complete", userHandler.MarkWatchComplete)
 	}
 
-	// Public view counter (no auth required) - must be before :slug routes
-	api.POST("/movies/:id/view", userHandler.RecordView)
+	// Authenticated view counter - must be before :slug routes.
+	// Guests can open detail/watch pages for SEO and login prompts, but only a
+	// signed-in user can be counted as watching.
+	api.POST("/movies/:id/view", middleware.RequireAuth(authService), userHandler.RecordView)
 
 	// Public user profile (optional auth — needed to enforce privacy for owner/admin)
 	api.GET("/users/:id", middleware.OptionalAuth(authService), userHandler.GetPublicProfile)

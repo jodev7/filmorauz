@@ -721,7 +721,8 @@ func (h *UserHandler) GetFavorites(c *gin.Context) {
 
 // RecordView godoc
 // POST /movies/:id/view
-// Records a view for a movie (can be called by authenticated or anonymous users)
+// Records a view for a movie or episode. Route middleware requires auth so
+// guests who only hit the login gate are not counted as watchers.
 func (h *UserHandler) RecordView(c *gin.Context) {
 	movieIDStr := c.Param("id")
 	if movieIDStr == "" {
