@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/filmorauz/backend/models"
@@ -520,5 +521,47 @@ func (r *WatchHistoryRepository) EnsureIndexes() error {
 	}
 
 	_, err := r.col.Indexes().CreateMany(ctx, indexes)
+	if err == nil {
+		return nil
+	}
+	// A pre-partial-filter deployment left plain unique indexes behind under the
+	// same auto-generated names, and Mongo rejects the whole CreateMany with
+	// IndexKeySpecsConflict rather than replacing them. Those old indexes are
+	// the bug: episode history rows carry no movie_id, so every episode after
+	// the first collides on (user_id, null). Drop them and create again.
+	if !isIndexKeySpecsConflict(err) {
+		return err
+	}
+	for _, name := range []string{"user_id_1_target_type_1_target_id_1", "user_id_1_movie_id_1"} {
+		if _, dropErr := r.col.Indexes().DropOne(ctx, name); dropErr != nil && !isIndexNotFound(dropErr) {
+			return dropErr
+		}
+	}
+	_, err = r.col.Indexes().CreateMany(ctx, indexes)
 	return err
+}
+
+// Mongo server error codes: 86 IndexKeySpecsConflict, 27 IndexNotFound.
+func isIndexKeySpecsConflict(err error) bool {
+	return hasMongoServerErrorCode(err, 86)
+}
+
+func isIndexNotFound(err error) bool {
+	return hasMongoServerErrorCode(err, 27)
+}
+
+func hasMongoServerErrorCode(err error, code int) bool {
+	var cmdErr mongo.CommandError
+	if errors.As(err, &cmdErr) {
+		return cmdErr.Code == int32(code)
+	}
+	var writeErr mongo.WriteException
+	if errors.As(err, &writeErr) {
+		for _, we := range writeErr.WriteErrors {
+			if we.Code == code {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -381,82 +381,76 @@ export default function WatchPageClient({
     setResolvedPlaybackUrl(null);
     setResolvedEmbedUrl(null);
 
-    if (movie.source_type !== "direct_hls" && movie.source_type !== "direct_mp4") {
+    const isDirectSource =
+      movie.source_type === "direct_hls" || movie.source_type === "direct_mp4";
+
+    // The payload only carries playback sources for authenticated callers, and
+    // this page is server-rendered without the viewer's session — so they are
+    // missing even when the viewer is logged in. Use them when they are there,
+    // otherwise mint the source per-request from the media endpoint, which
+    // does see the session.
+    if (!isDirectSource) {
       const nonProtectedUrl = movie.embed_url || movie.video_url || null;
       if (nonProtectedUrl) {
         setResolvedEmbedUrl(nonProtectedUrl);
         setResolvedPlaybackUrl(nonProtectedUrl);
         return;
       }
-      // The public payload withholds playback sources from guests, so an embed
-      // title arrives here without a URL — ask the media endpoint for it, which
-      // hands it over once the request carries a session.
-      if (!token) return;
-      const loadEmbedSource = async () => {
-        try {
-          const response = await getProtectedMediaAccess({
-            movieId: movie.type === "episode" ? undefined : movie.id,
-            episodeId: movie.type === "episode" ? movie.id : undefined,
-            token,
-          });
-          const embedSrc = response.embed_url || response.playback_url || "";
-          if (!embedSrc) throw new Error("Embed source is empty");
-          if (!cancelled) {
-            setResolvedEmbedUrl(embedSrc);
-            setResolvedPlaybackUrl(embedSrc);
-          }
-        } catch (error) {
-          console.error("Failed to resolve embed media URL:", error);
-          if (!cancelled) {
-            setPlaybackAccessError("Video manbasi olinmadi.");
-            setResolvedPlaybackUrl(null);
-          }
-        }
-      };
-      loadEmbedSource();
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    if (MEDIA_ACCESS_MODE !== "protected") {
+    } else if (MEDIA_ACCESS_MODE !== "protected") {
       const publicSrc = resolvePublicPlaybackUrl(movie);
-      logger.debug("[player-src] resolved");
-      setResolvedPlaybackUrl(publicSrc || null);
-      return;
+      if (publicSrc) {
+        logger.debug("[player-src] resolved");
+        setResolvedPlaybackUrl(publicSrc);
+        return;
+      }
     }
 
     // Guests can't watch (login gate below), so don't mint a media token.
     if (!token) return;
 
-    const loadProtectedPlayback = async () => {
+    const loadPlaybackSource = async () => {
       try {
         const response = await getProtectedMediaAccess({
           movieId: movie.type === "episode" ? undefined : movie.id,
           episodeId: movie.type === "episode" ? movie.id : undefined,
           token,
         });
+
+        // Iframe titles: the embed URL is the source, there's nothing to sign.
+        if (response.embed || !isDirectSource) {
+          const embedSrc = response.embed_url || response.playback_url || "";
+          if (!embedSrc) throw new Error("Embed source is empty");
+          if (!cancelled) {
+            setResolvedEmbedUrl(embedSrc);
+            setResolvedPlaybackUrl(embedSrc);
+          }
+          return;
+        }
+
         const playbackUrl = response.playback_url || "";
         const finalSrc = playbackUrl.startsWith("https://cdn.filmorauz.net/media/")
           ? playbackUrl
           : normalizeMediaUrl(playbackUrl, "");
-        if (!response.protected || !finalSrc.includes("/media/")) {
+        // Protected mode has to hand back a signed /media/ URL; in public mode
+        // the plain CDN object URL is the playback source.
+        if (MEDIA_ACCESS_MODE === "protected" && (!response.protected || !finalSrc.includes("/media/"))) {
           throw new Error("Protected playback URL is invalid");
         }
+        if (!finalSrc) throw new Error("Playback source is empty");
         logger.debug("[media-token] resolved");
         if (!cancelled) {
           setResolvedPlaybackUrl(finalSrc);
         }
       } catch (error) {
-        console.error("Failed to resolve protected media URL:", error);
+        console.error("Failed to resolve media URL:", error);
         if (!cancelled) {
-          setPlaybackAccessError("Himoyalangan video manbasi olinmadi.");
+          setPlaybackAccessError("Video manbasi olinmadi.");
           setResolvedPlaybackUrl(null);
         }
       }
     };
 
-    loadProtectedPlayback();
+    loadPlaybackSource();
     return () => {
       cancelled = true;
     };
