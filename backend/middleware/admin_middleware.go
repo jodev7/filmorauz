@@ -44,9 +44,10 @@ func RequireAdmin(authService *services.AuthService) gin.HandlerFunc {
 		c.Set("email", claims["email"])
 		c.Set("role", claims["role"])
 
-		// SECURITY: Check if user has admin/superadmin role (case-insensitive)
+		// SECURITY: Check if user has admin/superadmin role (case-insensitive).
+		// Moderators pass only for the routes on the moderator allowlist.
 		role, ok := claims["role"].(string)
-		if !ok || !isAdminRole(role) {
+		if !ok || !(isAdminRole(role) || (IsModerator(role) && ModeratorAllowed(c.Request.Method, c.FullPath()))) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "admin access required"})
 			c.Abort()
 			return

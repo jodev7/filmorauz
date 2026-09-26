@@ -8,9 +8,18 @@ import { adminGetMovies, Movie, getAdminDashboardStats, getAdminShareStats, getA
 import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
 import SystemStatusBlock from "@/components/admin/SystemStatusBlock";
-import DashboardCharts from "@/components/admin/DashboardCharts";
+import dynamic from "next/dynamic";
 import AdminOverviewBlocks from "@/components/admin/AdminOverviewBlocks";
 import { useVisibleInterval } from "@/lib/use-visible-interval";
+
+// recharts is heavy — load the charts section separately so the rest of the
+// dashboard renders without waiting for it.
+const DashboardCharts = dynamic(() => import("@/components/admin/DashboardCharts"), {
+  ssr: false,
+  loading: () => (
+    <div className="mb-8 sm:mb-10 h-40 rounded-xl border border-brand-border bg-brand-card animate-pulse" aria-hidden />
+  ),
+});
 
 // Short Uzbek relative-time label for the live-session "last seen" column.
 function formatRelativeTime(iso: string): string {

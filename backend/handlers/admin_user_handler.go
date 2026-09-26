@@ -472,6 +472,7 @@ func (h *AdminUserHandler) UpdateUserRole(c *gin.Context) {
 	// Validate role
 	validRoles := map[string]bool{
 		"user":       true,
+		"moderator":  true,
 		"admin":      true,
 		"superadmin": true,
 	}
@@ -525,7 +526,8 @@ func (h *AdminUserHandler) BanUser(c *gin.Context) {
 
 	// Only admin/superadmin can ban users
 	currentUserRoleStr, ok := currentUserRole.(string)
-	if !ok || (strings.ToLower(strings.TrimSpace(currentUserRoleStr)) != "admin" && strings.ToLower(strings.TrimSpace(currentUserRoleStr)) != "superadmin") {
+	actorIsModerator := ok && middleware.IsModerator(currentUserRoleStr)
+	if !ok || (strings.ToLower(strings.TrimSpace(currentUserRoleStr)) != "admin" && strings.ToLower(strings.TrimSpace(currentUserRoleStr)) != "superadmin" && !actorIsModerator) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":   "forbidden",
 			"message": "Only admins can ban users",
@@ -545,6 +547,14 @@ func (h *AdminUserHandler) BanUser(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":   "forbidden",
 			"message": "SuperAdmin hisobini ban qilish mumkin emas",
+		})
+		return
+	}
+	// Moderators may only act on regular users, never on staff accounts.
+	if actorIsModerator && strings.ToLower(strings.TrimSpace(targetUser.Role)) != "user" && targetUser.Role != "" {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "forbidden",
+			"message": "Moderator faqat oddiy foydalanuvchilarni ban qila oladi",
 		})
 		return
 	}
@@ -662,7 +672,8 @@ func (h *AdminUserHandler) UnbanUser(c *gin.Context) {
 
 	// Only admin/superadmin can unban users
 	currentUserRoleStr, ok := currentUserRole.(string)
-	if !ok || (strings.ToLower(strings.TrimSpace(currentUserRoleStr)) != "admin" && strings.ToLower(strings.TrimSpace(currentUserRoleStr)) != "superadmin") {
+	actorIsModerator := ok && middleware.IsModerator(currentUserRoleStr)
+	if !ok || (strings.ToLower(strings.TrimSpace(currentUserRoleStr)) != "admin" && strings.ToLower(strings.TrimSpace(currentUserRoleStr)) != "superadmin" && !actorIsModerator) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":   "forbidden",
 			"message": "Only admins can unban users",
@@ -682,6 +693,14 @@ func (h *AdminUserHandler) UnbanUser(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":   "forbidden",
 			"message": "SuperAdmin hisobini o'zgartirish mumkin emas",
+		})
+		return
+	}
+	// Moderators may only act on regular users, never on staff accounts.
+	if actorIsModerator && strings.ToLower(strings.TrimSpace(targetUser.Role)) != "user" && targetUser.Role != "" {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "forbidden",
+			"message": "Moderator faqat oddiy foydalanuvchilarni boshqara oladi",
 		})
 		return
 	}

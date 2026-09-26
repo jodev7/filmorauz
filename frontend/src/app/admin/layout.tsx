@@ -10,8 +10,10 @@ import { useVisibleInterval } from "@/lib/use-visible-interval";
 import { visibleNav, activeHref } from "@/components/admin/admin-nav";
 import CommandPalette from "@/components/admin/CommandPalette";
 import { ToastProvider } from "@/components/admin/Toast";
+import { isFullAdminRole, isModeratorRole, moderatorCanOpen, MODERATOR_HOME } from "@/lib/roles";
 
 const COLLAPSED_KEY = "admin-nav-collapsed";
+const MODERATOR_RESULT_KINDS: ("user")[] = ["user"];
 
 function readCollapsed(): Set<string> {
   try {
@@ -31,14 +33,19 @@ export default function AdminLayout({
   const router = useRouter();
   const pathname = usePathname();
 
-  // SECURITY FIX: Check if user has admin/superadmin role
-  const isAdmin = user?.role === "admin" || user?.role === "superadmin";
+  // SECURITY FIX: Check if user has a staff role. `isAdmin` means "may enter
+  // /admin at all" — moderators included, but they're confined to their pages.
+  const isModerator = isModeratorRole(user?.role);
+  const isAdmin = isFullAdminRole(user?.role) || isModerator;
   const isSuperAdmin = user?.role === "superadmin";
+  const moderatorBlocked = isModerator && pathname !== "/admin/login" && !moderatorCanOpen(pathname);
 
   // Paths that require superadmin role specifically (backend enforces the
   // same via middleware.RequireSuperAdmin on /api/superadmin/*).
   const isSuperAdminPath =
-    pathname.startsWith("/admin/ads") || pathname.startsWith("/admin/expenses");
+    pathname.startsWith("/admin/ads") ||
+    pathname.startsWith("/admin/expenses") ||
+    pathname.startsWith("/admin/audit");
 
   // Protect all /admin/* except /admin/login
   useEffect(() => {
@@ -58,10 +65,16 @@ export default function AdminLayout({
     // Superadmin-only sections: a normal admin hitting the URL directly
     // gets bounced to the dashboard. Wait for the user profile to finish
     // loading so we don't flash-redirect a superadmin mid-boot.
-    if (!isLoading && isAuthenticated && isAdmin && !isSuperAdmin && isSuperAdminPath) {
+    if (!isLoading && isAuthenticated && isAdmin && !isSuperAdmin && isSuperAdminPath && !isModerator) {
       router.replace("/admin/dashboard");
+      return;
     }
-  }, [isAuthenticated, isLoading, pathname, router, isAdmin, isSuperAdmin, isSuperAdminPath]);
+
+    // Moderators only get the community pages (comments, appeals, ...).
+    if (!isLoading && isAuthenticated && moderatorBlocked) {
+      router.replace(MODERATOR_HOME);
+    }
+  }, [isAuthenticated, isLoading, pathname, router, isAdmin, isSuperAdmin, isSuperAdminPath, isModerator, moderatorBlocked]);
 
   // ── Sidebar state (declared before any early return — hooks order) ──
   const [badges, setBadges] = useState<AdminBadges | null>(null);
@@ -122,6 +135,9 @@ export default function AdminLayout({
   // matching the useEffect-driven redirect above. Prevents a flash of
   // restricted content before the router swap.
   if (!isLoading && isAdmin && !isSuperAdmin && isSuperAdminPath) {
+    return null;
+  }
+  if (!isLoading && moderatorBlocked) {
     return null;
   }
 
@@ -273,7 +289,13 @@ export default function AdminLayout({
         {children}
       </div>
 
-      <CommandPalette token={token} nav={nav} open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <CommandPalette
+        token={token}
+        nav={nav}
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        resultKinds={isModerator ? MODERATOR_RESULT_KINDS : undefined}
+      />
     </div>
     </ToastProvider>
   );

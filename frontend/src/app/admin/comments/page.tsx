@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { MessageSquare, Search, ChevronLeft, ChevronRight, Check, X, Trash2, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { isStaffRole } from "@/lib/roles";
 import { getAdminComments, updateCommentStatus, adminDeleteComment, AdminComment, CommentStatus } from "@/lib/comments-api";
 
 export default function AdminCommentsPage() {
@@ -23,7 +24,7 @@ export default function AdminCommentsPage() {
 
   // Redirect if not admin
   useEffect(() => {
-    if (!authLoading && (!token || (user?.role !== "admin" && user?.role !== "superadmin"))) {
+    if (!authLoading && (!token || !isStaffRole(user?.role))) {
       router.push("/");
     }
   }, [authLoading, token, user, router]);
@@ -137,7 +138,7 @@ export default function AdminCommentsPage() {
     );
   }
 
-  if (!token || (user?.role !== "admin" && user?.role !== "superadmin")) {
+  if (!token || !isStaffRole(user?.role)) {
     return null;
   }
 

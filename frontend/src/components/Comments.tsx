@@ -340,6 +340,9 @@ function CommentThread({
     if (role === "admin") {
       return { text: tt.admin || "Admin", className: "bg-brand-red" };
     }
+    if (role === "moderator") {
+      return { text: "Moderator", className: "bg-blue-600" };
+    }
     return null;
   };
 

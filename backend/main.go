@@ -202,6 +202,11 @@ func main() {
 	}
 	analyticsHandler := handlers.NewAnalyticsHandler(analyticsRepo)
 	adminOverviewHandler := handlers.NewAdminOverviewHandler(db, jobRepo)
+	auditLogRepo := repositories.NewAuditLogRepository(db)
+	if err := auditLogRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure admin_audit_logs indexes: %v", err)
+	}
+	auditLogHandler := handlers.NewAuditLogHandler(auditLogRepo)
 	movieHandler.SetAnalyticsRepository(analyticsRepo)
 	
 	userHandler := handlers.NewUserHandler(watchHistoryRepo, favoriteRepo, movieRepo, seriesRepo, userRepo, analyticsRepo)
@@ -372,7 +377,7 @@ func main() {
 	// Register routes
 	deleteJobHandler := handlers.NewDeleteJobHandler(repositories.NewDeleteJobRepository(db))
 
-	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler, deleteJobHandler, expenseHandler, announcementHandler, gifHandler, analyticsHandler, adminOverviewHandler)
+	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler, deleteJobHandler, expenseHandler, announcementHandler, gifHandler, analyticsHandler, adminOverviewHandler, auditLogHandler, auditLogRepo)
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)
 	seoNotifier := buildSEONotifier(cfg, db)

@@ -5452,3 +5452,49 @@ export async function adminBulkUpdateMovies(
   if (!res.ok) throw new Error(json?.error || "Bulk update failed");
   return json;
 }
+
+// ─── Admin audit log (superadmin) ────────────────────────────────────────────
+
+export interface AuditLogEntry {
+  id: string;
+  actor_id: string;
+  actor_role: string;
+  method: string;
+  route: string;
+  path: string;
+  params?: Record<string, string>;
+  body?: Record<string, unknown>;
+  status: number;
+  ip?: string;
+  user_agent?: string;
+  duration_ms: number;
+  created_at: string;
+  actor?: { first_name?: string; last_name?: string; display_name?: string; username?: string };
+}
+
+export interface AuditLogPage {
+  data: AuditLogEntry[];
+  total: number;
+  page: number;
+  limit: number;
+  total_pages: number;
+}
+
+export async function getAdminAuditLogs(
+  token: string,
+  opts: { page?: number; limit?: number; actor_id?: string; method?: string; q?: string; failed?: boolean }
+): Promise<AuditLogPage> {
+  const params = new URLSearchParams();
+  params.set("page", String(opts.page ?? 1));
+  params.set("limit", String(opts.limit ?? 50));
+  if (opts.actor_id) params.set("actor_id", opts.actor_id);
+  if (opts.method) params.set("method", opts.method);
+  if (opts.q) params.set("q", opts.q);
+  if (opts.failed) params.set("failed", "1");
+  const res = await fetch(`${API_URL}/superadmin/audit-logs?${params.toString()}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch audit logs");
+  return res.json();
+}

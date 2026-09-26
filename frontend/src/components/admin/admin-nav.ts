@@ -20,9 +20,11 @@ import {
   Users,
   Video,
   Wallet,
+  ScrollText,
   type LucideIcon,
 } from "lucide-react";
 import type { AdminBadges } from "@/lib/api";
+import { isModeratorRole } from "@/lib/roles";
 
 export type AdminRole = "admin" | "superadmin" | string | undefined;
 
@@ -35,6 +37,8 @@ export interface AdminNavItem {
   // Which attention counter to show as a badge next to the item.
   badge?: keyof AdminBadges;
   superadminOnly?: boolean;
+  // Visible to the limited "moderator" role.
+  moderator?: boolean;
 }
 
 export interface AdminNavGroup {
@@ -71,12 +75,12 @@ export const ADMIN_NAV: AdminNavGroup[] = [
     id: "community",
     label: "Foydalanuvchilar",
     items: [
-      { href: "/admin/users", icon: Users, label: "Users", keywords: "foydalanuvchilar premium" },
-      { href: "/admin/users/banned", icon: Ban, label: "Ban olganlar" },
-      { href: "/admin/users/ban-history", icon: History, label: "Ban tarixi" },
-      { href: "/admin/appeals", icon: MessageCircle, label: "Apellyatsiyalar", keywords: "appeals", badge: "pending_appeals" },
-      { href: "/admin/suggestions", icon: Lightbulb, label: "Tavsiyalar", keywords: "suggestions", badge: "pending_suggestions" },
-      { href: "/admin/comments", icon: MessageSquare, label: "Comments", keywords: "kommentlar izohlar moderatsiya", badge: "pending_comments" },
+      { href: "/admin/users", icon: Users, label: "Users", keywords: "foydalanuvchilar premium", moderator: true },
+      { href: "/admin/users/banned", icon: Ban, label: "Ban olganlar", moderator: true },
+      { href: "/admin/users/ban-history", icon: History, label: "Ban tarixi", moderator: true },
+      { href: "/admin/appeals", icon: MessageCircle, label: "Apellyatsiyalar", keywords: "appeals", badge: "pending_appeals", moderator: true },
+      { href: "/admin/suggestions", icon: Lightbulb, label: "Tavsiyalar", keywords: "suggestions", badge: "pending_suggestions", moderator: true },
+      { href: "/admin/comments", icon: MessageSquare, label: "Comments", keywords: "kommentlar izohlar moderatsiya", badge: "pending_comments", moderator: true },
       { href: "/admin/comments/settings", icon: Settings, label: "Comment Settings" },
       { href: "/admin/rooms", icon: Users, label: "Watch Rooms", keywords: "xonalar" },
     ],
@@ -95,15 +99,17 @@ export const ADMIN_NAV: AdminNavGroup[] = [
     label: "Tizim",
     items: [
       { href: "/admin/expenses", icon: Wallet, label: "Xarajatlar", keywords: "expenses moliya", superadminOnly: true },
+      { href: "/admin/audit", icon: ScrollText, label: "Audit log", keywords: "tarix kim nima o'zgartirdi jurnal", superadminOnly: true },
     ],
   },
 ];
 
 export function visibleNav(role: AdminRole): AdminNavGroup[] {
   const isSuperAdmin = role === "superadmin";
+  const isModerator = isModeratorRole(role);
   return ADMIN_NAV.map((g) => ({
     ...g,
-    items: g.items.filter((i) => !i.superadminOnly || isSuperAdmin),
+    items: g.items.filter((i) => (isModerator ? !!i.moderator : !i.superadminOnly || isSuperAdmin)),
   })).filter((g) => g.items.length > 0);
 }
 

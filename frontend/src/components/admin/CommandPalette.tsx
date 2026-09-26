@@ -46,11 +46,14 @@ export default function CommandPalette({
   nav,
   open,
   onOpenChange,
+  resultKinds,
 }: {
   token: string | null;
   nav: AdminNavGroup[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  // Restrict remote results (moderators can't open movie/series editors).
+  resultKinds?: AdminSearchResult["kind"][];
 }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -117,7 +120,7 @@ export default function CommandPalette({
         }
       }
     }
-    const found: PaletteItem[] = remote.map((r) => ({
+    const found: PaletteItem[] = remote.filter((r) => !resultKinds || resultKinds.includes(r.kind)).map((r) => ({
       key: `${r.kind}:${r.id}`,
       label: r.title || r.id,
       subtitle: r.subtitle,
@@ -126,7 +129,7 @@ export default function CommandPalette({
       section: "Natijalar",
     }));
     return [...found, ...pages.slice(0, q ? 8 : 30)];
-  }, [nav, query, remote]);
+  }, [nav, query, remote, resultKinds]);
 
   useEffect(() => {
     setActiveIndex((i) => Math.min(i, Math.max(0, items.length - 1)));
