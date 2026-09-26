@@ -5304,3 +5304,38 @@ export async function getAdminPlaybackReports(token: string, status = "new") {
   if (!res.ok) throw new Error("Failed to load playback reports");
   return res.json() as Promise<{ reports: PlaybackReport[]; counts: Record<string, number> }>;
 }
+
+// ─── Dashboard timeseries (charts + period comparison) ───────────────────────
+
+export interface DailyPoint {
+  date: string; // YYYY-MM-DD, Tashkent time
+  new_users: number;
+  views: number;
+  active_viewers: number;
+  premium_sales: number;
+  stars_revenue: number;
+}
+
+export interface PeriodTotals {
+  new_users: number;
+  views: number;
+  avg_active_viewers: number;
+  premium_sales: number;
+  stars_revenue: number;
+}
+
+export interface DashboardTimeseries {
+  days: number;
+  series: DailyPoint[];
+  current: PeriodTotals;
+  previous: PeriodTotals;
+}
+
+export async function getAdminDashboardTimeseries(token: string, days = 30): Promise<DashboardTimeseries> {
+  const res = await fetch(`${API_URL}/admin/analytics/timeseries?days=${days}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch dashboard timeseries");
+  return res.json();
+}

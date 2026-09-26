@@ -25,6 +25,7 @@ type AnalyticsRepository struct {
 	episodes            *mongo.Collection
 	premiumSessions     *mongo.Collection
 	premiumPayments     *mongo.Collection
+	users               *mongo.Collection
 }
 
 type SearchTermStat struct {
@@ -78,6 +79,7 @@ func NewAnalyticsRepository(db *mongo.Database) *AnalyticsRepository {
 		episodes:            db.Collection("episodes"),
 		premiumSessions:     db.Collection("premium_purchase_sessions"),
 		premiumPayments:     db.Collection("telegram_stars_payments"),
+		users:               db.Collection("users"),
 	}
 }
 

@@ -452,6 +452,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		admin.GET("/analytics/top-content", analyticsHandler.AdminTopContentByPeriod)
 		admin.GET("/analytics/completion-summary", analyticsHandler.AdminCompletionSummary)
 		admin.GET("/analytics/premium-funnel", analyticsHandler.AdminPremiumFunnel)
+		admin.GET("/analytics/timeseries", analyticsHandler.AdminDashboardTimeseries)
 		admin.GET("/analytics/playback-reports", analyticsHandler.AdminPlaybackReports)
 	}
 
