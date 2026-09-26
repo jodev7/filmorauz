@@ -105,6 +105,23 @@ func main() {
 	notificationRepo := repositories.NewNotificationRepository(db)
 	notificationService.SetRepositories(notificationRepo, userRepo)
 	notificationService.SetSiteURL(cfg.BaseSiteURL)
+	// Per-user notification settings + web push (VAPID keys from env).
+	notifyPrefsRepo := repositories.NewNotifyPrefsRepository(db)
+	if err := notifyPrefsRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure notification prefs indexes: %v", err)
+	}
+	var webPusher *services.WebPusher
+	if cfg.WebPushVAPIDPrivateKey != "" {
+		if keys, err := services.ParseVAPIDPrivateKey(cfg.WebPushVAPIDPrivateKey, cfg.WebPushSubject); err != nil {
+			log.Printf("Warning: web push disabled: %v", err)
+		} else {
+			webPusher = services.NewWebPusher(keys)
+			log.Printf("[PUSH] web push enabled")
+		}
+	} else {
+		log.Printf("[PUSH] web push disabled (set WEB_PUSH_VAPID_PRIVATE_KEY; generate with: go run ./cmd/vapid-keys)")
+	}
+	notificationService.SetDelivery(notifyPrefsRepo, webPusher)
 
 	authService := services.NewAuthService(userRepo, authSessionRepo, cfg.JWTSecret)
 
@@ -426,6 +443,7 @@ func main() {
 		DailyReport:  handlers.NewDailyReportHandler(dailyReporter),
 		History:      handlers.NewHistoryHandler(watchHistoryRepo),
 		Lists:        handlers.NewUserListHandler(userListRepo),
+		NotifyPrefs:  handlers.NewNotifySettingsHandler(notificationService, userRepo),
 	})
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)

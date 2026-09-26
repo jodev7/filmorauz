@@ -117,6 +117,9 @@ func (s *NotificationService) NotifyUserBoth(ctx context.Context, userID primiti
 	if s.userRepo == nil || telegramHTML == "" {
 		return
 	}
+	if !s.channelsFor(ctx, userID, typ).Telegram {
+		return
+	}
 	user, err := s.userRepo.FindByID(userID.Hex())
 	if err != nil || user == nil {
 		return

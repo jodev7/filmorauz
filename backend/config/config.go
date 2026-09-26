@@ -25,6 +25,9 @@ type Config struct {
 	IsDev                   bool
 	IsProd                  bool
 	BaseSiteURL             string
+	// Web push (VAPID). Private key: base64url raw P-256 scalar.
+	WebPushVAPIDPrivateKey  string
+	WebPushSubject          string
 	AllowedOrigin           string
 	TelegramBotUsername     string
 	TelegramChannelUsername string
@@ -90,6 +93,8 @@ func Load() *Config {
 		JWTSecret:               getEnv("JWT_SECRET", ""),
 		AdminTelegramID:         parseTelegramID(getEnv("ADMIN_TELEGRAM_ID", "0")),
 		BaseSiteURL:             getEnv("BASE_SITE_URL", "https://filmorauz.net"),
+		WebPushVAPIDPrivateKey:  getEnv("WEB_PUSH_VAPID_PRIVATE_KEY", ""),
+		WebPushSubject:          getEnv("WEB_PUSH_SUBJECT", "mailto:admin@filmorauz.net"),
 		AllowedOrigin:           getEnv("ALLOWED_ORIGIN", ""),
 		TelegramBotUsername:     getEnv("TELEGRAM_BOT_USERNAME", "FilmoraUzBot"),
 		TelegramChannelUsername: getEnv("TG_CHANNEL_USERNAME", ""),

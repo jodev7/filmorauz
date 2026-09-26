@@ -87,3 +87,34 @@ type NotificationCreateRequest struct {
 type MarkReadRequest struct {
 	IDs []string `json:"ids"`
 }
+
+// Notification categories group types for per-user delivery settings.
+const (
+	NotifCatNewEpisode  = "new_episode"
+	NotifCatComments    = "comments"
+	NotifCatSuggestions = "suggestions"
+	NotifCatRooms       = "rooms"
+	NotifCatPremium     = "premium"
+	NotifCatAccount     = "account" // bans/appeals: always delivered on the site
+)
+
+// NotificationCategories lists the user-configurable categories in UI order.
+var NotificationCategories = []string{NotifCatNewEpisode, NotifCatComments, NotifCatSuggestions, NotifCatRooms, NotifCatPremium, NotifCatAccount}
+
+// NotificationCategoryOf maps a notification type to its settings category.
+func NotificationCategoryOf(t NotificationType) string {
+	switch t {
+	case NotificationNewEpisode:
+		return NotifCatNewEpisode
+	case NotificationCommentReply, NotificationCommentLike:
+		return NotifCatComments
+	case NotificationSuggestionAdded:
+		return NotifCatSuggestions
+	case NotificationRoomInvite:
+		return NotifCatRooms
+	case NotificationPremiumActivated, NotificationPremiumExpiringSoon, NotificationPremiumExpired, NotificationReferralReward:
+		return NotifCatPremium
+	default:
+		return NotifCatAccount
+	}
+}

@@ -456,6 +456,60 @@ export async function getMovie(slug: string): Promise<Movie> {
   return normalizeMovieResponse(json.data);
 }
 
+// ── Notification settings & web push ──
+
+export type NotifyChannel = "site" | "telegram" | "push";
+export type NotifyPrefs = Record<string, Record<NotifyChannel, boolean>>;
+
+export interface NotificationSettings {
+  prefs: NotifyPrefs;
+  categories: string[];
+  push_public_key: string;
+  push_devices: number;
+  telegram_connected: boolean;
+}
+
+export async function getNotificationSettings(token: string): Promise<NotificationSettings> {
+  const res = await fetch(`${API_URL}/user/notification-settings`, { headers: authHeaders(token), cache: "no-store" });
+  if (!res.ok) throw new Error("Sozlamalarni yuklab bo'lmadi");
+  return res.json();
+}
+
+export async function saveNotificationSettings(token: string, prefs: NotifyPrefs): Promise<NotifyPrefs> {
+  const res = await fetch(`${API_URL}/user/notification-settings`, {
+    method: "PUT",
+    headers: authHeaders(token),
+    body: JSON.stringify({ prefs }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Saqlab bo'lmadi");
+  return json.prefs;
+}
+
+export async function savePushSubscription(token: string, sub: PushSubscriptionJSON): Promise<void> {
+  const res = await fetch(`${API_URL}/user/push-subscriptions`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(sub),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Obunani saqlab bo'lmadi");
+}
+
+export async function deletePushSubscription(token: string, endpoint: string): Promise<void> {
+  await fetch(`${API_URL}/user/push-subscriptions`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+    body: JSON.stringify({ endpoint }),
+  }).catch(() => {});
+}
+
+export async function sendTestPush(token: string): Promise<void> {
+  const res = await fetch(`${API_URL}/user/push-subscriptions/test`, { method: "POST", headers: authHeaders(token) });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Yuborib bo'lmadi");
+}
+
 // ── Year in review ──
 
 export interface YearReview {

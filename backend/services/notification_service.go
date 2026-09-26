@@ -27,6 +27,8 @@ type NotificationService struct {
 	botUsername      string
 	channelUsername  string
 	siteURL          string
+	prefsRepo        *repositories.NotifyPrefsRepository
+	pusher           *WebPusher
 }
 
 // NewNotificationServiceWithConfig creates a new NotificationService with config
@@ -81,6 +83,19 @@ func (s *NotificationService) CreateNotification(ctx context.Context, req *model
 		Data:      req.Data,
 	}
 
+	// Per-user settings decide the site bell and web push independently.
+	ch := s.channelsFor(ctx, req.UserID, req.Type)
+	if ch.Push && s.pusher != nil {
+		payload := PushPayload{Title: req.Title, Body: req.Message, URL: req.ActionURL, Tag: string(req.Type)}
+		go func(userID primitive.ObjectID) {
+			pctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			s.PushToUser(pctx, userID, payload)
+		}(req.UserID)
+	}
+	if !ch.Site {
+		return nil
+	}
 	return s.notificationRepo.Create(ctx, notification)
 }
 

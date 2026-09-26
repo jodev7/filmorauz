@@ -23,6 +23,7 @@ type ExtraDeps struct {
 	DailyReport  *handlers.DailyReportHandler
 	History      *handlers.HistoryHandler
 	Lists        *handlers.UserListHandler
+	NotifyPrefs  *handlers.NotifySettingsHandler
 }
 
 // SetupExtras registers user-library, community and growth routes.
@@ -66,6 +67,13 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 		user.DELETE("/history", d.History.ClearHistory)
 		user.GET("/series-progress/:id", d.History.SeriesProgress)
 		user.GET("/year-review", d.History.YearReview)
+
+		// Notification settings + web push
+		user.GET("/notification-settings", d.NotifyPrefs.Get)
+		user.PUT("/notification-settings", d.NotifyPrefs.Update)
+		user.POST("/push-subscriptions", d.NotifyPrefs.Subscribe)
+		user.DELETE("/push-subscriptions", d.NotifyPrefs.Unsubscribe)
+		user.POST("/push-subscriptions/test", d.NotifyPrefs.Test)
 
 		// Personal lists
 		user.GET("/lists", d.Lists.Mine)

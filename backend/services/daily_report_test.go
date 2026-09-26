@@ -36,8 +36,8 @@ func TestDailyReportFormat(t *testing.T) {
 		Day: day, NewUsers: 120, Views: 5430, ActiveViewers: 1200,
 		PremiumSales: 4, StarsRevenue: 1000, StarsUSDRate: 0.013,
 		AvgNewUsers: 100, AvgViews: 5600,
-		Top:           []DailyReportTop{{Title: "Tom & Jerry <3>", Views: 340}},
-		ErrorGroups:   3, NewErrorGroups: 1,
+		Top:         []DailyReportTop{{Title: "Tom & Jerry <3>", Views: 340}},
+		ErrorGroups: 3, NewErrorGroups: 1,
 		PendingMovies: 5, ReportedComments: 1,
 		ScheduledToday: 2,
 	}
