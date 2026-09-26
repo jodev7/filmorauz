@@ -15,6 +15,7 @@ const VideoPlayer = dynamic(() => import("@/components/VideoPlayer"), {
 });
 import WatchTogetherButton from "@/components/WatchTogetherButton";
 import TelegramLoginModal from "@/components/TelegramLoginModal";
+import PremiumUnlockCard from "@/components/PremiumUnlockCard";
 import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveUnifiedWatchProgress, getWatchProgress, resetWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, getProtectedMediaAccess, buildVideoDownloadUrl, Ad, Movie } from "@/lib/api";
 import { pickWeightedRandomAd } from "@/lib/ads-utils";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
@@ -824,22 +825,13 @@ export default function WatchPageClient({
             />
             <div className="absolute inset-0 bg-black/60" />
             
-            {/* Lock overlay */}
-            <PremiumLockOverlay
-              title="Premium kontent"
-              message="Bu kino faqat Premium foydalanuvchilar uchun."
-              className="absolute inset-0 m-auto"
+            {/* Unlock card → on-site checkout with a way back here */}
+            <PremiumUnlockCard
+              targetType={movie.type === "episode" ? "episode" : "movie"}
+              targetId={movie.id}
+              title={movie.title}
+              fromPath={typeof window !== "undefined" ? window.location.pathname + window.location.search : `/movies/${movie.slug}`}
             />
-
-            {/* Upgrade button */}
-            <div className="absolute bottom-8 left-0 right-0 flex justify-center">
-              <PremiumButton
-                onClick={() => window.open('https://t.me/filmorauz_bot', '_blank')}
-              >
-                <Crown size={18} />
-                Premium olish
-              </PremiumButton>
-            </div>
           </div>
         ) : (
           <div className="relative">

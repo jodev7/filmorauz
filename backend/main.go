@@ -389,12 +389,20 @@ func main() {
 		log.Printf("Warning: Failed to ensure comment report/review indexes: %v", err)
 	}
 	communityHandler := handlers.NewCommunityHandler(db, communityRepo, commentService, ratingService)
+	referralRepo := repositories.NewReferralRepository(db)
+	if err := referralRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure referral indexes: %v", err)
+	}
+	referralHandler := handlers.NewReferralHandler(referralRepo, cfg.BaseSiteURL)
+	// Reward referrals once the invited friend starts watching.
+	go services.StartReferralRewardJob(context.Background(), referralRepo, userRepo, notificationService)
 	routes.SetupExtras(r, routes.ExtraDeps{
 		AuthService:  authService,
 		AuditLogRepo: auditLogRepo,
 		Library:      libraryHandler,
 		Movies:       movieHandler,
 		Community:    communityHandler,
+		Referral:     referralHandler,
 	})
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)

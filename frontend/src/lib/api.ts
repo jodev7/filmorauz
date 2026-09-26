@@ -5628,3 +5628,53 @@ export async function getMovieFilterFacets(): Promise<MovieFilterFacets> {
   if (!res.ok) throw new Error("Failed to fetch filter options");
   return res.json();
 }
+
+// ─── Premium funnel events + referral program ────────────────────────────────
+
+// Fire-and-forget: powers the admin "Premium sotib olish" funnel
+// (lock_view → cta_click → session → paid). Requires login server-side.
+export function recordPremiumEvent(
+  token: string | null | undefined,
+  eventType: "lock_view" | "cta_click",
+  target?: { type?: string; id?: string; pkg?: string }
+): void {
+  if (!token) return;
+  fetch(`${API_URL}/analytics/premium-event`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ event_type: eventType, target_type: target?.type, target_id: target?.id, package: target?.pkg }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
+// Only same-site relative paths are allowed as a post-purchase return target.
+export function safeReturnPath(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  return raw.startsWith("/") && !raw.startsWith("//") && !raw.includes("://") ? raw : null;
+}
+
+export interface MyReferral {
+  code: string;
+  link: string;
+  invited: number;
+  rewarded: number;
+  reward_days: number;
+  days_per_friend: number;
+  welcome_days: number;
+}
+
+export async function getMyReferral(token: string): Promise<MyReferral> {
+  const res = await fetch(`${API_URL}/user/referral`, { headers: authHeaders(token), cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to load referral");
+  return res.json();
+}
+
+export async function claimReferral(token: string, code: string): Promise<{ claimed: boolean; reason?: string }> {
+  const res = await fetch(`${API_URL}/user/referral/claim`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) throw new Error("Failed to claim referral");
+  return res.json();
+}

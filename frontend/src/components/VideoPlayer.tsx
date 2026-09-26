@@ -312,6 +312,12 @@ function loadSeekStep(): number {
 // preferred quality (by height, -1 = Auto).
 const PLAYER_PREFS_KEY = "filmorauz:player:prefs";
 
+// /premium link that brings the viewer back to this page after purchase.
+function premiumHref(): string {
+  if (typeof window === "undefined") return "/premium";
+  return `/premium?from=${encodeURIComponent(window.location.pathname + window.location.search)}#telegram-stars`;
+}
+
 interface PlayerPrefs {
   speed?: number;
   volume?: number;
@@ -1393,7 +1399,7 @@ function HLSPlayer({
             Reklama tugashiga: {adRemaining}s
           </div>
           <Link
-            href="/premium"
+            href={premiumHref()}
             className="absolute right-3 bottom-3 rounded-full bg-white/95 px-4 py-2 text-xs font-semibold text-black transition hover:bg-white"
           >
             Reklamani o&apos;chirish
@@ -1509,7 +1515,7 @@ function HLSPlayer({
                 Yopish
               </button>
               <Link
-                href="/premium"
+                href={premiumHref()}
                 className="inline-flex flex-1 items-center justify-center rounded-xl bg-gradient-to-r from-yellow-500 to-amber-600 px-4 py-3 text-sm font-semibold text-black transition-opacity hover:opacity-90"
               >
                 Premium olish

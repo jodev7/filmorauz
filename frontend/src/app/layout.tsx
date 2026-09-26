@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Script from "next/script";
 import { Bebas_Neue, Inter, Poppins } from "next/font/google";
 import "./globals.css";
+import ReferralCapture from "@/components/ReferralCapture";
 import { AuthProvider } from "@/lib/auth-context";
 import { I18nProvider } from "@/lib/i18n";
 import { AdSlotProvider } from "@/components/ads/AdSlotContext";
@@ -162,6 +163,7 @@ export default function RootLayout({
               <BanGuardWrapper>
                 <AlertBanner />
                 <PresencePinger />
+                <ReferralCapture />
                 <InAppBrowserBanner />
                 {children}
                 <FixedBottomAd placement="website_fixed_bottom" />

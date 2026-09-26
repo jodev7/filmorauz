@@ -18,6 +18,7 @@ type ExtraDeps struct {
 	Library      *handlers.LibraryHandler
 	Movies       *handlers.MovieHandler
 	Community    *handlers.CommunityHandler
+	Referral     *handlers.ReferralHandler
 }
 
 // SetupExtras registers user-library, community and growth routes.
@@ -45,6 +46,10 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 
 		// "Siz uchun" personal recommendations
 		user.GET("/for-you", d.Library.ForYou)
+
+		// Referral program
+		user.GET("/referral", d.Referral.GetMyReferral)
+		user.POST("/referral/claim", d.Referral.ClaimReferral)
 	}
 
 	// Reviews ("qisqa taqriz") — public list, optional auth for "mine"/helpful.

@@ -14,6 +14,7 @@ import { PremiumBadge, PremiumButton, PremiumAvatarRing, resolveIsPremium, resol
 import { getFavorites, getWatchHistory, getCurrentUser, updateProfile, uploadProfileImage, updateProfileStyle, updatePrivacySettings, ProfileStyle } from "@/lib/api";
 import SuggestionModal from "@/components/SuggestionModal";
 import UserLibrarySections from "@/components/UserLibrarySections";
+import ReferralCard from "@/components/ReferralCard";
 import TelegramLoginModal from "@/components/TelegramLoginModal";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { CurrentUser } from "@/lib/api";
@@ -1144,6 +1145,9 @@ export default function UserPage() {
                   />
                 </section>
               )}
+
+              {/* Invite friends → premium days */}
+              <ReferralCard />
 
               {/* Watch later + followed series */}
               <UserLibrarySections />
