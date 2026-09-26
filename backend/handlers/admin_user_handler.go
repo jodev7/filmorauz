@@ -64,6 +64,14 @@ func (h *AdminUserHandler) DashboardStats(c *gin.Context) {
 		return
 	}
 
+	// Movie counts — computed in Mongo so the dashboard no longer has to
+	// download the whole movie list just to count it.
+	totalMovies, moviesThisMonth, err := h.movieRepo.CountAdminStats()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get movie stats"})
+		return
+	}
+
 	// Recent users
 	recentUsers, err := h.userRepo.FindRecentUsers(5)
 	if err != nil {
@@ -116,6 +124,10 @@ func (h *AdminUserHandler) DashboardStats(c *gin.Context) {
 			"registered_today":      todayUsers,
 			"registered_this_month": thisMonthUsers,
 			"recent":                recentUsersResp,
+		},
+		"movies": gin.H{
+			"total":            totalMovies,
+			"added_this_month": moviesThisMonth,
 		},
 	})
 }

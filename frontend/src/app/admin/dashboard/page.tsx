@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Film, PlusCircle, List, ExternalLink, Users, UserPlus, Share2, Eye, Star, Tv, Wifi, UserCheck, Globe, Activity, CalendarDays, CalendarRange, Monitor, MapPin, PlayCircle, ChevronLeft, ChevronRight, User as UserIcon } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
@@ -8,6 +8,7 @@ import { adminGetMovies, Movie, getAdminDashboardStats, getAdminShareStats, getA
 import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
 import SystemStatusBlock from "@/components/admin/SystemStatusBlock";
+import { useVisibleInterval } from "@/lib/use-visible-interval";
 
 // Short Uzbek relative-time label for the live-session "last seen" column.
 function formatRelativeTime(iso: string): string {
@@ -25,9 +26,11 @@ function formatRelativeTime(iso: string): string {
 
 export default function AdminDashboard() {
   const { token, user } = useAuth();
-  const [movies, setMovies] = useState<Movie[]>([]);
+  // Each block tracks its own state: `null` = still loading. A failing
+  // request only affects its own block instead of blanking the dashboard.
+  const [recentMovies, setRecentMovies] = useState<Movie[] | null>(null);
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [statsFailed, setStatsFailed] = useState(false);
 
   // Share stats
   const [shareStats, setShareStats] = useState<AdminShareStats | null>(null);
@@ -36,8 +39,8 @@ export default function AdminDashboard() {
   const [userMetrics, setUserMetrics] = useState<UserMetrics | null>(null);
   
   // Top content
-  const [topMovies, setTopMovies] = useState<TopContentItem[]>([]);
-  const [topSeries, setTopSeries] = useState<TopContentItem[]>([]);
+  const [topMovies, setTopMovies] = useState<TopContentItem[] | null>(null);
+  const [topSeries, setTopSeries] = useState<TopContentItem[] | null>(null);
 
   // Live activity (online + DAU/WAU/MAU). Refreshed on a short interval.
   const [onlineStats, setOnlineStats] = useState<OnlineStats | null>(null);
@@ -49,73 +52,60 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     if (!token) return;
+    let cancelled = false;
+    // Independent requests (not Promise.all): each block renders as soon as
+    // its own data arrives, and one failure doesn't hide the others.
+    const run = <T,>(p: Promise<T>, onOk: (v: T) => void, onErr?: () => void) => {
+      p.then((v) => {
+        if (!cancelled) onOk(v);
+      }).catch((err) => {
+        console.error(err);
+        if (!cancelled) onErr?.();
+      });
+    };
 
-    Promise.all([
-      adminGetMovies(token),
-      getAdminDashboardStats(token),
-      getAdminShareStats(token),
-      getAdminUserMetrics(token),
-      getAdminTopMovies(token),
-      getAdminTopSeries(token)
-    ])
-      .then(([moviesData, statsData, shareStatsData, userMetricsData, topMoviesData, topSeriesData]) => {
-        setMovies(moviesData);
-        setStats(statsData);
-        setShareStats(shareStatsData);
-        setUserMetrics(userMetricsData);
-        setTopMovies(topMoviesData.data || []);
-        setTopSeries(topSeriesData.data || []);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    // Only the 5 newest are shown — counts come from the stats endpoint.
+    run(adminGetMovies(token, 5), setRecentMovies, () => setRecentMovies([]));
+    run(getAdminDashboardStats(token), setStats, () => setStatsFailed(true));
+    run(getAdminShareStats(token), setShareStats);
+    run(getAdminUserMetrics(token), setUserMetrics);
+    run(getAdminTopMovies(token), (d) => setTopMovies(d.data || []), () => setTopMovies([]));
+    run(getAdminTopSeries(token), (d) => setTopSeries(d.data || []), () => setTopSeries([]));
+
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
-  useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
-    const load = () => {
+  // Live polling — paused while the tab is hidden (see useVisibleInterval).
+  const loadOnlineStats = useCallback(
+    (isActive: () => boolean) => {
+      if (!token) return;
       getAdminOnlineStats(token)
         .then((data) => {
-          if (!cancelled) setOnlineStats(data);
+          if (isActive()) setOnlineStats(data);
         })
         .catch(() => {});
-    };
-    load();
-    const t = setInterval(load, 15_000);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, [token]);
+    },
+    [token]
+  );
+  useVisibleInterval(loadOnlineStats, 15_000);
 
-  useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
-    const load = () => {
+  const loadSessions = useCallback(
+    (isActive: () => boolean) => {
+      if (!token) return;
       getAdminOnlineSessions(token, sessionsPage, SESSIONS_PER_PAGE)
         .then((data) => {
-          if (!cancelled) setSessions(data);
+          if (isActive()) setSessions(data);
         })
         .catch(() => {});
-    };
-    load();
-    const t = setInterval(load, 15_000);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, [token, sessionsPage]);
+    },
+    [token, sessionsPage]
+  );
+  useVisibleInterval(loadSessions, 15_000);
 
-  const recentMovies = movies.slice(0, 5);
-
-  // Movies this month
-  const thisMonthCount = movies.filter((m) => {
-    if (!m.created_at) return false;
-    const d = new Date(m.created_at);
-    if (isNaN(d.getTime())) return false;
-    const now = new Date();
-    return d.getUTCMonth() === now.getUTCMonth() && d.getUTCFullYear() === now.getUTCFullYear();
-  }).length;
+  const formatCount = (n: number | undefined) =>
+    typeof n === "number" ? n.toLocaleString() : statsFailed || stats ? "—" : "…";
 
   // Format date for display
   const formatDate = (dateStr: string) => {
@@ -396,7 +386,7 @@ export default function AdminDashboard() {
             <span className="text-sm text-gray-400">Jami kinolar</span>
           </div>
           <p className="text-3xl font-bold text-white">
-            {loading ? "—" : movies.length}
+            {formatCount(stats?.movies?.total)}
           </p>
         </div>
 
@@ -408,7 +398,7 @@ export default function AdminDashboard() {
             <span className="text-sm text-gray-400">Bu oyda</span>
           </div>
           <p className="text-3xl font-bold text-white">
-            {loading ? "—" : thisMonthCount}
+            {formatCount(stats?.movies?.added_this_month)}
           </p>
         </div>
 
@@ -524,7 +514,7 @@ export default function AdminDashboard() {
             </Link>
           </div>
 
-          {loading ? (
+          {recentMovies === null ? (
             <div className="bg-brand-card border border-brand-border rounded-xl p-6 text-center">
               <p className="text-gray-500 text-sm">Yuklanmoqda...</p>
             </div>
@@ -617,9 +607,9 @@ export default function AdminDashboard() {
             </Link>
           </div>
 
-          {loading || !stats ? (
+          {!stats ? (
             <div className="bg-brand-card border border-brand-border rounded-xl p-6 text-center">
-              <p className="text-gray-500 text-sm">Yuklanmoqda...</p>
+              <p className="text-gray-500 text-sm">{statsFailed ? "Yuklab bo'lmadi" : "Yuklanmoqda..."}</p>
             </div>
           ) : stats.users.recent.length === 0 ? (
             <div className="bg-brand-card border border-brand-border rounded-xl p-6 sm:p-8 text-center">
@@ -685,9 +675,9 @@ export default function AdminDashboard() {
             </Link>
           </div>
 
-          {loading || topMovies.length === 0 ? (
+          {topMovies === null || topMovies.length === 0 ? (
             <div className="bg-brand-card border border-brand-border rounded-xl p-6 text-center">
-              <p className="text-gray-500 text-sm">Ma'lumot yo'q</p>
+              <p className="text-gray-500 text-sm">{topMovies === null ? "Yuklanmoqda..." : "Ma'lumot yo'q"}</p>
             </div>
           ) : (
             <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden">
@@ -724,9 +714,9 @@ export default function AdminDashboard() {
             </Link>
           </div>
 
-          {loading || topSeries.length === 0 ? (
+          {topSeries === null || topSeries.length === 0 ? (
             <div className="bg-brand-card border border-brand-border rounded-xl p-6 text-center">
-              <p className="text-gray-500 text-sm">Ma'lumot yo'q</p>
+              <p className="text-gray-500 text-sm">{topSeries === null ? "Yuklanmoqda..." : "Ma'lumot yo'q"}</p>
             </div>
           ) : (
             <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden">

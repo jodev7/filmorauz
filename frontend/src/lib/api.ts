@@ -1401,8 +1401,8 @@ export async function adminDeleteMovie(
   return json as MovieDeleteResponse;
 }
 
-export async function adminGetMovies(token: string): Promise<Movie[]> {
-  const res = await fetch(`${API_URL}/admin/movies?limit=500`, {
+export async function adminGetMovies(token: string, limit = 500): Promise<Movie[]> {
+  const res = await fetch(`${API_URL}/admin/movies?limit=${limit}`, {
     headers: authHeaders(token),
     cache: "no-store",
   });
@@ -2641,6 +2641,11 @@ export interface DashboardStats {
     registered_today: number;
     registered_this_month: number;
     recent: AdminUser[];
+  };
+  // Optional so an older backend without these counts doesn't break the page.
+  movies?: {
+    total: number;
+    added_this_month: number;
   };
 }
 

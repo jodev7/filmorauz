@@ -69,6 +69,26 @@ func (r *MovieRepository) Collection() *mongo.Collection {
 	return r.col
 }
 
+// CountAdminStats returns the total number of movies (any approval status)
+// and how many were created since the start of the current UTC month.
+func (r *MovieRepository) CountAdminStats() (total int64, thisMonth int64, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	total, err = r.col.CountDocuments(ctx, bson.M{})
+	if err != nil {
+		return 0, 0, fmt.Errorf("count movies: %w", err)
+	}
+
+	now := time.Now().UTC()
+	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	thisMonth, err = r.col.CountDocuments(ctx, bson.M{"created_at": bson.M{"$gte": startOfMonth}})
+	if err != nil {
+		return 0, 0, fmt.Errorf("count movies this month: %w", err)
+	}
+	return total, thisMonth, nil
+}
+
 // CountTotalViews returns total views across all movies
 func (r *MovieRepository) CountTotalViews() (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
