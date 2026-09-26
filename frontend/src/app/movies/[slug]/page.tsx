@@ -18,6 +18,7 @@ import { WatchPlayerProvider } from "@/lib/watch-player-context";
 import { isMoviePremium, PremiumBadge } from "@/components/PremiumComponents";
 import { getMovie, getRecommendations, getTopReviewsForSeo, reviewsToJsonLd, personPath } from "@/lib/api";
 import JsonLd from "@/components/JsonLd";
+import PersonChip from "@/components/PersonChip";
 import { getTranslations } from "@/lib/i18n-server";
 import { formatDuration } from "@/lib/movie-utils";
 import { normalizeMediaUrl } from "@/lib/image-utils";
@@ -237,7 +238,7 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
       <WatchPlayerProvider initialOpen={autoOpenPlayer}>
       <main className="min-h-screen">
         {/* Backdrop hero */}
-        <div className="relative h-[50vh] sm:h-[55vh] min-h-[300px] sm:min-h-[380px]">
+        <div className="relative h-[36vh] sm:h-[55vh] min-h-[240px] sm:min-h-[380px]">
           <MediaImage
             src={movie.backdrop_url || movie.poster_url}
             alt={movie.title}
@@ -249,40 +250,34 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
         </div>
 
         {/* Main content */}
-        <div className="max-w-7xl mx-auto px-4 -mt-24 sm:-mt-32 relative">
-          <div className="flex flex-col md:flex-row gap-6 sm:gap-8">
-            {/* Poster */}
+        <div className="max-w-7xl mx-auto px-4 -mt-28 sm:-mt-36 relative">
+          {/* Header: poster beside title on every screen size */}
+          <div className="flex gap-4 sm:gap-6 md:gap-8">
             <div className="shrink-0">
               <MoviePoster
                 src={movie.poster_url}
                 alt={localizedTitle}
-                className="w-36 sm:w-44 md:w-48 lg:w-56 rounded-xl shadow-2xl border border-white/10"
+                className="w-28 sm:w-40 md:w-48 lg:w-56 rounded-xl shadow-2xl border border-white/10"
               />
             </div>
 
-            {/* Details */}
-            <div className="flex-1 pt-2 md:pt-6 sm:pt-8">
+            <div className="min-w-0 flex-1 pt-10 sm:pt-16 md:pt-24">
               <Link
                 href="/movies"
-                className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-white mb-3 sm:mb-4 transition-colors"
+                className="hidden sm:inline-flex items-center gap-1 text-sm text-gray-400 hover:text-white mb-3 transition-colors"
               >
                 <ChevronLeft size={16} />
                 {t("common.backToMovies")}
               </Link>
 
-              {/* Movie code with copy button */}
-              <div className="mb-3">
-                <MovieCode code={movie.code} />
-              </div>
-
-              <h1 className="font-display text-3xl sm:text-4xl md:text-5xl lg:text-6xl text-white tracking-wide leading-none mb-3 flex flex-wrap items-center gap-3">
+              <h1 className="font-display text-2xl sm:text-4xl md:text-5xl lg:text-6xl text-white tracking-wide leading-none mb-3 flex flex-wrap items-center gap-2 sm:gap-3">
                 <MediaTitle title={localizedTitle} />
                 {isMoviePremium(movie) && (
                   <PremiumBadge size="default" showCrown />
                 )}
               </h1>
 
-              <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-sm text-gray-400 mb-4">
+              <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-400 mb-3 sm:mb-4">
                 <span className="flex items-center gap-1">
                   <Calendar size={14} />
                   {movie.year}
@@ -307,7 +302,7 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
               </div>
 
               {movieGenres.length > 0 && (
-                <div className="flex flex-wrap gap-2 mb-5">
+                <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-3">
                   {movieGenres.map((g) => (
                     <Link
                       key={g}
@@ -320,72 +315,73 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
                 </div>
               )}
 
-              <p className="text-gray-300 leading-relaxed max-w-2xl mb-6 sm:mb-8 text-sm sm:text-base">
-                {localizedDescription}
-              </p>
 
-              {(movie.director || (movie.cast && movie.cast.length > 0)) && (
-                <dl className="-mt-3 mb-6 max-w-2xl space-y-1 text-sm">
-                  {movie.director && (
-                    <div>
-                      <dt className="inline text-gray-500">Rejissyor: </dt>
-                      <dd className="inline">
-                        <Link href={personPath(movie.director)} className="text-gray-300 hover:text-white underline-offset-2 hover:underline">
-                          {movie.director}
-                        </Link>
-                      </dd>
-                    </div>
-                  )}
-                  {movie.cast && movie.cast.length > 0 && (
-                    <div>
-                      <dt className="inline text-gray-500">Rollarda: </dt>
-                      <dd className="inline text-gray-300">
-                        {movie.cast.slice(0, 8).map((name, i) => (
-                          <span key={name}>
-                            {i > 0 && ", "}
-                            <Link href={personPath(name)} className="hover:text-white underline-offset-2 hover:underline">
-                              {name}
-                            </Link>
-                          </span>
-                        ))}
-                      </dd>
-                    </div>
-                  )}
-                </dl>
-              )}
-
-              <div className="flex flex-wrap items-center gap-4">
-                <WatchButton
-                  movieSlug={movie.slug}
-                  movieTitle={localizedTitle}
-                  isPremium={isMoviePremium(movie)}
-                />
-
-                <WatchTogetherButton
-                  contentType="movie"
-                  contentID={movie.id}
-                  className="inline-flex items-center gap-1.5 px-4 py-3 glass-card border border-white/10 hover:border-brand-red rounded-xl text-sm text-white transition-colors"
-                />
-
-                <ShareButton
-                  movieId={movie.id}
-                  movieTitle={localizedTitle}
-                  movieSlug={movie.slug}
-                />
-                
-                <div className="flex items-center gap-4">
-                  <MovieActions movie={movie} />
-                </div>
-
-                <LibraryButtons targetType="movie" targetId={movie.id} title={localizedTitle} />
-                
-                {/* Rating */}
-                <div className="flex items-center gap-2 mt-4">
-                  <StarRating movieId={movie.id} />
-                </div>
+              <div className="hidden sm:block">
+                <MovieCode code={movie.code} />
               </div>
             </div>
           </div>
+
+          {/* Body: full width on phones, aligned with the title column on desktop */}
+          <div className="mt-5 md:ml-[14rem] lg:ml-[16rem]">
+            <div className="sm:hidden mb-4">
+              <MovieCode code={movie.code} />
+            </div>
+
+            {/* Primary actions */}
+            <div className="flex flex-wrap items-center gap-3 [&>*:first-child]:w-full sm:[&>*:first-child]:w-auto">
+              <WatchButton
+                movieSlug={movie.slug}
+                movieTitle={localizedTitle}
+                isPremium={isMoviePremium(movie)}
+              />
+              <LibraryButtons targetType="movie" targetId={movie.id} title={localizedTitle} />
+            </div>
+
+            {/* Secondary actions */}
+            <div className="mt-3 flex flex-wrap items-center gap-2 sm:gap-3">
+              <WatchTogetherButton
+                contentType="movie"
+                contentID={movie.id}
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 glass-card border border-white/10 hover:border-brand-red rounded-xl text-sm text-white transition-colors"
+              />
+              <ShareButton
+                movieId={movie.id}
+                movieTitle={localizedTitle}
+                movieSlug={movie.slug}
+              />
+              <MovieActions movie={movie} />
+            </div>
+
+            <p className="mt-6 text-gray-300 leading-relaxed max-w-3xl text-sm sm:text-base">
+              {localizedDescription}
+            </p>
+
+            <div className="mt-4">
+              <StarRating movieId={movie.id} />
+            </div>
+          </div>
+
+          {/* Cast & crew */}
+          {(movie.director || (movie.cast && movie.cast.length > 0)) && (
+            <section className="mt-8" aria-labelledby="cast-title">
+              <h2 id="cast-title" className="font-display text-xl sm:text-2xl tracking-wide text-white mb-4">
+                ROLLARDA VA IJODKORLAR
+              </h2>
+              <ul className="scrollbar-hide -mx-4 flex gap-3 overflow-x-auto px-4 pb-2">
+                {movie.director && (
+                  <li className="shrink-0">
+                    <PersonChip name={movie.director} role="Rejissyor" />
+                  </li>
+                )}
+                {(movie.cast || []).slice(0, 15).map((name) => (
+                  <li key={name} className="shrink-0">
+                    <PersonChip name={name} role="Aktyor" />
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
         </div>
 
         {/* Inline player — opens here when "Tomosha qilish" is clicked */}
@@ -397,11 +393,11 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
           <WebsiteAdSlot placement="movie_detail_banner" variant="banner" />
         </div>
 
-        {/* Recommendations Section */}
+        {/* Similar titles */}
         {recommendations.length > 0 && (
           <section className="max-w-7xl mx-auto px-4 pb-8">
             <h2 className="font-display text-2xl sm:text-3xl tracking-wide text-white mb-6">
-              {t("movie.recommendations")}
+              O&apos;XSHASH KINOLAR
             </h2>
             <MovieCarousel movies={recommendations} />
           </section>
