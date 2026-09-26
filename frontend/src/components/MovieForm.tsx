@@ -83,6 +83,8 @@ const emptyForm: MovieInput = {
   quality: "1080p",
   is_premium: false,
   slug: "",
+  cast: [],
+  director: "",
 };
 
 function normalizeGenreValue(value: string): string {
@@ -762,6 +764,31 @@ export default function MovieForm({
             ))}
           </div>
         )}
+      </div>
+
+      {/* Credits — searchable on the site ("aktyor bo'yicha qidirish") */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="md:col-span-2">
+          <label className="block text-sm text-gray-400 mb-1.5">Aktyorlar</label>
+          <input
+            type="text"
+            value={(form.cast ?? []).join(", ")}
+            onChange={(e) => set("cast", e.target.value.split(",").map((s) => s.trimStart()))}
+            onBlur={() => set("cast", (form.cast ?? []).map((s) => s.trim()).filter(Boolean))}
+            placeholder="Vergul bilan: Tom Hanks, Emma Watson"
+            className="field"
+          />
+        </div>
+        <div>
+          <label className="block text-sm text-gray-400 mb-1.5">Rejissyor</label>
+          <input
+            type="text"
+            value={form.director ?? ""}
+            onChange={(e) => set("director", e.target.value)}
+            placeholder="Christopher Nolan"
+            className="field"
+          />
+        </div>
       </div>
 
       {/* Country + Duration + Quality */}

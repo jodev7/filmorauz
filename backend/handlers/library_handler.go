@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -295,4 +296,30 @@ func (h *LibraryHandler) LinkSuggestion(c *gin.Context) {
 		"linked_title": title,
 		"linked_slug":  content.Slug,
 	})
+}
+
+// ─── "Siz uchun" ─────────────────────────────────────────────────────────────
+
+// ForYou GET /api/user/for-you?limit=18 — personal recommendations built from
+// the user's history, favorites, high ratings and watch-later list. Returns
+// an empty list (and the client hides the row) for brand-new users.
+func (h *LibraryHandler) ForYou(c *gin.Context) {
+	userID, ok := currentUserOID(c)
+	if !ok {
+		return
+	}
+	limit := 18
+	if v, err := strconv.Atoi(c.Query("limit")); err == nil && v > 0 && v <= 40 {
+		limit = v
+	}
+	movies, genres, err := repositories.NewForYouRepository(h.db).ForYou(c.Request.Context(), userID, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build recommendations"})
+		return
+	}
+	for i := range movies {
+		protectMovieMedia(&movies[i])
+		stripMoviePlayback(&movies[i])
+	}
+	c.JSON(http.StatusOK, gin.H{"data": movies, "genres": genres})
 }

@@ -94,6 +94,8 @@ export default function EditMoviePage() {
     quality: movie.quality,
     is_premium: movie.is_premium ?? false,
     slug: movie.slug,
+    cast: movie.cast ?? [],
+    director: movie.director ?? "",
   };
 
   return (

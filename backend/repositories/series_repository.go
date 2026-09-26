@@ -1280,37 +1280,42 @@ func (r *SeriesRepository) Search(query string) ([]models.Series, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Case-insensitive regex search on title; only published content
-	filter := bson.M{
-		"$and": []bson.M{
-			{
-				"$or": []bson.M{
-					{"is_published": true},
-					{"is_published": bson.M{"$exists": false}},
-				},
-			},
-			{
-				"$or": []bson.M{
-					{"title": bson.M{"$regex": query, "$options": "i"}},
-					{"description": bson.M{"$regex": query, "$options": "i"}},
-				},
-			},
-		},
+	// Typo/script-tolerant title search (see search_query.go); only
+	// published content. Falls back to any-word matching when the whole
+	// phrase finds nothing.
+	published := bson.M{"$or": []bson.M{
+		{"is_published": true},
+		{"is_published": bson.M{"$exists": false}},
+	}}
+	fields := []string{"title", "title_uz"}
+	run := func(match bson.M) ([]models.Series, error) {
+		opts := options.Find().
+			SetSort(bson.D{{Key: "views", Value: -1}, {Key: "created_at", Value: -1}}).
+			SetLimit(30)
+		cursor, err := r.seriesCol.Find(ctx, bson.M{"$and": []bson.M{published, match}}, opts)
+		if err != nil {
+			return nil, fmt.Errorf("search series: %w", err)
+		}
+		defer cursor.Close(ctx)
+		var out []models.Series
+		if err := cursor.All(ctx, &out); err != nil {
+			return nil, fmt.Errorf("decode search results: %w", err)
+		}
+		return out, nil
 	}
 
-	opts := options.Find().
-		SetSort(bson.D{{Key: "created_at", Value: -1}}).
-		SetLimit(20)
-
-	cursor, err := r.seriesCol.Find(ctx, filter, opts)
+	seriesList, err := run(BuildTitleSearchFilter(query, fields, true))
 	if err != nil {
-		return nil, fmt.Errorf("search series: %w", err)
+		return nil, err
 	}
-	defer cursor.Close(ctx)
-
-	var seriesList []models.Series
-	if err := cursor.All(ctx, &seriesList); err != nil {
-		return nil, fmt.Errorf("decode search results: %w", err)
+	if words := SearchWords(query); len(seriesList) == 0 && len(words) > 1 {
+		any := bson.A{}
+		for _, w := range words {
+			any = append(any, BuildTitleSearchFilter(w, fields, false))
+		}
+		if seriesList, err = run(bson.M{"$or": any}); err != nil {
+			return nil, err
+		}
 	}
 
 	if seriesList == nil {

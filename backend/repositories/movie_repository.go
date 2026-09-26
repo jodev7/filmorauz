@@ -440,6 +440,18 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 		movie.Country = country
 	}
 
+	// Credits
+	if cast, ok := doc["cast"].(bson.A); ok {
+		for _, c := range cast {
+			if s, ok := c.(string); ok && strings.TrimSpace(s) != "" {
+				movie.Cast = append(movie.Cast, s)
+			}
+		}
+	}
+	if director, ok := doc["director"].(string); ok {
+		movie.Director = director
+	}
+
 	// Handle video_url
 	if videoURL, ok := doc["video_url"].(string); ok {
 		movie.VideoURL = videoURL
@@ -1095,38 +1107,42 @@ func (r *MovieRepository) Search(query string) ([]models.Movie, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Case-insensitive regex search on title; only published content
-	filter := bson.M{
-		"$and": []bson.M{
-			{
-				"$or": []bson.M{
-					{"is_published": true},
-					{"is_published": bson.M{"$exists": false}},
-				},
-			},
-			{
-				"$or": []bson.M{
-					{"title": bson.M{"$regex": query, "$options": "i"}},
-					{"description": bson.M{"$regex": query, "$options": "i"}},
-				},
-			},
-		},
+	// Typo/script-tolerant search over titles, cast and director (see
+	// search_query.go); only published content. Falls back to any-word
+	// matching when the whole phrase finds nothing.
+	published := bson.M{"$or": []bson.M{
+		{"is_published": true},
+		{"is_published": bson.M{"$exists": false}},
+	}}
+	fields := []string{"title", "title_uz", "original_title", "cast", "director"}
+	run := func(match bson.M) ([]bson.M, error) {
+		opts := options.Find().
+			SetSort(bson.D{{Key: "views", Value: -1}, {Key: "created_at", Value: -1}}).
+			SetLimit(40)
+		cursor, err := r.col.Find(ctx, bson.M{"$and": []bson.M{published, match}}, opts)
+		if err != nil {
+			return nil, fmt.Errorf("search movies: %w", err)
+		}
+		defer cursor.Close(ctx)
+		var docs []bson.M
+		if err := cursor.All(ctx, &docs); err != nil {
+			return nil, fmt.Errorf("decode search results: %w", err)
+		}
+		return docs, nil
 	}
 
-	opts := options.Find().
-		SetSort(bson.D{{Key: "created_at", Value: -1}}).
-		SetLimit(20)
-
-	cursor, err := r.col.Find(ctx, filter, opts)
+	rawDocs, err := run(BuildTitleSearchFilter(query, fields, true))
 	if err != nil {
-		return nil, fmt.Errorf("search movies: %w", err)
+		return nil, err
 	}
-	defer cursor.Close(ctx)
-
-	// Decode into bson.M first
-	var rawDocs []bson.M
-	if err := cursor.All(ctx, &rawDocs); err != nil {
-		return nil, fmt.Errorf("decode search results: %w", err)
+	if words := SearchWords(query); len(rawDocs) == 0 && len(words) > 1 {
+		any := bson.A{}
+		for _, w := range words {
+			any = append(any, BuildTitleSearchFilter(w, fields, false))
+		}
+		if rawDocs, err = run(bson.M{"$or": any}); err != nil {
+			return nil, err
+		}
 	}
 
 	// Normalize each document
@@ -1296,6 +1312,8 @@ func (r *MovieRepository) Update(id primitive.ObjectID, movie *models.Movie) err
 				"year":                        movie.Year,
 				"genre":                       movie.Genre,
 				"country":                     movie.Country,
+				"cast":                        movie.Cast,
+				"director":                    movie.Director,
 				"video_url":                   movie.VideoURL,
 				"embed_url":                   movie.EmbedURL,
 				"source_type":                 movie.SourceType,

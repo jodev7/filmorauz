@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -47,7 +48,28 @@ func (h *MovieHandler) ListMovies(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 
-	movies, total, err := h.movieService.ListMovies(genre, page, limit)
+	// Advanced filter (year range, rating, country, duration, free-only,
+	// sort). Without any of these the original listing path is used.
+	filter := repositories.MovieListFilter{Genre: genre, Country: c.Query("country"), Duration: c.Query("duration"), Sort: c.Query("sort")}
+	filter.YearFrom, _ = strconv.Atoi(c.Query("year_from"))
+	filter.YearTo, _ = strconv.Atoi(c.Query("year_to"))
+	filter.MinRating, _ = strconv.ParseFloat(c.Query("min_rating"), 64)
+	filter.FreeOnly = c.Query("free") == "1" || c.Query("free") == "true"
+
+	var movies []models.Movie
+	var total int64
+	var err error
+	if filter.IsZero() {
+		movies, total, err = h.movieService.ListMovies(genre, page, limit)
+	} else {
+		if page < 1 {
+			page = 1
+		}
+		if limit < 1 || limit > 100 {
+			limit = 20
+		}
+		movies, total, err = h.movieService.ListMoviesFiltered(filter, page, limit)
+	}
 	if err != nil {
 		log.Printf("[ERROR] ListMovies: failed to fetch movies: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch movies"})
@@ -89,6 +111,16 @@ func (h *MovieHandler) ListMovies(c *gin.Context) {
 		"page":  page,
 		"limit": limit,
 	})
+}
+
+// MovieFilterFacets GET /api/movies/filters — options for the /movies filter UI.
+func (h *MovieHandler) MovieFilterFacets(c *gin.Context) {
+	facets, err := h.movieService.MovieFilterFacets()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load filters"})
+		return
+	}
+	c.JSON(http.StatusOK, facets)
 }
 
 // GetMovieBySlug GET /api/movies/slug/:slug
@@ -240,6 +272,15 @@ func (h *MovieHandler) SearchMovies(c *gin.Context) {
 		Code       string   `json:"code"`
 	}
 
+	// Rank movies and series together: exact code/title > prefix >
+	// substring > fuzzy match, then by popularity.
+	type ranked struct {
+		UnifiedResult
+		score int
+		views int64
+	}
+	rankedResults := make([]ranked, 0, len(movies)+len(series))
+
 	results := make([]UnifiedResult, 0, len(movies)+len(series))
 	for _, m := range movies {
 		results = append(results, UnifiedResult{
@@ -252,6 +293,11 @@ func (h *MovieHandler) SearchMovies(c *gin.Context) {
 			Quality:    m.Quality,
 			TargetType: "movie",
 			Code:       m.Code,
+		})
+		rankedResults = append(rankedResults, ranked{
+			UnifiedResult: results[len(results)-1],
+			score:         repositories.SearchScore(query, m.Code, append([]string{m.Title, m.TitleUz, m.OriginalTitle, m.Director}, m.Cast...)...),
+			views:         m.Views,
 		})
 	}
 	for _, s := range series {
@@ -266,6 +312,24 @@ func (h *MovieHandler) SearchMovies(c *gin.Context) {
 			TargetType: "series",
 			Code:       s.Code,
 		})
+		rankedResults = append(rankedResults, ranked{
+			UnifiedResult: results[len(results)-1],
+			score:         repositories.SearchScore(query, s.Code, s.Title, s.TitleUz),
+			views:         s.Views,
+		})
+	}
+	sort.SliceStable(rankedResults, func(i, j int) bool {
+		if rankedResults[i].score != rankedResults[j].score {
+			return rankedResults[i].score > rankedResults[j].score
+		}
+		return rankedResults[i].views > rankedResults[j].views
+	})
+	if len(rankedResults) > 40 {
+		rankedResults = rankedResults[:40]
+	}
+	results = results[:0]
+	for _, r := range rankedResults {
+		results = append(results, r.UnifiedResult)
 	}
 
 	if h.analyticsRepo != nil && strings.TrimSpace(query) != "" {

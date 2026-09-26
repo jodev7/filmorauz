@@ -63,6 +63,8 @@ export interface Movie {
   rating_avg: number;
   rating_count: number;
   is_premium?: boolean;
+  cast?: string[];
+  director?: string;
   created_at: string;
   updated_at: string;
   // Approval workflow
@@ -108,6 +110,9 @@ export interface MovieInput {
   quality: string;
   is_premium?: boolean;
   slug?: string;
+  // Optional credits (searchable). Omit to leave unchanged on update.
+  cast?: string[];
+  director?: string;
 }
 
 export interface ListResponse {
@@ -263,11 +268,20 @@ export async function getMovies(params?: {
   genre?: string;
   page?: number;
   limit?: number;
+  filters?: MovieFilterParams;
 }): Promise<ListResponse> {
   const qs = new URLSearchParams();
   if (params?.genre) qs.set("genre", params.genre);
   if (params?.page) qs.set("page", String(params.page));
   if (params?.limit) qs.set("limit", String(params.limit));
+  const f = params?.filters;
+  if (f?.year_from) qs.set("year_from", String(f.year_from));
+  if (f?.year_to) qs.set("year_to", String(f.year_to));
+  if (f?.min_rating) qs.set("min_rating", String(f.min_rating));
+  if (f?.country) qs.set("country", f.country);
+  if (f?.duration) qs.set("duration", f.duration);
+  if (f?.free) qs.set("free", "1");
+  if (f?.sort && f.sort !== "new") qs.set("sort", f.sort);
 
   const res = await fetch(`${API_URL}/movies?${qs}`, {
     next: { revalidate: 60 }, // ISR: revalidate every 60s
@@ -5578,4 +5592,38 @@ export async function adminLinkSuggestion(
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json?.error || "Bog'lab bo'lmadi");
   return json;
+}
+
+// ─── "Siz uchun" + advanced movie filter ─────────────────────────────────────
+
+export async function getForYou(token: string, limit = 18): Promise<{ data: Movie[]; genres: string[] }> {
+  const res = await fetch(`${API_URL}/user/for-you?limit=${limit}`, { headers: authHeaders(token), cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to fetch recommendations");
+  const json = await res.json();
+  return {
+    data: (json.data || []).map((item: any) => normalizeMovieResponse(item)),
+    genres: Array.isArray(json.genres) ? json.genres : [],
+  };
+}
+
+export interface MovieFilterParams {
+  year_from?: number;
+  year_to?: number;
+  min_rating?: number;
+  country?: string;
+  duration?: "short" | "medium" | "long";
+  free?: boolean;
+  sort?: "new" | "popular" | "rating" | "year";
+}
+
+export interface MovieFilterFacets {
+  countries: string[];
+  year_min: number;
+  year_max: number;
+}
+
+export async function getMovieFilterFacets(): Promise<MovieFilterFacets> {
+  const res = await fetch(`${API_URL}/movies/filters`, { next: { revalidate: 600 } });
+  if (!res.ok) throw new Error("Failed to fetch filter options");
+  return res.json();
 }

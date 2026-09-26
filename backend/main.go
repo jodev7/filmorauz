@@ -388,6 +388,7 @@ func main() {
 		AuthService:  authService,
 		AuditLogRepo: auditLogRepo,
 		Library:      libraryHandler,
+		Movies:       movieHandler,
 	})
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)

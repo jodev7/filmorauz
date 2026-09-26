@@ -16,6 +16,7 @@ import { getTranslations } from "@/lib/i18n-server";
 
 const FeaturedCollectionsSection = dynamic(() => import("@/components/home/FeaturedCollectionsSection"));
 const ContinueWatchingRow = dynamic(() => import("@/components/home/ContinueWatchingRow"));
+const ForYouRow = dynamic(() => import("@/components/home/ForYouRow"));
 const WebsiteAdSlot = dynamic(() => import("@/components/ads/WebsiteAdSlot"));
 
 // ISR: regenerate the homepage shell every 60s. User-specific sections (ads)
@@ -104,6 +105,9 @@ export default async function HomePage() {
 
         {/* ── Continue Watching (logged-in users; self-hides when empty) ── */}
         <ContinueWatchingRow />
+
+        {/* ── "Siz uchun" personal recommendations (logged-in; self-hides) ── */}
+        <ForYouRow />
 
         {/* ── Homepage Top Banner Ad — lazy; shared prefetch serves it ─ */}
         <div className="max-w-7xl mx-auto px-4 mt-8 mb-6">

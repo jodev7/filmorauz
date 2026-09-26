@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"time"
+
 	"github.com/filmorauz/backend/handlers"
 	"github.com/filmorauz/backend/middleware"
 	"github.com/filmorauz/backend/repositories"
@@ -14,6 +16,7 @@ type ExtraDeps struct {
 	AuthService  *services.AuthService
 	AuditLogRepo *repositories.AuditLogRepository
 	Library      *handlers.LibraryHandler
+	Movies       *handlers.MovieHandler
 }
 
 // SetupExtras registers user-library, community and growth routes.
@@ -21,6 +24,9 @@ type ExtraDeps struct {
 // ones in Setup.
 func SetupExtras(r *gin.Engine, d ExtraDeps) {
 	api := r.Group("/api")
+
+	// Options for the advanced movie filter (countries, year range).
+	api.GET("/movies/filters", middleware.CacheResponse(10*time.Minute), d.Movies.MovieFilterFacets)
 
 	user := api.Group("/user")
 	user.Use(middleware.RequireAuth(d.AuthService))
@@ -35,6 +41,9 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 		user.GET("/subscriptions", d.Library.GetSubscriptions)
 		user.POST("/subscriptions/series/:id", d.Library.Subscribe)
 		user.DELETE("/subscriptions/series/:id", d.Library.Unsubscribe)
+
+		// "Siz uchun" personal recommendations
+		user.GET("/for-you", d.Library.ForYou)
 	}
 
 	admin := api.Group("/admin")

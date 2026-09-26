@@ -44,6 +44,10 @@ type Movie struct {
 	CreatedAt       time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt       time.Time          `bson:"updated_at" json:"updated_at"`
 
+	// Optional credits — searchable ("aktyor bo'yicha qidirish").
+	Cast     []string `bson:"cast,omitempty" json:"cast,omitempty"`
+	Director string   `bson:"director,omitempty" json:"director,omitempty"`
+
 	// HLS Streaming Support
 	MasterPlaylistURL  string   `bson:"master_playlist_url,omitempty" json:"master_playlist_url,omitempty"` // CDN URL to master.m3u8
 	AvailableQualities []string `bson:"available_qualities,omitempty" json:"available_qualities,omitempty"` // Verified qualities from actual generated folders
@@ -107,6 +111,9 @@ type MovieInput struct {
 	Quality     string          `json:"quality"`
 	IsPremium   bool            `json:"is_premium"`
 	Slug        string          `json:"slug"`
+	// Pointers: nil = "not sent" so older clients don't wipe credits.
+	Cast     *[]string `json:"cast,omitempty"`
+	Director *string   `json:"director,omitempty"`
 
 	// HLS Streaming Support
 	MasterPlaylistURL  string   `json:"master_playlist_url"`
@@ -182,6 +189,8 @@ func (m *MovieInput) UnmarshalJSON(data []byte) error {
 		Genres             interface{}     `json:"genres"`
 		MovieGenre         interface{}     `json:"movie_genre"`
 		Country            string          `json:"country"`
+		Cast               *[]string       `json:"cast"`
+		Director           *string         `json:"director"`
 		VideoURL           string          `json:"video_url"`
 		EmbedURL           string          `json:"embed_url"`
 		SourceType         VideoSourceType `json:"source_type"`
@@ -217,6 +226,8 @@ func (m *MovieInput) UnmarshalJSON(data []byte) error {
 		Year:               aux.Year,
 		Genre:              normalizeMovieInputGenres(aux.Genre, aux.Genres, aux.MovieGenre),
 		Country:            aux.Country,
+		Cast:               aux.Cast,
+		Director:           aux.Director,
 		VideoURL:           aux.VideoURL,
 		EmbedURL:           aux.EmbedURL,
 		SourceType:         aux.SourceType,

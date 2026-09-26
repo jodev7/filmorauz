@@ -184,6 +184,12 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
       target: `${movieUrl}?play=1`,
     },
   };
+  if (movie.cast && movie.cast.length > 0) {
+    movieJsonLd.actor = movie.cast.slice(0, 10).map((name) => ({ "@type": "Person", name }));
+  }
+  if (movie.director) {
+    movieJsonLd.director = { "@type": "Person", name: movie.director };
+  }
   if (movie.rating_count && movie.rating_count > 0 && movie.rating_avg) {
     movieJsonLd.aggregateRating = {
       "@type": "AggregateRating",
@@ -323,6 +329,36 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
               <p className="text-gray-300 leading-relaxed max-w-2xl mb-6 sm:mb-8 text-sm sm:text-base">
                 {localizedDescription}
               </p>
+
+              {(movie.director || (movie.cast && movie.cast.length > 0)) && (
+                <dl className="-mt-3 mb-6 max-w-2xl space-y-1 text-sm">
+                  {movie.director && (
+                    <div>
+                      <dt className="inline text-gray-500">Rejissyor: </dt>
+                      <dd className="inline">
+                        <Link href={`/movies?search=${encodeURIComponent(movie.director)}`} className="text-gray-300 hover:text-white">
+                          {movie.director}
+                        </Link>
+                      </dd>
+                    </div>
+                  )}
+                  {movie.cast && movie.cast.length > 0 && (
+                    <div>
+                      <dt className="inline text-gray-500">Rollarda: </dt>
+                      <dd className="inline text-gray-300">
+                        {movie.cast.slice(0, 8).map((name, i) => (
+                          <span key={name}>
+                            {i > 0 && ", "}
+                            <Link href={`/movies?search=${encodeURIComponent(name)}`} className="hover:text-white">
+                              {name}
+                            </Link>
+                          </span>
+                        ))}
+                      </dd>
+                    </div>
+                  )}
+                </dl>
+              )}
 
               <div className="flex flex-wrap items-center gap-4">
                 <WatchButton
