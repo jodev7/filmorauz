@@ -26,6 +26,7 @@ const StarRating = dynamicImport(() => import("@/components/StarRating"));
 const SeriesShareButton = dynamicImport(() => import("@/components/SeriesShareButton"));
 const LibraryButtons = dynamicImport(() => import("@/components/LibraryButtons"));
 const Reviews = dynamicImport(() => import("@/components/Reviews"));
+const SeriesResumeButton = dynamicImport(() => import("@/components/SeriesResumeButton"));
 
 interface Props {
   params: { slug: string };
@@ -98,6 +99,16 @@ export default async function SeriesDetailPage({ params }: Props) {
 
   const { series, seasons } = seriesData;
   const canonicalUrl = buildSeriesUrl(slug);
+
+  // First episode (lowest season, lowest episode) for the "start watching" CTA.
+  const firstEpisode = (() => {
+    const sorted = [...(seasons || [])].sort((a, b) => a.season.season_number - b.season.season_number);
+    for (const s of sorted) {
+      const eps = [...(s.episodes || [])].sort((a, b) => a.episode_number - b.episode_number);
+      if (eps[0]) return { id: eps[0].id, seasonNumber: s.season.season_number, episodeNumber: eps[0].episode_number };
+    }
+    return null;
+  })();
 
   const seriesJsonLd: Record<string, any> = {
     "@context": "https://schema.org",
@@ -237,6 +248,12 @@ export default async function SeriesDetailPage({ params }: Props) {
                 {series.description}
               </p>
 
+              {firstEpisode && (
+                <div className="mb-4">
+                  <SeriesResumeButton seriesId={series.id} seriesSlug={series.slug} firstEpisode={firstEpisode} />
+                </div>
+              )}
+
               <div className="mb-4 flex flex-wrap items-start gap-2">
                 <WatchTogetherButton contentType="series" contentID={series.id} />
                 <SeriesShareButton seriesId={series.id} seriesTitle={series.title} />
@@ -267,6 +284,7 @@ export default async function SeriesDetailPage({ params }: Props) {
                 seriesBackdropUrl={series.backdrop_url}
                 seriesPosterUrl={series.poster_url}
                 seriesSlug={series.slug}
+                seriesId={series.id}
               />
             </section>
           )}

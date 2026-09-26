@@ -1116,6 +1116,70 @@ export async function getWatchHistory(token: string): Promise<WatchHistoryItem[]
   return json.data || [];
 }
 
+// ── Watch history management ──
+
+export type HistoryTargetType = "movie" | "episode";
+
+async function historyCall(token: string, method: string, path: string): Promise<void> {
+  const res = await fetch(`${API_URL}${path}`, { method, headers: authHeaders(token) });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Amal bajarilmadi");
+  }
+}
+
+// Remove from "continue watching" only (history stays).
+export function hideFromContinueWatching(token: string, type: HistoryTargetType, id: string) {
+  return historyCall(token, "DELETE", `/user/continue-watching/${type}/${id}`);
+}
+
+export function restoreToContinueWatching(token: string, type: HistoryTargetType, id: string) {
+  return historyCall(token, "POST", `/user/continue-watching/${type}/${id}/restore`);
+}
+
+export function markAsWatched(token: string, type: HistoryTargetType, id: string) {
+  return historyCall(token, "POST", `/user/history/${type}/${id}/watched`);
+}
+
+export function deleteHistoryEntry(token: string, type: HistoryTargetType, id: string) {
+  return historyCall(token, "DELETE", `/user/history/${type}/${id}`);
+}
+
+export function clearWatchHistory(token: string) {
+  return historyCall(token, "DELETE", `/user/history`);
+}
+
+export interface EpisodeProgress {
+  episode_id: string;
+  season_number: number;
+  episode_number: number;
+  progress_percent: number;
+  last_position_sec: number;
+  completed: boolean;
+}
+
+export interface SeriesProgress {
+  episodes: EpisodeProgress[];
+  watched: number;
+  total: number;
+  resume?: {
+    episode_id: string;
+    season_number: number;
+    episode_number: number;
+    mode: "continue" | "next";
+    progress_percent: number;
+  };
+}
+
+export async function getSeriesProgress(token: string, seriesId: string): Promise<SeriesProgress> {
+  const res = await fetch(`${API_URL}/user/series-progress/${seriesId}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to load series progress");
+  return res.json();
+}
+
 // Add to favorites (authenticated)
 export async function addFavorite(token: string, targetId: string, options?: TargetOptions): Promise<void> {
   const query = options?.targetType ? `?target_type=${encodeURIComponent(options.targetType)}` : "";

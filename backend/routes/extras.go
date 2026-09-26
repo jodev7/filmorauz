@@ -21,6 +21,7 @@ type ExtraDeps struct {
 	Referral     *handlers.ReferralHandler
 	Errors       *handlers.ErrorHandler
 	DailyReport  *handlers.DailyReportHandler
+	History      *handlers.HistoryHandler
 }
 
 // SetupExtras registers user-library, community and growth routes.
@@ -51,6 +52,14 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 
 		// "Siz uchun" personal recommendations
 		user.GET("/for-you", d.Library.ForYou)
+
+		// Watch history management
+		user.DELETE("/continue-watching/:type/:id", d.History.HideFromContinue)
+		user.POST("/continue-watching/:type/:id/restore", d.History.RestoreToContinue)
+		user.POST("/history/:type/:id/watched", d.History.MarkWatched)
+		user.DELETE("/history/:type/:id", d.History.DeleteEntry)
+		user.DELETE("/history", d.History.ClearHistory)
+		user.GET("/series-progress/:id", d.History.SeriesProgress)
 
 		// Referral program
 		user.GET("/referral", d.Referral.GetMyReferral)

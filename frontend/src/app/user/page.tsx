@@ -11,6 +11,7 @@ import { useI18n } from "@/lib/i18n";
 import Link from "next/link";
 import { Heart, History, User as UserIcon, Crown, Calendar, Shield, Clock, Camera, Edit2, Check, X, Send, Hash, LayoutDashboard, BadgeCheck, Sparkles, RefreshCw, Zap, Palette, Eye, EyeOff, Lock, Star, LogOut, Lightbulb } from "lucide-react";
 import { PremiumBadge, PremiumButton, PremiumAvatarRing, resolveIsPremium, resolvePremiumStatus } from "@/components/PremiumComponents";
+import WatchHistoryList from "@/components/WatchHistoryList";
 import { getFavorites, getWatchHistory, getCurrentUser, updateProfile, uploadProfileImage, updateProfileStyle, updatePrivacySettings, ProfileStyle } from "@/lib/api";
 import SuggestionModal from "@/components/SuggestionModal";
 import UserLibrarySections from "@/components/UserLibrarySections";
@@ -1201,19 +1202,7 @@ export default function UserPage() {
                   )}
                 </div>
                 
-                {watchHistory.length > 0 ? (
-                  <MovieCarousel 
-                    movies={watchHistory.map((item) => item.movie || item)} 
-                  />
-                ) : (
-                  <div className="py-10 text-center glass-card rounded-xl border border-white/5">
-                    <History className="w-8 h-8 text-gray-600 mx-auto mb-2" />
-                    <p className="text-gray-500 text-sm">{t("user.noWatchHistory")}</p>
-                    <p className="text-gray-600 text-xs mt-1">
-                      Haligacha hech qanday kino ko&apos;rmagansiz
-                    </p>
-                  </div>
-                )}
+                {token && <WatchHistoryList token={token} items={watchHistory} onChange={setWatchHistory} />}
               </section>
             </>
           )}

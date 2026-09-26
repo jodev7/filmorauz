@@ -119,6 +119,7 @@ export default async function SeasonPage({ params }: Props) {
             seriesBackdropUrl={data.series.backdrop_url}
             seriesPosterUrl={data.series.poster_url}
             seriesSlug={data.series.slug}
+            seriesId={data.series.id}
           />
         </div>
       </main>

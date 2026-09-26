@@ -420,6 +420,7 @@ func main() {
 		Referral:     referralHandler,
 		Errors:       handlers.NewErrorHandler(errorRepo),
 		DailyReport:  handlers.NewDailyReportHandler(dailyReporter),
+		History:      handlers.NewHistoryHandler(watchHistoryRepo),
 	})
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)
