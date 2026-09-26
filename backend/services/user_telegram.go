@@ -73,6 +73,15 @@ func (s *NotificationService) SendTelegramToUser(user *models.User, htmlText, bu
 	if chatID == 0 {
 		return false
 	}
+	return s.SendTelegramToChat(chatID, htmlText, buttonText, actionPath)
+}
+
+// SendTelegramToChat sends an HTML message (with an optional link button) to
+// a raw Telegram chat id through the site bot.
+func (s *NotificationService) SendTelegramToChat(chatID int64, htmlText, buttonText, actionPath string) bool {
+	if chatID == 0 {
+		return false
+	}
 	api, err := s.botAPI()
 	if err != nil {
 		return false
@@ -86,7 +95,7 @@ func (s *NotificationService) SendTelegramToUser(user *models.User, htmlText, bu
 		)
 	}
 	if _, err := api.Send(msg); err != nil {
-		log.Printf("[NOTIFY] telegram to user %s failed: %v", user.ID.Hex(), err)
+		log.Printf("[NOTIFY] telegram to chat %d failed: %v", chatID, err)
 		return false
 	}
 	return true

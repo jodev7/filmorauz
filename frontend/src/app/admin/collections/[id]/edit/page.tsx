@@ -18,7 +18,7 @@ import {
   getAdminCollectionById,
   createCollection,
   updateCollection,
-  adminGetMovies,
+  adminGetAllMovies,
   adminGetSeries,
   CollectionInput,
   Movie,
@@ -145,7 +145,7 @@ export default function EditCollectionPage() {
   // Fetch movies + series for selection
   useEffect(() => {
     if (!token) return;
-    adminGetMovies(token)
+    adminGetAllMovies(token)
       .then((data) => setMovies(data || []))
       .catch(console.error);
     adminGetSeries(token)

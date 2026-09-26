@@ -1199,11 +1199,6 @@ func calculateWebsiteURL(slug string, baseURL string) string {
 	return fmt.Sprintf("%s/movies/%s", baseURL, slug)
 }
 
-// ListAllMoviesAdmin returns all movies regardless of approval status for admin dashboard.
-func (s *MovieService) ListAllMoviesAdmin(page, limit int) ([]models.Movie, int64, error) {
-	return s.repo.ListAdmin(page, limit)
-}
-
 // SetMovieApprovalStatus approves or rejects a movie.
 func (s *MovieService) SetMovieApprovalStatus(id, status, byUserID string) error {
 	if status == "approved" {

@@ -796,27 +796,28 @@ func lastIndex(s, substr string) int {
 // AdminListMovies GET /api/admin/movies
 // Returns ALL movies (pending, approved, rejected) for the admin dashboard.
 func (h *MovieHandler) AdminListMovies(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 500 {
-		limit = 200
-	}
+	// Server-side filters/paging: ?page=&limit=&status=&q=&premium=&media=&sort=
+	// plus ?counts=1 for the status-tab counters.
+	q := adminMovieQueryFromRequest(c, 200)
 
-	movies, total, err := h.movieService.ListAllMoviesAdmin(page, limit)
+	movies, total, err := h.movieService.ListAdminMovies(q)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch movies"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"data":  movies,
 		"total": total,
-		"page":  page,
-		"limit": limit,
-	})
+		"page":  q.Page,
+		"limit": q.Limit,
+	}
+	if c.Query("counts") == "1" {
+		if counts, err := h.movieService.AdminMovieCounts(q); err == nil {
+			resp["counts"] = counts
+		}
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // ApproveMovie PATCH /api/admin/movies/:id/approve
@@ -844,43 +845,8 @@ func (h *MovieHandler) ApproveMovie(c *gin.Context) {
 
 	// Async Telegram post — non-blocking
 	if h.telegramService != nil && !alreadyPosted {
-		go func() {
-			log.Printf("[TELEGRAM APPROVE] triggered for movie id=%s by user=%s", id, byUserID)
-			movie, err := h.movieService.GetMovieByID(id)
-			if err != nil {
-				log.Printf("[TELEGRAM APPROVE] could not fetch movie %s: %v", id, err)
-				return
-			}
-			if movie.TelegramPostedOnApproval {
-				log.Printf("[TELEGRAM APPROVE] movie id=%s already posted — skipping duplicate", id)
-				return
-			}
-			watchURL := h.telegramService.GetBaseSiteURL() + "/movies/" + movie.Slug
-			data := &services.TelegramMovieData{
-				Title:       movie.Title,
-				Year:        movie.Year,
-				Genres:      movie.Genre,
-				GenresUz:    movie.GenresUz,
-				Country:     movie.Country,
-				CountriesUz: movie.CountriesUz,
-				Code:        movie.Code,
-				PosterURL:   firstNonEmpty(movie.PosterURL, movie.BackdropURL),
-				Quality:     movie.Quality,
-				Description: movie.Description,
-				Slug:        movie.Slug,
-				MovieURL:    watchURL,
-			}
-			log.Printf("[TELEGRAM] movie=%s genres from DB: %v (len=%d)", movie.Title, movie.Genre, len(movie.Genre))
-			posted := h.telegramService.PostContentApproval(data, false)
-			log.Printf("[TELEGRAM APPROVE] movie id=%s result: posted_to=%v", id, posted)
-			if len(posted) == 0 {
-				log.Printf("[TELEGRAM APPROVE] movie id=%s no channels received the post — not marking as posted", id)
-				return
-			}
-			if err := h.movieService.MarkTelegramPostedOnApproval(id); err != nil {
-				log.Printf("[TELEGRAM APPROVE] failed to mark movie id=%s as posted: %v", id, err)
-			}
-		}()
+		log.Printf("[TELEGRAM APPROVE] triggered for movie id=%s by user=%s", id, byUserID)
+		go services.AnnounceApprovedMovie(h.movieService, h.telegramService, id)
 	} else if alreadyPosted {
 		log.Printf("[TELEGRAM APPROVE] movie id=%s already posted on a previous approval — skipping", id)
 	}

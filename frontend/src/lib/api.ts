@@ -72,6 +72,10 @@ export interface Movie {
   is_published?: boolean;
   approved_at?: string | null;
   approved_by?: string;
+  // Scheduled publish (admin)
+  scheduled_publish_at?: string | null;
+  scheduled_by?: string;
+  schedule_error?: string;
   type?: "movie" | "episode";
   target_type?: "movie" | "episode" | "series";
   target_id?: string;
@@ -1423,6 +1427,137 @@ export async function adminGetMovies(token: string, limit = 500): Promise<Movie[
   if (!res.ok) throw new Error("Failed to fetch");
   const json = await res.json();
   return (json.data || []).map((item: any) => normalizeMovieResponse(item));
+}
+
+// Every movie, any approval status, paging through the admin list (used by
+// pickers that filter client-side, e.g. the collection editor).
+export async function adminGetAllMovies(token: string): Promise<Movie[]> {
+  const out: Movie[] = [];
+  for (let page = 1; page <= 40; page++) {
+    const res = await adminListMovies(token, { page, limit: 500 });
+    out.push(...res.data);
+    if (res.data.length < 500 || out.length >= res.total) break;
+  }
+  return out;
+}
+
+export type AdminMovieStatus = "all" | "pending" | "approved" | "rejected" | "scheduled";
+
+export interface AdminMovieListParams {
+  page?: number;
+  limit?: number;
+  status?: AdminMovieStatus;
+  q?: string;
+  premium?: "" | "premium" | "free";
+  media?: "" | "missing";
+  sort?: "" | "newest" | "oldest" | "title" | "views" | "rating" | "schedule";
+  counts?: boolean;
+}
+
+export interface AdminMovieCounts {
+  all: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+  scheduled: number;
+}
+
+export interface AdminMovieListResponse {
+  data: Movie[];
+  total: number;
+  page: number;
+  limit: number;
+  counts?: AdminMovieCounts;
+}
+
+// Server-side paged/filtered admin movie list.
+export async function adminListMovies(
+  token: string,
+  params: AdminMovieListParams,
+  signal?: AbortSignal
+): Promise<AdminMovieListResponse> {
+  const qs = new URLSearchParams();
+  qs.set("page", String(params.page ?? 1));
+  qs.set("limit", String(params.limit ?? 20));
+  if (params.status && params.status !== "all") qs.set("status", params.status);
+  if (params.q?.trim()) qs.set("q", params.q.trim());
+  if (params.premium) qs.set("premium", params.premium);
+  if (params.media) qs.set("media", params.media);
+  if (params.sort) qs.set("sort", params.sort);
+  if (params.counts) qs.set("counts", "1");
+  const res = await fetch(`${API_URL}/admin/movies?${qs.toString()}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+    signal,
+  });
+  if (!res.ok) throw new Error("Failed to fetch");
+  const json = await res.json();
+  return {
+    data: (json.data || []).map((item: any) => normalizeMovieResponse(item)),
+    total: json.total || 0,
+    page: json.page || 1,
+    limit: json.limit || params.limit || 20,
+    counts: json.counts,
+  };
+}
+
+// One movie by id, any approval status (admin edit page).
+export async function adminGetMovie(token: string, id: string): Promise<Movie> {
+  const res = await fetch(`${API_URL}/admin/movies/${encodeURIComponent(id)}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (res.status === 404) throw new Error("not_found");
+  if (!res.ok) throw new Error("Failed to fetch");
+  const json = await res.json();
+  return normalizeMovieResponse(json.data);
+}
+
+export async function adminScheduleMovie(token: string, id: string, publishAtISO: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/movies/${encodeURIComponent(id)}/schedule`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ publish_at: publishAtISO }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Rejalashtirib bo'lmadi");
+  }
+}
+
+export async function adminCancelMovieSchedule(token: string, id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/movies/${encodeURIComponent(id)}/schedule`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Bekor qilib bo'lmadi");
+  }
+}
+
+// ── Daily Telegram report (superadmin) ──
+
+export async function getDailyReportPreview(token: string): Promise<{ html: string; recipients: number }> {
+  const res = await fetch(`${API_URL}/superadmin/daily-report/preview`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Hisobotni yuklab bo'lmadi");
+  }
+  return res.json();
+}
+
+export async function sendDailyReport(token: string): Promise<{ sent: number; recipients: number }> {
+  const res = await fetch(`${API_URL}/superadmin/daily-report/send`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Yuborib bo'lmadi");
+  return json;
 }
 
 export async function approveMovie(token: string, id: string): Promise<void> {

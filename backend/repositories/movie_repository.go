@@ -631,6 +631,21 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 	if by, ok := doc["approved_by"].(string); ok {
 		movie.ApprovedBy = by
 	}
+	if raw, ok := doc["scheduled_publish_at"]; ok && raw != nil {
+		switch v := raw.(type) {
+		case primitive.DateTime:
+			t := v.Time()
+			movie.ScheduledPublishAt = &t
+		case time.Time:
+			movie.ScheduledPublishAt = &v
+		}
+	}
+	if by, ok := doc["scheduled_by"].(string); ok {
+		movie.ScheduledBy = by
+	}
+	if msg, ok := doc["schedule_error"].(string); ok {
+		movie.ScheduleError = msg
+	}
 
 	return movie, nil
 }
@@ -1466,53 +1481,6 @@ func (r *MovieRepository) FindMoviesWithoutCode() ([]models.Movie, error) {
 	return movies, nil
 }
 
-// ListAdmin returns ALL movies (regardless of approval status) for the admin dashboard.
-func (r *MovieRepository) ListAdmin(page, limit int) ([]models.Movie, int64, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 {
-		limit = 100
-	}
-
-	filter := bson.M{}
-
-	total, err := r.col.CountDocuments(ctx, filter)
-	if err != nil {
-		return nil, 0, fmt.Errorf("count admin movies: %w", err)
-	}
-
-	opts := options.Find().
-		SetSort(bson.D{{Key: "created_at", Value: -1}}).
-		SetSkip(int64((page - 1) * limit)).
-		SetLimit(int64(limit))
-
-	cursor, err := r.col.Find(ctx, filter, opts)
-	if err != nil {
-		return nil, 0, fmt.Errorf("find admin movies: %w", err)
-	}
-	defer cursor.Close(ctx)
-
-	var rawDocs []bson.M
-	if err := cursor.All(ctx, &rawDocs); err != nil {
-		return nil, 0, fmt.Errorf("decode admin movies: %w", err)
-	}
-
-	movies := make([]models.Movie, 0, len(rawDocs))
-	for _, doc := range rawDocs {
-		movie, err := normalizeMovieFromBSON(doc)
-		if err != nil {
-			continue
-		}
-		movies = append(movies, *movie)
-	}
-
-	return movies, total, nil
-}
-
 // MarkTelegramPostedOnApproval sets telegram_posted_on_approval=true so a
 // subsequent approval click doesn't re-post to Telegram.
 func (r *MovieRepository) MarkTelegramPostedOnApproval(idHex string) error {
@@ -1545,13 +1513,17 @@ func (r *MovieRepository) SetApprovalStatus(idHex, status, byUserID string) erro
 	result, err := r.col.UpdateOne(
 		ctx,
 		bson.M{"_id": id},
-		bson.M{"$set": bson.M{
-			"approval_status": status,
-			"is_published":    status == "approved",
-			"approved_at":     now,
-			"approved_by":     byUserID,
-			"updated_at":      now,
-		}},
+		bson.M{
+			"$set": bson.M{
+				"approval_status": status,
+				"is_published":    status == "approved",
+				"approved_at":     now,
+				"approved_by":     byUserID,
+				"updated_at":      now,
+			},
+			// A manual approve/reject supersedes any pending schedule.
+			"$unset": bson.M{"scheduled_publish_at": "", "scheduled_by": "", "schedule_error": ""},
+		},
 	)
 	if err != nil {
 		return err

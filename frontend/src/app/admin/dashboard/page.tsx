@@ -10,6 +10,8 @@ import MediaImage from "@/components/ui/MediaImage";
 import SystemStatusBlock from "@/components/admin/SystemStatusBlock";
 import dynamic from "next/dynamic";
 import AdminOverviewBlocks from "@/components/admin/AdminOverviewBlocks";
+import DailyReportButton from "@/components/admin/DailyReportButton";
+import { isSuperAdminRole } from "@/lib/roles";
 import { useVisibleInterval } from "@/lib/use-visible-interval";
 
 // recharts is heavy — load the charts section separately so the rest of the
@@ -147,11 +149,14 @@ export default function AdminDashboard() {
 
   return (
     <div className="p-4 sm:p-8">
-      <div className="mb-6 sm:mb-8">
-        <h1 className="text-xl sm:text-2xl font-bold text-white">Boshqaruv paneli</h1>
-        <p className="text-gray-500 text-sm mt-1">
-          Xush kelibsiz{user?.display_name ? `, ${user.display_name}` : ""}. Bu yerda nima bo'layotganini ko'ring.
-        </p>
+      <div className="mb-6 sm:mb-8 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold text-white">Boshqaruv paneli</h1>
+          <p className="text-gray-500 text-sm mt-1">
+            Xush kelibsiz{user?.display_name ? `, ${user.display_name}` : ""}. Bu yerda nima bo'layotganini ko'ring.
+          </p>
+        </div>
+        {token && isSuperAdminRole(user?.role) && <DailyReportButton token={token} />}
       </div>
 
       {/* Needs attention, pipeline health, content quality, finance */}

@@ -4,13 +4,12 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/filmorauz/backend/models"
 	"github.com/filmorauz/backend/repositories"
+	"github.com/filmorauz/backend/services"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -30,16 +29,9 @@ func NewAdminOverviewHandler(db *mongo.Database, jobRepo *repositories.JobReposi
 	return &AdminOverviewHandler{db: db, jobRepo: jobRepo}
 }
 
-// starsUSDRate is the approximate USD value of one Telegram Star, used only
-// for the rough revenue estimate on the dashboard. Override with
-// STARS_USD_RATE if Telegram's payout rate changes.
+// starsUSDRate: see services.StarsUSDRate (STARS_USD_RATE env override).
 func starsUSDRate() float64 {
-	if v := strings.TrimSpace(os.Getenv("STARS_USD_RATE")); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
-			return f
-		}
-	}
-	return 0.013
+	return services.StarsUSDRate()
 }
 
 func (h *AdminOverviewHandler) count(ctx context.Context, collection string, filter bson.M) int64 {

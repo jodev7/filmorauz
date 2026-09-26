@@ -79,6 +79,13 @@ type Movie struct {
 	ApprovedAt     *time.Time `bson:"approved_at,omitempty" json:"approved_at,omitempty"`
 	ApprovedBy     string     `bson:"approved_by,omitempty" json:"approved_by,omitempty"`
 
+	// Scheduled publish: while set (and not yet approved), the scheduler job
+	// approves the movie at this time and runs the usual Telegram post.
+	// ScheduleError keeps the reason when an automatic publish failed.
+	ScheduledPublishAt *time.Time `bson:"scheduled_publish_at,omitempty" json:"scheduled_publish_at,omitempty"`
+	ScheduledBy        string     `bson:"scheduled_by,omitempty" json:"scheduled_by,omitempty"`
+	ScheduleError      string     `bson:"schedule_error,omitempty" json:"schedule_error,omitempty"`
+
 	// TelegramPostedOnApproval is set to true after the approval auto-post
 	// succeeded at least once. Used to prevent re-posting on subsequent
 	// approve calls. omitempty keeps the field off the document when false.

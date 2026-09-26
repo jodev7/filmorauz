@@ -403,6 +403,14 @@ func main() {
 	referralHandler := handlers.NewReferralHandler(referralRepo, cfg.BaseSiteURL)
 	// Reward referrals once the invited friend starts watching.
 	go services.StartReferralRewardJob(context.Background(), referralRepo, userRepo, notificationService)
+	// Morning report to superadmins' Telegram (see services/daily_report.go).
+	dailyReporter := &services.DailyReporter{
+		DB:              db,
+		Analytics:       analyticsRepo,
+		Notify:          notificationService,
+		AdminTelegramID: cfg.AdminTelegramID,
+	}
+	dailyReporter.Start()
 	routes.SetupExtras(r, routes.ExtraDeps{
 		AuthService:  authService,
 		AuditLogRepo: auditLogRepo,
@@ -411,6 +419,7 @@ func main() {
 		Community:    communityHandler,
 		Referral:     referralHandler,
 		Errors:       handlers.NewErrorHandler(errorRepo),
+		DailyReport:  handlers.NewDailyReportHandler(dailyReporter),
 	})
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)
@@ -443,6 +452,17 @@ func main() {
 
 	// Tell series subscribers about newly playable episodes (site + Telegram).
 	go services.NewEpisodeNotifier(db, libraryRepo, notificationService).Start(context.Background())
+
+	// Publish movies whose scheduled time has come (approve + Telegram post).
+	// Started after the SEO notifier is wired so scheduled approvals ping it too.
+	(&services.ScheduledPublisher{
+		Movies:   movieService,
+		Repo:     movieRepo,
+		Telegram: telegramService,
+		Notify:   notificationService,
+		Users:    userRepo,
+		Audit:    auditLogRepo,
+	}).Start()
 
 	// Start content-deletion worker (runs every 10s). Executes queued
 	// DeleteJobs in-process — full B2 + Mongo cascade with progress written

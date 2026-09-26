@@ -231,9 +231,18 @@ func (r *AnalyticsRepository) TopContentByPeriod(ctx context.Context, days int, 
 	if limit <= 0 {
 		limit = 10
 	}
-	since := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	now := time.Now()
+	return r.TopContentBetween(ctx, now.Add(-time.Duration(days)*24*time.Hour), now, days, limit)
+}
+
+// TopContentBetween returns the most viewed titles with views in [from, to).
+func (r *AnalyticsRepository) TopContentBetween(ctx context.Context, from, to time.Time, periodDays, limit int) ([]TopContentPeriodStat, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	days := periodDays
 	pipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{"created_at": bson.M{"$gte": since}}}},
+		{{Key: "$match", Value: bson.M{"created_at": bson.M{"$gte": from, "$lt": to}}}},
 		{{Key: "$group", Value: bson.M{
 			"_id": bson.M{
 				"target_type": "$target_type",

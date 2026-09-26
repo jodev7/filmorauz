@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   PlusCircle,
@@ -15,10 +15,16 @@ import {
   Crown,
   FolderPlus,
   X,
+  CalendarClock,
+  ChevronLeft,
+  ChevronRight,
+  AlertTriangle,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
-  adminGetMovies,
+  adminListMovies,
+  AdminMovieCounts,
+  AdminMovieListParams,
   adminDeleteMovie,
   approveMovie,
   rejectMovie,
@@ -35,10 +41,31 @@ import CascadeDeleteModal, {
   formatCascadeWarning,
 } from "@/components/admin/CascadeDeleteModal";
 import DeleteProgressModal from "@/components/admin/DeleteProgressModal";
+import ScheduleMovieModal, { formatScheduleTime } from "@/components/admin/ScheduleMovieModal";
 
-type StatusFilter = "all" | "pending" | "approved" | "rejected";
+type StatusFilter = "all" | "pending" | "approved" | "rejected" | "scheduled";
+type PremiumFilter = "" | "premium" | "free";
+type MediaFilter = "" | "missing";
+type SortKey = "newest" | "oldest" | "title" | "views" | "rating" | "schedule";
 
-const STATUS_FILTERS: StatusFilter[] = ["all", "pending", "approved", "rejected"];
+const STATUS_FILTERS: StatusFilter[] = ["all", "pending", "approved", "rejected", "scheduled"];
+const PREMIUM_FILTERS: PremiumFilter[] = ["", "premium", "free"];
+const MEDIA_FILTERS: MediaFilter[] = ["", "missing"];
+const SORT_KEYS: SortKey[] = ["newest", "oldest", "title", "views", "rating", "schedule"];
+const SORT_LABELS: Record<SortKey, string> = {
+  newest: "Eng yangi",
+  oldest: "Eng eski",
+  title: "Nomi (A–Z)",
+  views: "Ko'rishlar",
+  rating: "Reyting",
+  schedule: "Nashr vaqti",
+};
+const PAGE_SIZE = 20;
+
+function pickParam<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
+  const v = readUrlParam(key, fallback) as T;
+  return allowed.includes(v) ? v : fallback;
+}
 
 // Runs `fn` over items with a small concurrency limit so bulk actions that
 // reuse single-movie endpoints don't flood the API.
@@ -61,7 +88,15 @@ async function runPool<T>(items: T[], limit: number, fn: (item: T) => Promise<vo
   return { ok, failed };
 }
 
-function ApprovalBadge({ status }: { status?: string }) {
+function ApprovalBadge({ status, scheduledAt }: { status?: string; scheduledAt?: string | null }) {
+  if (scheduledAt && status !== "approved") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300" title="Rejalashtirilgan nashr">
+        <CalendarClock size={10} />
+        {formatScheduleTime(scheduledAt)}
+      </span>
+    );
+  }
   if (!status || status === "approved") {
     return (
       <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-500/15 text-green-400">
@@ -89,104 +124,151 @@ function ApprovalBadge({ status }: { status?: string }) {
 export default function AdminMoviesPage() {
   const { token } = useAuth();
   const toast = useToast();
+  // One server-side page of movies; filters, sort and paging run in Mongo so
+  // the list works the same with 500 or 50 000 titles.
   const [movies, setMovies] = useState<Movie[]>([]);
-  const [filtered, setFiltered] = useState<Movie[]>([]);
+  const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState<AdminMovieCounts | null>(null);
   const [loading, setLoading] = useState(true);
-  // Filters live in the URL (?q=&status=&page=) so refresh/back and shared
-  // links keep the same view.
+  const [refreshing, setRefreshing] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  // Filters live in the URL (?q=&status=&page=&premium=&media=&sort=) so
+  // refresh/back and shared links keep the same view.
   const [search, setSearchState] = useState(() => readUrlParam("q", ""));
-  const [statusFilter, setStatusFilterState] = useState<StatusFilter>(() => {
-    const v = readUrlParam("status", "all") as StatusFilter;
-    return STATUS_FILTERS.includes(v) ? v : "all";
-  });
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
+  const [statusFilter, setStatusFilterState] = useState<StatusFilter>(() => pickParam("status", STATUS_FILTERS, "all"));
+  const [premiumFilter, setPremiumFilterState] = useState<PremiumFilter>(() => pickParam("premium", PREMIUM_FILTERS, ""));
+  const [mediaFilter, setMediaFilterState] = useState<MediaFilter>(() => pickParam("media", MEDIA_FILTERS, ""));
+  const [sort, setSortState] = useState<SortKey>(() => pickParam("sort", SORT_KEYS, "newest"));
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteJobId, setDeleteJobId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Movie | null>(null);
   const [approving, setApproving] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
-  // Client-side pagination so the admin list doesn't render hundreds of rows
-  // at once and stretch the page.
-  const PAGE_SIZE = 20;
+  const [scheduleTarget, setScheduleTarget] = useState<Movie | null>(null);
   const [page, setPage] = useState(() => readUrlNumber("page", 1));
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Selection survives paging: keep the movie objects, not just ids, so bulk
+  // actions work on rows from other pages too.
+  const [selected, setSelected] = useState<Map<string, Movie>>(new Map());
 
   // Filter changes reset to page 1 in the same update (a follow-up effect
   // would also fire on mount and wipe ?page= from the URL).
   // Selection is cleared too, so a bulk action never hits rows the new
   // filter hides.
+  const resetPaging = () => {
+    setPage(1);
+    setSelected(new Map());
+  };
   const setSearch = (v: string) => {
     setSearchState(v);
-    setPage(1);
-    setSelected(new Set());
+    resetPaging();
   };
   const setStatusFilter = (v: StatusFilter) => {
     setStatusFilterState(v);
+    if (v === "scheduled" && sort === "newest") setSortState("schedule");
+    if (v !== "scheduled" && sort === "schedule") setSortState("newest");
+    resetPaging();
+  };
+  const setPremiumFilter = (v: PremiumFilter) => {
+    setPremiumFilterState(v);
+    resetPaging();
+  };
+  const setMediaFilter = (v: MediaFilter) => {
+    setMediaFilterState(v);
+    resetPaging();
+  };
+  const setSort = (v: SortKey) => {
+    setSortState(v);
     setPage(1);
-    setSelected(new Set());
   };
 
-  useSyncUrlParams({ q: search, status: statusFilter, page }, { q: "", status: "all", page: 1 });
+  useSyncUrlParams(
+    { q: search, status: statusFilter, page, premium: premiumFilter, media: mediaFilter, sort },
+    { q: "", status: "all", page: 1, premium: "", media: "", sort: "newest" }
+  );
+
+  // Debounce typing so each keystroke doesn't hit the API.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
   // ── Bulk selection ──
   const [bulkBusy, setBulkBusy] = useState<string | null>(null);
   const [collections, setCollections] = useState<CollectionInput[]>([]);
   const [collectionPick, setCollectionPick] = useState("");
 
-  const fetchMovies = async () => {
+  const firstLoad = useRef(true);
+  useEffect(() => {
     if (!token) return;
-    try {
-      const data = await adminGetMovies(token);
-      setMovies(data || []);
-    } catch (err) {
-      console.error(err);
-      toast.error("Kinolarni yuklab bo'lmadi");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchMovies();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
-
-  // Client-side filter: search + status tab
-  useEffect(() => {
-    let result = movies;
-
-    if (statusFilter !== "all") {
-      result = result.filter((m) => {
-        const s = m.approval_status || "approved";
-        return s === statusFilter;
+    const ctrl = new AbortController();
+    const params: AdminMovieListParams = {
+      page,
+      limit: PAGE_SIZE,
+      status: statusFilter,
+      q: debouncedSearch,
+      premium: premiumFilter,
+      media: mediaFilter,
+      sort: sort === "newest" ? "" : sort,
+      counts: true,
+    };
+    if (!firstLoad.current) setRefreshing(true);
+    adminListMovies(token, params, ctrl.signal)
+      .then((res) => {
+        setMovies(res.data);
+        setTotal(res.total);
+        if (res.counts) setCounts(res.counts);
+        // Paged past the end (e.g. after deleting the last rows): step back.
+        if (res.data.length === 0 && res.total > 0 && page > 1) {
+          setPage(Math.max(1, Math.ceil(res.total / PAGE_SIZE)));
+        }
+      })
+      .catch((err) => {
+        if (ctrl.signal.aborted) return;
+        console.error(err);
+        toast.error("Kinolarni yuklab bo'lmadi");
+      })
+      .finally(() => {
+        if (ctrl.signal.aborted) return;
+        firstLoad.current = false;
+        setLoading(false);
+        setRefreshing(false);
       });
-    }
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, page, statusFilter, debouncedSearch, premiumFilter, mediaFilter, sort, reloadKey]);
 
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      result = result.filter(
-        (m) =>
-          m.title.toLowerCase().includes(q) ||
-          (m.code && String(m.code).includes(q)) ||
-          m.genre?.some((g) => g.toLowerCase().includes(q))
-      );
-    }
+  // Re-fetch the current page (and tab counts) after a mutation.
+  const reload = useCallback(() => setReloadKey((k) => k + 1), []);
 
-    setFiltered(result);
-  }, [search, movies, statusFilter]);
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
-  const pageItems = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const pageItems = movies;
 
-  // Drop selections for movies that no longer exist (e.g. after delete).
-  useEffect(() => {
+  // Patch one movie everywhere it is shown (current page + selection).
+  const patchMovies = (ids: Set<string>, patch: (m: Movie) => Movie) => {
+    setMovies((prev) => prev.map((m) => (ids.has(m.id) ? patch(m) : m)));
     setSelected((prev) => {
-      if (prev.size === 0) return prev;
-      const ids = new Set(movies.map((m) => m.id));
-      const next = new Set(Array.from(prev).filter((id) => ids.has(id)));
-      return next.size === prev.size ? prev : next;
+      let changed = false;
+      const next = new Map(prev);
+      prev.forEach((m, id) => {
+        if (ids.has(id)) {
+          next.set(id, patch(m));
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
     });
-  }, [movies]);
+  };
+  const dropMovies = (ids: Set<string>) => {
+    setMovies((prev) => prev.filter((m) => !ids.has(m.id)));
+    setSelected((prev) => {
+      if (!Array.from(prev.keys()).some((id) => ids.has(id))) return prev;
+      const next = new Map(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!token || selected.size === 0 || collections.length > 0) return;
@@ -198,23 +280,23 @@ export default function AdminMoviesPage() {
   const pageIds = useMemo(() => pageItems.map((m) => m.id), [pageItems]);
   const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
 
-  const toggleOne = (id: string) =>
+  const toggleOne = (movie: Movie) =>
     setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      const next = new Map(prev);
+      if (next.has(movie.id)) next.delete(movie.id);
+      else next.set(movie.id, movie);
       return next;
     });
 
   const togglePage = () =>
     setSelected((prev) => {
-      const next = new Set(prev);
+      const next = new Map(prev);
       if (allOnPageSelected) pageIds.forEach((id) => next.delete(id));
-      else pageIds.forEach((id) => next.add(id));
+      else pageItems.forEach((m) => next.set(m.id, m));
       return next;
     });
 
-  const selectedMovies = movies.filter((m) => selected.has(m.id));
+  const selectedMovies = Array.from(selected.values());
 
   const reportBulk = (verb: string, r: { ok: number; failed: number }) => {
     if (r.failed === 0) toast.success(`${r.ok} ta kino ${verb}`);
@@ -232,9 +314,10 @@ export default function AdminMoviesPage() {
       await approveMovie(token, m.id);
       done.add(m.id);
     });
-    setMovies((prev) => prev.map((m) => (done.has(m.id) ? { ...m, approval_status: "approved", is_published: true } : m)));
+    patchMovies(done, (m) => ({ ...m, approval_status: "approved", is_published: true, scheduled_publish_at: null }));
     reportBulk("tasdiqlandi", r);
     setBulkBusy(null);
+    reload();
   };
 
   const bulkReject = async () => {
@@ -248,9 +331,10 @@ export default function AdminMoviesPage() {
       await rejectMovie(token, m._id || m.id);
       done.add(m.id);
     });
-    setMovies((prev) => prev.map((m) => (done.has(m.id) ? { ...m, approval_status: "rejected", is_published: false } : m)));
+    patchMovies(done, (m) => ({ ...m, approval_status: "rejected", is_published: false, scheduled_publish_at: null }));
     reportBulk("rad etildi", r);
     setBulkBusy(null);
+    reload();
   };
 
   const bulkPremium = async (isPremium: boolean) => {
@@ -260,7 +344,8 @@ export default function AdminMoviesPage() {
     try {
       await adminBulkUpdateMovies(token, { ids, is_premium: isPremium });
       const idSet = new Set(ids);
-      setMovies((prev) => prev.map((m) => (idSet.has(m.id) ? { ...m, is_premium: isPremium } : m)));
+      patchMovies(idSet, (m) => ({ ...m, is_premium: isPremium }));
+      if (premiumFilter) reload();
       toast.success(`${ids.length} ta kino ${isPremium ? "premium qilindi" : "bepul qilindi"}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Xatolik");
@@ -301,9 +386,10 @@ export default function AdminMoviesPage() {
       done.add(m.id);
     });
     // Deletions run as background jobs; hide them from the list right away.
-    setMovies((prev) => prev.filter((m) => !done.has(m.id)));
+    dropMovies(done);
     reportBulk("o'chirish navbatiga qo'yildi", r);
     setBulkBusy(null);
+    reload();
   };
 
   const handleDeleteClick = (movie: Movie) => {
@@ -320,7 +406,8 @@ export default function AdminMoviesPage() {
         setDeleteJobId(response.job_id);
       } else {
         // Fallback for non-async (if job_id missing)
-        setMovies((prev) => prev.filter((m) => m.id !== movie.id));
+        dropMovies(new Set([movie.id]));
+        reload();
         const warning = formatCascadeWarning(response?.deleted_b2);
         if (warning) toast.error(`"${movie.title}" o'chirildi, lekin ba'zi fayllar muammoli: ${warning}`);
         else toast.success(`"${movie.title}" o'chirildi`);
@@ -336,13 +423,8 @@ export default function AdminMoviesPage() {
     setApproving(movie.id);
     try {
       await approveMovie(token!, movie.id);
-      setMovies((prev) =>
-        prev.map((m) =>
-          m.id === movie.id
-            ? { ...m, approval_status: "approved", is_published: true }
-            : m
-        )
-      );
+      patchMovies(new Set([movie.id]), (m) => ({ ...m, approval_status: "approved", is_published: true, scheduled_publish_at: null }));
+      reload();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Tasdiqlashda xato");
     } finally {
@@ -352,16 +434,11 @@ export default function AdminMoviesPage() {
 
   const handleReject = async (movie: Movie) => {
     const movieId = movie._id || movie.id;
-    setRejecting(movieId);
+    setRejecting(movie.id);
     try {
       await rejectMovie(token!, movieId);
-      setMovies((prev) =>
-        prev.map((m) =>
-          (m._id || m.id) === movieId
-            ? { ...m, approval_status: "rejected", is_published: false }
-            : m
-        )
-      );
+      patchMovies(new Set([movie.id]), (m) => ({ ...m, approval_status: "rejected", is_published: false, scheduled_publish_at: null }));
+      reload();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Rad etishda xato");
     } finally {
@@ -369,19 +446,26 @@ export default function AdminMoviesPage() {
     }
   };
 
-  const counts = {
-    all: movies.length,
-    pending: movies.filter((m) => (m.approval_status || "approved") === "pending").length,
-    approved: movies.filter((m) => (m.approval_status || "approved") === "approved").length,
-    rejected: movies.filter((m) => (m.approval_status || "approved") === "rejected").length,
+  const handleScheduleChanged = (movieId: string, scheduledAt: string | null) => {
+    patchMovies(new Set([movieId]), (m) => ({
+      ...m,
+      scheduled_publish_at: scheduledAt,
+      schedule_error: undefined,
+      ...(scheduledAt ? { approval_status: "pending" as const, is_published: false } : {}),
+    }));
+    toast.success(scheduledAt ? `Nashr rejalashtirildi: ${formatScheduleTime(scheduledAt)}` : "Reja bekor qilindi");
+    reload();
   };
 
+  const c = counts ?? { all: 0, pending: 0, approved: 0, rejected: 0, scheduled: 0 };
   const tabs: { key: StatusFilter; label: string }[] = [
-    { key: "all", label: `Barchasi (${counts.all})` },
-    { key: "pending", label: `Kutmoqda (${counts.pending})` },
-    { key: "approved", label: `Tasdiqlangan (${counts.approved})` },
-    { key: "rejected", label: `Rad etilgan (${counts.rejected})` },
+    { key: "all", label: `Barchasi (${c.all})` },
+    { key: "pending", label: `Kutmoqda (${c.pending})` },
+    { key: "scheduled", label: `Rejalashtirilgan (${c.scheduled})` },
+    { key: "approved", label: `Tasdiqlangan (${c.approved})` },
+    { key: "rejected", label: `Rad etilgan (${c.rejected})` },
   ];
+  const hasFilters = !!(search || statusFilter !== "all" || premiumFilter || mediaFilter);
 
   return (
     <div className="p-4 sm:p-8">
@@ -389,8 +473,9 @@ export default function AdminMoviesPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-white">Kinolar</h1>
-          <p className="text-gray-500 text-sm mt-1">
-            {movies.length} ta kino mavjud
+          <p className="text-gray-500 text-sm mt-1 flex items-center gap-2">
+            {counts ? `${c.all} ta kino${hasFilters ? " (filtr bo'yicha)" : " mavjud"}` : "\u00a0"}
+            {refreshing && <Loader2 size={13} className="animate-spin text-gray-600" aria-label="Yangilanmoqda" />}
           </p>
         </div>
         <Link
@@ -420,19 +505,68 @@ export default function AdminMoviesPage() {
         ))}
       </div>
 
-      {/* Search */}
-      <div className="relative mb-6 max-w-sm">
-        <Search
-          size={15}
-          className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"
-        />
-        <input
-          type="text"
-          placeholder="Kinolarni qidiring..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full bg-brand-card border border-brand-border rounded-lg pl-9 pr-4 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-red transition-colors"
-        />
+      {/* Search + filters */}
+      <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+        <div className="relative w-full sm:max-w-sm">
+          <Search
+            size={15}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"
+          />
+          <input
+            type="text"
+            placeholder="Nomi, kodi, slug, aktyor..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full bg-brand-card border border-brand-border rounded-lg pl-9 pr-4 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-brand-red transition-colors"
+          />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <select
+            value={premiumFilter}
+            onChange={(e) => setPremiumFilter(e.target.value as PremiumFilter)}
+            className="rounded-lg border border-brand-border bg-brand-card px-3 py-2.5 text-sm text-white focus:border-brand-red focus:outline-none"
+            aria-label="Premium filtri"
+          >
+            <option value="">Barcha turlar</option>
+            <option value="premium">Faqat premium</option>
+            <option value="free">Faqat bepul</option>
+          </select>
+          <select
+            value={mediaFilter}
+            onChange={(e) => setMediaFilter(e.target.value as MediaFilter)}
+            className="rounded-lg border border-brand-border bg-brand-card px-3 py-2.5 text-sm text-white focus:border-brand-red focus:outline-none"
+            aria-label="Video filtri"
+          >
+            <option value="">Video: hammasi</option>
+            <option value="missing">Videosiz</option>
+          </select>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortKey)}
+            className="rounded-lg border border-brand-border bg-brand-card px-3 py-2.5 text-sm text-white focus:border-brand-red focus:outline-none"
+            aria-label="Saralash"
+          >
+            {SORT_KEYS.map((k) => (
+              <option key={k} value={k}>{SORT_LABELS[k]}</option>
+            ))}
+          </select>
+          {hasFilters && (
+            <button
+              onClick={() => {
+                setSearchState("");
+                setDebouncedSearch("");
+                setStatusFilterState("all");
+                setPremiumFilterState("");
+                setMediaFilterState("");
+                if (sort === "schedule") setSortState("newest");
+                resetPaging();
+              }}
+              className="inline-flex items-center gap-1 rounded-lg px-3 py-2.5 text-sm text-gray-400 hover:text-white"
+            >
+              <X size={14} /> Tozalash
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Bulk actions bar */}
@@ -470,7 +604,7 @@ export default function AdminMoviesPage() {
           <button onClick={bulkDelete} disabled={!!bulkBusy} className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 px-2.5 py-1.5 text-xs text-red-400 hover:bg-red-500/10 disabled:opacity-50">
             {bulkBusy === "delete" ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} O&apos;chirish
           </button>
-          <button onClick={() => setSelected(new Set())} className="ml-auto inline-flex items-center gap-1 text-xs text-gray-500 hover:text-white">
+          <button onClick={() => setSelected(new Map())} className="ml-auto inline-flex items-center gap-1 text-xs text-gray-500 hover:text-white">
             <X size={13} /> Bekor qilish
           </button>
         </div>
@@ -482,14 +616,16 @@ export default function AdminMoviesPage() {
           <Loader2 size={18} className="animate-spin" />
           Kinolar yuklanmoqda...
         </div>
-      ) : filtered.length === 0 ? (
+      ) : pageItems.length === 0 ? (
         <div className="bg-brand-card border border-brand-border rounded-xl p-8 sm:p-12 text-center">
           <p className="text-gray-500">
-            {search || statusFilter !== "all"
-              ? "Filtrlarga mos kinolar yo'q."
+            {hasFilters
+              ? statusFilter === "scheduled"
+                ? "Rejalashtirilgan kinolar yo'q. Kutilayotgan kino qatoridagi soat tugmasi orqali nashr vaqtini belgilang."
+                : "Filtrlarga mos kinolar yo'q."
               : "Hali kinolar yo'q."}
           </p>
-          {!search && statusFilter === "all" && (
+          {!hasFilters && (
             <Link
               href="/admin/movies/new"
               className="mt-3 inline-block text-sm text-brand-red hover:underline"
@@ -541,7 +677,7 @@ export default function AdminMoviesPage() {
                       <input
                         type="checkbox"
                         checked={selected.has(movie.id)}
-                        onChange={() => toggleOne(movie.id)}
+                        onChange={() => toggleOne(movie)}
                         className="accent-brand-red"
                         aria-label={`${movie.title} ni tanlash`}
                       />
@@ -569,6 +705,17 @@ export default function AdminMoviesPage() {
                           <p className="text-gray-600 text-xs font-mono truncate max-w-[150px] sm:max-w-[200px]">
                             {movie.slug}
                           </p>
+                          {movie.scheduled_publish_at && movie.approval_status !== "approved" && (
+                            <p className="md:hidden mt-0.5 inline-flex items-center gap-1 text-[11px] text-sky-300">
+                              <CalendarClock size={10} /> {formatScheduleTime(movie.scheduled_publish_at)}
+                            </p>
+                          )}
+                          {movie.schedule_error && (
+                            <p className="mt-0.5 flex items-center gap-1 text-[11px] text-red-400 max-w-[220px]" title={movie.schedule_error}>
+                              <AlertTriangle size={10} className="shrink-0" />
+                              <span className="truncate">Avto-nashr: {movie.schedule_error}</span>
+                            </p>
+                          )}
                         </div>
                       </div>
                     </td>
@@ -594,7 +741,7 @@ export default function AdminMoviesPage() {
 
                     {/* Approval status */}
                     <td className="px-3 sm:px-5 py-3 hidden md:table-cell">
-                      <ApprovalBadge status={movie.approval_status} />
+                      <ApprovalBadge status={movie.approval_status} scheduledAt={movie.scheduled_publish_at} />
                     </td>
 
                     {/* Actions */}
@@ -613,6 +760,21 @@ export default function AdminMoviesPage() {
                             ) : (
                               <CheckCircle size={14} />
                             )}
+                          </button>
+                        )}
+
+                        {/* Schedule — for anything not yet published */}
+                        {movie.approval_status !== "approved" && (
+                          <button
+                            onClick={() => setScheduleTarget(movie)}
+                            title={movie.scheduled_publish_at ? `Rejalashtirilgan: ${formatScheduleTime(movie.scheduled_publish_at)}` : "Nashrni rejalashtirish"}
+                            className={`p-2 rounded-lg transition-colors ${
+                              movie.scheduled_publish_at
+                                ? "text-sky-300 hover:bg-sky-500/10"
+                                : "text-gray-500 hover:text-sky-300 hover:bg-sky-500/10"
+                            }`}
+                          >
+                            <CalendarClock size={14} />
                           </button>
                         )}
 
@@ -676,23 +838,39 @@ export default function AdminMoviesPage() {
           </div>
         </div>
         {totalPages > 1 && (
-          <div className="flex items-center justify-center gap-3 mt-4">
+          <div className="flex items-center justify-center gap-2 mt-4">
+            <button
+              onClick={() => setPage(1)}
+              disabled={safePage <= 1 || refreshing}
+              className="hidden sm:block px-2.5 py-1.5 bg-brand-card border border-brand-border rounded-lg text-sm text-gray-300 disabled:opacity-40 hover:border-gray-500 transition-colors"
+              aria-label="Birinchi sahifa"
+            >
+              «
+            </button>
             <button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={safePage <= 1}
-              className="px-3 py-1.5 bg-brand-card border border-brand-border rounded-lg text-sm text-gray-300 disabled:opacity-40 hover:border-gray-500 transition-colors"
+              disabled={safePage <= 1 || refreshing}
+              className="inline-flex items-center gap-1 px-3 py-1.5 bg-brand-card border border-brand-border rounded-lg text-sm text-gray-300 disabled:opacity-40 hover:border-gray-500 transition-colors"
             >
-              Oldingi
+              <ChevronLeft size={14} /> Oldingi
             </button>
-            <span className="text-sm text-gray-500">
-              {safePage} / {totalPages} · {filtered.length} ta
+            <span className="text-sm text-gray-500 px-1">
+              {safePage} / {totalPages} · {total} ta
             </span>
             <button
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={safePage >= totalPages}
-              className="px-3 py-1.5 bg-brand-card border border-brand-border rounded-lg text-sm text-gray-300 disabled:opacity-40 hover:border-gray-500 transition-colors"
+              disabled={safePage >= totalPages || refreshing}
+              className="inline-flex items-center gap-1 px-3 py-1.5 bg-brand-card border border-brand-border rounded-lg text-sm text-gray-300 disabled:opacity-40 hover:border-gray-500 transition-colors"
             >
-              Keyingi
+              Keyingi <ChevronRight size={14} />
+            </button>
+            <button
+              onClick={() => setPage(totalPages)}
+              disabled={safePage >= totalPages || refreshing}
+              className="hidden sm:block px-2.5 py-1.5 bg-brand-card border border-brand-border rounded-lg text-sm text-gray-300 disabled:opacity-40 hover:border-gray-500 transition-colors"
+              aria-label="Oxirgi sahifa"
+            >
+              »
             </button>
           </div>
         )}
@@ -709,14 +887,25 @@ export default function AdminMoviesPage() {
         }}
       />
 
+      {token && (
+        <ScheduleMovieModal
+          movie={scheduleTarget}
+          token={token}
+          onClose={() => setScheduleTarget(null)}
+          onChanged={handleScheduleChanged}
+          onError={(msg) => toast.error(msg)}
+        />
+      )}
+
       {deleteJobId && (
         <DeleteProgressModal
           jobId={deleteJobId}
           isOpen={true}
           onClose={() => {
             if (deleteTarget) {
-              setMovies((prev) => prev.filter((m) => m.id !== deleteTarget.id));
+              dropMovies(new Set([deleteTarget.id]));
               setDeleteTarget(null);
+              reload();
             }
             setDeleteJobId(null);
             setDeleting(null);

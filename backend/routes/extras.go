@@ -20,6 +20,7 @@ type ExtraDeps struct {
 	Community    *handlers.CommunityHandler
 	Referral     *handlers.ReferralHandler
 	Errors       *handlers.ErrorHandler
+	DailyReport  *handlers.DailyReportHandler
 }
 
 // SetupExtras registers user-library, community and growth routes.
@@ -81,8 +82,23 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 	{
 		admin.POST("/suggestions/:id/link", d.Library.LinkSuggestion)
 
+		// Single movie for the edit page (any approval status) and
+		// scheduled publishing.
+		admin.GET("/movies/:id", d.Movies.AdminGetMovie)
+		admin.POST("/movies/:id/schedule", d.Movies.ScheduleMovie)
+		admin.DELETE("/movies/:id/schedule", d.Movies.CancelMovieSchedule)
+
 		// Error tracking (client + server)
 		admin.GET("/errors", d.Errors.ListErrors)
 		admin.POST("/errors/:id/resolve", d.Errors.ResolveError)
+	}
+
+	// Daily Telegram report (preview / send now).
+	superadmin := api.Group("/superadmin")
+	superadmin.Use(middleware.RequireSuperAdmin(d.AuthService))
+	superadmin.Use(middleware.AuditLog(d.AuditLogRepo))
+	{
+		superadmin.GET("/daily-report/preview", d.DailyReport.Preview)
+		superadmin.POST("/daily-report/send", d.DailyReport.SendNow)
 	}
 }
