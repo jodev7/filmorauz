@@ -321,6 +321,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		// Movie management
 		admin.GET("/movies", movieHandler.AdminListMovies)
 		admin.POST("/movies", movieHandler.CreateMovie)
+		admin.POST("/movies/bulk-update", movieHandler.BulkUpdateMovies)
 		admin.PUT("/movies/:id", movieHandler.UpdateMovie)
 		admin.DELETE("/movies/:id", movieHandler.DeleteMovie)
 		admin.PATCH("/movies/:id/approve", movieHandler.ApproveMovie)

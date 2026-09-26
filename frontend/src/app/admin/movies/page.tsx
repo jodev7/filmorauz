@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   PlusCircle,
@@ -12,6 +12,9 @@ import {
   CheckCircle,
   XCircle,
   Clock,
+  Crown,
+  FolderPlus,
+  X,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -19,8 +22,13 @@ import {
   adminDeleteMovie,
   approveMovie,
   rejectMovie,
+  adminBulkUpdateMovies,
+  getAdminCollections,
+  CollectionInput,
   Movie,
 } from "@/lib/api";
+import { useToast } from "@/components/admin/Toast";
+import { readUrlNumber, readUrlParam, useSyncUrlParams } from "@/lib/url-state";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
 import CascadeDeleteModal, {
@@ -29,6 +37,29 @@ import CascadeDeleteModal, {
 import DeleteProgressModal from "@/components/admin/DeleteProgressModal";
 
 type StatusFilter = "all" | "pending" | "approved" | "rejected";
+
+const STATUS_FILTERS: StatusFilter[] = ["all", "pending", "approved", "rejected"];
+
+// Runs `fn` over items with a small concurrency limit so bulk actions that
+// reuse single-movie endpoints don't flood the API.
+async function runPool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<{ ok: number; failed: number }> {
+  let ok = 0;
+  let failed = 0;
+  let index = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (index < items.length) {
+      const item = items[index++];
+      try {
+        await fn(item);
+        ok++;
+      } catch {
+        failed++;
+      }
+    }
+  });
+  await Promise.all(workers);
+  return { ok, failed };
+}
 
 function ApprovalBadge({ status }: { status?: string }) {
   if (!status || status === "approved") {
@@ -57,11 +88,17 @@ function ApprovalBadge({ status }: { status?: string }) {
 
 export default function AdminMoviesPage() {
   const { token } = useAuth();
+  const toast = useToast();
   const [movies, setMovies] = useState<Movie[]>([]);
   const [filtered, setFiltered] = useState<Movie[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  // Filters live in the URL (?q=&status=&page=) so refresh/back and shared
+  // links keep the same view.
+  const [search, setSearchState] = useState(() => readUrlParam("q", ""));
+  const [statusFilter, setStatusFilterState] = useState<StatusFilter>(() => {
+    const v = readUrlParam("status", "all") as StatusFilter;
+    return STATUS_FILTERS.includes(v) ? v : "all";
+  });
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteJobId, setDeleteJobId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Movie | null>(null);
@@ -70,7 +107,30 @@ export default function AdminMoviesPage() {
   // Client-side pagination so the admin list doesn't render hundreds of rows
   // at once and stretch the page.
   const PAGE_SIZE = 20;
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(() => readUrlNumber("page", 1));
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // Filter changes reset to page 1 in the same update (a follow-up effect
+  // would also fire on mount and wipe ?page= from the URL).
+  // Selection is cleared too, so a bulk action never hits rows the new
+  // filter hides.
+  const setSearch = (v: string) => {
+    setSearchState(v);
+    setPage(1);
+    setSelected(new Set());
+  };
+  const setStatusFilter = (v: StatusFilter) => {
+    setStatusFilterState(v);
+    setPage(1);
+    setSelected(new Set());
+  };
+
+  useSyncUrlParams({ q: search, status: statusFilter, page }, { q: "", status: "all", page: 1 });
+
+  // ── Bulk selection ──
+  const [bulkBusy, setBulkBusy] = useState<string | null>(null);
+  const [collections, setCollections] = useState<CollectionInput[]>([]);
+  const [collectionPick, setCollectionPick] = useState("");
 
   const fetchMovies = async () => {
     if (!token) return;
@@ -79,6 +139,7 @@ export default function AdminMoviesPage() {
       setMovies(data || []);
     } catch (err) {
       console.error(err);
+      toast.error("Kinolarni yuklab bo'lmadi");
     } finally {
       setLoading(false);
     }
@@ -113,15 +174,137 @@ export default function AdminMoviesPage() {
     setFiltered(result);
   }, [search, movies, statusFilter]);
 
-  // Reset to the first page whenever the filters change (but not on every
-  // movies refresh, so an approve/delete doesn't yank the admin to page 1).
-  useEffect(() => {
-    setPage(1);
-  }, [search, statusFilter]);
-
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const pageItems = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
+  // Drop selections for movies that no longer exist (e.g. after delete).
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const ids = new Set(movies.map((m) => m.id));
+      const next = new Set(Array.from(prev).filter((id) => ids.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [movies]);
+
+  useEffect(() => {
+    if (!token || selected.size === 0 || collections.length > 0) return;
+    getAdminCollections(token)
+      .then(setCollections)
+      .catch(() => {});
+  }, [token, selected.size, collections.length]);
+
+  const pageIds = useMemo(() => pageItems.map((m) => m.id), [pageItems]);
+  const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const togglePage = () =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allOnPageSelected) pageIds.forEach((id) => next.delete(id));
+      else pageIds.forEach((id) => next.add(id));
+      return next;
+    });
+
+  const selectedMovies = movies.filter((m) => selected.has(m.id));
+
+  const reportBulk = (verb: string, r: { ok: number; failed: number }) => {
+    if (r.failed === 0) toast.success(`${r.ok} ta kino ${verb}`);
+    else toast.error(`${r.ok} ta kino ${verb}, ${r.failed} tasida xato`);
+  };
+
+  const bulkApprove = async () => {
+    if (!token) return;
+    const targets = selectedMovies.filter((m) => m.approval_status !== "approved");
+    if (targets.length === 0) return toast.info("Tanlanganlar allaqachon tasdiqlangan");
+    if (!window.confirm(`${targets.length} ta kino tasdiqlansinmi? Har biri uchun Telegram post yuborilishi mumkin.`)) return;
+    setBulkBusy("approve");
+    const done = new Set<string>();
+    const r = await runPool(targets, 3, async (m) => {
+      await approveMovie(token, m.id);
+      done.add(m.id);
+    });
+    setMovies((prev) => prev.map((m) => (done.has(m.id) ? { ...m, approval_status: "approved", is_published: true } : m)));
+    reportBulk("tasdiqlandi", r);
+    setBulkBusy(null);
+  };
+
+  const bulkReject = async () => {
+    if (!token) return;
+    const targets = selectedMovies.filter((m) => m.approval_status !== "rejected");
+    if (targets.length === 0) return toast.info("Tanlanganlar allaqachon rad etilgan");
+    if (!window.confirm(`${targets.length} ta kino rad etilsinmi? Ular saytdan yashiriladi.`)) return;
+    setBulkBusy("reject");
+    const done = new Set<string>();
+    const r = await runPool(targets, 3, async (m) => {
+      await rejectMovie(token, m._id || m.id);
+      done.add(m.id);
+    });
+    setMovies((prev) => prev.map((m) => (done.has(m.id) ? { ...m, approval_status: "rejected", is_published: false } : m)));
+    reportBulk("rad etildi", r);
+    setBulkBusy(null);
+  };
+
+  const bulkPremium = async (isPremium: boolean) => {
+    if (!token) return;
+    const ids = selectedMovies.map((m) => m.id);
+    setBulkBusy(isPremium ? "premium" : "free");
+    try {
+      await adminBulkUpdateMovies(token, { ids, is_premium: isPremium });
+      const idSet = new Set(ids);
+      setMovies((prev) => prev.map((m) => (idSet.has(m.id) ? { ...m, is_premium: isPremium } : m)));
+      toast.success(`${ids.length} ta kino ${isPremium ? "premium qilindi" : "bepul qilindi"}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Xatolik");
+    } finally {
+      setBulkBusy(null);
+    }
+  };
+
+  const bulkAddToCollection = async () => {
+    if (!token || !collectionPick) return;
+    const ids = selectedMovies.map((m) => m.id);
+    const col = collections.find((c) => c.id === collectionPick);
+    setBulkBusy("collection");
+    try {
+      await adminBulkUpdateMovies(token, { ids, add_to_collection: collectionPick });
+      toast.success(`${ids.length} ta kino "${col?.title ?? "kolleksiya"}"ga qo'shildi`);
+      setCollectionPick("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Xatolik");
+    } finally {
+      setBulkBusy(null);
+    }
+  };
+
+  const bulkDelete = async () => {
+    if (!token) return;
+    const targets = selectedMovies;
+    if (
+      !window.confirm(
+        `${targets.length} ta kino butunlay o'chirilsinmi?\n\nVideo fayllar, kliplar, izohlar va boshqa bog'liq ma'lumotlar ham o'chadi. Bu amalni qaytarib bo'lmaydi.`
+      )
+    )
+      return;
+    setBulkBusy("delete");
+    const done = new Set<string>();
+    const r = await runPool(targets, 2, async (m) => {
+      await adminDeleteMovie(token, m.id);
+      done.add(m.id);
+    });
+    // Deletions run as background jobs; hide them from the list right away.
+    setMovies((prev) => prev.filter((m) => !done.has(m.id)));
+    reportBulk("o'chirish navbatiga qo'yildi", r);
+    setBulkBusy(null);
+  };
 
   const handleDeleteClick = (movie: Movie) => {
     setDeleteTarget(movie);
@@ -139,11 +322,12 @@ export default function AdminMoviesPage() {
         // Fallback for non-async (if job_id missing)
         setMovies((prev) => prev.filter((m) => m.id !== movie.id));
         const warning = formatCascadeWarning(response?.deleted_b2);
-        if (warning) alert(`"${movie.title}" o'chirildi, lekin ba'zi fayllar muammoli:\n\n${warning}`);
+        if (warning) toast.error(`"${movie.title}" o'chirildi, lekin ba'zi fayllar muammoli: ${warning}`);
+        else toast.success(`"${movie.title}" o'chirildi`);
         setDeleteTarget(null);
       }
     } catch (err: any) {
-      alert(err.message || "O'chirishda xatolik");
+      toast.error(err.message || "O'chirishda xatolik");
       setDeleting(null);
     }
   };
@@ -160,7 +344,7 @@ export default function AdminMoviesPage() {
         )
       );
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Tasdiqlashda xato");
+      toast.error(err instanceof Error ? err.message : "Tasdiqlashda xato");
     } finally {
       setApproving(null);
     }
@@ -179,7 +363,7 @@ export default function AdminMoviesPage() {
         )
       );
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Rad etishda xato");
+      toast.error(err instanceof Error ? err.message : "Rad etishda xato");
     } finally {
       setRejecting(null);
     }
@@ -251,6 +435,47 @@ export default function AdminMoviesPage() {
         />
       </div>
 
+      {/* Bulk actions bar */}
+      {selected.size > 0 && (
+        <div className="sticky top-0 lg:top-2 z-30 mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-brand-red/40 bg-brand-card/95 px-3 py-2.5 backdrop-blur">
+          <span className="text-sm font-medium text-white mr-1">{selected.size} ta tanlandi</span>
+          <button onClick={bulkApprove} disabled={!!bulkBusy} className="inline-flex items-center gap-1.5 rounded-lg border border-brand-border px-2.5 py-1.5 text-xs text-green-400 hover:bg-green-500/10 disabled:opacity-50">
+            {bulkBusy === "approve" ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />} Tasdiqlash
+          </button>
+          <button onClick={bulkReject} disabled={!!bulkBusy} className="inline-flex items-center gap-1.5 rounded-lg border border-brand-border px-2.5 py-1.5 text-xs text-red-400 hover:bg-red-500/10 disabled:opacity-50">
+            {bulkBusy === "reject" ? <Loader2 size={13} className="animate-spin" /> : <XCircle size={13} />} Rad etish
+          </button>
+          <button onClick={() => bulkPremium(true)} disabled={!!bulkBusy} className="inline-flex items-center gap-1.5 rounded-lg border border-brand-border px-2.5 py-1.5 text-xs text-amber-300 hover:bg-amber-500/10 disabled:opacity-50">
+            {bulkBusy === "premium" ? <Loader2 size={13} className="animate-spin" /> : <Crown size={13} />} Premium
+          </button>
+          <button onClick={() => bulkPremium(false)} disabled={!!bulkBusy} className="inline-flex items-center gap-1.5 rounded-lg border border-brand-border px-2.5 py-1.5 text-xs text-gray-300 hover:bg-white/5 disabled:opacity-50">
+            {bulkBusy === "free" ? <Loader2 size={13} className="animate-spin" /> : <Crown size={13} className="opacity-50" />} Bepul
+          </button>
+          <div className="inline-flex items-center gap-1">
+            <select
+              value={collectionPick}
+              onChange={(e) => setCollectionPick(e.target.value)}
+              className="max-w-[180px] rounded-lg border border-brand-border bg-brand-dark px-2 py-1.5 text-xs text-white"
+              aria-label="Kolleksiya tanlash"
+            >
+              <option value="">Kolleksiyaga...</option>
+              {collections.map((c) => (
+                <option key={c.id} value={c.id}>{c.title}</option>
+              ))}
+            </select>
+            <button onClick={bulkAddToCollection} disabled={!!bulkBusy || !collectionPick} className="inline-flex items-center gap-1.5 rounded-lg border border-brand-border px-2.5 py-1.5 text-xs text-blue-300 hover:bg-blue-500/10 disabled:opacity-50">
+              {bulkBusy === "collection" ? <Loader2 size={13} className="animate-spin" /> : <FolderPlus size={13} />} Qo&apos;shish
+            </button>
+          </div>
+          <button onClick={bulkDelete} disabled={!!bulkBusy} className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 px-2.5 py-1.5 text-xs text-red-400 hover:bg-red-500/10 disabled:opacity-50">
+            {bulkBusy === "delete" ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} O&apos;chirish
+          </button>
+          <button onClick={() => setSelected(new Set())} className="ml-auto inline-flex items-center gap-1 text-xs text-gray-500 hover:text-white">
+            <X size={13} /> Bekor qilish
+          </button>
+        </div>
+      )}
+
       {/* Table */}
       {loading ? (
         <div className="flex items-center gap-2 text-gray-500 py-12 justify-center">
@@ -280,6 +505,15 @@ export default function AdminMoviesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-brand-border text-gray-500 text-xs uppercase tracking-wider">
+                  <th className="w-10 pl-3 sm:pl-5 py-3">
+                    <input
+                      type="checkbox"
+                      checked={allOnPageSelected}
+                      onChange={togglePage}
+                      className="accent-brand-red"
+                      aria-label="Sahifadagi barcha kinolarni tanlash"
+                    />
+                  </th>
                   <th className="text-left px-3 sm:px-5 py-3">Kino</th>
                   <th className="text-left px-3 sm:px-5 py-3 hidden lg:table-cell">
                     Janr
@@ -299,8 +533,19 @@ export default function AdminMoviesPage() {
                   return (
                   <tr
                     key={movie.id}
-                    className="border-b border-brand-border/50 last:border-0 hover:bg-brand-border/20 transition-colors"
+                    className={`border-b border-brand-border/50 last:border-0 hover:bg-brand-border/20 transition-colors ${
+                      selected.has(movie.id) ? "bg-brand-red/5" : ""
+                    }`}
                   >
+                    <td className="w-10 pl-3 sm:pl-5 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(movie.id)}
+                        onChange={() => toggleOne(movie.id)}
+                        className="accent-brand-red"
+                        aria-label={`${movie.title} ni tanlash`}
+                      />
+                    </td>
                     {/* Poster + title */}
                     <td className="px-3 sm:px-5 py-3">
                       <div className="flex items-center gap-2 sm:gap-3">
@@ -317,6 +562,9 @@ export default function AdminMoviesPage() {
                               </span>
                             )}
                             {movie.title}
+                            {movie.is_premium && (
+                              <Crown size={11} className="inline ml-1 -mt-0.5 text-amber-400" aria-label="Premium" />
+                            )}
                           </p>
                           <p className="text-gray-600 text-xs font-mono truncate max-w-[150px] sm:max-w-[200px]">
                             {movie.slug}

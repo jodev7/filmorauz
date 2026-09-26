@@ -25,6 +25,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { useToast } from "@/components/admin/Toast";
+import { readUrlBool, readUrlList, readUrlNumber, readUrlParam, useSyncUrlParams } from "@/lib/url-state";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -772,11 +774,19 @@ function PublishModal({
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ jobs: selectedJobs, caption }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `status ${res.status}`);
       setResults(data.results || []);
       await onPublished(clip);
-    } catch {
-      // silently ignore
+    } catch (err) {
+      setResults([
+        {
+          platform: "instagram",
+          account_name: "system",
+          status: "failed",
+          error: err instanceof Error ? err.message : "Yuklash muvaffaqiyatsiz",
+        },
+      ]);
     } finally {
       setBusyBoth(false);
     }
@@ -809,8 +819,15 @@ function PublishModal({
           },
         ]);
       }
-    } catch {
-      // silently ignore
+    } catch (err) {
+      setResults([
+        {
+          platform: "instagram",
+          account_name: "system",
+          status: "failed",
+          error: err instanceof Error ? err.message : "Rejalash muvaffaqiyatsiz",
+        },
+      ]);
     } finally {
       setBusyBoth(false);
     }
@@ -1473,29 +1490,55 @@ export default function AdminClipsPage() {
 
   const [groups, setGroups] = useState<ServerGroups | null>(null);
   const [groupsLoading, setGroupsLoading] = useState(true);
-  const [groupsPage, setGroupsPage] = useState(1);
+  const [groupsPage, setGroupsPage] = useState(() => readUrlNumber("page", 1));
 
   // Filter state — controls what GET /api/admin/clips/groups returns.
   // Each change re-runs the server query (debounced for the search box).
-  const [filterKind, setFilterKind] = useState<ClipKind>("all");
-  const [filterQuery, setFilterQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [filterGenres, setFilterGenres] = useState<string[]>([]);
-  const [filterAccount, setFilterAccount] = useState<string>(""); // "" ⇒ all accounts
-  const [filterOnlyUnposted, setFilterOnlyUnposted] = useState(false);
-  const [filterSort, setFilterSort] = useState<ClipSort>("title");
+  // Initial values come from the URL so refresh/back/shared links keep the
+  // same view; useSyncUrlParams below writes changes back.
+  const [filterKind, setFilterKind] = useState<ClipKind>(() => {
+    const v = readUrlParam("kind", "all");
+    return v === "movie" || v === "series" ? v : "all";
+  });
+  const [filterQuery, setFilterQuery] = useState(() => readUrlParam("q", ""));
+  const [debouncedQuery, setDebouncedQuery] = useState(() => readUrlParam("q", "").trim());
+  const [filterGenres, setFilterGenres] = useState<string[]>(() => readUrlList("genres"));
+  const [filterAccount, setFilterAccount] = useState<string>(() => readUrlParam("account", "")); // "" ⇒ all accounts
+  const [filterOnlyUnposted, setFilterOnlyUnposted] = useState(() => readUrlBool("unposted"));
+  const [filterSort, setFilterSort] = useState<ClipSort>(() => {
+    const v = readUrlParam("sort", "title");
+    return (["title", "newest", "most_clips", "least_posted"] as const).includes(v as ClipSort) ? (v as ClipSort) : "title";
+  });
+  const toast = useToast();
+
+  useSyncUrlParams(
+    {
+      kind: filterKind,
+      q: debouncedQuery,
+      genres: filterGenres,
+      account: filterAccount,
+      unposted: filterOnlyUnposted,
+      sort: filterSort,
+      page: groupsPage,
+    },
+    { kind: "all", q: "", genres: [], account: "", unposted: false, sort: "title", page: 1 }
+  );
   const [allGenres, setAllGenres] = useState<string[]>([]);
   const [igAccountsMeta, setIgAccountsMeta] = useState<InstagramAccountWithFilter[]>([]);
 
   // Debounce the search input so we don't spam the backend on every
   // keystroke. 300ms is enough to feel instant without firing per key.
   useEffect(() => {
+    const next = filterQuery.trim();
+    // Skip when nothing changed — otherwise the mount run would reset a
+    // ?page= restored from the URL.
+    if (next === debouncedQuery) return;
     const t = setTimeout(() => {
-      setDebouncedQuery(filterQuery.trim());
+      setDebouncedQuery(next);
       setGroupsPage(1);
     }, 300);
     return () => clearTimeout(t);
-  }, [filterQuery]);
+  }, [filterQuery, debouncedQuery]);
 
   // Filter setters reset to page 1 in the same batched update. Doing the
   // reset in a separate effect caused a second render + a wasted request
@@ -1547,31 +1590,31 @@ export default function AdminClipsPage() {
         headers: { Authorization: `Bearer ${token}` },
         signal,
       });
-      if (res.ok) {
-        const data: ServerGroups = await res.json();
-        if (signal?.aborted) return;
-        setGroups({
-          movies: data.movies || [],
-          series: data.series || [],
-          total_clips: data.total_clips || 0,
-          total_contents: data.total_contents || 0,
-          total_filtered: data.total_filtered,
-          total_movies: data.total_movies,
-          total_series: data.total_series,
-          movie_group_count: data.movie_group_count,
-          series_group_count: data.series_group_count,
-        });
-        if (data.all_genres && data.all_genres.length > 0) {
-          const fromServer = data.all_genres;
-          setAllGenres((prev) => (prev.length === 0 ? fromServer : prev));
-        }
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const data: ServerGroups = await res.json();
+      if (signal?.aborted) return;
+      setGroups({
+        movies: data.movies || [],
+        series: data.series || [],
+        total_clips: data.total_clips || 0,
+        total_contents: data.total_contents || 0,
+        total_filtered: data.total_filtered,
+        total_movies: data.total_movies,
+        total_series: data.total_series,
+        movie_group_count: data.movie_group_count,
+        series_group_count: data.series_group_count,
+      });
+      if (data.all_genres && data.all_genres.length > 0) {
+        const fromServer = data.all_genres;
+        setAllGenres((prev) => (prev.length === 0 ? fromServer : prev));
       }
-    } catch {
-      // silently ignore (includes AbortError from a superseded request)
+    } catch (err) {
+      // A superseded request is aborted on purpose — not an error.
+      if (!signal?.aborted) toast.error(`Kliplar ro'yxatini yuklab bo'lmadi${err instanceof Error ? `: ${err.message}` : ""}`);
     } finally {
       if (!signal?.aborted) setGroupsLoading(false);
     }
-  }, [token, filterKind, debouncedQuery, filterGenres, filterAccount, filterOnlyUnposted, filterSort, groupsPage, groupsPageLimit]);
+  }, [token, filterKind, debouncedQuery, filterGenres, filterAccount, filterOnlyUnposted, filterSort, groupsPage, groupsPageLimit, toast]);
 
   // Load the full genre list once — separate endpoint so the chip
   // selector shows every option even when the current filter excludes
@@ -1669,11 +1712,13 @@ export default function AdminClipsPage() {
           youtube: data.youtube || [],
           tiktok: data.tiktok || [],
         });
+      } else {
+        toast.error("Publish akkauntlarini yuklab bo'lmadi");
       }
     } catch {
-      // silently ignore
+      toast.error("Publish akkauntlarini yuklab bo'lmadi");
     }
-  }, [token]);
+  }, [token, toast]);
 
   const fetchJobs = useCallback(async () => {
     if (!token) return;
@@ -1686,11 +1731,13 @@ export default function AdminClipsPage() {
         const data = await res.json();
         setPublishJobs(data.items || data.data || []);
         setJobsTotal(data.total || 0);
+      } else {
+        toast.error("Rejalashtirilgan yuklamalarni yuklab bo'lmadi");
       }
     } catch {
-      // silently ignore
+      toast.error("Rejalashtirilgan yuklamalarni yuklab bo'lmadi");
     }
-  }, [token, jobsPage]);
+  }, [token, jobsPage, toast]);
 
   const fetchAllPendingJobs = useCallback(async () => {
     if (!token) return;
@@ -1722,7 +1769,7 @@ export default function AdminClipsPage() {
 
       setAllPendingJobs(jobs);
     } catch {
-      // silently ignore
+      // Badges only — the jobs list above reports its own failure.
     }
   }, [token]);
 
@@ -1911,12 +1958,19 @@ export default function AdminClipsPage() {
     if (!token) return;
     setCancellingId(id);
     try {
-      await fetch(`${API}/admin/publish/jobs/${id}`, {
+      const res = await fetch(`${API}/admin/publish/jobs/${id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `status ${res.status}`);
+      }
+      toast.success("Yuklama bekor qilindi");
       await fetchJobs();
       await fetchAllPendingJobs();
+    } catch (err) {
+      toast.error(`Bekor qilib bo'lmadi${err instanceof Error ? `: ${err.message}` : ""}`);
     } finally {
       setCancellingId(null);
     }
@@ -1930,13 +1984,16 @@ export default function AdminClipsPage() {
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ scheduled_for: tashkentLocalToISO(newLocalTime) }),
       });
-      if (res.ok) {
-        setEditingJob(null);
-        await fetchJobs();
-        await fetchAllPendingJobs();
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `status ${res.status}`);
       }
-    } catch {
-      // silently ignore
+      setEditingJob(null);
+      toast.success("Vaqt yangilandi");
+      await fetchJobs();
+      await fetchAllPendingJobs();
+    } catch (err) {
+      toast.error(`Vaqtni saqlab bo'lmadi${err instanceof Error ? `: ${err.message}` : ""}`);
     }
   };
 
@@ -1959,11 +2016,13 @@ export default function AdminClipsPage() {
         document.body.removeChild(link);
         window.URL.revokeObjectURL(objectUrl);
       })
-      .catch(() => {})
+      .catch((err) => {
+        toast.error(`Klipni yuklab olib bo'lmadi${err instanceof Error ? `: ${err.message}` : ""}`);
+      })
       .finally(() => {
         setDownloading((prev) => ({ ...prev, [clip.id]: false }));
       });
-  }, [token]);
+  }, [token, toast]);
 
   // ── Derived: paged content group list ───────────────────────────────
 
@@ -1984,9 +2043,11 @@ export default function AdminClipsPage() {
   const groupsTotalPages = Math.max(1, Math.ceil(totalFiltered / groupsPageLimit));
   const pagedGroups = flatGroups;
 
+  // Clamp only once real totals are known — before the first response the
+  // total is 0 and this would wipe a ?page= restored from the URL.
   useEffect(() => {
-    if (groupsPage > groupsTotalPages) setGroupsPage(groupsTotalPages);
-  }, [groupsPage, groupsTotalPages]);
+    if (groups && !groupsLoading && groupsPage > groupsTotalPages) setGroupsPage(groupsTotalPages);
+  }, [groups, groupsLoading, groupsPage, groupsTotalPages]);
 
   const pagedPendingJobs = publishJobs.filter(isActivePublishJob);
   const doneJobs = publishJobs.filter((j) => j.status === "success" || j.status === "failed");

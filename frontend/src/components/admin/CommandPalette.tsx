@@ -28,7 +28,8 @@ function resultHref(r: AdminSearchResult): string {
     case "series":
       return `/admin/series/${r.id}/edit`;
     case "user":
-      return `/admin/users?search=${encodeURIComponent(r.title.replace(/^@/, ""))}`;
+      // /admin/users search also matches a MongoDB id exactly.
+      return `/admin/users?search=${encodeURIComponent(r.id)}`;
   }
 }
 

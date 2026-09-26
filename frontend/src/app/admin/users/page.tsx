@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Users, Search, ChevronLeft, ChevronRight, User, Shield, Crown, Ban, Unlock, X, ShieldCheck, Wallet } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { readUrlNumber, readUrlParam, useSyncUrlParams } from "@/lib/url-state";
 import { getAdminUsers, updateAdminUserRole, updateAdminUserPremium, updateUserWallet, banUser, unbanUser, AdminUser } from "@/lib/api";
 
 // Check if a user is SuperAdmin (case-insensitive)
@@ -18,11 +19,27 @@ export default function AdminUsersPage() {
 
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(() => readUrlNumber("page", 1));
   const [limit] = useState(20);
   const [totalPages, setTotalPages] = useState(0);
-  const [search, setSearch] = useState("");
-  const [role, setRole] = useState("all");
+  // Filters live in the URL (?search=&role=&page=) — refresh/back keep the
+  // view, and the Ctrl+K palette can deep-link to a user.
+  const [searchInput, setSearchInput] = useState(() => readUrlParam("search", ""));
+  const [search, setSearch] = useState(() => readUrlParam("search", "").trim());
+  const [role, setRole] = useState(() => readUrlParam("role", "all"));
+
+  useSyncUrlParams({ search, role, page }, { search: "", role: "all", page: 1 });
+
+  // Debounce typing so every keystroke doesn't hit the API.
+  useEffect(() => {
+    const next = searchInput.trim();
+    if (next === search) return;
+    const t = setTimeout(() => {
+      setSearch(next);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput, search]);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [showBanModal, setShowBanModal] = useState(false);
@@ -46,16 +63,23 @@ export default function AdminUsersPage() {
   // Fetch users
   useEffect(() => {
     if (!token) return;
+    let cancelled = false;
 
     setLoading(true);
     getAdminUsers(token, { page, limit, search: search || undefined, role: role !== "all" ? role : undefined })
       .then((data) => {
+        if (cancelled) return;
         setUsers(data.data);
         setTotal(data.total);
         setTotalPages(data.total_pages);
       })
       .catch(console.error)
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [token, page, search, role]);
 
   const handleRoleChange = async (userId: string, newRole: string) => {
@@ -220,11 +244,8 @@ export default function AdminUsersPage() {
           <input
             type="text"
             placeholder="Username, Telegram ID yoki MongoDB ID bo'yicha qidiring..."
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             className="w-full bg-brand-card border border-brand-border rounded-lg pl-10 pr-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
           />
         </div>

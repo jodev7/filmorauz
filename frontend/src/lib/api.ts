@@ -5437,3 +5437,18 @@ export async function adminGlobalSearch(token: string, q: string, signal?: Abort
   const json = await res.json();
   return Array.isArray(json.results) ? json.results : [];
 }
+
+// Admin: bulk field updates for many movies (premium flag, add to collection).
+export async function adminBulkUpdateMovies(
+  token: string,
+  body: { ids: string[]; is_premium?: boolean; add_to_collection?: string }
+): Promise<{ success: boolean; premium_updated?: number; collection_updated?: boolean }> {
+  const res = await fetch(`${API_URL}/admin/movies/bulk-update`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || "Bulk update failed");
+  return json;
+}

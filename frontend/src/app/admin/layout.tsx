@@ -9,6 +9,7 @@ import { getAdminBadges, AdminBadges } from "@/lib/api";
 import { useVisibleInterval } from "@/lib/use-visible-interval";
 import { visibleNav, activeHref } from "@/components/admin/admin-nav";
 import CommandPalette from "@/components/admin/CommandPalette";
+import { ToastProvider } from "@/components/admin/Toast";
 
 const COLLAPSED_KEY = "admin-nav-collapsed";
 
@@ -110,7 +111,7 @@ export default function AdminLayout({
 
   // Don't render sidebar on login page
   if (pathname === "/admin/login") {
-    return <>{children}</>;
+    return <ToastProvider>{children}</ToastProvider>;
   }
 
   if (!isAuthenticated) {
@@ -238,6 +239,7 @@ export default function AdminLayout({
   );
 
   return (
+    <ToastProvider>
     <div className="min-h-screen bg-brand-dark flex">
       {/* Desktop sidebar */}
       <aside className="hidden lg:flex w-60 bg-brand-card border-r border-brand-border flex-col shrink-0 sticky top-0 h-screen">
@@ -273,5 +275,6 @@ export default function AdminLayout({
 
       <CommandPalette token={token} nav={nav} open={paletteOpen} onOpenChange={setPaletteOpen} />
     </div>
+    </ToastProvider>
   );
 }
