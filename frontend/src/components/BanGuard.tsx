@@ -40,18 +40,13 @@ export default function BanGuard({ children, excludePaths = [] }: BanGuardProps)
     }
   }, [user, isLoading, isBanned, pathname, router, excludePaths]);
 
-  // Show loading state while checking auth
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-brand-dark flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-brand-red"></div>
-      </div>
-    );
-  }
+  // Render children while auth is still loading: public pages must come out
+  // of the server with their content (and JSON-LD) in the HTML, not a spinner.
+  // Only a user we already know is banned gets blocked below.
 
   // If user is banned and not on excluded path, don't render children
   // The redirect will happen via the useEffect
-  if (user && isBanned && pathname !== "/banned") {
+  if (!isLoading && user && isBanned && pathname !== "/banned") {
     return (
       <div className="min-h-screen bg-brand-dark flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-brand-red"></div>

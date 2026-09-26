@@ -21,6 +21,7 @@ import {
   FileText,
   PlayCircle,
   Flag,
+  Bug,
   type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
@@ -50,6 +51,7 @@ function NeedsAttention({ data }: { data: AdminOverview["attention"] }) {
     { label: "Video muammosi haqida xabarlar", value: data.playback_reports, href: "/admin/analytics", icon: PlayCircle, tone: "bad" },
     { label: "Xato bergan publish joblar (7 kun)", value: data.failed_publish_jobs_7d, href: "/admin/clips", icon: Send, tone: "bad" },
     { label: "3 kunda tugaydigan premiumlar", value: data.premium_expiring_3d, href: "/admin/users", icon: Crown, tone: "warn" },
+    { label: "Yangi xatolar (24 soat)", value: data.open_errors_24h ?? 0, href: "/admin/errors", icon: Bug, tone: "bad" },
   ];
   const open = rows.filter((r) => r.value > 0);
 

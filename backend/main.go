@@ -128,6 +128,13 @@ func main() {
 
 	// Setup Gin
 	r := gin.Default()
+	// Record panics and 5xx responses for /admin/errors (re-panics, so
+	// gin's Recovery still produces the 500 response as before).
+	errorRepo := repositories.NewErrorRepository(db)
+	if err := errorRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure error_groups indexes: %v", err)
+	}
+	r.Use(middleware.ErrorTracking(errorRepo))
 	r.Use(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/uploads/") || strings.HasPrefix(c.Request.URL.Path, "/stream/") {
 			c.Header("Cache-Control", "public, max-age=31536000, immutable")
@@ -403,6 +410,7 @@ func main() {
 		Movies:       movieHandler,
 		Community:    communityHandler,
 		Referral:     referralHandler,
+		Errors:       handlers.NewErrorHandler(errorRepo),
 	})
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)

@@ -3,7 +3,6 @@ export const dynamic = "force-dynamic";
 import dynamicImport from "next/dynamic";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import Script from "next/script";
 import { ChevronLeft, Calendar, Globe, Play } from "lucide-react";
 import MediaTitle from "@/components/MediaTitle";
 import Navbar from "@/components/Navbar";
@@ -18,6 +17,8 @@ import { localizeSingleGenre } from "@/lib/localization";
 import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 import { buildSeriesUrl } from "@/lib/content-routes";
 import { buildContentDescription, buildContentKeywords, buildContentTitle, pickSeoImage } from "@/lib/seo";
+import JsonLd from "@/components/JsonLd";
+import { getTopReviewsForSeo, reviewsToJsonLd } from "@/lib/api";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
@@ -120,6 +121,12 @@ export default async function SeriesDetailPage({ params }: Props) {
     };
   }
 
+  // Top written reviews (if any) — eligible for review snippets.
+  const topReviews = await getTopReviewsForSeo("series", series.id);
+  if (topReviews.length > 0) {
+    seriesJsonLd.review = reviewsToJsonLd(topReviews);
+  }
+
   const breadcrumbJsonLd = {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
@@ -132,16 +139,8 @@ export default async function SeriesDetailPage({ params }: Props) {
 
   return (
     <>
-      <Script
-        id="series-schema"
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(seriesJsonLd) }}
-      />
-      <Script
-        id="series-breadcrumb-schema"
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
-      />
+      <JsonLd data={seriesJsonLd} />
+      <JsonLd data={breadcrumbJsonLd} />
       <Navbar />
       <main className="min-h-screen">
         {/* Backdrop hero */}

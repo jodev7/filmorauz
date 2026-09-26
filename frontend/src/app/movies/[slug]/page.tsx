@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 export const dynamic = "force-dynamic";
 import dynamicImport from "next/dynamic";
 import { notFound } from "next/navigation";
-import Script from "next/script";
 import Link from "next/link";
 import { Clock, Calendar, Globe, ChevronLeft } from "lucide-react";
 import Navbar from "@/components/Navbar";
@@ -17,7 +16,8 @@ import MovieWatchSection from "@/components/MovieWatchSection";
 import MediaTitle from "@/components/MediaTitle";
 import { WatchPlayerProvider } from "@/lib/watch-player-context";
 import { isMoviePremium, PremiumBadge } from "@/components/PremiumComponents";
-import { getMovie, getRecommendations } from "@/lib/api";
+import { getMovie, getRecommendations, getTopReviewsForSeo, reviewsToJsonLd } from "@/lib/api";
+import JsonLd from "@/components/JsonLd";
 import { getTranslations } from "@/lib/i18n-server";
 import { formatDuration } from "@/lib/movie-utils";
 import { normalizeMediaUrl } from "@/lib/image-utils";
@@ -185,6 +185,11 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
       target: `${movieUrl}?play=1`,
     },
   };
+  // Top written reviews (if any) — eligible for review snippets.
+  const topReviews = await getTopReviewsForSeo("movie", movie.id);
+  if (topReviews.length > 0) {
+    movieJsonLd.review = reviewsToJsonLd(topReviews);
+  }
   if (movie.cast && movie.cast.length > 0) {
     movieJsonLd.actor = movie.cast.slice(0, 10).map((name) => ({ "@type": "Person", name }));
   }
@@ -223,23 +228,11 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
   return (
     <>
       {/* Breadcrumbs JSON-LD */}
-      <Script
-        id="breadcrumb-schema"
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
-      />
+      <JsonLd data={breadcrumbJsonLd} />
       {/* Movie JSON-LD */}
-      <Script
-        id="movie-schema"
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(movieJsonLd) }}
-      />
+      <JsonLd data={movieJsonLd} />
       {/* VideoObject JSON-LD — drives Google Video Search */}
-      <Script
-        id="video-schema"
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(videoJsonLd) }}
-      />
+      <JsonLd data={videoJsonLd} />
       <Navbar />
       <WatchPlayerProvider initialOpen={autoOpenPlayer}>
       <main className="min-h-screen">

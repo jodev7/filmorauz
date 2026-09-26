@@ -19,6 +19,7 @@ type ExtraDeps struct {
 	Movies       *handlers.MovieHandler
 	Community    *handlers.CommunityHandler
 	Referral     *handlers.ReferralHandler
+	Errors       *handlers.ErrorHandler
 }
 
 // SetupExtras registers user-library, community and growth routes.
@@ -26,6 +27,9 @@ type ExtraDeps struct {
 // ones in Setup.
 func SetupExtras(r *gin.Engine, d ExtraDeps) {
 	api := r.Group("/api")
+
+	// Browser error beacon (rate-limited per IP; optional auth for user id).
+	api.POST("/client-errors", middleware.OptionalAuth(d.AuthService), d.Errors.ReportClientError)
 
 	// Options for the advanced movie filter (countries, year range).
 	api.GET("/movies/filters", middleware.CacheResponse(10*time.Minute), d.Movies.MovieFilterFacets)
@@ -76,5 +80,9 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 	admin.Use(middleware.AuditLog(d.AuditLogRepo))
 	{
 		admin.POST("/suggestions/:id/link", d.Library.LinkSuggestion)
+
+		// Error tracking (client + server)
+		admin.GET("/errors", d.Errors.ListErrors)
+		admin.POST("/errors/:id/resolve", d.Errors.ResolveError)
 	}
 }

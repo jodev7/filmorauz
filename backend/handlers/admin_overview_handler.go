@@ -141,6 +141,11 @@ func (h *AdminOverviewHandler) attention(ctx context.Context, now time.Time) gin
 			"status":     models.PublishJobStatusFailed,
 			"updated_at": bson.M{"$gte": weekAgo},
 		}),
+		// Unresolved error groups seen in the last 24h (see /admin/errors).
+		"open_errors_24h": h.count(ctx, "error_groups", bson.M{
+			"resolved":  false,
+			"last_seen": bson.M{"$gte": now.Add(-24 * time.Hour)},
+		}),
 	}
 }
 

@@ -18,7 +18,7 @@ func TestModeratorRoutesExist(t *testing.T) {
 	// receivers are fine for building the route table.
 	Setup(r, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
-	SetupExtras(r, ExtraDeps{Library: &handlers.LibraryHandler{}, Movies: &handlers.MovieHandler{}, Community: &handlers.CommunityHandler{}, Referral: &handlers.ReferralHandler{}})
+	SetupExtras(r, ExtraDeps{Library: &handlers.LibraryHandler{}, Movies: &handlers.MovieHandler{}, Community: &handlers.CommunityHandler{}, Referral: &handlers.ReferralHandler{}, Errors: &handlers.ErrorHandler{}})
 
 	registered := map[string]bool{}
 	for _, rt := range r.Routes() {

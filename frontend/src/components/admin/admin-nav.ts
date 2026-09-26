@@ -21,6 +21,7 @@ import {
   Video,
   Wallet,
   ScrollText,
+  Bug,
   type LucideIcon,
 } from "lucide-react";
 import type { AdminBadges } from "@/lib/api";
@@ -98,6 +99,7 @@ export const ADMIN_NAV: AdminNavGroup[] = [
     id: "system",
     label: "Tizim",
     items: [
+      { href: "/admin/errors", icon: Bug, label: "Xatolar", keywords: "errors bug xatolik sentry", badge: "open_errors_24h" },
       { href: "/admin/expenses", icon: Wallet, label: "Xarajatlar", keywords: "expenses moliya", superadminOnly: true },
       { href: "/admin/audit", icon: ScrollText, label: "Audit log", keywords: "tarix kim nima o'zgartirdi jurnal", superadminOnly: true },
     ],

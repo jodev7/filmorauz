@@ -13,9 +13,10 @@ import (
 )
 
 // Referral rewards (env-tunable):
-//   REFERRAL_REWARD_DAYS   premium days for the inviter per activated friend (default 3)
-//   REFERRAL_WELCOME_DAYS  premium days for the invited friend (default 1)
-//   REFERRAL_MONTHLY_CAP   max rewarded friends per inviter per month (default 10)
+//
+//	REFERRAL_REWARD_DAYS   premium days for the inviter per activated friend (default 3)
+//	REFERRAL_WELCOME_DAYS  premium days for the invited friend (default 1)
+//	REFERRAL_MONTHLY_CAP   max rewarded friends per inviter per month (default 10)
 func envInt(key string, def int) int {
 	if v, err := strconv.Atoi(os.Getenv(key)); err == nil && v >= 0 {
 		return v

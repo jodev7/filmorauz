@@ -5379,6 +5379,7 @@ export interface AdminOverview {
     pending_approvals: number;
     premium_expiring_3d: number;
     failed_publish_jobs_7d: number;
+    open_errors_24h?: number;
   };
   ingestion: {
     active: number;
@@ -5677,4 +5678,66 @@ export async function claimReferral(token: string, code: string): Promise<{ clai
   });
   if (!res.ok) throw new Error("Failed to claim referral");
   return res.json();
+}
+
+// ─── Error tracking (admin) ──────────────────────────────────────────────────
+
+export interface ErrorGroup {
+  id: string;
+  source: "client" | "server";
+  kind: string;
+  message: string;
+  stack?: string;
+  last_url: string;
+  release?: string;
+  status?: number;
+  count: number;
+  user_count: number;
+  last_user_agent?: string;
+  first_seen: string;
+  last_seen: string;
+  resolved: boolean;
+}
+
+export async function getAdminErrors(token: string, source: "" | "client" | "server", includeResolved: boolean): Promise<ErrorGroup[]> {
+  const qs = new URLSearchParams();
+  if (source) qs.set("source", source);
+  if (includeResolved) qs.set("resolved", "1");
+  const res = await fetch(`${API_URL}/admin/errors?${qs}`, { headers: authHeaders(token), cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to load errors");
+  const json = await res.json();
+  return json.data || [];
+}
+
+export async function resolveAdminError(token: string, id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/errors/${id}/resolve`, { method: "POST", headers: authHeaders(token) });
+  if (!res.ok) throw new Error("Failed to resolve");
+}
+
+// Top reviews for structured data (server-side, cached 5 min). Never throws.
+export async function getTopReviewsForSeo(
+  targetType: "movie" | "series",
+  targetId: string
+): Promise<{ user_name: string; rating: number; text: string; created_at: string }[]> {
+  try {
+    const res = await fetch(`${API_URL}/reviews/${targetType}/${targetId}?sort=helpful&limit=3`, {
+      next: { revalidate: 300 },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    return Array.isArray(json.data) ? json.data.slice(0, 3) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function reviewsToJsonLd(reviews: { user_name: string; rating: number; text: string; created_at: string }[]) {
+  return reviews.map((r) => ({
+    "@type": "Review",
+    author: { "@type": "Person", name: r.user_name || "FilmoraUz foydalanuvchisi" },
+    reviewRating: { "@type": "Rating", ratingValue: r.rating, bestRating: 5, worstRating: 1 },
+    reviewBody: r.text,
+    datePublished: r.created_at ? r.created_at.slice(0, 10) : undefined,
+  }));
 }

@@ -6,10 +6,10 @@ import StarRating from "@/components/StarRating";
 import SeriesCarousel from "@/components/SeriesCarousel";
 import type { EpisodePageData } from "@/lib/episode-page-data";
 import Link from "next/link";
-import Script from "next/script";
 import { buildEpisodeJsonLd } from "@/lib/episode-page-data";
 import { buildSeriesPath } from "@/lib/content-routes";
 import { getSeriesRecommendations } from "@/lib/series-api";
+import JsonLd from "@/components/JsonLd";
 
 interface EpisodePageViewProps {
   data: EpisodePageData;
@@ -59,11 +59,7 @@ export default async function EpisodePageView({ data }: EpisodePageViewProps) {
 
   return (
     <>
-      <Script
-        id="episode-schema"
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(buildEpisodeJsonLd(data)) }}
-      />
+      <JsonLd data={buildEpisodeJsonLd(data)} />
       <Navbar />
       <WatchPageClient
         movie={movieData as any}
