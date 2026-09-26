@@ -5,7 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 
 // Public, crawlable catalogue pages (exact path or a sub-path).
-const PUBLIC_CONTENT_PREFIXES = ["/movies", "/series", "/watch", "/episode", "/collections", "/genres", "/contact", "/copyright", "/dmca"];
+const PUBLIC_CONTENT_PREFIXES = ["/movies", "/series", "/watch", "/episode", "/collections", "/genres", "/person", "/contact", "/copyright", "/dmca"];
 
 export function isPublicContentPath(pathname: string | null): boolean {
   if (!pathname) return false;

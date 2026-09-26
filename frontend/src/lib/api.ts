@@ -456,6 +456,42 @@ export async function getMovie(slug: string): Promise<Movie> {
   return normalizeMovieResponse(json.data);
 }
 
+// ── Discovery: people pages & random movie ──
+
+export interface PersonCredits {
+  name: string;
+  acted: Movie[];
+  directed: Movie[];
+}
+
+// Actor / director page data; null when the person has no published titles.
+export async function getPersonCredits(name: string): Promise<PersonCredits | null> {
+  const res = await fetch(`${API_URL}/people/${encodeURIComponent(name)}`, { next: { revalidate: 300 } });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error("Failed to load person");
+  const json = await res.json();
+  return {
+    name: json.name,
+    acted: (json.acted || []).map(normalizeMovieResponse),
+    directed: (json.directed || []).map(normalizeMovieResponse),
+  };
+}
+
+export function personPath(name: string): string {
+  return `/person/${encodeURIComponent(name.trim())}`;
+}
+
+export async function getRandomMovie(genre?: string, exclude: string[] = []): Promise<Movie | null> {
+  const qs = new URLSearchParams();
+  if (genre) qs.set("genre", genre);
+  if (exclude.length) qs.set("exclude", exclude.slice(-50).join(","));
+  const res = await fetch(`${API_URL}/movies/random?${qs.toString()}`, { cache: "no-store" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error("Failed to pick a movie");
+  const json = await res.json();
+  return json.data ? normalizeMovieResponse(json.data) : null;
+}
+
 // Get movie by ID
 export async function getMovieById(id: string): Promise<Movie> {
   const res = await fetch(`${API_URL}/movies/${id}`, {

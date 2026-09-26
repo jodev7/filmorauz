@@ -7,6 +7,7 @@ import MovieCard from "@/components/MovieCard";
 import SeriesCard from "@/components/SeriesCard";
 import GenreFilter from "@/components/GenreFilter";
 import MovieFilterBar from "@/components/MovieFilterBar";
+import RandomMovieButton from "@/components/RandomMovie";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getMovies, searchMovies, Movie, MovieFilterParams } from "@/lib/api";
 import { getSeries, type Series } from "@/lib/series-api";
@@ -144,14 +145,17 @@ export default async function MoviesPage({ searchParams }: Props) {
       <Navbar />
       <main className="min-h-screen pt-20 sm:pt-24">
         <div className="max-w-7xl mx-auto px-4">
-          <div className="mb-6 sm:mb-8">
-            <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-white tracking-wide mb-2">
-              {pageTitle}
-            </h1>
-            <p className="text-gray-500 text-sm">
-              {total} ta film
-              {series.length > 0 ? ` · ${series.length} ta serial` : ""} topildi
-            </p>
+          <div className="mb-6 sm:mb-8 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-white tracking-wide mb-2">
+                {pageTitle}
+              </h1>
+              <p className="text-gray-500 text-sm">
+                {total} ta film
+                {series.length > 0 ? ` · ${series.length} ta serial` : ""} topildi
+              </p>
+            </div>
+            {!search && <RandomMovieButton />}
           </div>
 
           <div className="mb-6">

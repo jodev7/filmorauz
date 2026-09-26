@@ -16,7 +16,7 @@ import MovieWatchSection from "@/components/MovieWatchSection";
 import MediaTitle from "@/components/MediaTitle";
 import { WatchPlayerProvider } from "@/lib/watch-player-context";
 import { isMoviePremium, PremiumBadge } from "@/components/PremiumComponents";
-import { getMovie, getRecommendations, getTopReviewsForSeo, reviewsToJsonLd } from "@/lib/api";
+import { getMovie, getRecommendations, getTopReviewsForSeo, reviewsToJsonLd, personPath } from "@/lib/api";
 import JsonLd from "@/components/JsonLd";
 import { getTranslations } from "@/lib/i18n-server";
 import { formatDuration } from "@/lib/movie-utils";
@@ -191,7 +191,7 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
     movieJsonLd.review = reviewsToJsonLd(topReviews);
   }
   if (movie.cast && movie.cast.length > 0) {
-    movieJsonLd.actor = movie.cast.slice(0, 10).map((name) => ({ "@type": "Person", name }));
+    movieJsonLd.actor = movie.cast.slice(0, 10).map((name) => ({ "@type": "Person", name, url: `${SITE_URL}${personPath(name)}` }));
   }
   if (movie.director) {
     movieJsonLd.director = { "@type": "Person", name: movie.director };
@@ -330,7 +330,7 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
                     <div>
                       <dt className="inline text-gray-500">Rejissyor: </dt>
                       <dd className="inline">
-                        <Link href={`/movies?search=${encodeURIComponent(movie.director)}`} className="text-gray-300 hover:text-white">
+                        <Link href={personPath(movie.director)} className="text-gray-300 hover:text-white underline-offset-2 hover:underline">
                           {movie.director}
                         </Link>
                       </dd>
@@ -343,7 +343,7 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
                         {movie.cast.slice(0, 8).map((name, i) => (
                           <span key={name}>
                             {i > 0 && ", "}
-                            <Link href={`/movies?search=${encodeURIComponent(name)}`} className="hover:text-white">
+                            <Link href={personPath(name)} className="hover:text-white underline-offset-2 hover:underline">
                               {name}
                             </Link>
                           </span>

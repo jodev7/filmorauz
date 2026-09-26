@@ -1605,6 +1605,30 @@ func (r *MovieRepository) GetRecommendations(currentMovieID string, userID strin
 		return nil, err
 	}
 
+	// The popular pool alone rarely contains the genuinely similar titles,
+	// so also pull candidates that share a genre, an actor or the director.
+	if related := similarCandidateFilter(currentMovie); related != nil {
+		relatedFilter := bson.M{"$and": []bson.M{filter, related}}
+		relCur, err := r.col.Find(ctx, relatedFilter, options.Find().
+			SetSort(bson.D{{Key: "views", Value: -1}}).
+			SetLimit(150))
+		if err == nil {
+			var extra []models.Movie
+			if relCur.All(ctx, &extra) == nil {
+				seen := make(map[primitive.ObjectID]bool, len(candidates))
+				for _, m := range candidates {
+					seen[m.ID] = true
+				}
+				for _, m := range extra {
+					if !seen[m.ID] {
+						seen[m.ID] = true
+						candidates = append(candidates, m)
+					}
+				}
+			}
+		}
+	}
+
 	// Collect user preferences if userID provided (simplified: could be extended to query watch history)
 	var userPreferredGenres []string
 	if userID != "" {
@@ -1632,6 +1656,9 @@ func (r *MovieRepository) GetRecommendations(currentMovieID string, userID strin
 				}
 			}
 		}
+
+		// Shared people: cast overlap (+4 each, max +12) and director (+6)
+		score += creditsScore(currentMovie, m)
 
 		// Country match (+2)
 		if m.Country != "" && currentMovie.Country != "" && strings.EqualFold(m.Country, currentMovie.Country) {

@@ -36,6 +36,10 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 	// Options for the advanced movie filter (countries, year range).
 	api.GET("/movies/filters", middleware.CacheResponse(10*time.Minute), d.Movies.MovieFilterFacets)
 
+	// Discovery: actor/director pages and "random movie".
+	api.GET("/movies/random", d.Movies.RandomMovie)
+	api.GET("/people/:name", middleware.CacheResponse(5*time.Minute), d.Movies.PersonCredits)
+
 	user := api.Group("/user")
 	user.Use(middleware.RequireAuth(d.AuthService))
 	{
