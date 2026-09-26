@@ -65,6 +65,7 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 		user.DELETE("/history/:type/:id", d.History.DeleteEntry)
 		user.DELETE("/history", d.History.ClearHistory)
 		user.GET("/series-progress/:id", d.History.SeriesProgress)
+		user.GET("/year-review", d.History.YearReview)
 
 		// Personal lists
 		user.GET("/lists", d.Lists.Mine)

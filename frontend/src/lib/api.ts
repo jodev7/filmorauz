@@ -456,6 +456,34 @@ export async function getMovie(slug: string): Promise<Movie> {
   return normalizeMovieResponse(json.data);
 }
 
+// ── Year in review ──
+
+export interface YearReview {
+  year: number;
+  complete: boolean;
+  total_minutes: number;
+  movies_watched: number;
+  episodes_watched: number;
+  series_watched: number;
+  completed: number;
+  active_days: number;
+  top_genres: { key: string; count: number }[];
+  months: number[];
+  top_month: number;
+  top_weekday: number;
+  night_owl: boolean;
+  top_titles: { target_type: "movie" | "series"; target_id: string; title: string; slug: string; poster_url: string; minutes: number }[];
+  ratings: number;
+  reviews: number;
+  comments: number;
+}
+
+export async function getYearReview(token: string, year: number): Promise<YearReview> {
+  const res = await fetch(`${API_URL}/user/year-review?year=${year}`, { headers: authHeaders(token), cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to load year review");
+  return res.json();
+}
+
 // ── Personal lists ──
 
 export interface UserListSummary {

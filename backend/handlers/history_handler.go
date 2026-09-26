@@ -3,6 +3,8 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/filmorauz/backend/repositories"
 	"github.com/gin-gonic/gin"
@@ -136,4 +138,27 @@ func (h *HistoryHandler) SeriesProgress(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, p)
+}
+
+// YearReview GET /api/user/year-review?year=2026
+func (h *HistoryHandler) YearReview(c *gin.Context) {
+	userID, ok := currentUserOID(c)
+	if !ok {
+		return
+	}
+	now := time.Now()
+	year := now.Year()
+	if y, err := strconv.Atoi(c.Query("year")); err == nil {
+		year = y
+	}
+	if year < 2020 || year > now.Year() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid year"})
+		return
+	}
+	review, err := h.history.GetYearReview(userID, year, now)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed"})
+		return
+	}
+	c.JSON(http.StatusOK, review)
 }
