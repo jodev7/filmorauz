@@ -403,6 +403,10 @@ func main() {
 	referralHandler := handlers.NewReferralHandler(referralRepo, cfg.BaseSiteURL)
 	// Reward referrals once the invited friend starts watching.
 	go services.StartReferralRewardJob(context.Background(), referralRepo, userRepo, notificationService)
+	userListRepo := repositories.NewUserListRepository(db, libraryRepo)
+	if err := userListRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure user list indexes: %v", err)
+	}
 	// Morning report to superadmins' Telegram (see services/daily_report.go).
 	dailyReporter := &services.DailyReporter{
 		DB:              db,
@@ -421,6 +425,7 @@ func main() {
 		Errors:       handlers.NewErrorHandler(errorRepo),
 		DailyReport:  handlers.NewDailyReportHandler(dailyReporter),
 		History:      handlers.NewHistoryHandler(watchHistoryRepo),
+		Lists:        handlers.NewUserListHandler(userListRepo),
 	})
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)

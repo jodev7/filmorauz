@@ -12,6 +12,7 @@ import Link from "next/link";
 import { Heart, History, User as UserIcon, Crown, Calendar, Shield, Clock, Camera, Edit2, Check, X, Send, Hash, LayoutDashboard, BadgeCheck, Sparkles, RefreshCw, Zap, Palette, Eye, EyeOff, Lock, Star, LogOut, Lightbulb } from "lucide-react";
 import { PremiumBadge, PremiumButton, PremiumAvatarRing, resolveIsPremium, resolvePremiumStatus } from "@/components/PremiumComponents";
 import WatchHistoryList from "@/components/WatchHistoryList";
+import UserListsSection from "@/components/UserListsSection";
 import { getFavorites, getWatchHistory, getCurrentUser, updateProfile, uploadProfileImage, updateProfileStyle, updatePrivacySettings, ProfileStyle } from "@/lib/api";
 import SuggestionModal from "@/components/SuggestionModal";
 import UserLibrarySections from "@/components/UserLibrarySections";
@@ -1152,6 +1153,14 @@ export default function UserPage() {
 
               {/* Watch later + followed series */}
               <UserLibrarySections />
+
+              {/* Personal lists */}
+              {token && (
+                <section className="mb-10">
+                  <h2 className="font-display text-xl sm:text-2xl text-white tracking-wide mb-5">RO&apos;YXATLARIM</h2>
+                  <UserListsSection token={token} />
+                </section>
+              )}
 
               {/* Favorites section - Carousel */}
               <section className="mb-10">

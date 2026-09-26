@@ -456,6 +456,95 @@ export async function getMovie(slug: string): Promise<Movie> {
   return normalizeMovieResponse(json.data);
 }
 
+// ── Personal lists ──
+
+export interface UserListSummary {
+  id: string;
+  title: string;
+  description?: string;
+  is_public: boolean;
+  share_slug: string;
+  count: number;
+  covers: string[];
+  updated_at: string;
+}
+
+export interface UserListItem {
+  target_type: "movie" | "series";
+  target_id: string;
+  title: string;
+  title_uz?: string;
+  slug: string;
+  poster_url: string;
+  year?: number;
+  quality?: string;
+  is_premium: boolean;
+  rating_avg: number;
+  added_at: string;
+}
+
+export interface UserListDetail extends UserListSummary {
+  owner_id: string;
+  owner_name: string;
+  is_owner: boolean;
+  items: UserListItem[];
+}
+
+async function listsCall<T>(token: string, method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, {
+    method,
+    headers: authHeaders(token),
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: "no-store",
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Xatolik yuz berdi");
+  return json as T;
+}
+
+export async function getMyLists(token: string): Promise<UserListSummary[]> {
+  const r = await listsCall<{ data: UserListSummary[] }>(token, "GET", "/user/lists");
+  return r.data || [];
+}
+
+export async function createList(token: string, input: { title: string; description?: string; is_public?: boolean }): Promise<UserListSummary> {
+  const r = await listsCall<{ data: UserListSummary }>(token, "POST", "/user/lists", input);
+  return r.data;
+}
+
+export function updateList(token: string, id: string, patch: { title?: string; description?: string; is_public?: boolean }) {
+  return listsCall(token, "PATCH", `/user/lists/${id}`, patch);
+}
+
+export function deleteList(token: string, id: string) {
+  return listsCall(token, "DELETE", `/user/lists/${id}`);
+}
+
+export function addToList(token: string, listId: string, type: "movie" | "series", targetId: string) {
+  return listsCall(token, "POST", `/user/lists/${listId}/items/${type}/${targetId}`);
+}
+
+export function removeFromList(token: string, listId: string, type: "movie" | "series", targetId: string) {
+  return listsCall(token, "DELETE", `/user/lists/${listId}/items/${type}/${targetId}`);
+}
+
+export async function getListsContaining(token: string, type: "movie" | "series", targetId: string): Promise<string[]> {
+  const r = await listsCall<{ data: string[] }>(token, "GET", `/user/lists-containing/${type}/${targetId}`);
+  return r.data || [];
+}
+
+// Share page; token (optional) lets the owner see a private list.
+export async function getListBySlug(slug: string, token?: string): Promise<UserListDetail | null> {
+  const res = await fetch(`${API_URL}/lists/${encodeURIComponent(slug)}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    cache: "no-store",
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error("Failed to load list");
+  const json = await res.json();
+  return json.data;
+}
+
 // ── Discovery: people pages & random movie ──
 
 export interface PersonCredits {

@@ -22,6 +22,7 @@ type ExtraDeps struct {
 	Errors       *handlers.ErrorHandler
 	DailyReport  *handlers.DailyReportHandler
 	History      *handlers.HistoryHandler
+	Lists        *handlers.UserListHandler
 }
 
 // SetupExtras registers user-library, community and growth routes.
@@ -65,10 +66,22 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 		user.DELETE("/history", d.History.ClearHistory)
 		user.GET("/series-progress/:id", d.History.SeriesProgress)
 
+		// Personal lists
+		user.GET("/lists", d.Lists.Mine)
+		user.POST("/lists", d.Lists.Create)
+		user.PATCH("/lists/:id", d.Lists.Update)
+		user.DELETE("/lists/:id", d.Lists.Delete)
+		user.POST("/lists/:id/items/:type/:targetId", d.Lists.AddItem)
+		user.DELETE("/lists/:id/items/:type/:targetId", d.Lists.RemoveItem)
+		user.GET("/lists-containing/:type/:id", d.Lists.Containing)
+
 		// Referral program
 		user.GET("/referral", d.Referral.GetMyReferral)
 		user.POST("/referral/claim", d.Referral.ClaimReferral)
 	}
+
+	// Shared personal list page
+	api.GET("/lists/:slug", middleware.OptionalAuth(d.AuthService), d.Lists.BySlug)
 
 	// Reviews ("qisqa taqriz") — public list, optional auth for "mine"/helpful.
 	api.GET("/reviews/:type/:id", middleware.OptionalAuth(d.AuthService), d.Community.ListReviews)

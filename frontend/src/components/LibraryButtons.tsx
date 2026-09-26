@@ -12,6 +12,7 @@ import {
   LibraryTargetType,
 } from "@/lib/api";
 import TelegramLoginModal from "@/components/TelegramLoginModal";
+import AddToListButton from "@/components/AddToListButton";
 
 const baseBtn =
   "inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm transition-colors disabled:opacity-60";
@@ -118,6 +119,14 @@ export default function LibraryButtons({
         )}
         {inList ? "Ro'yxatda" : "Keyinroq ko'raman"}
       </button>
+
+      <AddToListButton
+        targetType={targetType}
+        targetId={targetId}
+        className={`${baseBtn} ${offBtn}`}
+        onNeedLogin={() => setLoginOpen(true)}
+        onFlash={flash}
+      />
 
       {targetType === "series" && (
         <button

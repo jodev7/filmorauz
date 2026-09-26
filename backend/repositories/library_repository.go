@@ -120,8 +120,25 @@ func (r *LibraryRepository) ListWatchlist(ctx context.Context, userID primitive.
 		return nil, err
 	}
 
-	var movieIDs, seriesIDs []primitive.ObjectID
+	refs := make([]TargetRef, 0, len(entries))
 	for _, e := range entries {
+		refs = append(refs, TargetRef{TargetType: e.TargetType, TargetID: e.TargetID, AddedAt: e.CreatedAt})
+	}
+	return r.HydrateTargets(ctx, refs)
+}
+
+// TargetRef points at a movie or series (with when it was added).
+type TargetRef struct {
+	TargetType string             `bson:"target_type" json:"target_type"`
+	TargetID   primitive.ObjectID `bson:"target_id" json:"target_id"`
+	AddedAt    time.Time          `bson:"added_at" json:"added_at"`
+}
+
+// HydrateTargets joins refs with display fields, keeping their order and
+// dropping ones whose content no longer exists.
+func (r *LibraryRepository) HydrateTargets(ctx context.Context, refs []TargetRef) ([]WatchlistItem, error) {
+	var movieIDs, seriesIDs []primitive.ObjectID
+	for _, e := range refs {
 		if e.TargetType == "series" {
 			seriesIDs = append(seriesIDs, e.TargetID)
 		} else {
@@ -159,8 +176,8 @@ func (r *LibraryRepository) ListWatchlist(ctx context.Context, userID primitive.
 		return nil, err
 	}
 
-	items := make([]WatchlistItem, 0, len(entries))
-	for _, e := range entries {
+	items := make([]WatchlistItem, 0, len(refs))
+	for _, e := range refs {
 		src := movies
 		if e.TargetType == "series" {
 			src = series
@@ -180,7 +197,7 @@ func (r *LibraryRepository) ListWatchlist(ctx context.Context, userID primitive.
 			Quality:    docString(d, "quality"),
 			IsPremium:  d["is_premium"] == true,
 			RatingAvg:  docFloat(d, "rating_avg"),
-			AddedAt:    e.CreatedAt,
+			AddedAt:    e.AddedAt,
 		})
 	}
 	return items, nil
