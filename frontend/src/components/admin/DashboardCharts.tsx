@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
   ResponsiveContainer,
   Tooltip,
@@ -25,19 +27,26 @@ type MetricKey = "new_users" | "views" | "active_viewers" | "premium_sales";
 const METRICS: {
   key: MetricKey;
   label: string;
+  // Small discrete daily counts read better as bars than a smoothed curve.
+  mark: "area" | "bar";
   total: (t: PeriodTotals) => number;
   totalLabel: string;
 }[] = [
-  { key: "new_users", label: "Yangi foydalanuvchilar", total: (t) => t.new_users, totalLabel: "jami" },
-  { key: "views", label: "Ko'rishlar", total: (t) => t.views, totalLabel: "jami" },
-  { key: "active_viewers", label: "Faol tomoshabinlar", total: (t) => t.avg_active_viewers, totalLabel: "kunlik o'rtacha" },
-  { key: "premium_sales", label: "Premium sotuvlar", total: (t) => t.premium_sales, totalLabel: "jami" },
+  { key: "new_users", label: "Yangi foydalanuvchilar", mark: "area", total: (t) => t.new_users, totalLabel: "jami" },
+  { key: "views", label: "Ko'rishlar", mark: "area", total: (t) => t.views, totalLabel: "jami" },
+  { key: "active_viewers", label: "Faol tomoshabinlar", mark: "area", total: (t) => t.avg_active_viewers, totalLabel: "kunlik o'rtacha" },
+  { key: "premium_sales", label: "Premium sotuvlar", mark: "bar", total: (t) => t.premium_sales, totalLabel: "jami" },
 ];
 
 const RANGES = [7, 30, 90] as const;
 
 function formatNumber(n: number): string {
   return Math.round(n).toLocaleString("uz-UZ");
+}
+
+const compactFormatter = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+function formatAxis(n: number): string {
+  return compactFormatter.format(n);
 }
 
 function formatDay(date: string): string {
@@ -104,47 +113,73 @@ function ChartTooltip({
 
 function MetricChart({ data, metric }: { data: DailyPoint[]; metric: (typeof METRICS)[number] }) {
   const gradientId = `grad-${metric.key}`;
+  const margin = { top: 6, right: 4, bottom: 0, left: 0 };
+  const xAxis = (
+    <XAxis
+      dataKey="date"
+      tickFormatter={formatDay}
+      tick={{ fill: AXIS_TEXT, fontSize: 11 }}
+      axisLine={false}
+      tickLine={false}
+      minTickGap={24}
+    />
+  );
+  const yAxis = (
+    <YAxis
+      allowDecimals={false}
+      tickFormatter={formatAxis}
+      tick={{ fill: AXIS_TEXT, fontSize: 11 }}
+      axisLine={false}
+      tickLine={false}
+      width={36}
+    />
+  );
+  const grid = <CartesianGrid vertical={false} stroke={GRID_COLOR} />;
+  const tooltip = (cursor: object) => (
+    <Tooltip cursor={cursor} content={<ChartTooltip metricLabel={metric.label} />} />
+  );
+
   return (
     <div className="h-36" role="img" aria-label={`${metric.label} — kunlik grafik`}>
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ top: 6, right: 4, bottom: 0, left: -18 }}>
-          <defs>
-            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={SERIES_COLOR} stopOpacity={0.28} />
-              <stop offset="100%" stopColor={SERIES_COLOR} stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <CartesianGrid vertical={false} stroke={GRID_COLOR} />
-          <XAxis
-            dataKey="date"
-            tickFormatter={formatDay}
-            tick={{ fill: AXIS_TEXT, fontSize: 11 }}
-            axisLine={false}
-            tickLine={false}
-            minTickGap={24}
-          />
-          <YAxis
-            allowDecimals={false}
-            tick={{ fill: AXIS_TEXT, fontSize: 11 }}
-            axisLine={false}
-            tickLine={false}
-            width={48}
-          />
-          <Tooltip
-            cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }}
-            content={<ChartTooltip metricLabel={metric.label} />}
-          />
-          <Area
-            type="monotone"
-            dataKey={metric.key}
-            stroke={SERIES_COLOR}
-            strokeWidth={2}
-            fill={`url(#${gradientId})`}
-            dot={false}
-            activeDot={{ r: 4, stroke: "#111", strokeWidth: 2 }}
-            isAnimationActive={false}
-          />
-        </AreaChart>
+        {metric.mark === "bar" ? (
+          <BarChart data={data} margin={margin} barCategoryGap={2}>
+            {grid}
+            {xAxis}
+            {yAxis}
+            {tooltip({ fill: "rgba(255,255,255,0.05)" })}
+            <Bar
+              dataKey={metric.key}
+              fill={SERIES_COLOR}
+              radius={[4, 4, 0, 0]}
+              maxBarSize={18}
+              isAnimationActive={false}
+            />
+          </BarChart>
+        ) : (
+          <AreaChart data={data} margin={margin}>
+            <defs>
+              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={SERIES_COLOR} stopOpacity={0.28} />
+                <stop offset="100%" stopColor={SERIES_COLOR} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            {grid}
+            {xAxis}
+            {yAxis}
+            {tooltip({ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 })}
+            <Area
+              type="monotone"
+              dataKey={metric.key}
+              stroke={SERIES_COLOR}
+              strokeWidth={2}
+              fill={`url(#${gradientId})`}
+              dot={false}
+              activeDot={{ r: 4, stroke: "#111", strokeWidth: 2 }}
+              isAnimationActive={false}
+            />
+          </AreaChart>
+        )}
       </ResponsiveContainer>
     </div>
   );

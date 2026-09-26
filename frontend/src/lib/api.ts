@@ -5339,3 +5339,70 @@ export async function getAdminDashboardTimeseries(token: string, days = 30): Pro
   if (!res.ok) throw new Error("Failed to fetch dashboard timeseries");
   return res.json();
 }
+
+// ─── Admin overview (attention / pipeline / quality / finance) ───────────────
+
+export interface OverviewQualityItem {
+  id: string;
+  title: string;
+  slug: string;
+  views: number;
+}
+
+export interface AdminOverview {
+  attention: {
+    pending_appeals: number;
+    pending_suggestions: number;
+    pending_comments: number;
+    playback_reports: number;
+    pending_approvals: number;
+    premium_expiring_3d: number;
+    failed_publish_jobs_7d: number;
+  };
+  ingestion: {
+    active: number;
+    pending: number;
+    processing: number;
+    stuck: number;
+    failed_24h: number;
+    completed_24h: number;
+  };
+  publish_queue: {
+    scheduled: number;
+    success_24h: number;
+    failed_24h: number;
+  };
+  quality: {
+    missing_poster: number;
+    missing_description: number;
+    missing_video: number;
+    low_views: number;
+    samples: {
+      missing_poster: OverviewQualityItem[];
+      missing_video: OverviewQualityItem[];
+      low_views: OverviewQualityItem[];
+    };
+  };
+  // Present only for superadmins.
+  finance?: {
+    month: string;
+    premium_sales: number;
+    stars_revenue: number;
+    stars_usd_rate: number;
+    revenue_usd: number;
+    recurring_expenses: number;
+    one_off_expenses: number;
+    ai_clip_cost: number;
+    expenses_usd: number;
+    net_usd: number;
+  };
+}
+
+export async function getAdminOverview(token: string): Promise<AdminOverview> {
+  const res = await fetch(`${API_URL}/admin/overview`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch admin overview");
+  return res.json();
+}

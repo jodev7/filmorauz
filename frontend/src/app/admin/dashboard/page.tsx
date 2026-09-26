@@ -9,6 +9,7 @@ import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
 import SystemStatusBlock from "@/components/admin/SystemStatusBlock";
 import DashboardCharts from "@/components/admin/DashboardCharts";
+import AdminOverviewBlocks from "@/components/admin/AdminOverviewBlocks";
 import { useVisibleInterval } from "@/lib/use-visible-interval";
 
 // Short Uzbek relative-time label for the live-session "last seen" column.
@@ -143,6 +144,9 @@ export default function AdminDashboard() {
           Xush kelibsiz{user?.display_name ? `, ${user.display_name}` : ""}. Bu yerda nima bo'layotganini ko'ring.
         </p>
       </div>
+
+      {/* Needs attention, pipeline health, content quality, finance */}
+      <AdminOverviewBlocks />
 
       {/* VPS / fleet status */}
       <SystemStatusBlock />
