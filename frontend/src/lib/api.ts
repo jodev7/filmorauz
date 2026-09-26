@@ -5374,6 +5374,7 @@ export interface AdminOverview {
     pending_appeals: number;
     pending_suggestions: number;
     pending_comments: number;
+    reported_comments?: number;
     playback_reports: number;
     pending_approvals: number;
     premium_expiring_3d: number;

@@ -166,6 +166,8 @@ func (r *CommentRepository) GetByMovieID(movieID primitive.ObjectID, limit, skip
 			UserID:              c.UserID,
 			ParentID:            c.ParentID,
 			Content:             c.Content,
+			IsSpoiler:           c.IsSpoiler,
+			ReportsCount:        c.ReportsCount,
 			Status:              c.Status,
 			HasBlockedWord:      c.HasBlockedWord,
 			HasLink:             c.HasLink,
@@ -222,6 +224,8 @@ func (r *CommentRepository) GetReplies(parentID primitive.ObjectID) ([]models.Co
 			UserID:              c.UserID,
 			ParentID:            c.ParentID,
 			Content:             c.Content,
+			IsSpoiler:           c.IsSpoiler,
+			ReportsCount:        c.ReportsCount,
 			Status:              c.Status,
 			HasBlockedWord:      c.HasBlockedWord,
 			HasLink:             c.HasLink,
@@ -318,6 +322,8 @@ func (r *CommentRepository) GetAllApprovedByMovieID(movieID primitive.ObjectID, 
 			UserID:              c.UserID,
 			ParentID:            c.ParentID,
 			Content:             c.Content,
+			IsSpoiler:           c.IsSpoiler,
+			ReportsCount:        c.ReportsCount,
 			Status:              c.Status,
 			HasBlockedWord:      c.HasBlockedWord,
 			HasLink:             c.HasLink,
@@ -384,6 +390,8 @@ func (r *CommentRepository) GetByStatus(status string, page, limit int) ([]model
 			UserID:              comment.UserID,
 			ParentID:            comment.ParentID,
 			Content:             comment.Content,
+			IsSpoiler:           comment.IsSpoiler,
+			ReportsCount:        comment.ReportsCount,
 			Status:              comment.Status,
 			HasBlockedWord:      comment.HasBlockedWord,
 			HasLink:             comment.HasLink,
@@ -652,6 +660,8 @@ func hydrateAdminComment(raw bson.M) models.MovieComment {
 		IsPremiumUser:  boolFromAny(raw["is_premium_user"]),
 		LikesCount:     intFromAny(raw["likes_count"]),
 		LikedBy:        objectIDSliceFromAny(raw["liked_by"]),
+		IsSpoiler:      boolFromAny(raw["is_spoiler"]),
+		ReportsCount:   intFromAny(raw["reports_count"]),
 	}
 	if comment.Status == "" {
 		comment.Status = models.CommentStatusApproved
@@ -890,6 +900,8 @@ func (r *CommentRepository) GetByTarget(targetType models.CommentTargetType, tar
 			UserID:              c.UserID,
 			ParentID:            c.ParentID,
 			Content:             c.Content,
+			IsSpoiler:           c.IsSpoiler,
+			ReportsCount:        c.ReportsCount,
 			Status:              c.Status,
 			HasBlockedWord:      c.HasBlockedWord,
 			HasLink:             c.HasLink,
@@ -974,6 +986,8 @@ func (r *CommentRepository) GetAllApprovedByTarget(targetType models.CommentTarg
 			UserID:              c.UserID,
 			ParentID:            c.ParentID,
 			Content:             c.Content,
+			IsSpoiler:           c.IsSpoiler,
+			ReportsCount:        c.ReportsCount,
 			Status:              c.Status,
 			HasBlockedWord:      c.HasBlockedWord,
 			HasLink:             c.HasLink,
@@ -1036,6 +1050,8 @@ func (r *CommentRepository) GetRepliesByTarget(parentID primitive.ObjectID, targ
 			UserID:              c.UserID,
 			ParentID:            c.ParentID,
 			Content:             c.Content,
+			IsSpoiler:           c.IsSpoiler,
+			ReportsCount:        c.ReportsCount,
 			Status:              c.Status,
 			HasBlockedWord:      c.HasBlockedWord,
 			HasLink:             c.HasLink,
@@ -1054,4 +1070,12 @@ func (r *CommentRepository) GetRepliesByTarget(parentID primitive.ObjectID, targ
 	}
 
 	return result, nil
+}
+
+// SetSpoiler marks/unmarks a comment as a spoiler.
+func (r *CommentRepository) SetSpoiler(id primitive.ObjectID, spoiler bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := r.col.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"is_spoiler": spoiler}})
+	return err
 }

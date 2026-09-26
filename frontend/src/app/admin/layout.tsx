@@ -7,7 +7,7 @@ import { Film, LogOut, ChevronDown, Menu, X, Search } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { getAdminBadges, AdminBadges } from "@/lib/api";
 import { useVisibleInterval } from "@/lib/use-visible-interval";
-import { visibleNav, activeHref } from "@/components/admin/admin-nav";
+import { visibleNav, activeHref, badgeCount } from "@/components/admin/admin-nav";
 import CommandPalette from "@/components/admin/CommandPalette";
 import { ToastProvider } from "@/components/admin/Toast";
 import { isFullAdminRole, isModeratorRole, moderatorCanOpen, MODERATOR_HOME } from "@/lib/roles";
@@ -179,7 +179,7 @@ export default function AdminLayout({
       <nav className="flex-1 px-3 py-3 space-y-3 overflow-y-auto" aria-label="Admin bo'limlari">
         {nav.map((group) => {
           const isCollapsed = collapsed.has(group.id);
-          const groupBadge = group.items.reduce((sum, i) => sum + (i.badge && badges ? badges[i.badge] || 0 : 0), 0);
+          const groupBadge = group.items.reduce((sum, i) => sum + badgeCount(i.badge, badges), 0);
           return (
             <div key={group.id}>
               <button
@@ -197,7 +197,7 @@ export default function AdminLayout({
                 <div className="mt-1 space-y-0.5">
                   {group.items.map((item) => {
                     const active = currentHref === item.href;
-                    const count = item.badge && badges ? badges[item.badge] || 0 : 0;
+                    const count = badgeCount(item.badge, badges);
                     return (
                       <Link
                         key={item.href}

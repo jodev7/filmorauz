@@ -37,6 +37,7 @@ type CommentRequest struct {
 	Content    string `json:"content" binding:"required"`
 	TargetType string `json:"target_type"` // "movie" or "episode"
 	TargetID   string `json:"target_id"`   // ID of movie or episode
+	IsSpoiler  bool   `json:"is_spoiler"`  // show blurred until the reader opts in
 }
 
 // EpisodeCommentRequest is the request body for creating an episode comment
@@ -46,7 +47,8 @@ type EpisodeCommentRequest struct {
 
 // ReplyRequest is the request body for replying to a comment
 type ReplyRequest struct {
-	Content string `json:"content" binding:"required"`
+	Content   string `json:"content" binding:"required"`
+	IsSpoiler bool   `json:"is_spoiler"`
 }
 
 // UpdateCommentRequest is the request body for updating a comment
@@ -335,6 +337,11 @@ func (h *CommentHandler) CreateComment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if req.IsSpoiler {
+		if err := h.commentService.MarkSpoiler(comment.ID); err == nil {
+			comment.IsSpoiler = true
+		}
+	}
 
 	// Return appropriate response based on status
 	if comment.Status == "pending" {
@@ -425,6 +432,11 @@ func (h *CommentHandler) CreateReply(c *gin.Context) {
 	}
 
 	comment, err := h.commentService.CreateComment(parentComment.MovieID, userOID, req.Content, &parentID, targetType, targetID)
+	if err == nil && req.IsSpoiler {
+		if markErr := h.commentService.MarkSpoiler(comment.ID); markErr == nil {
+			comment.IsSpoiler = true
+		}
+	}
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

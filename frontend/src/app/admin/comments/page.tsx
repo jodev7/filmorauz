@@ -7,6 +7,7 @@ import { MessageSquare, Search, ChevronLeft, ChevronRight, Check, X, Trash2, Eye
 import { useAuth } from "@/lib/auth-context";
 import { isStaffRole } from "@/lib/roles";
 import { getAdminComments, updateCommentStatus, adminDeleteComment, AdminComment, CommentStatus } from "@/lib/comments-api";
+import ReportedCommentsPanel from "@/components/admin/ReportedCommentsPanel";
 
 export default function AdminCommentsPage() {
   const { token, isLoading: authLoading, user } = useAuth();
@@ -150,6 +151,9 @@ export default function AdminCommentsPage() {
           Film izohlarini boshqarish va moderatsiya qilish
         </p>
       </div>
+
+      {/* User reports ("shikoyatlar") — hidden when there are none */}
+      {token && <ReportedCommentsPanel token={token} />}
 
       {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-4 mb-6">

@@ -24,6 +24,7 @@ const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot
 const StarRating = dynamicImport(() => import("@/components/StarRating"));
 const SeriesShareButton = dynamicImport(() => import("@/components/SeriesShareButton"));
 const LibraryButtons = dynamicImport(() => import("@/components/LibraryButtons"));
+const Reviews = dynamicImport(() => import("@/components/Reviews"));
 
 interface Props {
   params: { slug: string };
@@ -270,6 +271,9 @@ export default async function SeriesDetailPage({ params }: Props) {
               />
             </section>
           )}
+
+          {/* Short reviews */}
+          <Reviews targetType="series" targetId={series.id} />
 
           {/* Content-similar series — "Sizga yoqishi mumkin" */}
           {relatedSeries.length > 0 && (

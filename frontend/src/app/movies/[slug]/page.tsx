@@ -36,6 +36,7 @@ const MovieActions = dynamicImport(() => import("@/components/MovieActions"));
 const LibraryButtons = dynamicImport(() => import("@/components/LibraryButtons"));
 const StarRating = dynamicImport(() => import("@/components/StarRating"));
 const Comments = dynamicImport(() => import("@/components/Comments"));
+const Reviews = dynamicImport(() => import("@/components/Reviews"));
 const ShareButton = dynamicImport(() => import("@/components/ShareButton"));
 const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
 
@@ -413,8 +414,9 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
           </section>
         )}
 
-        {/* Comments Section */}
+        {/* Reviews + Comments */}
         <section className="max-w-7xl mx-auto px-4 pb-12">
+          <Reviews targetType="movie" targetId={movie.id} />
           <Comments movieId={movie.id} />
         </section>
       </main>

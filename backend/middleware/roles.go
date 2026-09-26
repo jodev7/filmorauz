@@ -35,10 +35,10 @@ var moderatorRoutes = map[string]bool{
 	"POST /api/admin/appeals/:id/review":   true,
 
 	// Content suggestions from users.
-	"GET /api/admin/suggestions":       true,
-	"GET /api/admin/suggestions/stats": true,
-	"GET /api/admin/suggestions/:id":   true,
-	"PATCH /api/admin/suggestions/:id": true,
+	"GET /api/admin/suggestions":           true,
+	"GET /api/admin/suggestions/stats":     true,
+	"GET /api/admin/suggestions/:id":       true,
+	"PATCH /api/admin/suggestions/:id":     true,
 	"POST /api/admin/suggestions/:id/link": true,
 
 	// Comment moderation (settings are read-only for moderators).
@@ -46,6 +46,11 @@ var moderatorRoutes = map[string]bool{
 	"PATCH /api/v1/admin/comments/:id/status": true,
 	"DELETE /api/v1/admin/comments/:id":       true,
 	"GET /api/v1/admin/comment-settings":      true,
+
+	// Comment reports + review removal.
+	"GET /api/v1/admin/comments/reported":             true,
+	"POST /api/v1/admin/comments/:id/dismiss-reports": true,
+	"DELETE /api/v1/admin/reviews/:id":                true,
 }
 
 // ModeratorAllowed reports whether a moderator may call method+routePath,

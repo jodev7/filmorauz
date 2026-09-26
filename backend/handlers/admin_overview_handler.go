@@ -130,6 +130,7 @@ func (h *AdminOverviewHandler) attention(ctx context.Context, now time.Time) gin
 		"pending_appeals":     h.count(ctx, "ban_appeals", bson.M{"status": models.BanAppealStatusPending}),
 		"pending_suggestions": h.count(ctx, "suggestions", bson.M{"status": models.SuggestionStatusPending}),
 		"pending_comments":    h.count(ctx, "movie_comments", bson.M{"status": models.CommentStatusPending}),
+		"reported_comments":   h.count(ctx, "movie_comments", bson.M{"reports_count": bson.M{"$gt": 0}}),
 		"playback_reports":    h.count(ctx, "playback_reports", bson.M{"status": "new"}),
 		"pending_approvals":   h.count(ctx, "movies", bson.M{"approval_status": "pending"}),
 		"premium_expiring_3d": h.count(ctx, "users", bson.M{

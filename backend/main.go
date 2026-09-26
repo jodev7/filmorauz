@@ -384,11 +384,17 @@ func main() {
 	deleteJobHandler := handlers.NewDeleteJobHandler(repositories.NewDeleteJobRepository(db))
 
 	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler, deleteJobHandler, expenseHandler, announcementHandler, gifHandler, analyticsHandler, adminOverviewHandler, auditLogHandler, auditLogRepo)
+	communityRepo := repositories.NewCommunityRepository(db)
+	if err := communityRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure comment report/review indexes: %v", err)
+	}
+	communityHandler := handlers.NewCommunityHandler(db, communityRepo, commentService, ratingService)
 	routes.SetupExtras(r, routes.ExtraDeps{
 		AuthService:  authService,
 		AuditLogRepo: auditLogRepo,
 		Library:      libraryHandler,
 		Movies:       movieHandler,
+		Community:    communityHandler,
 	})
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)

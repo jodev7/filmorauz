@@ -34,8 +34,8 @@ export interface AdminNavItem {
   label: string;
   // Extra words the command palette matches on.
   keywords?: string;
-  // Which attention counter to show as a badge next to the item.
-  badge?: keyof AdminBadges;
+  // Which attention counter(s) to show (summed) as a badge next to the item.
+  badge?: keyof AdminBadges | (keyof AdminBadges)[];
   superadminOnly?: boolean;
   // Visible to the limited "moderator" role.
   moderator?: boolean;
@@ -80,7 +80,7 @@ export const ADMIN_NAV: AdminNavGroup[] = [
       { href: "/admin/users/ban-history", icon: History, label: "Ban tarixi", moderator: true },
       { href: "/admin/appeals", icon: MessageCircle, label: "Apellyatsiyalar", keywords: "appeals", badge: "pending_appeals", moderator: true },
       { href: "/admin/suggestions", icon: Lightbulb, label: "Tavsiyalar", keywords: "suggestions", badge: "pending_suggestions", moderator: true },
-      { href: "/admin/comments", icon: MessageSquare, label: "Comments", keywords: "kommentlar izohlar moderatsiya", badge: "pending_comments", moderator: true },
+      { href: "/admin/comments", icon: MessageSquare, label: "Comments", keywords: "kommentlar izohlar moderatsiya", badge: ["pending_comments", "reported_comments"], moderator: true },
       { href: "/admin/comments/settings", icon: Settings, label: "Comment Settings" },
       { href: "/admin/rooms", icon: Users, label: "Watch Rooms", keywords: "xonalar" },
     ],
@@ -125,4 +125,10 @@ export function activeHref(pathname: string, groups: AdminNavGroup[]): string | 
     }
   }
   return best;
+}
+
+export function badgeCount(badge: AdminNavItem["badge"], badges: AdminBadges | null): number {
+  if (!badge || !badges) return 0;
+  const keys = Array.isArray(badge) ? badge : [badge];
+  return keys.reduce((sum, k) => sum + (Number(badges[k]) || 0), 0);
 }

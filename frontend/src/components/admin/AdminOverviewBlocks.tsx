@@ -20,6 +20,7 @@ import {
   Wallet,
   FileText,
   PlayCircle,
+  Flag,
   type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
@@ -44,6 +45,7 @@ function NeedsAttention({ data }: { data: AdminOverview["attention"] }) {
     { label: "Ko'rib chiqilmagan apellyatsiyalar", value: data.pending_appeals, href: "/admin/appeals", icon: MessageCircle, tone: "warn" },
     { label: "Yangi tavsiyalar", value: data.pending_suggestions, href: "/admin/suggestions", icon: Lightbulb, tone: "warn" },
     { label: "Moderatsiyadagi kommentlar", value: data.pending_comments, href: "/admin/comments", icon: MessageSquare, tone: "warn" },
+    { label: "Shikoyat qilingan izohlar", value: data.reported_comments ?? 0, href: "/admin/comments", icon: Flag, tone: "bad" },
     { label: "Tasdiqlanmagan kinolar", value: data.pending_approvals, href: "/admin/movies", icon: Film, tone: "warn" },
     { label: "Video muammosi haqida xabarlar", value: data.playback_reports, href: "/admin/analytics", icon: PlayCircle, tone: "bad" },
     { label: "Xato bergan publish joblar (7 kun)", value: data.failed_publish_jobs_7d, href: "/admin/clips", icon: Send, tone: "bad" },
