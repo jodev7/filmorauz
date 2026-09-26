@@ -5406,3 +5406,34 @@ export async function getAdminOverview(token: string): Promise<AdminOverview> {
   if (!res.ok) throw new Error("Failed to fetch admin overview");
   return res.json();
 }
+
+// ─── Admin sidebar badges + global search ────────────────────────────────────
+
+export type AdminBadges = AdminOverview["attention"];
+
+export async function getAdminBadges(token: string): Promise<AdminBadges> {
+  const res = await fetch(`${API_URL}/admin/overview/badges`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch admin badges");
+  return res.json();
+}
+
+export interface AdminSearchResult {
+  kind: "movie" | "series" | "user";
+  id: string;
+  title: string;
+  subtitle?: string;
+}
+
+export async function adminGlobalSearch(token: string, q: string, signal?: AbortSignal): Promise<AdminSearchResult[]> {
+  const res = await fetch(`${API_URL}/admin/search?q=${encodeURIComponent(q)}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+    signal,
+  });
+  if (!res.ok) throw new Error("Admin search failed");
+  const json = await res.json();
+  return Array.isArray(json.results) ? json.results : [];
+}

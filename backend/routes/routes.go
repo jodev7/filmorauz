@@ -370,6 +370,8 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		// User management
 		admin.GET("/dashboard/stats", adminUserHandler.DashboardStats)
 		admin.GET("/overview", adminOverviewHandler.Overview)
+		admin.GET("/overview/badges", adminOverviewHandler.Badges)
+		admin.GET("/search", adminOverviewHandler.Search)
 		admin.GET("/analytics/top-movies", adminUserHandler.GetTopMovies)
 		admin.GET("/analytics/top-series", adminUserHandler.GetTopSeries)
 		admin.GET("/analytics/users", adminUserHandler.GetUserMetrics)

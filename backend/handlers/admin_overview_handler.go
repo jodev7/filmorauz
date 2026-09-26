@@ -122,17 +122,11 @@ func emptyField(field string) bson.M {
 	}}
 }
 
-// Overview GET /api/admin/overview
-func (h *AdminOverviewHandler) Overview(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
-	defer cancel()
-
-	now := time.Now()
-	dayAgo := now.Add(-24 * time.Hour)
+// attention returns the counts of items waiting for an admin. Shared by the
+// dashboard overview and the sidebar badges.
+func (h *AdminOverviewHandler) attention(ctx context.Context, now time.Time) gin.H {
 	weekAgo := now.Add(-7 * 24 * time.Hour)
-
-	// ── Needs attention ────────────────────────────────────────────────
-	attention := gin.H{
+	return gin.H{
 		"pending_appeals":     h.count(ctx, "ban_appeals", bson.M{"status": models.BanAppealStatusPending}),
 		"pending_suggestions": h.count(ctx, "suggestions", bson.M{"status": models.SuggestionStatusPending}),
 		"pending_comments":    h.count(ctx, "movie_comments", bson.M{"status": models.CommentStatusPending}),
@@ -147,6 +141,24 @@ func (h *AdminOverviewHandler) Overview(c *gin.Context) {
 			"updated_at": bson.M{"$gte": weekAgo},
 		}),
 	}
+}
+
+// Badges GET /api/admin/overview/badges — lightweight counts for sidebar badges.
+func (h *AdminOverviewHandler) Badges(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+	c.JSON(http.StatusOK, h.attention(ctx, time.Now()))
+}
+
+// Overview GET /api/admin/overview
+func (h *AdminOverviewHandler) Overview(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
+	now := time.Now()
+	dayAgo := now.Add(-24 * time.Hour)
+
+	attention := h.attention(ctx, now)
 
 	// ── Pipeline health (ingestion queue) ──────────────────────────────
 	ingestion := gin.H{}
