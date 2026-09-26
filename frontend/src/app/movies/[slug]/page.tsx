@@ -33,6 +33,7 @@ import {
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 const MovieActions = dynamicImport(() => import("@/components/MovieActions"));
+const LibraryButtons = dynamicImport(() => import("@/components/LibraryButtons"));
 const StarRating = dynamicImport(() => import("@/components/StarRating"));
 const Comments = dynamicImport(() => import("@/components/Comments"));
 const ShareButton = dynamicImport(() => import("@/components/ShareButton"));
@@ -345,6 +346,8 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
                 <div className="flex items-center gap-4">
                   <MovieActions movie={movie} />
                 </div>
+
+                <LibraryButtons targetType="movie" targetId={movie.id} title={localizedTitle} />
                 
                 {/* Rating */}
                 <div className="flex items-center gap-2 mt-4">

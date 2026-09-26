@@ -21,6 +21,9 @@ const (
 	NotificationCommentReply        NotificationType = "COMMENT_REPLY"
 	NotificationCommentLike         NotificationType = "COMMENT_LIKE"
 	NotificationRoomInvite          NotificationType = "ROOM_INVITE"
+	NotificationNewEpisode          NotificationType = "NEW_EPISODE"
+	NotificationSuggestionAdded     NotificationType = "SUGGESTION_ADDED"
+	NotificationReferralReward      NotificationType = "REFERRAL_REWARD"
 )
 
 // Notification represents a user notification

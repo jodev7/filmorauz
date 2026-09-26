@@ -4414,6 +4414,12 @@ export interface Suggestion {
   admin_message?: string;
   reviewed_by?: string;
   reviewed_at?: string;
+  // Content added because of this suggestion (see adminLinkSuggestion).
+  linked_type?: "movie" | "series";
+  linked_id?: string;
+  linked_slug?: string;
+  linked_title?: string;
+  linked_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -5497,4 +5503,79 @@ export async function getAdminAuditLogs(
   });
   if (!res.ok) throw new Error("Failed to fetch audit logs");
   return res.json();
+}
+
+// ─── User library: watch later + series subscriptions ────────────────────────
+
+export type LibraryTargetType = "movie" | "series";
+
+export interface LibraryItem {
+  target_type: LibraryTargetType;
+  target_id: string;
+  title: string;
+  title_uz?: string;
+  slug: string;
+  poster_url: string;
+  year?: number;
+  quality?: string;
+  is_premium: boolean;
+  rating_avg: number;
+  added_at: string;
+}
+
+export interface LibraryStatus {
+  in_watchlist: boolean;
+  subscribed?: boolean;
+}
+
+async function libraryRequest<T>(token: string, path: string, method = "GET"): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, { method, headers: authHeaders(token), cache: "no-store" });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || `Request failed: ${res.status}`);
+  return json as T;
+}
+
+export function getWatchlist(token: string): Promise<{ data: LibraryItem[]; total: number }> {
+  return libraryRequest(token, "/user/watchlist");
+}
+
+export function addToWatchlist(token: string, type: LibraryTargetType, id: string): Promise<LibraryStatus> {
+  return libraryRequest(token, `/user/watchlist/${type}/${id}`, "POST");
+}
+
+export function removeFromWatchlist(token: string, type: LibraryTargetType, id: string): Promise<LibraryStatus> {
+  return libraryRequest(token, `/user/watchlist/${type}/${id}`, "DELETE");
+}
+
+export function getLibraryStatus(token: string, type: LibraryTargetType, id: string): Promise<LibraryStatus> {
+  return libraryRequest(token, `/user/library/${type}/${id}`);
+}
+
+export function getSeriesSubscriptions(token: string): Promise<{ data: LibraryItem[]; total: number }> {
+  return libraryRequest(token, "/user/subscriptions");
+}
+
+export function subscribeSeries(token: string, seriesId: string): Promise<{ subscribed: boolean }> {
+  return libraryRequest(token, `/user/subscriptions/series/${seriesId}`, "POST");
+}
+
+export function unsubscribeSeries(token: string, seriesId: string): Promise<{ subscribed: boolean }> {
+  return libraryRequest(token, `/user/subscriptions/series/${seriesId}`, "DELETE");
+}
+
+// Admin: link a suggestion to the movie/series added for it (notifies the user).
+export async function adminLinkSuggestion(
+  token: string,
+  suggestionId: string,
+  targetType: LibraryTargetType,
+  targetId: string
+): Promise<{ success: boolean; notified: boolean; linked_title: string; linked_slug: string }> {
+  const res = await fetch(`${API_URL}/admin/suggestions/${suggestionId}/link`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ target_type: targetType, target_id: targetId }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || "Bog'lab bo'lmadi");
+  return json;
 }

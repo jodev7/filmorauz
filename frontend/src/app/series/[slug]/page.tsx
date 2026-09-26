@@ -23,6 +23,7 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
 const StarRating = dynamicImport(() => import("@/components/StarRating"));
 const SeriesShareButton = dynamicImport(() => import("@/components/SeriesShareButton"));
+const LibraryButtons = dynamicImport(() => import("@/components/LibraryButtons"));
 
 interface Props {
   params: { slug: string };
@@ -239,6 +240,10 @@ export default async function SeriesDetailPage({ params }: Props) {
               <div className="mb-4 flex flex-wrap items-start gap-2">
                 <WatchTogetherButton contentType="series" contentID={series.id} />
                 <SeriesShareButton seriesId={series.id} seriesTitle={series.title} />
+              </div>
+
+              <div className="mb-4">
+                <LibraryButtons targetType="series" targetId={series.id} title={series.title} />
               </div>
 
               <div className="mb-6">

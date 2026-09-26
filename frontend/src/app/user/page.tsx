@@ -13,6 +13,7 @@ import { Heart, History, User as UserIcon, Crown, Calendar, Shield, Clock, Camer
 import { PremiumBadge, PremiumButton, PremiumAvatarRing, resolveIsPremium, resolvePremiumStatus } from "@/components/PremiumComponents";
 import { getFavorites, getWatchHistory, getCurrentUser, updateProfile, uploadProfileImage, updateProfileStyle, updatePrivacySettings, ProfileStyle } from "@/lib/api";
 import SuggestionModal from "@/components/SuggestionModal";
+import UserLibrarySections from "@/components/UserLibrarySections";
 import TelegramLoginModal from "@/components/TelegramLoginModal";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { CurrentUser } from "@/lib/api";
@@ -1143,6 +1144,9 @@ export default function UserPage() {
                   />
                 </section>
               )}
+
+              {/* Watch later + followed series */}
+              <UserLibrarySections />
 
               {/* Favorites section - Carousel */}
               <section className="mb-10">

@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { getNotifications, getUnreadNotificationCount, markNotificationAsRead, markAllNotificationsAsRead, deleteNotification, Notification } from "@/lib/api";
-import { Bell, Check, CheckCheck, X, Clock, Gift, AlertTriangle, MessageCircle, Ban, FileText } from "lucide-react";
+import { Bell, Check, CheckCheck, X, Clock, Gift, AlertTriangle, MessageCircle, Ban, FileText, PlayCircle, Lightbulb } from "lucide-react";
 import MediaImage from "@/components/ui/MediaImage";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 
@@ -133,6 +133,13 @@ export default function NotificationBell() {
         return <MessageCircle className="w-5 h-5 text-pink-400" />;
       case "ROOM_INVITE":
         return <Bell className="w-5 h-5 text-purple-400" />;
+      case "NEW_EPISODE":
+        return <PlayCircle className="w-5 h-5 text-emerald-400" />;
+      case "SUGGESTION_ADDED":
+      case "SUGGESTION_STATUS":
+        return <Lightbulb className="w-5 h-5 text-amber-400" />;
+      case "REFERRAL_REWARD":
+        return <Gift className="w-5 h-5 text-yellow-400" />;
       default:
         return <Bell className="w-5 h-5 text-gray-400" />;
     }

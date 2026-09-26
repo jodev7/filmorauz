@@ -39,6 +39,7 @@ var moderatorRoutes = map[string]bool{
 	"GET /api/admin/suggestions/stats": true,
 	"GET /api/admin/suggestions/:id":   true,
 	"PATCH /api/admin/suggestions/:id": true,
+	"POST /api/admin/suggestions/:id/link": true,
 
 	// Comment moderation (settings are read-only for moderators).
 	"GET /api/v1/admin/comments":              true,

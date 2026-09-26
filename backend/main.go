@@ -104,6 +104,7 @@ func main() {
 	// Initialize notification repository for in-app notifications
 	notificationRepo := repositories.NewNotificationRepository(db)
 	notificationService.SetRepositories(notificationRepo, userRepo)
+	notificationService.SetSiteURL(cfg.BaseSiteURL)
 
 	authService := services.NewAuthService(userRepo, authSessionRepo, cfg.JWTSecret)
 
@@ -207,6 +208,11 @@ func main() {
 		log.Printf("Warning: Failed to ensure admin_audit_logs indexes: %v", err)
 	}
 	auditLogHandler := handlers.NewAuditLogHandler(auditLogRepo)
+	libraryRepo := repositories.NewLibraryRepository(db)
+	if err := libraryRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure watchlist/subscription indexes: %v", err)
+	}
+	libraryHandler := handlers.NewLibraryHandler(db, libraryRepo, notificationService)
 	movieHandler.SetAnalyticsRepository(analyticsRepo)
 	
 	userHandler := handlers.NewUserHandler(watchHistoryRepo, favoriteRepo, movieRepo, seriesRepo, userRepo, analyticsRepo)
@@ -378,6 +384,11 @@ func main() {
 	deleteJobHandler := handlers.NewDeleteJobHandler(repositories.NewDeleteJobRepository(db))
 
 	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler, deleteJobHandler, expenseHandler, announcementHandler, gifHandler, analyticsHandler, adminOverviewHandler, auditLogHandler, auditLogRepo)
+	routes.SetupExtras(r, routes.ExtraDeps{
+		AuthService:  authService,
+		AuditLogRepo: auditLogRepo,
+		Library:      libraryHandler,
+	})
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)
 	seoNotifier := buildSEONotifier(cfg, db)
@@ -406,6 +417,9 @@ func main() {
 
 	// Start premium cleanup background job (runs every 10 minutes)
 	go startPremiumCleanupJob(userRepo, notificationService)
+
+	// Tell series subscribers about newly playable episodes (site + Telegram).
+	go services.NewEpisodeNotifier(db, libraryRepo, notificationService).Start(context.Background())
 
 	// Start content-deletion worker (runs every 10s). Executes queued
 	// DeleteJobs in-process — full B2 + Mongo cascade with progress written

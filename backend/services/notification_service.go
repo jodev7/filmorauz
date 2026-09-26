@@ -26,6 +26,7 @@ type NotificationService struct {
 	botToken         string
 	botUsername      string
 	channelUsername  string
+	siteURL          string
 }
 
 // NewNotificationServiceWithConfig creates a new NotificationService with config

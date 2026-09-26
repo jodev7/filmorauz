@@ -3,6 +3,7 @@ package routes
 import (
 	"testing"
 
+	"github.com/filmorauz/backend/handlers"
 	"github.com/filmorauz/backend/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -16,6 +17,8 @@ func TestModeratorRoutesExist(t *testing.T) {
 	// Handlers are only referenced (method values), never called, so nil
 	// receivers are fine for building the route table.
 	Setup(r, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	SetupExtras(r, ExtraDeps{Library: &handlers.LibraryHandler{}})
 
 	registered := map[string]bool{}
 	for _, rt := range r.Routes() {
