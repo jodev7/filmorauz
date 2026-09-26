@@ -308,6 +308,50 @@ function loadSeekStep(): number {
   return SEEK_STEPS.includes(v) ? v : 10;
 }
 
+// Remembered between videos and visits: speed, volume/mute and the
+// preferred quality (by height, -1 = Auto).
+const PLAYER_PREFS_KEY = "filmorauz:player:prefs";
+
+interface PlayerPrefs {
+  speed?: number;
+  volume?: number;
+  muted?: boolean;
+  qualityHeight?: number;
+}
+
+function loadPlayerPrefs(): PlayerPrefs {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(PLAYER_PREFS_KEY);
+    const parsed = raw ? (JSON.parse(raw) as PlayerPrefs) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePlayerPrefs(patch: Partial<PlayerPrefs>) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PLAYER_PREFS_KEY, JSON.stringify({ ...loadPlayerPrefs(), ...patch }));
+  } catch {
+    // storage full/blocked — preferences just won't persist
+  }
+}
+
+const SHORTCUTS: [string, string][] = [
+  ["Probel / K", "Ijro / pauza"],
+  ["← / →", "Orqaga / oldinga (qadam sozlamada)"],
+  ["J / L", "10 soniya orqaga / oldinga"],
+  ["↑ / ↓", "Ovozni oshirish / pasaytirish"],
+  ["M", "Ovozni o'chirish / yoqish"],
+  ["F", "To'liq ekran"],
+  ["P", "Suzuvchi oyna"],
+  ["Shift + > / <", "Tezlikni oshirish / pasaytirish"],
+  ["0 – 9", "Videoning 0%–90% qismiga o'tish"],
+  ["?", "Shu ro'yxat"],
+];
+
 interface QualityLevel {
   index: number; // hls.js level index, -1 = Auto
   label: string;
@@ -434,6 +478,18 @@ function HLSPlayer({
   const [isPiP, setIsPiP] = useState(false);
   const [pipSupported, setPipSupported] = useState(false);
   const [settingsPane, setSettingsPane] = useState<"root" | "quality" | "speed" | "seek">("root");
+  // On-screen indicator for keyboard actions ("1.5x", "Ovoz 60%") and the
+  // shortcuts help panel.
+  const [osd, setOsd] = useState<string | null>(null);
+  const osdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const prefsRef = useRef<PlayerPrefs>({});
+
+  const showOsd = useCallback((text: string) => {
+    setOsd(text);
+    if (osdTimer.current) clearTimeout(osdTimer.current);
+    osdTimer.current = setTimeout(() => setOsd(null), 900);
+  }, []);
 
   // Progress hover preview
   const progressContainerRef = useRef<HTMLDivElement>(null);
@@ -556,6 +612,21 @@ function HLSPlayer({
 
   useEffect(() => {
     setSeekStep(loadSeekStep());
+    // Restore remembered speed / volume / mute.
+    const prefs = loadPlayerPrefs();
+    prefsRef.current = prefs;
+    if (prefs.speed && SPEEDS.includes(prefs.speed)) setSelectedSpeed(prefs.speed);
+    const video = videoRef.current;
+    if (video) {
+      if (typeof prefs.volume === "number" && prefs.volume >= 0 && prefs.volume <= 1) video.volume = prefs.volume;
+      if (prefs.muted) video.muted = true;
+    }
+  }, []);
+
+  // Speed changes from the menu or keyboard are remembered.
+  const changeSpeed = useCallback((speed: number) => {
+    setSelectedSpeed(speed);
+    savePlayerPrefs({ speed });
   }, []);
 
   // Try to apply the saved-progress seek. Safe to call repeatedly: it bails if
@@ -737,6 +808,13 @@ function HLSPlayer({
           hls.nextAutoLevel = maxFreeLevelIndex;
         }
         setQualities(levels);
+        // Restore the remembered manual quality when this video has it
+        // (and it isn't premium-locked for this user).
+        const preferredHeight = prefsRef.current.qualityHeight;
+        if (preferredHeight && preferredHeight > 0) {
+          const preferred = levels.find((l) => l.height === preferredHeight && !l.locked);
+          if (preferred) hls.currentLevel = preferred.index;
+        }
         syncSelectedQualityFromHls(hls);
         if (shouldAutoPlay) {
           video.play().catch(() => {});
@@ -843,6 +921,8 @@ function HLSPlayer({
     if (!hls) return;
     hls.currentLevel = quality.index;
     syncSelectedQualityFromHls(hls, quality.index);
+    prefsRef.current.qualityHeight = quality.index === -1 ? -1 : quality.height;
+    savePlayerPrefs({ qualityHeight: prefsRef.current.qualityHeight });
     // Seek to current position to flush buffered old-quality data and reload at new level
     if (video) {
       const t = video.currentTime;
@@ -857,7 +937,10 @@ function HLSPlayer({
     }
   }, [selectedSpeed]);
 
-  // Keyboard: space (play/pause), ArrowLeft/ArrowRight (seek)
+  // Keyboard shortcuts (see SHORTCUTS). Fullscreen / PiP toggles are
+  // defined further down as plain functions, so they're reached via refs.
+  const fullscreenRef = useRef<() => void>(() => {});
+  const pipRef = useRef<() => void>(() => {});
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
@@ -867,37 +950,85 @@ function HLSPlayer({
         target.tagName === "SELECT" ||
         target.isContentEditable
       ) return;
+      // Leave browser/OS shortcuts (Ctrl+F, Cmd+K, …) alone.
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === "?") {
+        e.preventDefault();
+        setShowShortcuts((v) => !v);
+        return;
+      }
+      if (e.key === "Escape") {
+        setShowShortcuts(false);
+        return;
+      }
       if (adActive) return;
       const video = videoRef.current;
       if (!video) return;
-      if (e.code === "Space") {
-        e.preventDefault();
+      const togglePlayback = () => {
         if (video.paused) video.play();
         else video.pause();
+      };
+      const setVol = (v: number) => {
+        video.muted = false;
+        video.volume = Math.max(0, Math.min(1, v));
+        showOsd(`Ovoz ${Math.round(video.volume * 100)}%`);
+      };
+      if (e.code === "Space" || e.code === "KeyK") {
+        e.preventDefault();
+        togglePlayback();
       } else if (e.code === "ArrowRight") {
         e.preventDefault();
         seekBy(seekStep);
+        showOsd(`+${seekStep}s`);
         resetControlsTimer();
       } else if (e.code === "ArrowLeft") {
         e.preventDefault();
         seekBy(-seekStep);
+        showOsd(`−${seekStep}s`);
         resetControlsTimer();
+      } else if (e.code === "KeyL") {
+        e.preventDefault();
+        seekBy(10);
+        showOsd("+10s");
+      } else if (e.code === "KeyJ") {
+        e.preventDefault();
+        seekBy(-10);
+        showOsd("−10s");
       } else if (e.code === "ArrowUp") {
         e.preventDefault();
-        const next = Math.min(1, (video.muted ? 0 : video.volume) + 0.05);
-        video.muted = false;
-        video.volume = next;
+        setVol((video.muted ? 0 : video.volume) + 0.05);
         resetControlsTimer();
       } else if (e.code === "ArrowDown") {
         e.preventDefault();
-        const next = Math.max(0, (video.muted ? 0 : video.volume) - 0.05);
-        video.volume = next;
+        setVol((video.muted ? 0 : video.volume) - 0.05);
         resetControlsTimer();
+      } else if (e.code === "KeyM") {
+        e.preventDefault();
+        video.muted = !video.muted;
+        showOsd(video.muted ? "Ovoz o'chirildi" : `Ovoz ${Math.round(video.volume * 100)}%`);
+      } else if (e.code === "KeyF") {
+        e.preventDefault();
+        fullscreenRef.current();
+      } else if (e.code === "KeyP") {
+        e.preventDefault();
+        pipRef.current();
+      } else if (e.shiftKey && (e.code === "Period" || e.code === "Comma")) {
+        e.preventDefault();
+        const i = SPEEDS.indexOf(video.playbackRate);
+        const idx = i === -1 ? SPEEDS.indexOf(1) : i;
+        const next = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, idx + (e.code === "Period" ? 1 : -1)))];
+        changeSpeed(next);
+        showOsd(`${next}x`);
+      } else if (/^Digit[0-9]$/.test(e.code) && isFinite(video.duration) && video.duration > 0) {
+        e.preventDefault();
+        const pct = Number(e.code.slice(5)) / 10;
+        video.currentTime = video.duration * pct;
+        showOsd(`${pct * 100}%`);
       }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [seekStep, seekBy, resetControlsTimer, adActive]);
+  }, [seekStep, seekBy, resetControlsTimer, adActive, showOsd, changeSpeed]);
 
   // Video event listeners
   useEffect(() => {
@@ -939,6 +1070,7 @@ function HLSPlayer({
     const onVolumeChange = () => {
       setVolume(video.volume);
       setMuted(video.muted);
+      savePlayerPrefs({ volume: video.volume, muted: video.muted });
     };
     const onVideoEnded = () => {
       setPlaying(false);
@@ -1142,6 +1274,11 @@ function HLSPlayer({
     }
   };
 
+  fullscreenRef.current = toggleFullscreen;
+  pipRef.current = () => {
+    if (pipSupported) void togglePictureInPicture();
+  };
+
   const qualityLabel = useMemo(() => {
     if (selectedQuality === -1) return "Auto";
     const fromQualities = qualities.find((q) => q.index === selectedQuality);
@@ -1316,6 +1453,38 @@ function HLSPlayer({
               </Link>
             )
           )}
+        </div>
+      )}
+
+      {/* Keyboard action indicator */}
+      {osd && (
+        <div className="pointer-events-none absolute left-1/2 top-6 z-40 -translate-x-1/2 rounded-lg bg-black/75 px-3 py-1.5 text-sm font-semibold text-white" role="status">
+          {osd}
+        </div>
+      )}
+
+      {/* Keyboard shortcuts help ("?") */}
+      {showShortcuts && (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setShowShortcuts(false)}
+          role="dialog"
+          aria-label="Klaviatura tugmalari"
+        >
+          <div className="w-full max-w-sm rounded-xl border border-white/10 bg-black/90 p-4" onClick={(e) => e.stopPropagation()}>
+            <p className="mb-3 text-sm font-semibold text-white">Klaviatura tugmalari</p>
+            <dl className="space-y-1.5 text-xs">
+              {SHORTCUTS.map(([keys, action]) => (
+                <div key={keys} className="flex items-center justify-between gap-4">
+                  <dt className="font-mono text-white/90">{keys}</dt>
+                  <dd className="text-right text-white/60">{action}</dd>
+                </div>
+              ))}
+            </dl>
+            <button onClick={() => setShowShortcuts(false)} className="mt-4 w-full rounded-lg bg-white/10 py-1.5 text-xs text-white hover:bg-white/20">
+              Yopish (Esc)
+            </button>
+          </div>
         </div>
       )}
 
@@ -1594,6 +1763,13 @@ function HLSPlayer({
                         <span>Olg‘a/orqa qadami</span>
                         <span className="text-white/60">{seekStep}s</span>
                       </button>
+                      <button
+                        onClick={() => { setShowSettings(false); setShowShortcuts(true); }}
+                        className="hidden sm:flex w-full items-center justify-between px-3 py-2 text-left text-white hover:bg-white/10"
+                      >
+                        <span>Klaviatura tugmalari</span>
+                        <span className="text-white/60">?</span>
+                      </button>
                     </div>
                   )}
 
@@ -1631,7 +1807,7 @@ function HLSPlayer({
                       {SPEEDS.map((s) => (
                         <button
                           key={s}
-                          onClick={() => { setSelectedSpeed(s); setSettingsPane("root"); }}
+                          onClick={() => { changeSpeed(s); setSettingsPane("root"); }}
                           className={`block w-full px-3 py-1.5 text-left hover:bg-white/10 transition-colors ${
                             s === selectedSpeed ? "text-brand-red font-semibold" : "text-white"
                           }`}
