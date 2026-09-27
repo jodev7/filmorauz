@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -33,6 +34,8 @@ func (h *AuditLogHandler) List(c *gin.Context) {
 		Failed:  c.Query("failed") == "1" || c.Query("failed") == "true",
 	}, page, limit)
 	if err != nil {
+		log.Printf("[AUDIT] list failed: %v", err)
+		_ = c.Error(err) // surfaces the cause on /admin/errors
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load audit logs"})
 		return
 	}

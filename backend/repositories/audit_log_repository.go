@@ -2,6 +2,8 @@ package repositories
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -134,9 +136,89 @@ func (r *AuditLogRepository) List(ctx context.Context, f AuditLogFilter, page, l
 		return nil, 0, err
 	}
 	defer cursor.Close(ctx)
+	// Decode entry by entry: one odd document (legacy field types, a
+	// non-string name on the joined user...) must not fail the whole page.
 	out := []AuditLogView{}
-	if err := cursor.All(ctx, &out); err != nil {
+	for cursor.Next(ctx) {
+		var v AuditLogView
+		if err := cursor.Decode(&v); err == nil {
+			out = append(out, v)
+			continue
+		} else {
+			log.Printf("[AUDIT] lenient decode for %v: %v", cursor.Current.Lookup("_id"), err)
+		}
+		out = append(out, lenientAuditView(cursor.Current))
+	}
+	if err := cursor.Err(); err != nil {
 		return nil, 0, err
 	}
 	return out, total, nil
+}
+
+// rawToString renders any BSON scalar as plain text ("7", "true", ...).
+func rawToString(val bson.RawValue) string {
+	if s, ok := val.StringValueOK(); ok {
+		return s
+	}
+	var x interface{}
+	if val.Unmarshal(&x) != nil || x == nil {
+		return ""
+	}
+	return fmt.Sprint(x)
+}
+
+// lenientAuditView builds a view from a raw document field by field,
+// skipping anything whose type doesn't fit.
+func lenientAuditView(raw bson.Raw) AuditLogView {
+	var v AuditLogView
+	str := func(key string) string {
+		if val, err := raw.LookupErr(key); err == nil {
+			return rawToString(val)
+		}
+		return ""
+	}
+	num := func(key string) int64 {
+		if val, err := raw.LookupErr(key); err == nil {
+			if n, ok := val.AsInt64OK(); ok {
+				return n
+			}
+		}
+		return 0
+	}
+	if val, err := raw.LookupErr("_id"); err == nil {
+		v.ID, _ = val.ObjectIDOK()
+	}
+	v.ActorID = str("actor_id")
+	v.ActorRole = str("actor_role")
+	v.Method = str("method")
+	v.Route = str("route")
+	v.Path = str("path")
+	v.IP = str("ip")
+	v.UserAgent = str("user_agent")
+	v.Status = int(num("status"))
+	v.DurationMS = num("duration_ms")
+	if val, err := raw.LookupErr("created_at"); err == nil {
+		if t, ok := val.TimeOK(); ok {
+			v.CreatedAt = t
+		}
+	}
+	if val, err := raw.LookupErr("params"); err == nil {
+		if doc, ok := val.DocumentOK(); ok {
+			v.Params = map[string]string{}
+			if elems, err := doc.Elements(); err == nil {
+				for _, e := range elems {
+					v.Params[e.Key()] = rawToString(e.Value())
+				}
+			}
+		}
+	}
+	if val, err := raw.LookupErr("body"); err == nil {
+		if doc, ok := val.DocumentOK(); ok {
+			var m bson.M
+			if bson.Unmarshal(doc, &m) == nil {
+				v.Body = m
+			}
+		}
+	}
+	return v
 }
