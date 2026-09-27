@@ -39,10 +39,24 @@ function Toggle({ on, disabled, onChange, label }: { on: boolean; disabled?: boo
       aria-label={label}
       disabled={disabled}
       onClick={onChange}
-      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${on ? "bg-orange-500" : "bg-white/15"}`}
+      className={`group inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0e0e15] disabled:cursor-not-allowed disabled:opacity-40 ${
+        on ? "border-orange-500 bg-orange-500" : "border-white/15 bg-white/10 hover:bg-white/15"
+      }`}
     >
-      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${on ? "translate-x-[22px]" : "translate-x-0.5"}`} />
+      <span
+        aria-hidden="true"
+        className={`h-[22px] w-[22px] rounded-full bg-white shadow-md transition-transform duration-200 ease-out ${on ? "translate-x-5" : "translate-x-0"}`}
+      />
     </button>
+  );
+}
+
+// Shown instead of a switch where the choice isn't the user's to make.
+function FixedCell({ text, title }: { text: string; title: string }) {
+  return (
+    <span title={title} className="inline-flex h-7 w-12 items-center justify-center rounded-full border border-white/10 text-[11px] text-gray-500">
+      {text}
+    </span>
   );
 }
 
@@ -209,7 +223,7 @@ export default function NotificationSettings() {
             {saveState === "error" && <span className="text-red-400">Saqlanmadi</span>}
           </span>
         </div>
-        <div className="hidden grid-cols-[1fr_repeat(3,80px)] gap-2 border-b border-white/5 px-5 py-2 text-xs text-gray-500 sm:grid">
+        <div className="hidden grid-cols-[1fr_repeat(3,88px)] gap-2 border-b border-white/5 px-5 py-2 text-xs text-gray-500 sm:grid">
           <span />
           {CHANNELS.map((c) => (
             <span key={c.key} className="flex items-center justify-center gap-1">
@@ -221,25 +235,27 @@ export default function NotificationSettings() {
           {settings.categories.map((cat) => {
             const meta = CATEGORY_META[cat] ?? { label: cat, hint: "", telegram: false };
             return (
-              <li key={cat} className="grid grid-cols-1 gap-3 px-5 py-4 sm:grid-cols-[1fr_repeat(3,80px)] sm:items-center sm:gap-2">
-                <div>
+              <li key={cat} className="grid grid-cols-3 gap-2 px-5 py-4 sm:grid-cols-[1fr_repeat(3,88px)] sm:items-center">
+                <div className="col-span-3 sm:col-span-1">
                   <p className="text-sm font-medium text-white">{meta.label}</p>
                   <p className="text-xs text-gray-500">{meta.hint}</p>
                 </div>
                 {CHANNELS.map((ch) => {
-                  const unavailable =
-                    (ch.key === "telegram" && !meta.telegram) || (ch.key === "site" && cat === "account") || (ch.key === "push" && !pushConfigured);
+                  const noTelegram = ch.key === "telegram" && !meta.telegram;
+                  const alwaysOn = ch.key === "site" && cat === "account";
                   return (
-                    <div key={ch.key} className="flex items-center justify-between gap-2 sm:justify-center">
+                    <div key={ch.key} className="flex flex-col items-center gap-1.5 rounded-xl bg-white/[0.03] px-2 py-2.5 sm:bg-transparent sm:p-0">
                       <span className="flex items-center gap-1.5 text-xs text-gray-400 sm:hidden">
                         {ch.icon} {ch.label}
                       </span>
-                      {ch.key === "telegram" && !meta.telegram ? (
-                        <span className="w-11 text-center text-xs text-gray-600" title="Bu turdagi xabar Telegramga yuborilmaydi">—</span>
+                      {noTelegram ? (
+                        <FixedCell text="Yo'q" title="Bu turdagi xabar Telegramga yuborilmaydi" />
+                      ) : alwaysOn ? (
+                        <FixedCell text="Doim" title="Akkaunt xabarlari saytda doim ko'rsatiladi" />
                       ) : (
                         <Toggle
                           on={!!prefs[cat]?.[ch.key]}
-                          disabled={unavailable}
+                          disabled={ch.key === "push" && !pushConfigured}
                           onChange={() => update(cat, ch.key)}
                           label={`${meta.label}: ${ch.label}`}
                         />
