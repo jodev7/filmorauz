@@ -143,8 +143,20 @@ func (r *MovieRepository) FindPersonCredits(name string, limit int) (*PersonCred
 // RandomMovie returns one random published, playable movie, optionally of a
 // genre and excluding some ids (the ones the user already skipped).
 func (r *MovieRepository) RandomMovie(genre string, exclude []primitive.ObjectID) (*models.Movie, error) {
+	list, err := r.RandomMovies(genre, exclude, 1)
+	if err != nil || len(list) == 0 {
+		return nil, err
+	}
+	return &list[0], nil
+}
+
+// RandomMovies returns up to n random published, playable movies.
+func (r *MovieRepository) RandomMovies(genre string, exclude []primitive.ObjectID, n int) ([]models.Movie, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if n < 1 {
+		n = 1
+	}
 
 	and := []bson.M{publishedMovieFilter, {"$or": []bson.M{
 		{"video_url": bson.M{"$nin": bson.A{"", nil}}},
@@ -159,7 +171,7 @@ func (r *MovieRepository) RandomMovie(genre string, exclude []primitive.ObjectID
 	}
 	cur, err := r.col.Aggregate(ctx, mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{"$and": and}}},
-		{{Key: "$sample", Value: bson.M{"size": 1}}},
+		{{Key: "$sample", Value: bson.M{"size": n}}},
 	})
 	if err != nil {
 		return nil, err
@@ -169,8 +181,15 @@ func (r *MovieRepository) RandomMovie(genre string, exclude []primitive.ObjectID
 	if err := cur.All(ctx, &docs); err != nil {
 		return nil, err
 	}
-	if len(docs) == 0 {
-		return nil, nil
+	out := make([]models.Movie, 0, len(docs))
+	seen := make(map[string]bool, len(docs))
+	for _, d := range docs {
+		m, err := normalizeMovieFromBSON(d)
+		if err != nil || m == nil || seen[m.ID.Hex()] {
+			continue
+		}
+		seen[m.ID.Hex()] = true
+		out = append(out, *m)
 	}
-	return normalizeMovieFromBSON(docs[0])
+	return out, nil
 }

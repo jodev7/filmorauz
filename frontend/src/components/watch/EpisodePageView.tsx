@@ -3,13 +3,14 @@ import Footer from "@/components/Footer";
 import WatchPageClient from "@/components/watch/WatchPageClient";
 import Comments from "@/components/Comments";
 import StarRating from "@/components/StarRating";
-import SeriesCarousel from "@/components/SeriesCarousel";
+import ContentDiscovery from "@/components/discovery/ContentDiscovery";
 import type { EpisodePageData } from "@/lib/episode-page-data";
 import Link from "next/link";
 import { buildEpisodeJsonLd } from "@/lib/episode-page-data";
 import { buildSeriesPath } from "@/lib/content-routes";
 import { getSeriesRecommendations } from "@/lib/series-api";
 import JsonLd from "@/components/JsonLd";
+import ShareSheet from "@/components/share/ShareSheet";
 
 interface EpisodePageViewProps {
   data: EpisodePageData;
@@ -87,6 +88,14 @@ export default async function EpisodePageView({ data }: EpisodePageViewProps) {
       />
       <section className="max-w-6xl mx-auto px-3 sm:px-4 pb-4">
         <nav className="flex flex-wrap items-center gap-3 text-sm text-gray-300">
+          <ShareSheet
+            kind="episode"
+            id={episode.id}
+            title={series.series.title}
+            subtitle={`${episode.episode_number}-qism${episode.title ? ` · ${episode.title}` : ""}`}
+            path={data.canonicalUrl.replace(/^https?:\/\/[^/]+/, "") || `/episode/${episode.id}`}
+            posterUrl={series.series.poster_url}
+          />
           <Link href={buildSeriesPath(series.series.slug)} className="hover:text-white underline">
             ← {series.series.title}
           </Link>
@@ -114,14 +123,9 @@ export default async function EpisodePageView({ data }: EpisodePageViewProps) {
           </div>
         </div>
       </section>
-      {relatedSeries.length > 0 && (
-        <section className="max-w-6xl mx-auto px-3 sm:px-4 pb-8">
-          <h2 className="font-display text-xl sm:text-2xl tracking-wide text-white mb-4">
-            SIZGA YOQISHI MUMKIN
-          </h2>
-          <SeriesCarousel series={relatedSeries} />
-        </section>
-      )}
+      <section className="max-w-6xl mx-auto px-3 sm:px-4 pb-10">
+        <ContentDiscovery similarSeries={relatedSeries} similarTitle="O'xshash seriallar" />
+      </section>
       <section className="max-w-6xl mx-auto px-3 sm:px-4 pb-12">
         <Comments targetType="episode" targetId={episode.id} />
       </section>

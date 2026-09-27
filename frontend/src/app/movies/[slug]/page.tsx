@@ -9,7 +9,6 @@ import Footer from "@/components/Footer";
 import MediaImage from "@/components/MediaImage";
 import MoviePoster from "@/components/MoviePoster";
 import MovieCode from "@/components/MovieCode";
-import MovieCarousel from "@/components/MovieCarousel";
 import WatchButton from "@/components/WatchButton";
 import WatchTogetherButton from "@/components/WatchTogetherButton";
 import MovieWatchSection from "@/components/MovieWatchSection";
@@ -38,7 +37,8 @@ const LibraryButtons = dynamicImport(() => import("@/components/LibraryButtons")
 const StarRating = dynamicImport(() => import("@/components/StarRating"));
 const Comments = dynamicImport(() => import("@/components/Comments"));
 const Reviews = dynamicImport(() => import("@/components/Reviews"));
-const ShareButton = dynamicImport(() => import("@/components/ShareButton"));
+const ShareSheet = dynamicImport(() => import("@/components/share/ShareSheet"));
+const ContentDiscovery = dynamicImport(() => import("@/components/discovery/ContentDiscovery"));
 const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
 
 interface Props {
@@ -347,10 +347,13 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
                 contentID={movie.id}
                 className="inline-flex items-center gap-1.5 px-4 py-2.5 glass-card border border-white/10 hover:border-brand-red rounded-xl text-sm text-white transition-colors"
               />
-              <ShareButton
-                movieId={movie.id}
-                movieTitle={localizedTitle}
-                movieSlug={movie.slug}
+              <ShareSheet
+                kind="movie"
+                id={movie.id}
+                title={localizedTitle}
+                path={`/movies/${movie.slug}`}
+                posterUrl={movie.poster_url}
+                subtitle={movie.year ? String(movie.year) : undefined}
               />
               <MovieActions movie={movie} />
             </div>
@@ -382,15 +385,10 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
           <WebsiteAdSlot placement="movie_detail_banner" variant="banner" />
         </div>
 
-        {/* Similar titles */}
-        {recommendations.length > 0 && (
-          <section className="max-w-7xl mx-auto px-4 pb-8">
-            <h2 className="font-display text-2xl sm:text-3xl tracking-wide text-white mb-6">
-              O&apos;XSHASH KINOLAR
-            </h2>
-            <MovieCarousel movies={recommendations} />
-          </section>
-        )}
+        {/* Similar / recommended / random titles */}
+        <section className="max-w-7xl mx-auto px-4 pb-8">
+          <ContentDiscovery excludeIds={[movie.id]} similarMovies={recommendations} />
+        </section>
 
         {/* Reviews + Comments */}
         <section className="max-w-7xl mx-auto px-4 pb-12">

@@ -15,3 +15,8 @@ func (s *MovieService) PersonCredits(name string) (*repositories.PersonCredits, 
 func (s *MovieService) RandomMovie(genre string, exclude []primitive.ObjectID) (*models.Movie, error) {
 	return s.repo.RandomMovie(genre, exclude)
 }
+
+// RandomMovies picks up to n random playable movies.
+func (s *MovieService) RandomMovies(genre string, exclude []primitive.ObjectID, n int) ([]models.Movie, error) {
+	return s.repo.RandomMovies(genre, exclude, n)
+}

@@ -744,6 +744,17 @@ export async function getRandomMovie(genre?: string, exclude: string[] = []): Pr
   return json.data ? normalizeMovieResponse(json.data) : null;
 }
 
+// Several random playable movies (the "Tasodifiy kinolar" row).
+export async function getRandomMovies(limit = 12, exclude: string[] = [], genre?: string): Promise<Movie[]> {
+  const qs = new URLSearchParams({ limit: String(limit) });
+  if (genre) qs.set("genre", genre);
+  if (exclude.length) qs.set("exclude", exclude.slice(-50).join(","));
+  const res = await fetch(`${API_URL}/movies/random-list?${qs.toString()}`, { cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to load random movies");
+  const json = await res.json();
+  return (json.data || []).map((item: any) => normalizeMovieResponse(item));
+}
+
 // Get movie by ID
 export async function getMovieById(id: string): Promise<Movie> {
   const res = await fetch(`${API_URL}/movies/${id}`, {

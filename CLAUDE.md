@@ -208,6 +208,9 @@ Ads have two generations of fields:
 - `HeroCarousel` — full-width hero banner (latest movies)
 - `Comments` — comment thread with replies
 - `BanGuard` / `BanGuardWrapper` — redirects banned users
+- `discovery/ContentDiscovery` — under movie/series/episode pages: similar titles (SSR, passed in), "Siz uchun tavsiya" (`/user/for-you`, falls back to trending) and "Tasodifiy kinolar" (`GET /api/movies/random-list`)
+- `share/ShareSheet` — share modal (Telegram, Instagram, TikTok, X, Facebook, WhatsApp, copy link); tracked share link for movies/series + `?ref=` referral code for signed-in users
+- `comments/CommentRules` — "Izoh qoidalari" modal opened from `Comments` (which also sorts/filters client-side over up to 100 loaded comments)
 
 ### Key Libraries (`lib/`)
 

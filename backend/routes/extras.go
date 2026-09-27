@@ -49,6 +49,7 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 
 	// Discovery: actor/director pages and "random movie".
 	api.GET("/movies/random", d.Movies.RandomMovie)
+	api.GET("/movies/random-list", d.Movies.RandomMovies)
 	api.GET("/people/:name", middleware.CacheResponse(5*time.Minute), d.Movies.PersonCredits)
 
 	user := api.Group("/user")
