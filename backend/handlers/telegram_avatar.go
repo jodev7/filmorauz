@@ -341,39 +341,6 @@ func (t *TelegramAvatarImporter) Start(ctx context.Context) {
 
 // ── HTTP ──
 
-// UseTelegramPhoto POST /api/user/avatar/telegram — the user puts their
-// current Telegram photo back as their profile picture.
-func (t *TelegramAvatarImporter) UseTelegramPhoto(c *gin.Context) {
-	if t == nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "Telegram bot sozlanmagan"})
-		return
-	}
-	uid, err := primitive.ObjectIDFromHex(c.GetString("user_id"))
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-		return
-	}
-	var u struct {
-		TelegramID int64 `bson:"telegram_id"`
-	}
-	if err := t.users.FindOne(c.Request.Context(), bson.M{"_id": uid}, options.FindOne().SetProjection(bson.M{"telegram_id": 1})).Decode(&u); err != nil || u.TelegramID == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Telegram hisobi topilmadi"})
-		return
-	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
-	defer cancel()
-	status, imgURL, err := t.Import(ctx, uid, u.TelegramID, true)
-	switch {
-	case err != nil:
-		log.Printf("[TG_AVATAR] manual user=%s: %v", uid.Hex(), err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Telegram rasmini olib bo'lmadi"})
-	case status == tgAvatarNone:
-		c.JSON(http.StatusNotFound, gin.H{"error": "Telegram profilingizda rasm yo'q yoki u yashirin"})
-	default:
-		c.JSON(http.StatusOK, gin.H{"profile_image_url": imgURL})
-	}
-}
-
 // BackfillNow POST /api/superadmin/users/telegram-avatars/backfill
 func (t *TelegramAvatarImporter) BackfillNow(c *gin.Context) {
 	if t == nil {

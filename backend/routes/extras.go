@@ -86,9 +86,6 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 		user.DELETE("/lists/:id/items/:type/:targetId", d.Lists.RemoveItem)
 		user.GET("/lists-containing/:type/:id", d.Lists.Containing)
 
-		// Put the Telegram profile photo back as the profile picture
-		user.POST("/avatar/telegram", d.Avatars.UseTelegramPhoto)
-
 		// Referral program
 		user.GET("/referral", d.Referral.GetMyReferral)
 		user.POST("/referral/claim", d.Referral.ClaimReferral)

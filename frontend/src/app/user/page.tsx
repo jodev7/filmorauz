@@ -16,7 +16,7 @@ import UserListsSection from "@/components/UserListsSection";
 import NotificationSettings from "@/components/NotificationSettings";
 import ProfileTabs, { PROFILE_TABS, ProfileTab } from "@/components/profile/ProfileTabs";
 import YearReviewTeaser from "@/components/profile/YearReviewTeaser";
-import { getFavorites, getWatchHistory, getCurrentUser, updateProfile, uploadProfileImage, applyTelegramProfilePhoto, updateProfileStyle, updatePrivacySettings, ProfileStyle } from "@/lib/api";
+import { getFavorites, getWatchHistory, getCurrentUser, updateProfile, uploadProfileImage, updateProfileStyle, updatePrivacySettings, ProfileStyle } from "@/lib/api";
 import { openSuggestion } from "@/lib/suggestion-modal";
 import UserLibrarySections from "@/components/UserLibrarySections";
 import ReferralCard from "@/components/ReferralCard";
@@ -195,7 +195,6 @@ export default function UserPage() {
   };
   
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
 
   // Derived user state - normalize all role/premium fields
   // Prioritize 'user' from auth context (updated by refreshUser) over 'currentUser'
@@ -471,23 +470,6 @@ export default function UserPage() {
     }
   };
 
-  const handleUseTelegramPhoto = async () => {
-    if (!token) return;
-    setAvatarMenuOpen(false);
-    setUploadError(null);
-    setIsUploadingImage(true);
-    try {
-      const imageUrl = await applyTelegramProfilePhoto(token);
-      await refreshUser();
-      if (currentUser) {
-        setCurrentUser({ ...currentUser, profile_image_url: imageUrl });
-      }
-    } catch (error) {
-      setUploadError(error instanceof Error ? error.message : "Telegram rasmini olib bo'lmadi");
-    }
-    setIsUploadingImage(false);
-  };
-
   if (!isAuthenticated) {
     return (
       <>
@@ -601,10 +583,8 @@ export default function UserPage() {
               
               {/* Camera edit button - ensure it's above decorative layers */}
               <button
-                onClick={() => setAvatarMenuOpen((v) => !v)}
+                onClick={() => fileInputRef.current?.click()}
                 disabled={isUploadingImage}
-                aria-haspopup="menu"
-                aria-expanded={avatarMenuOpen}
                 className={`absolute bottom-1 right-1 p-2 rounded-full transition-all z-20 ${
                   displayIsPremium 
                     ? 'bg-gradient-to-r from-yellow-500 to-amber-600 hover:from-yellow-400 hover:to-amber-500 shadow-[0_0_15px_rgba(234,179,8,0.6)] hover:shadow-[0_0_20px_rgba(234,179,8,0.8)]' 
@@ -618,32 +598,6 @@ export default function UserPage() {
                   <Camera size={16} className="text-white" />
                 )}
               </button>
-              {avatarMenuOpen && (
-                <>
-                  <div className="fixed inset-0 z-30" onClick={() => setAvatarMenuOpen(false)} aria-hidden="true" />
-                  <div role="menu" className="absolute left-1/2 top-full z-40 mt-2 w-56 -translate-x-1/2 overflow-hidden rounded-xl border border-white/10 bg-[#16161f] py-1 text-left shadow-2xl">
-                    <button
-                      role="menuitem"
-                      onClick={() => {
-                        setAvatarMenuOpen(false);
-                        fileInputRef.current?.click();
-                      }}
-                      className="flex w-full items-center gap-2.5 px-3 py-2.5 text-sm text-gray-200 hover:bg-white/5"
-                    >
-                      <Camera size={15} className="text-gray-400" />
-                      Rasm yuklash
-                    </button>
-                    <button
-                      role="menuitem"
-                      onClick={handleUseTelegramPhoto}
-                      className="flex w-full items-center gap-2.5 px-3 py-2.5 text-sm text-gray-200 hover:bg-white/5"
-                    >
-                      <Send size={15} className="text-sky-400" />
-                      Telegram rasmini qo&apos;yish
-                    </button>
-                  </div>
-                </>
-              )}
               <input
                 ref={fileInputRef}
                 type="file"
