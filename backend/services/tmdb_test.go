@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -89,5 +90,20 @@ func TestTMDBSearchAndCredits(t *testing.T) {
 	}
 	if NewTMDBClient("", "") != nil {
 		t.Fatal("client without credentials should be nil")
+	}
+}
+
+func TestTMDBErrorsHideAPIKey(t *testing.T) {
+	c := NewTMDBClient("secret-key-123", "")
+	c.baseURL = "http://127.0.0.1:1" // nothing listens here
+	_, err := c.Credits(context.Background(), "movie", 1)
+	if err == nil || strings.Contains(err.Error(), "secret-key-123") {
+		t.Fatalf("error must exist and not leak the key: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
+	defer srv.Close()
+	c.baseURL = srv.URL
+	if _, err := c.Credits(context.Background(), "movie", 1); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("want 401 message, got %v", err)
 	}
 }

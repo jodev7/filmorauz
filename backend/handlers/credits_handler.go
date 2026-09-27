@@ -37,13 +37,15 @@ func (h *CreditsHandler) fetch(c *gin.Context, series bool) {
 		res, err = h.svc.FetchMovie(ctx, id, force)
 	}
 	switch {
+	// Never 502/503/504 here: Cloudflare swaps those for its own error page
+	// (without CORS headers), so the admin would only see "Failed to fetch".
 	case errors.Is(err, services.ErrTMDBDisabled):
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 	case errors.Is(err, services.ErrCreditsTargetNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "topilmadi"})
 	case err != nil:
 		log.Printf("[CREDITS] fetch %s: %v", id.Hex(), err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": "TMDB bilan bog'lanib bo'lmadi"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	default:
 		c.JSON(http.StatusOK, res)
 	}
@@ -58,7 +60,7 @@ func (h *CreditsHandler) FetchSeries(c *gin.Context) { h.fetch(c, true) }
 // Backfill POST /api/admin/credits/backfill — starts one batch now.
 func (h *CreditsHandler) Backfill(c *gin.Context) {
 	if !h.svc.Enabled() {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": services.ErrTMDBDisabled.Error()})
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": services.ErrTMDBDisabled.Error()})
 		return
 	}
 	go func() {

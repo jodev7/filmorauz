@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -54,7 +55,12 @@ func (c *TMDBClient) get(ctx context.Context, path string, q url.Values, out int
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		// *url.Error embeds the full URL, which contains api_key — drop it.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return fmt.Errorf("TMDB'ga ulanib bo'lmadi (%s): %v", path, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
@@ -62,7 +68,13 @@ func (c *TMDBClient) get(ctx context.Context, path string, q url.Values, out int
 	}
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("tmdb %s: status %d", path, resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusUnauthorized:
+			return fmt.Errorf("TMDB kaliti noto'g'ri yoki bekor qilingan (401) — TMDB_API_KEY / TMDB_READ_TOKEN ni tekshiring")
+		case http.StatusTooManyRequests:
+			return fmt.Errorf("TMDB so'rovlar limiti (429) — birozdan keyin qayta urinib ko'ring")
+		}
+		return fmt.Errorf("TMDB %s: status %d", path, resp.StatusCode)
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(out)
 }

@@ -675,9 +675,14 @@ export interface CreditsResult {
 }
 
 async function creditsRequest(token: string, path: string): Promise<CreditsResult> {
-  const res = await fetch(`${API_URL}${path}`, { method: "POST", headers: authHeaders(token) });
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, { method: "POST", headers: authHeaders(token) });
+  } catch {
+    throw new Error("Server javob bermadi — backend loglarini tekshiring ([CREDITS])");
+  }
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || "TMDB'dan olib bo'lmadi");
+  if (!res.ok) throw new Error(json.error || `TMDB'dan olib bo'lmadi (HTTP ${res.status})`);
   return { ...json, cast: json.cast || [], cast_details: json.cast_details || [], director: json.director || "" };
 }
 
