@@ -5,7 +5,7 @@ import { Crown, Image as ImageIcon, Languages, Sparkles, Tags, Tv } from "lucide
 import { CreateSeriesData, uploadSeriesImage } from "@/lib/api";
 import { buildSeoTitle, buildSeoDescription } from "@/lib/seo-template";
 import { slugify } from "@/lib/slugify";
-import { ErrorBanner, Field, FormSection, Segmented, StickySaveBar, SwitchRow, inputCls, useLeaveGuard } from "@/components/admin/form/ui";
+import { ErrorBanner, Field, FormSection, StickySaveBar, SwitchRow, inputCls, useLeaveGuard } from "@/components/admin/form/ui";
 import GenrePicker, { normalizeGenre } from "@/components/admin/form/GenrePicker";
 import ChipsInput from "@/components/admin/form/ChipsInput";
 import SlugInput from "@/components/admin/form/SlugInput";
@@ -13,7 +13,8 @@ import MediaUploadField from "@/components/admin/form/MediaUploadField";
 import ContentPreviewCard from "@/components/admin/form/ContentPreviewCard";
 import DraftBanner from "@/components/admin/form/DraftBanner";
 import { useDraft } from "@/components/admin/form/useDraft";
-import { normalizeCountry, normalizeQuality, qualityOptions, splitCountries, toSiteCountries } from "@/components/admin/form/constants";
+import { bestQuality, normalizeCountry, normalizeQuality, splitCountries, toSiteCountries } from "@/components/admin/form/constants";
+import QualityField from "@/components/admin/form/QualityField";
 import { useSiteCountries } from "@/components/admin/form/useSiteCountries";
 
 export const EMPTY_SERIES: CreateSeriesData = {
@@ -50,6 +51,7 @@ export default function SeriesInfoForm({
   code,
   seasonsCount,
   episodesCount,
+  storageQualities = [],
 }: {
   initial?: CreateSeriesData;
   token?: string | null;
@@ -60,10 +62,12 @@ export default function SeriesInfoForm({
   code?: string;
   seasonsCount?: number;
   episodesCount?: number;
+  /** Renditions already in storage (B2) across the episodes. */
+  storageQualities?: string[];
 }) {
   const start = useMemo<CreateSeriesData>(
     () => ({ ...EMPTY_SERIES, ...(initial ?? {}), genre: (initial?.genre ?? []).map(normalizeGenre),
-      quality: normalizeQuality(initial?.quality) || EMPTY_SERIES.quality,
+      quality: bestQuality(storageQualities) || normalizeQuality(initial?.quality) || EMPTY_SERIES.quality,
       country: normalizeCountry(initial?.country),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -269,9 +273,7 @@ export default function SeriesInfoForm({
                   max={5}
                 />
               </Field>
-              <Field label="Sifat">
-                <Segmented ariaLabel="Sifat" value={form.quality || "1080p"} options={qualityOptions(form.quality)} onChange={(v) => set("quality", v)} />
-              </Field>
+              <QualityField value={form.quality || ""} onChange={(v) => set("quality", v)} storage={storageQualities} />
             </div>
           </FormSection>
 

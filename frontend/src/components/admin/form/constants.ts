@@ -29,6 +29,17 @@ export function bestQuality(list?: string[] | null): string {
   return norm[0] || "";
 }
 
+/** Renditions actually in storage (generated HLS folders), deduped and normalized. */
+export function storageQualityList(...lists: (string[] | null | undefined)[]): string[] {
+  const out: string[] = [];
+  for (const list of lists) for (const q of list || []) {
+    const n = normalizeQuality(q);
+    if (n && !out.includes(n)) out.push(n);
+  }
+  const rank = (q: string) => (QUALITIES.indexOf(q) < 0 ? -1 : QUALITIES.indexOf(q));
+  return out.sort((a, b) => rank(a) - rank(b));
+}
+
 /** Segmented options, plus the current value when it is not a standard one. */
 export function qualityOptions(current?: string) {
   const list = current && !QUALITIES.includes(current) ? [...QUALITIES, current] : QUALITIES;
