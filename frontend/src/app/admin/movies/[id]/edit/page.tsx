@@ -127,7 +127,7 @@ export default function EditMoviePage() {
         submitLabel="Saqlash"
         token={token ?? undefined}
         castDetails={movie.cast_details}
-        onFetchCredits={() => adminFetchMovieCredits(token!, movie.id)}
+        onFetchCredits={(tmdbId) => adminFetchMovieCredits(token!, movie.id, true, tmdbId)}
         storageQualities={storageQualityList(movie.generated_qualities?.length ? movie.generated_qualities : movie.available_qualities)}
         previewHref={movie.approval_status === "approved" || !movie.approval_status ? `/movies/${movie.slug}` : undefined}
       />

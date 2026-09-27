@@ -686,13 +686,47 @@ async function creditsRequest(token: string, path: string): Promise<CreditsResul
   return { ...json, cast: json.cast || [], cast_details: json.cast_details || [], director: json.director || "" };
 }
 
-/** Fetch cast + photos from TMDB. `force` replaces the admin-entered cast/director. */
-export function adminFetchMovieCredits(token: string, id: string, force = true) {
-  return creditsRequest(token, `/admin/movies/${encodeURIComponent(id)}/credits${force ? "?force=1" : ""}`);
+function creditsQuery(force: boolean, tmdbId?: number) {
+  const qs = new URLSearchParams();
+  if (force) qs.set("force", "1");
+  if (tmdbId) qs.set("tmdb_id", String(tmdbId));
+  const s = qs.toString();
+  return s ? `?${s}` : "";
 }
 
-export function adminFetchSeriesCredits(token: string, id: string, force = true) {
-  return creditsRequest(token, `/admin/series/${encodeURIComponent(id)}/credits${force ? "?force=1" : ""}`);
+/**
+ * Fetch cast + photos from TMDB. `force` replaces the admin-entered
+ * cast/director; `tmdbId` uses a title picked by hand instead of searching.
+ */
+export function adminFetchMovieCredits(token: string, id: string, force = true, tmdbId?: number) {
+  return creditsRequest(token, `/admin/movies/${encodeURIComponent(id)}/credits${creditsQuery(force, tmdbId)}`);
+}
+
+export function adminFetchSeriesCredits(token: string, id: string, force = true, tmdbId?: number) {
+  return creditsRequest(token, `/admin/series/${encodeURIComponent(id)}/credits${creditsQuery(force, tmdbId)}`);
+}
+
+export interface TmdbSearchItem {
+  id: number;
+  title: string;
+  original_title: string;
+  year: number;
+  poster_url?: string;
+  overview?: string;
+}
+
+export async function adminSearchTmdb(token: string, type: "movie" | "tv", q: string, year?: number): Promise<TmdbSearchItem[]> {
+  const qs = new URLSearchParams({ type, q });
+  if (year) qs.set("year", String(year));
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/admin/tmdb/search?${qs.toString()}`, { headers: authHeaders(token), cache: "no-store" });
+  } catch {
+    throw new Error("Server javob bermadi");
+  }
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || `Qidirib bo'lmadi (HTTP ${res.status})`);
+  return json.results || [];
 }
 
 export function personPath(name: string): string {

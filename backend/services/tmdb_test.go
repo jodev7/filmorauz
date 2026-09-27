@@ -135,3 +135,23 @@ func TestTMDBBadTokenFallsBackToAPIKey(t *testing.T) {
 		t.Fatalf("rejected token should be tried once, got %d", bearerCalls)
 	}
 }
+
+func TestTMDBSearchList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/search/tv" || r.URL.Query().Get("language") != "ru-RU" || r.URL.Query().Get("first_air_date_year") != "2021" {
+			t.Errorf("unexpected request %s", r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{"results":[{"id":93405,"name":"Игра в кальмара","original_name":"오징어 게임","first_air_date":"2021-09-17","poster_path":"/p.jpg"}]}`))
+	}))
+	defer srv.Close()
+	c := NewTMDBClient("k", "")
+	c.baseURL = srv.URL
+	items, err := c.SearchList(context.Background(), "tv", "Kalmar o'yini", 2021)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("%+v %v", items, err)
+	}
+	it := items[0]
+	if it.ID != 93405 || it.Title != "Игра в кальмара" || it.OriginalTitle != "오징어 게임" || it.Year != 2021 || it.PosterURL != "https://image.tmdb.org/t/p/w92/p.jpg" {
+		t.Fatalf("bad item %+v", it)
+	}
+}

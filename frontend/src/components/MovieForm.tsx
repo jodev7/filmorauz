@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Clapperboard, Crown, Film, Image as ImageIcon, Info, Loader2, Sparkles, Tags, Upload, Users, Video } from "lucide-react";
+import { Clapperboard, Crown, Film, Image as ImageIcon, Info, Loader2, Search, Sparkles, Tags, Upload, Users, Video } from "lucide-react";
 import CastPhotos from "@/components/admin/form/CastPhotos";
+import TmdbPicker from "@/components/admin/TmdbPicker";
 import {
   MovieInput,
   VideoSourceType,
@@ -52,7 +53,7 @@ interface Props {
   /** TMDB actor photos already stored on the movie. */
   castDetails?: CastMember[];
   /** Pull cast + director from TMDB (edit page); saves them server-side. */
-  onFetchCredits?: () => Promise<CreditsResult>;
+  onFetchCredits?: (tmdbId?: number) => Promise<CreditsResult>;
 }
 
 const emptyForm: MovieInput = {
@@ -97,15 +98,16 @@ export default function MovieForm({ initialData, onSubmit, submitLabel = "Saqlas
   const [form, setForm] = useState<MovieInput>(initial);
   const siteCountries = useSiteCountries();
   const [castDetails, setCastDetails] = useState<CastMember[]>(initialCastDetails);
-  const [credits, setCredits] = useState<{ busy: boolean; msg: string; error: boolean }>({ busy: false, msg: "", error: false });
+  const [credits, setCredits] = useState<{ busy: boolean; msg: string; error: boolean; notFound?: boolean }>({ busy: false, msg: "", error: false });
+  const [pickerOpen, setPickerOpen] = useState(false);
 
-  const fetchCredits = async () => {
+  const fetchCredits = async (tmdbId?: number) => {
     if (!onFetchCredits) return;
     setCredits({ busy: true, msg: "", error: false });
     try {
-      const res = await onFetchCredits();
+      const res = await onFetchCredits(tmdbId);
       if (res.status !== "ok") {
-        setCredits({ busy: false, msg: "TMDB'da bu kino topilmadi — nomi yoki yilini tekshiring", error: true });
+        setCredits({ busy: false, msg: "TMDB avtomatik topa olmadi —", error: true, notFound: true });
         return;
       }
       const patch = { cast: res.cast, director: res.director };
@@ -370,27 +372,63 @@ export default function MovieForm({ initialData, onSubmit, submitLabel = "Saqlas
                 label="Aktyorlar"
                 hint={
                   credits.msg ? (
-                    <span className={credits.error ? "text-amber-400" : "text-emerald-400"}>{credits.msg}</span>
+                    <span className={credits.error ? "text-amber-400" : "text-emerald-400"}>
+                      {credits.msg}
+                      {credits.notFound && (
+                        <>
+                          {" "}
+                          <button type="button" onClick={() => setPickerOpen(true)} className="font-medium text-sky-300 underline underline-offset-2 hover:text-sky-200">
+                            qo&apos;lda tanlang
+                          </button>
+                        </>
+                      )}
+                    </span>
                   ) : (
                     "Enter yoki vergul bilan; saqlangandan keyin TMDB'dan avtomatik ham olinadi"
                   )
                 }
                 right={
                   onFetchCredits ? (
-                    <button
-                      type="button"
-                      onClick={fetchCredits}
-                      disabled={credits.busy}
-                      className="inline-flex items-center gap-1 rounded-lg border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium text-sky-300 hover:bg-sky-500/20 disabled:opacity-60"
-                    >
-                      {credits.busy ? <Loader2 size={11} className="animate-spin" /> : <Users size={11} />}
-                      TMDB&apos;dan olish
-                    </button>
+                    <span className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => fetchCredits()}
+                        disabled={credits.busy}
+                        className="inline-flex items-center gap-1 rounded-lg border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium text-sky-300 hover:bg-sky-500/20 disabled:opacity-60"
+                      >
+                        {credits.busy ? <Loader2 size={11} className="animate-spin" /> : <Users size={11} />}
+                        TMDB&apos;dan olish
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPickerOpen(true)}
+                        disabled={credits.busy}
+                        title="TMDB'da kinoni qo'lda qidirib tanlash"
+                        className="inline-flex items-center rounded-lg border border-white/10 px-1.5 py-0.5 text-[11px] text-gray-400 hover:bg-white/5 hover:text-white disabled:opacity-60"
+                        aria-label="TMDB'dan qo'lda tanlash"
+                      >
+                        <Search size={11} />
+                      </button>
+                    </span>
                   ) : undefined
                 }
               >
                 <ChipsInput value={form.cast ?? []} onChange={(v) => set("cast", v)} placeholder="Tom Hanks, Emma Watson…" />
                 <CastPhotos names={form.cast ?? []} details={castDetails} />
+                {onFetchCredits && (
+                  <TmdbPicker
+                    open={pickerOpen}
+                    type="movie"
+                    token={token}
+                    initialQuery={form.title}
+                    initialYear={form.year || undefined}
+                    onClose={() => setPickerOpen(false)}
+                    onPick={(item) => {
+                      setPickerOpen(false);
+                      void fetchCredits(item.id);
+                    }}
+                  />
+                )}
               </Field>
               <Field label="Rejissyor" htmlFor="m-dir">
                 <input id="m-dir" value={form.director ?? ""} onChange={(e) => set("director", e.target.value)} placeholder="Christopher Nolan" className={inputCls} />

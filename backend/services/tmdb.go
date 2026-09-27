@@ -137,7 +137,13 @@ func cleanSearchTitle(t string) string {
 }
 
 type tmdbSearchHit struct {
-	ID           int     `json:"id"`
+	ID            int     `json:"id"`
+	Title         string  `json:"title"`
+	Name          string  `json:"name"`
+	OriginalTitle string  `json:"original_title"`
+	OriginalName  string  `json:"original_name"`
+	PosterPath    string  `json:"poster_path"`
+	Overview      string  `json:"overview"`
 	ReleaseDate  string  `json:"release_date"`
 	FirstAirDate string  `json:"first_air_date"`
 	Popularity   float64 `json:"popularity"`
@@ -153,6 +159,56 @@ func (h tmdbSearchHit) year() int {
 		return y
 	}
 	return 0
+}
+
+// TMDBSearchItem is one candidate shown in the admin picker.
+type TMDBSearchItem struct {
+	ID            int    `json:"id"`
+	Title         string `json:"title"`
+	OriginalTitle string `json:"original_title"`
+	Year          int    `json:"year"`
+	PosterURL     string `json:"poster_url,omitempty"`
+	Overview      string `json:"overview,omitempty"`
+}
+
+// SearchList returns up to 12 candidates for a free-text query (titles in
+// Russian when TMDB has them, plus the original title).
+func (c *TMDBClient) SearchList(ctx context.Context, kind, query string, year int) ([]TMDBSearchItem, error) {
+	q := url.Values{"query": {strings.TrimSpace(query)}, "include_adult": {"false"}, "language": {"ru-RU"}}
+	if year > 0 {
+		if kind == "tv" {
+			q.Set("first_air_date_year", strconv.Itoa(year))
+		} else {
+			q.Set("year", strconv.Itoa(year))
+		}
+	}
+	var res struct {
+		Results []tmdbSearchHit `json:"results"`
+	}
+	if err := c.get(ctx, "/search/"+kind, q, &res); err != nil {
+		return nil, err
+	}
+	out := make([]TMDBSearchItem, 0, 12)
+	for _, h := range res.Results {
+		title, orig := h.Title, h.OriginalTitle
+		if kind == "tv" {
+			title, orig = h.Name, h.OriginalName
+		}
+		item := TMDBSearchItem{ID: h.ID, Title: title, OriginalTitle: orig, Year: h.year()}
+		if h.PosterPath != "" {
+			item.PosterURL = "https://image.tmdb.org/t/p/w92" + h.PosterPath
+		}
+		if r := []rune(h.Overview); len(r) > 160 {
+			item.Overview = string(r[:160]) + "…"
+		} else {
+			item.Overview = h.Overview
+		}
+		out = append(out, item)
+		if len(out) == 12 {
+			break
+		}
+	}
+	return out, nil
 }
 
 func yearClose(a, b int) bool {

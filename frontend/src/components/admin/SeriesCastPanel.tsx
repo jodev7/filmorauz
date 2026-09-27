@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, RefreshCw, Users } from "lucide-react";
+import { Loader2, RefreshCw, Search, Users } from "lucide-react";
+import TmdbPicker from "@/components/admin/TmdbPicker";
 import { adminFetchSeriesCredits, CastMember } from "@/lib/api";
 
 /** Series cast from TMDB: shows what is stored and refreshes it on demand. */
@@ -12,6 +13,8 @@ export default function SeriesCastPanel({
   initialDirector = "",
   initialDetails = [],
   initialDirectorPhoto = "",
+  title = "",
+  year,
   onMessage,
 }: {
   seriesId: string;
@@ -20,6 +23,8 @@ export default function SeriesCastPanel({
   initialDirector?: string;
   initialDetails?: CastMember[];
   initialDirectorPhoto?: string;
+  title?: string;
+  year?: number;
   onMessage: (kind: "success" | "error", text: string) => void;
 }) {
   const [cast, setCast] = useState(initialCast);
@@ -27,16 +32,18 @@ export default function SeriesCastPanel({
   const [details, setDetails] = useState(initialDetails);
   const [directorPhoto, setDirectorPhoto] = useState(initialDirectorPhoto);
   const [busy, setBusy] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const photo = new Map(details.map((d) => [d.name.toLowerCase(), d]));
   if (director && directorPhoto) photo.set(director.toLowerCase(), { name: director, profile_url: directorPhoto });
 
-  const refresh = async () => {
+  const refresh = async (tmdbId?: number) => {
     if (!token) return;
     setBusy(true);
     try {
-      const res = await adminFetchSeriesCredits(token, seriesId);
+      const res = await adminFetchSeriesCredits(token, seriesId, true, tmdbId);
       if (res.status !== "ok") {
-        onMessage("error", "TMDB'da bu serial topilmadi — nomi yoki yilini tekshiring");
+        onMessage("error", "TMDB avtomatik topa olmadi — qidiruv orqali qo'lda tanlang");
+        setPickerOpen(true);
         return;
       }
       setCast(res.cast);
@@ -63,15 +70,26 @@ export default function SeriesCastPanel({
             <p className="text-xs text-gray-500">TMDB&apos;dan avtomatik olinadi (rasmlari bilan)</p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={refresh}
-          disabled={busy || !token}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs font-medium text-sky-300 hover:bg-sky-500/20 disabled:opacity-60"
-        >
-          {busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-          TMDB&apos;dan yangilash
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setPickerOpen(true)}
+            disabled={busy || !token}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-2 text-xs text-gray-300 hover:bg-white/5 disabled:opacity-60"
+          >
+            <Search size={13} />
+            Qo&apos;lda tanlash
+          </button>
+          <button
+            type="button"
+            onClick={() => refresh()}
+            disabled={busy || !token}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs font-medium text-sky-300 hover:bg-sky-500/20 disabled:opacity-60"
+          >
+            {busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+            TMDB&apos;dan yangilash
+          </button>
+        </div>
       </div>
       {cast.length === 0 && !director ? (
         <p className="text-sm text-gray-500">Hali olinmagan. Fon jarayoni bir necha daqiqada o&apos;zi oladi yoki tugmani bosing.</p>
@@ -95,6 +113,18 @@ export default function SeriesCastPanel({
           })}
         </ul>
       )}
+      <TmdbPicker
+        open={pickerOpen}
+        type="tv"
+        token={token}
+        initialQuery={title}
+        initialYear={year}
+        onClose={() => setPickerOpen(false)}
+        onPick={(item) => {
+          setPickerOpen(false);
+          void refresh(item.id);
+        }}
+      />
     </section>
   );
 }

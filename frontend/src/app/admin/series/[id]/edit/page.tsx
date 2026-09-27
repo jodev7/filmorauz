@@ -702,6 +702,8 @@ export default function EditSeriesPage() {
         initialDirector={seriesCredits.director}
         initialDetails={seriesCredits.details}
         initialDirectorPhoto={seriesCredits.directorPhoto}
+        title={form.title}
+        year={form.year}
         onMessage={(kind, text) => (kind === "success" ? toast.success(text) : toast.error(text))}
       />
 
