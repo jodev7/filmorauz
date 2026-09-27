@@ -5923,7 +5923,13 @@ export async function getAdminAuditLogs(
     headers: authHeaders(token),
     cache: "no-store",
   });
-  if (!res.ok) throw new Error("Failed to fetch audit logs");
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({} as { error?: string }));
+    if (res.status === 401) throw new Error("Sessiya muddati tugagan — qaytadan kiring.");
+    if (res.status === 403)
+      throw new Error("Audit log faqat superadmin uchun. Rolingiz yaqinda o'zgargan bo'lsa, chiqib qaytadan kiring.");
+    throw new Error(`Audit logni yuklab bo'lmadi (HTTP ${res.status}${body?.error ? `: ${body.error}` : ""})`);
+  }
   return res.json();
 }
 

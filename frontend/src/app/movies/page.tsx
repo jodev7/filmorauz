@@ -8,6 +8,7 @@ import SeriesCard from "@/components/SeriesCard";
 import GenreFilter from "@/components/GenreFilter";
 import MovieFilterBar from "@/components/MovieFilterBar";
 import RandomMovieButton from "@/components/RandomMovie";
+import SuggestButton from "@/components/SuggestButton";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getMovies, searchMovies, Movie, MovieFilterParams } from "@/lib/api";
 import { getSeries, type Series } from "@/lib/series-api";
@@ -227,6 +228,7 @@ export default async function MoviesPage({ searchParams }: Props) {
             <div className="py-24 text-center text-gray-500">
               <p className="text-lg">{t("movies.noResults")}</p>
               {search && <p className="text-sm mt-2">{t("movies.noResultsHint")}</p>}
+              {search && <SuggestButton title={search} className="mt-6" />}
             </div>
           ) : null}
 

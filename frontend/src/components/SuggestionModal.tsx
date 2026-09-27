@@ -1,141 +1,143 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Loader2, Film, Tv, ExternalLink, Upload, Image as ImageIcon } from "lucide-react";
+import Link from "next/link";
+import { X, Loader2, Film, Tv, Link2, ImagePlus, Lightbulb, CheckCircle2, Send, Search, Bell, Sparkles } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { createSuggestion, SuggestionFormData } from "@/lib/api";
+import { createSuggestion, searchMovies, Movie, SuggestionFormData } from "@/lib/api";
+import { getLocalizedTitle } from "@/lib/localization";
+import { DEFAULT_POSTER_PLACEHOLDER } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
+import TelegramLoginModal from "@/components/TelegramLoginModal";
 
 interface SuggestionModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: () => void;
+  initialTitle?: string;
+  initialType?: "movie" | "series";
 }
 
-export default function SuggestionModal({ isOpen, onClose, onSuccess }: SuggestionModalProps) {
+type Found = Movie & { target_type?: string };
+
+const EMPTY: SuggestionFormData = { type: "movie", title: "", message: "", source_url: "" };
+
+/**
+ * "Kino tavsiya qilish": a bottom sheet on phones, a dialog on desktop.
+ * Checks while typing whether the title is already on the site, so users
+ * find it instead of requesting a duplicate.
+ */
+export default function SuggestionModal({ isOpen, onClose, onSuccess, initialTitle, initialType }: SuggestionModalProps) {
   const { token, isAuthenticated } = useAuth();
+  const [form, setForm] = useState<SuggestionFormData>(EMPTY);
+  const [year, setYear] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
-  const [selectedImage, setSelectedImage] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [image, setImage] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [found, setFound] = useState<Found[]>([]);
+  const [checking, setChecking] = useState(false);
+  const [showExtra, setShowExtra] = useState(false);
+  const [loginOpen, setLoginOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const titleRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    setMounted(true);
-    return () => setMounted(false);
-  }, []);
+  useEffect(() => setMounted(true), []);
 
+  // Reset / prefill each time it opens.
   useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = "hidden";
-    } else {
+    if (!isOpen) return;
+    setForm({ ...EMPTY, title: initialTitle ?? "", type: initialType ?? "movie" });
+    setYear("");
+    setSuccess(false);
+    setError("");
+    setShowExtra(false);
+    setImage(null);
+    setPreview(null);
+    const t = setTimeout(() => titleRef.current?.focus(), 150);
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    return () => {
+      clearTimeout(t);
       document.body.style.overflow = "";
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [isOpen, initialTitle, initialType, onClose]);
+
+  useEffect(() => () => void (preview && URL.revokeObjectURL(preview)), [preview]);
+
+  // "Saytda bormi?" — debounced lookup of the typed title.
+  useEffect(() => {
+    if (!isOpen) return;
+    const q = form.title.trim();
+    if (q.length < 3) {
+      setFound([]);
+      return;
     }
+    setChecking(true);
+    let active = true;
+    const t = setTimeout(() => {
+      searchMovies(q)
+        .then((r) => active && setFound(((r || []) as Found[]).slice(0, 3)))
+        .catch(() => active && setFound([]))
+        .finally(() => active && setChecking(false));
+    }, 400);
     return () => {
-      document.body.style.overflow = "";
+      active = false;
+      clearTimeout(t);
     };
-  }, [isOpen]);
+  }, [form.title, isOpen]);
 
-  useEffect(() => {
-    return () => {
-      if (imagePreview) {
-        URL.revokeObjectURL(imagePreview);
-      }
-    };
-  }, [imagePreview]);
-
-  // Handle Escape key
-  useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isOpen) {
-        onClose();
-      }
-    };
-    document.addEventListener("keydown", handleEscape);
-    return () => document.removeEventListener("keydown", handleEscape);
-  }, [isOpen, onClose]);
-  
-  const [formData, setFormData] = useState<SuggestionFormData>({
-    type: "movie",
-    title: "",
-    message: "",
-    source_url: "",
-  });
-
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const pickImage = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    const validTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"];
-    if (!validTypes.includes(file.type)) {
-      setError("Faqat JPG, JPEG, PNG, WebP va GIF formatlari qabul qilinadi");
+    if (!["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"].includes(file.type)) {
+      setError("Faqat JPG, PNG, WebP yoki GIF rasm yuklang");
       return;
     }
-
-    const maxSize = file.type === "image/gif" ? 20 * 1024 * 1024 : 10 * 1024 * 1024;
-    if (file.size > maxSize) {
-      setError(file.type === "image/gif" ? "GIF hajmi 20MB dan oshmasligi kerak" : "Rasm hajmi 10MB dan oshmasligi kerak");
+    const max = file.type === "image/gif" ? 20 : 10;
+    if (file.size > max * 1024 * 1024) {
+      setError(`Rasm hajmi ${max}MB dan oshmasin`);
       return;
     }
-
-    setSelectedImage(file);
-    if (imagePreview) {
-      URL.revokeObjectURL(imagePreview);
-    }
-    setImagePreview(URL.createObjectURL(file));
+    setImage(file);
+    setPreview(URL.createObjectURL(file));
     setError("");
   };
 
-  const handleRemoveImage = () => {
-    if (selectedImage && imagePreview) {
-      URL.revokeObjectURL(imagePreview);
-    }
-    setSelectedImage(null);
-    setImagePreview(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
+  const clearImage = () => {
+    setImage(null);
+    setPreview(null);
+    if (fileRef.current) fileRef.current.value = "";
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
     if (!isAuthenticated || !token) {
-      setError("Tizimga kirishingiz kerak");
+      setLoginOpen(true);
       return;
     }
-
-    if (!formData.title.trim() || !formData.message.trim()) {
-      setError("Iltimos, barcha majburiy maydonlarni to'ldiring");
+    const title = form.title.trim();
+    if (!title) {
+      setError("Kino yoki serial nomini yozing");
+      titleRef.current?.focus();
       return;
     }
-
+    const parts = [form.message.trim()];
+    if (year.trim()) parts.push(`Yili: ${year.trim()}`);
+    const message = parts.filter(Boolean).join("\n") || "Saytga qo'shishni so'rayman.";
     setLoading(true);
     setError("");
-
     try {
-      await createSuggestion(token, {
-        ...formData,
-        image: selectedImage || undefined,
-      });
+      await createSuggestion(token, { ...form, title, message, image: image || undefined });
       setSuccess(true);
-      setTimeout(() => {
-        onSuccess?.();
-        onClose();
-        setSuccess(false);
-        setFormData({
-          type: "movie",
-          title: "",
-          message: "",
-          source_url: "",
-        });
-        handleRemoveImage();
-      }, 2000);
-    } catch (err: any) {
-      setError(err.message || "Xatolik yuz berdi");
+      onSuccess?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Xatolik yuz berdi");
     } finally {
       setLoading(false);
     }
@@ -143,190 +145,242 @@ export default function SuggestionModal({ isOpen, onClose, onSuccess }: Suggesti
 
   if (!isOpen || !mounted) return null;
 
-  const modalContent = (
-    <div className="fixed inset-0 z-[9999] overflow-hidden">
-      <div
-        className="absolute inset-0 bg-black/80 backdrop-blur-sm"
-        onClick={onClose}
-      />
-      <div className="flex items-center justify-center min-h-full p-4 sm:p-6">
-        <div 
-          className="relative glass-strong rounded-2xl p-6 w-full max-w-lg max-h-[calc(100vh-2rem)] sm:max-h-[90vh] overflow-y-auto shadow-2xl"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            onClick={onClose}
-            className="absolute top-4 right-4 text-gray-400 hover:text-white p-1 z-10"
-          >
+  const typeBtn = (value: "movie" | "series", label: string, Icon: React.ElementType) => (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={form.type === value}
+      onClick={() => setForm({ ...form, type: value })}
+      className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-medium transition-colors ${
+        form.type === value ? "bg-orange-500 text-white shadow" : "text-gray-400 hover:text-white"
+      }`}
+    >
+      <Icon size={16} /> {label}
+    </button>
+  );
+
+  const content = (
+    <div className="fixed inset-0 z-[9999] flex items-end justify-center sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="suggest-title">
+      <div className="absolute inset-0 bg-black/75 backdrop-blur-sm animate-[fadeIn_.15s_ease-out]" onClick={onClose} />
+      <div className="relative flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-3xl border border-white/10 bg-[#101018] shadow-2xl animate-[sheetUp_.22s_ease-out] sm:max-w-lg sm:rounded-3xl">
+        {/* Drag handle (phones) */}
+        <div className="flex justify-center pt-2.5 sm:hidden" aria-hidden="true">
+          <span className="h-1.5 w-10 rounded-full bg-white/20" />
+        </div>
+
+        {/* Header */}
+        <div className="relative overflow-hidden px-5 pb-4 pt-3 sm:px-6 sm:pt-6">
+          <div className="pointer-events-none absolute -right-10 -top-16 h-40 w-40 rounded-full bg-orange-500/20 blur-3xl" aria-hidden="true" />
+          <button onClick={onClose} className="absolute right-4 top-3 rounded-full p-2 text-gray-400 hover:bg-white/5 hover:text-white sm:top-5" aria-label="Yopish">
             <X size={20} />
           </button>
+          <div className="flex items-center gap-3">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-yellow-400 to-orange-600 shadow-lg shadow-orange-500/30">
+              <Lightbulb size={22} className="text-white" />
+            </span>
+            <div className="min-w-0 pr-8">
+              <h2 id="suggest-title" className="text-lg font-bold text-white">Kino tavsiya qilish</h2>
+              <p className="text-sm text-gray-400">Saytda yo&apos;q kinoni yozing — biz qo&apos;shamiz</p>
+            </div>
+          </div>
+        </div>
 
-          <h2 className="text-xl font-bold text-white mb-1">Kino tavsiya qilish</h2>
-          <p className="text-sm text-gray-400 mb-6">
-            Platformaga qo'shishni xohlagan kinoyingizni tavsiya qiling
-          </p>
-
+        <div className="flex-1 overflow-y-auto overscroll-contain px-5 pb-5 sm:px-6 sm:pb-6">
           {success ? (
-            <div className="text-center py-8">
-              <div className="w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Film className="w-8 h-8 text-green-400" />
+            <div className="py-6 text-center">
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/15">
+                <CheckCircle2 className="h-9 w-9 text-emerald-400" />
               </div>
-              <h3 className="text-xl font-bold text-white mb-2">Tavsiya yuborildi!</h3>
-              <p className="text-gray-400">
-                Tavsiyangiz muvaffaqiyatli qabul qilindi. Tez orada ko'rib chiqamiz.
+              <h3 className="text-xl font-bold text-white">Rahmat! Tavsiya yuborildi</h3>
+              <p className="mx-auto mt-2 max-w-xs text-sm text-gray-400">
+                &quot;{form.title.trim()}&quot; qo&apos;shilsa, sizga saytda va Telegram&apos;da xabar beramiz.
               </p>
+              <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-center">
+                <button
+                  onClick={() => {
+                    setSuccess(false);
+                    setForm({ ...EMPTY, type: form.type });
+                    setYear("");
+                    clearImage();
+                    setTimeout(() => titleRef.current?.focus(), 50);
+                  }}
+                  className="rounded-xl border border-white/10 px-5 py-2.5 text-sm text-white hover:bg-white/5"
+                >
+                  Yana tavsiya qilish
+                </button>
+                <button onClick={onClose} className="rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-600">
+                  Tayyor
+                </button>
+              </div>
             </div>
           ) : (
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Tur</label>
-                <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setFormData({ ...formData, type: "movie" })}
-                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg border transition-colors ${
-                      formData.type === "movie"
-                        ? "bg-brand-red border-brand-red text-white"
-                        : "bg-brand-dark border-white/10 text-gray-400 hover:text-white"
-                    }`}
-                  >
-                    <Film size={18} />
-                    Kino
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFormData({ ...formData, type: "series" })}
-                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg border transition-colors ${
-                      formData.type === "series"
-                        ? "bg-brand-red border-brand-red text-white"
-                        : "bg-brand-dark border-white/10 text-gray-400 hover:text-white"
-                    }`}
-                  >
-                    <Tv size={18} />
-                    Serial
-                  </button>
-                </div>
+            <form onSubmit={submit} className="space-y-4">
+              {/* How it works */}
+              <ol className="grid grid-cols-3 gap-2 text-center text-[11px] text-gray-400">
+                {[
+                  { icon: Send, text: "Siz yuborasiz" },
+                  { icon: Search, text: "Admin ko'rib chiqadi" },
+                  { icon: Bell, text: "Qo'shilsa xabar beramiz" },
+                ].map(({ icon: Icon, text }, i) => (
+                  <li key={text} className="flex flex-col items-center gap-1 rounded-xl bg-white/[0.03] px-1 py-2">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-orange-500/15 text-orange-400">
+                      <Icon size={14} />
+                    </span>
+                    <span>
+                      {i + 1}. {text}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+
+              {/* Type */}
+              <div role="radiogroup" aria-label="Tur" className="flex gap-1 rounded-xl border border-white/10 bg-black/30 p-1">
+                {typeBtn("movie", "Kino", Film)}
+                {typeBtn("series", "Serial", Tv)}
               </div>
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">
-                  Kino/Serial nomi <span className="text-red-400">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={formData.title}
-                  onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                  className="w-full px-4 py-3 bg-brand-dark border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
-                  placeholder="Kino nomini kiriting"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">
-                  Xabar <span className="text-red-400">*</span>
-                </label>
-                <textarea
-                  value={formData.message}
-                  onChange={(e) => setFormData({ ...formData, message: e.target.value })}
-                  className="w-full px-4 py-3 bg-brand-dark border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-brand-red resize-none"
-                  rows={3}
-                  placeholder="Nima uchun bu kino/serialni tavsiya qilmoqchisiz?"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">
-                  Manba URL (ixtiyoriy)
-                </label>
-                <div className="relative">
-                  <ExternalLink className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
+              {/* Title + year */}
+              <div className="grid grid-cols-[1fr_88px] gap-2">
+                <div>
+                  <label htmlFor="suggest-name" className="mb-1.5 block text-xs font-medium text-gray-400">
+                    Nomi <span className="text-orange-400">*</span>
+                  </label>
                   <input
-                    type="url"
-                    value={formData.source_url}
-                    onChange={(e) => setFormData({ ...formData, source_url: e.target.value })}
-                    className="w-full pl-10 pr-4 py-3 bg-brand-dark border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
-                    placeholder="https://..."
+                    id="suggest-name"
+                    ref={titleRef}
+                    value={form.title}
+                    onChange={(e) => setForm({ ...form, title: e.target.value })}
+                    maxLength={120}
+                    placeholder={form.type === "series" ? "Masalan: Dune: Prophecy" : "Masalan: Interstellar"}
+                    className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white placeholder-gray-600 focus:border-orange-500 focus:outline-none"
                   />
                 </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  Kinoni topishingiz mumkin bo'lgan havola (IMDb, Kinopoisk va h.k.)
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">
-                  Rasm (ixtiyoriy)
-                </label>
-                {imagePreview ? (
-                  <div className="relative mt-2">
-                    <MediaImage
-                      src={imagePreview}
-                      alt="Preview"
-                      className="w-full max-h-48 object-contain rounded-lg border border-white/10 bg-brand-dark"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleRemoveImage}
-                      className="absolute top-2 right-2 p-1.5 bg-black/70 rounded-full text-white hover:bg-black/90"
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-                ) : (
-                  <label className="flex items-center justify-center w-full h-24 border-2 border-dashed border-white/10 rounded-lg cursor-pointer hover:border-brand-red/50 hover:bg-brand-dark/50 transition-colors">
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/jpeg,image/jpg,image/png,image/webp,image/gif"
-                      onChange={handleImageSelect}
-                      className="hidden"
-                    />
-                    <div className="text-center">
-                      <Upload className="w-6 h-6 text-gray-500 mx-auto mb-1" />
-                      <span className="text-sm text-gray-500">
-                        Rasm tanlang (JPG, PNG, WebP, GIF)
-                      </span>
-                      <span className="text-xs text-gray-600 block mt-0.5">
-                        Max 10MB, GIF 20MB
-                      </span>
-                    </div>
+                <div>
+                  <label htmlFor="suggest-year" className="mb-1.5 block text-xs font-medium text-gray-400">
+                    Yili
                   </label>
-                )}
+                  <input
+                    id="suggest-year"
+                    value={year}
+                    onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    inputMode="numeric"
+                    placeholder="2024"
+                    className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-3 text-center text-white placeholder-gray-600 focus:border-orange-500 focus:outline-none"
+                  />
+                </div>
               </div>
 
-              {error && (
-                <div className="p-3 bg-red-500/20 border border-red-500/50 rounded-lg text-red-400 text-sm">
-                  {error}
+              {/* Already on the site? */}
+              {(checking || found.length > 0) && form.title.trim().length >= 3 && (
+                <div className="rounded-xl border border-sky-500/25 bg-sky-500/[0.07] p-3" aria-live="polite">
+                  {checking && found.length === 0 ? (
+                    <p className="flex items-center gap-2 text-xs text-sky-200">
+                      <Loader2 size={13} className="animate-spin" /> Saytda bor-yo&apos;qligini tekshiryapmiz…
+                    </p>
+                  ) : (
+                    <>
+                      <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-sky-200">
+                        <Sparkles size={13} /> Balki shuni qidiryapsiz? Bular saytda allaqachon bor:
+                      </p>
+                      <ul className="space-y-1">
+                        {found.map((m) => (
+                          <li key={m.id}>
+                            <Link
+                              href={m.target_type === "series" ? `/series/${m.slug}` : `/movies/${m.slug}`}
+                              onClick={onClose}
+                              className="flex items-center gap-3 rounded-lg p-1.5 hover:bg-white/5"
+                            >
+                              <MediaImage src={m.poster_url} alt="" fallbackSrc={DEFAULT_POSTER_PLACEHOLDER} className="h-11 w-8 shrink-0 rounded object-cover" />
+                              <span className="min-w-0 flex-1">
+                                <span className="line-clamp-1 text-sm text-white">{getLocalizedTitle(m)}</span>
+                                <span className="text-[11px] text-gray-400">
+                                  {m.year} · {m.target_type === "series" ? "Serial" : "Kino"}
+                                </span>
+                              </span>
+                              <span className="shrink-0 text-xs text-sky-300">Ko&apos;rish →</span>
+                            </Link>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
                 </div>
               )}
 
+              {/* Message */}
+              <div>
+                <label htmlFor="suggest-msg" className="mb-1.5 block text-xs font-medium text-gray-400">
+                  Izoh <span className="text-gray-600">(ixtiyoriy)</span>
+                </label>
+                <textarea
+                  id="suggest-msg"
+                  value={form.message}
+                  onChange={(e) => setForm({ ...form, message: e.target.value })}
+                  rows={2}
+                  maxLength={1000}
+                  placeholder="Qaysi tilda, qaysi fasl, aktyorlar… — admin topishiga yordam beradi"
+                  className="w-full resize-none rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white placeholder-gray-600 focus:border-orange-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Optional link + image */}
+              {!showExtra && !form.source_url && !preview ? (
+                <button type="button" onClick={() => setShowExtra(true)} className="text-sm text-orange-400 hover:underline">
+                  + Havola yoki rasm qo&apos;shish
+                </button>
+              ) : (
+                <div className="space-y-3">
+                  <div className="relative">
+                    <Link2 className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
+                    <input
+                      type="url"
+                      value={form.source_url}
+                      onChange={(e) => setForm({ ...form, source_url: e.target.value })}
+                      placeholder="IMDb, Kinopoisk yoki boshqa havola"
+                      className="w-full rounded-xl border border-white/10 bg-black/30 py-3 pl-10 pr-4 text-sm text-white placeholder-gray-600 focus:border-orange-500 focus:outline-none"
+                    />
+                  </div>
+                  {preview ? (
+                    <div className="relative">
+                      <MediaImage src={preview} alt="Tanlangan rasm" className="max-h-40 w-full rounded-xl border border-white/10 bg-black/30 object-contain" />
+                      <button type="button" onClick={clearImage} className="absolute right-2 top-2 rounded-full bg-black/70 p-1.5 text-white hover:bg-black" aria-label="Rasmni olib tashlash">
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-white/15 px-4 py-3 text-sm text-gray-400 transition-colors hover:border-orange-500/50 hover:text-gray-200">
+                      <input ref={fileRef} type="file" accept="image/jpeg,image/jpg,image/png,image/webp,image/gif" onChange={pickImage} className="hidden" />
+                      <ImagePlus size={18} className="text-gray-500" />
+                      Poster yoki skrinshot (ixtiyoriy)
+                    </label>
+                  )}
+                </div>
+              )}
+
+              {error && (
+                <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300" role="alert">
+                  {error}
+                </p>
+              )}
+
+              <div className="sticky bottom-0 -mx-5 -mb-5 space-y-2 border-t border-white/5 bg-[#101018]/95 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur sm:-mx-6 sm:-mb-6 sm:px-6">
               <button
                 type="submit"
-                disabled={loading}
-                className="w-full py-3 bg-brand-red hover:bg-brand-red/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-white font-medium flex items-center justify-center gap-2 transition-colors"
+                disabled={loading || !form.title.trim()}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-orange-600 py-3.5 font-semibold text-white shadow-lg shadow-orange-500/20 transition hover:from-orange-400 hover:to-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    Yuborilmoqda...
-                  </>
-                ) : (
-                  <>
-                    <Film className="w-5 h-5" />
-                    Tavsiya yuborish
-                  </>
-                )}
+                {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send size={18} />}
+                {loading ? "Yuborilmoqda…" : isAuthenticated ? "Tavsiyani yuborish" : "Kirish va yuborish"}
               </button>
+              {!isAuthenticated && <p className="text-center text-xs text-gray-500">Yuborish uchun Telegram orqali kirasiz</p>}
+              </div>
             </form>
           )}
         </div>
       </div>
+      <TelegramLoginModal isOpen={loginOpen} onClose={() => setLoginOpen(false)} />
     </div>
   );
 
-  if (typeof window === "undefined") return null;
-
-  return createPortal(modalContent, document.body);
+  return createPortal(content, document.body);
 }

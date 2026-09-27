@@ -225,3 +225,16 @@ body {
 .snap-start {
   isolation: isolate;
 }
+
+/* Suggestion sheet: slides up on phones, pops in on desktop. */
+@keyframes sheetUp {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-\[sheetUp_\.22s_ease-out\], .animate-\[fadeIn_\.15s_ease-out\] { animation: none; }
+}
