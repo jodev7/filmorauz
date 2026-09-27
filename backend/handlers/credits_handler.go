@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/filmorauz/backend/services"
@@ -28,22 +30,28 @@ func (h *CreditsHandler) fetch(c *gin.Context, series bool) {
 		return
 	}
 	force := c.Query("force") == "1" || c.Query("force") == "true"
+	picked, _ := strconv.Atoi(c.Query("tmdb_id"))
+	if picked < 0 {
+		picked = 0
+	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 40*time.Second)
 	defer cancel()
 	var res *services.CreditsResult
 	if series {
-		res, err = h.svc.FetchSeries(ctx, id, force)
+		res, err = h.svc.FetchSeries(ctx, id, force, picked)
 	} else {
-		res, err = h.svc.FetchMovie(ctx, id, force)
+		res, err = h.svc.FetchMovie(ctx, id, force, picked)
 	}
 	switch {
+	// Never 502/503/504 here: Cloudflare swaps those for its own error page
+	// (without CORS headers), so the admin would only see "Failed to fetch".
 	case errors.Is(err, services.ErrTMDBDisabled):
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 	case errors.Is(err, services.ErrCreditsTargetNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "topilmadi"})
 	case err != nil:
 		log.Printf("[CREDITS] fetch %s: %v", id.Hex(), err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": "TMDB bilan bog'lanib bo'lmadi"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	default:
 		c.JSON(http.StatusOK, res)
 	}
@@ -55,10 +63,37 @@ func (h *CreditsHandler) FetchMovie(c *gin.Context) { h.fetch(c, false) }
 // FetchSeries POST /api/admin/series/:id/credits?force=1
 func (h *CreditsHandler) FetchSeries(c *gin.Context) { h.fetch(c, true) }
 
+// Search GET /api/admin/tmdb/search?type=movie|tv&q=...&year=
+func (h *CreditsHandler) Search(c *gin.Context) {
+	kind := c.DefaultQuery("type", "movie")
+	if kind != "movie" && kind != "tv" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "type: movie yoki tv"})
+		return
+	}
+	q := strings.TrimSpace(c.Query("q"))
+	if q == "" || len([]rune(q)) > 120 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "qidiruv matni kerak"})
+		return
+	}
+	year, _ := strconv.Atoi(c.Query("year"))
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+	items, err := h.svc.SearchTMDB(ctx, kind, q, year)
+	switch {
+	case errors.Is(err, services.ErrTMDBDisabled):
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+	case err != nil:
+		log.Printf("[CREDITS] search: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	default:
+		c.JSON(http.StatusOK, gin.H{"results": items})
+	}
+}
+
 // Backfill POST /api/admin/credits/backfill — starts one batch now.
 func (h *CreditsHandler) Backfill(c *gin.Context) {
 	if !h.svc.Enabled() {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": services.ErrTMDBDisabled.Error()})
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": services.ErrTMDBDisabled.Error()})
 		return
 	}
 	go func() {

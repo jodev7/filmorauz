@@ -128,6 +128,7 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 		admin.POST("/movies/:id/credits", d.Credits.FetchMovie)
 		admin.POST("/series/:id/credits", d.Credits.FetchSeries)
 		admin.POST("/credits/backfill", d.Credits.Backfill)
+		admin.GET("/tmdb/search", d.Credits.Search)
 
 		// Error tracking (client + server)
 		admin.GET("/errors", d.Errors.ListErrors)

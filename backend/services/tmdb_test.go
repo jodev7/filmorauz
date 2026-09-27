@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -89,5 +90,68 @@ func TestTMDBSearchAndCredits(t *testing.T) {
 	}
 	if NewTMDBClient("", "") != nil {
 		t.Fatal("client without credentials should be nil")
+	}
+}
+
+func TestTMDBErrorsHideAPIKey(t *testing.T) {
+	c := NewTMDBClient("secret-key-123", "")
+	c.baseURL = "http://127.0.0.1:1" // nothing listens here
+	_, err := c.Credits(context.Background(), "movie", 1)
+	if err == nil || strings.Contains(err.Error(), "secret-key-123") {
+		t.Fatalf("error must exist and not leak the key: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
+	defer srv.Close()
+	c.baseURL = srv.URL
+	if _, err := c.Credits(context.Background(), "movie", 1); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("want 401 message, got %v", err)
+	}
+}
+
+func TestTMDBBadTokenFallsBackToAPIKey(t *testing.T) {
+	var bearerCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			bearerCalls++
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Query().Get("api_key") != "good" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"cast":[{"id":1,"name":"A"}],"crew":[]}`))
+	}))
+	defer srv.Close()
+	c := NewTMDBClient("good", "bad-token")
+	c.baseURL = srv.URL
+	for i := 0; i < 2; i++ {
+		cr, err := c.Credits(context.Background(), "movie", 1)
+		if err != nil || len(cr.Cast) != 1 {
+			t.Fatalf("call %d: %+v %v", i, cr, err)
+		}
+	}
+	if bearerCalls != 1 {
+		t.Fatalf("rejected token should be tried once, got %d", bearerCalls)
+	}
+}
+
+func TestTMDBSearchList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/search/tv" || r.URL.Query().Get("language") != "ru-RU" || r.URL.Query().Get("first_air_date_year") != "2021" {
+			t.Errorf("unexpected request %s", r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{"results":[{"id":93405,"name":"Игра в кальмара","original_name":"오징어 게임","first_air_date":"2021-09-17","poster_path":"/p.jpg"}]}`))
+	}))
+	defer srv.Close()
+	c := NewTMDBClient("k", "")
+	c.baseURL = srv.URL
+	items, err := c.SearchList(context.Background(), "tv", "Kalmar o'yini", 2021)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("%+v %v", items, err)
+	}
+	it := items[0]
+	if it.ID != 93405 || it.Title != "Игра в кальмара" || it.OriginalTitle != "오징어 게임" || it.Year != 2021 || it.PosterURL != "https://image.tmdb.org/t/p/w92/p.jpg" {
+		t.Fatalf("bad item %+v", it)
 	}
 }

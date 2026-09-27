@@ -116,15 +116,25 @@ func targetFromDoc(doc bson.M) creditsTarget {
 // FetchMovie / FetchSeries fetch and store credits for one title. With
 // force, admin-entered cast/director are replaced by TMDB's; otherwise they
 // are only filled when empty.
-func (s *CreditsService) FetchMovie(ctx context.Context, id primitive.ObjectID, force bool) (*CreditsResult, error) {
-	return s.fetch(ctx, "movies", "movie", id, force)
+// tmdbID > 0 means the admin picked the TMDB title by hand: it is used as
+// is (and replaces a wrong stored tmdb_id) instead of searching.
+func (s *CreditsService) FetchMovie(ctx context.Context, id primitive.ObjectID, force bool, tmdbID int) (*CreditsResult, error) {
+	return s.fetch(ctx, "movies", "movie", id, force, tmdbID)
 }
 
-func (s *CreditsService) FetchSeries(ctx context.Context, id primitive.ObjectID, force bool) (*CreditsResult, error) {
-	return s.fetch(ctx, "series", "tv", id, force)
+func (s *CreditsService) FetchSeries(ctx context.Context, id primitive.ObjectID, force bool, tmdbID int) (*CreditsResult, error) {
+	return s.fetch(ctx, "series", "tv", id, force, tmdbID)
 }
 
-func (s *CreditsService) fetch(ctx context.Context, colName, kind string, id primitive.ObjectID, force bool) (*CreditsResult, error) {
+// SearchTMDB lists candidates for the admin picker.
+func (s *CreditsService) SearchTMDB(ctx context.Context, kind, query string, year int) ([]TMDBSearchItem, error) {
+	if !s.Enabled() {
+		return nil, ErrTMDBDisabled
+	}
+	return s.tmdb.SearchList(ctx, kind, query, year)
+}
+
+func (s *CreditsService) fetch(ctx context.Context, colName, kind string, id primitive.ObjectID, force bool, pickedID int) (*CreditsResult, error) {
 	if !s.Enabled() {
 		return nil, ErrTMDBDisabled
 	}
@@ -145,6 +155,9 @@ func (s *CreditsService) fetch(ctx context.Context, colName, kind string, id pri
 	}
 
 	tmdbID := t.TMDBID
+	if pickedID > 0 {
+		tmdbID = pickedID
+	}
 	if tmdbID == 0 {
 		found, err := s.tmdb.Search(ctx, kind, []string{t.OriginalTitle, t.Title, t.TitleUz}, t.Year)
 		if err != nil {
@@ -158,7 +171,7 @@ func (s *CreditsService) fetch(ctx context.Context, colName, kind string, id pri
 		tmdbID = found
 	}
 	cr, err := s.tmdb.Credits(ctx, kind, tmdbID)
-	if errors.Is(err, errTMDBNotFound) && t.TMDBID != 0 {
+	if errors.Is(err, errTMDBNotFound) && tmdbID != 0 {
 		mark(CreditsNotFound)
 		return &CreditsResult{Status: CreditsNotFound, Cast: t.Cast, Director: t.Director, CastDetails: []models.CastMember{}}, nil
 	}
@@ -258,7 +271,7 @@ func (s *CreditsService) Backfill(ctx context.Context, limit int) (int, error) {
 	done := 0
 	for _, kind := range []struct {
 		col   string
-		fetch func(context.Context, primitive.ObjectID, bool) (*CreditsResult, error)
+		fetch func(context.Context, primitive.ObjectID, bool, int) (*CreditsResult, error)
 	}{{"movies", s.FetchMovie}, {"series", s.FetchSeries}} {
 		cur, err := s.db.Collection(kind.col).Find(ctx, pendingFilter(time.Now()),
 			options.Find().SetProjection(bson.M{"_id": 1}).SetSort(bson.D{{Key: "created_at", Value: -1}}).SetLimit(int64(limit)))
@@ -277,7 +290,7 @@ func (s *CreditsService) Backfill(ctx context.Context, limit int) (int, error) {
 				return done, ctx.Err()
 			}
 			one, cancel := context.WithTimeout(ctx, 30*time.Second)
-			res, err := kind.fetch(one, d.ID, false)
+			res, err := kind.fetch(one, d.ID, false, 0)
 			cancel()
 			if err != nil {
 				log.Printf("[CREDITS] %s %s: %v", kind.col, d.ID.Hex(), err)
