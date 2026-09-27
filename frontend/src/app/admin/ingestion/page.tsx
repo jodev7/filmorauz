@@ -17,6 +17,8 @@ import {
   CatalogImportInput, bulkImport
 } from "@/lib/api";
 import MediaImage from "@/components/ui/MediaImage";
+import { useToast } from "@/components/admin/Toast";
+import { EmptyState, PageHead, Pager, SkeletonList, StatTile, Tabs } from "@/components/admin/kit";
 
 // Season type for serial grouping
 type SeasonGroup = {
@@ -573,13 +575,13 @@ function getStatusMeta(status: IngestionStatus | string | undefined): {
 type JobFilter = "all" | "active" | "pending" | "processing" | "failed" | "completed" | "stuck";
 
 const JOB_FILTERS: { id: JobFilter; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "active", label: "Active" },
-  { id: "pending", label: "Pending" },
-  { id: "processing", label: "Processing" },
-  { id: "failed", label: "Failed" },
-  { id: "completed", label: "Completed" },
-  { id: "stuck", label: "Stuck" },
+  { id: "active", label: "Faol" },
+  { id: "pending", label: "Navbatda" },
+  { id: "processing", label: "Ishlanmoqda" },
+  { id: "failed", label: "Xato" },
+  { id: "stuck", label: "Qotib qolgan" },
+  { id: "completed", label: "Tugallangan" },
+  { id: "all", label: "Hammasi" },
 ];
 
 function getJobDisplayStatus(job: IngestionJob): string {
@@ -782,9 +784,9 @@ function BulkTab({
   };
 
   return (
-    <div className="bg-brand-card rounded-xl border border-brand-border p-6">
+    <div className="bg-[#12121a] rounded-xl border border-white/10 p-6">
       <div className="flex items-center gap-3 mb-6">
-        <Database className="w-6 h-6 text-brand-red" />
+        <Database className="w-6 h-6 text-orange-500" />
         <h2 className="text-xl font-display">Bulk Import</h2>
       </div>
 
@@ -803,8 +805,8 @@ function BulkTab({
                     onClick={() => setSourceId(source.id)}
                     className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 border ${
                       sourceId === source.id 
-                        ? "bg-brand-red text-white border-brand-red" 
-                        : "bg-brand-dark text-gray-400 hover:text-white border-brand-border"
+                        ? "bg-orange-500 text-white border-orange-500" 
+                        : "bg-black/30 text-gray-400 hover:text-white border-white/10"
                     }`}
                   >
                     <Icon className="w-4 h-4" />
@@ -827,7 +829,7 @@ function BulkTab({
               <select
                 value={selectedCategory}
                 onChange={(e) => setSelectedCategory(e.target.value)}
-                className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white focus:outline-none focus:border-brand-red"
+                className="w-full bg-black/30 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-orange-500"
               >
                 {categories.length === 0 ? (
                   <option value="">Kategoriyalar topilmadi</option>
@@ -856,8 +858,8 @@ function BulkTab({
                   onClick={() => setTypeFilter(t.id)}
                   className={`px-4 py-2 rounded-lg transition-colors border ${
                     typeFilter === t.id 
-                      ? "bg-brand-red text-white border-brand-red" 
-                      : "bg-brand-dark text-gray-400 hover:text-white border-brand-border"
+                      ? "bg-orange-500 text-white border-orange-500" 
+                      : "bg-black/30 text-gray-400 hover:text-white border-white/10"
                   }`}
                 >
                   {t.name}
@@ -875,7 +877,7 @@ function BulkTab({
                 min="1"
                 value={pageStart}
                 onChange={(e) => setPageStart(parseInt(e.target.value) || 1)}
-                className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white focus:outline-none focus:border-brand-red"
+                className="w-full bg-black/30 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-orange-500"
               />
             </div>
             <div>
@@ -885,7 +887,7 @@ function BulkTab({
                 min={pageStart}
                 value={pageEnd}
                 onChange={(e) => setPageEnd(parseInt(e.target.value) || pageStart)}
-                className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white focus:outline-none focus:border-brand-red"
+                className="w-full bg-black/30 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-orange-500"
               />
             </div>
           </div>
@@ -907,7 +909,7 @@ function BulkTab({
           <button
             onClick={handleStartBulkImport}
             disabled={importing || !selectedCategory}
-            className="w-full bg-brand-red hover:bg-brand-red/90 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors"
+            className="w-full bg-orange-500 hover:bg-orange-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors"
           >
             {importing ? (
               <>
@@ -924,30 +926,30 @@ function BulkTab({
         </div>
 
         {/* Info Box */}
-        <div className="bg-brand-dark/50 rounded-xl p-6 border border-brand-border h-fit">
+        <div className="bg-black/50 rounded-xl p-6 border border-white/10 h-fit">
           <h3 className="font-bold mb-4 flex items-center gap-2">
-            <Settings className="w-4 h-4 text-brand-red" />
+            <Settings className="w-4 h-4 text-orange-500" />
             Bulk Import haqida
           </h3>
           <ul className="space-y-3 text-sm text-gray-400">
             <li className="flex gap-2">
-              <span className="text-brand-red">•</span>
+              <span className="text-orange-500">•</span>
               Tanlangan kategoriya bo'yicha barcha video va seriallar avtomatik ravishda import qilinadi.
             </li>
             <li className="flex gap-2">
-              <span className="text-brand-red">•</span>
+              <span className="text-orange-500">•</span>
               Pagination avtomatik tarzda amalga oshiriladi (siz tanlagan sahifa oralig'ida).
             </li>
             <li className="flex gap-2">
-              <span className="text-brand-red">•</span>
+              <span className="text-orange-500">•</span>
               Tizimda allaqachon mavjud bo'lgan videolar qayta import qilinmaydi (skip qilinadi).
             </li>
             <li className="flex gap-2">
-              <span className="text-brand-red">•</span>
+              <span className="text-orange-500">•</span>
               Import jarayonini "Jobs" bo'limida kuzatib borishingiz mumkin.
             </li>
             <li className="flex gap-2">
-              <span className="text-brand-red">•</span>
+              <span className="text-orange-500">•</span>
               Eslatma: Juda ko'p sahifalarni bir marta import qilish server yuklamasini oshirishi mumkin. (Maksimal 50 sahifa).
             </li>
           </ul>
@@ -1197,7 +1199,7 @@ function CatalogTab({
       {/* Header with search toggle */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <SourceIcon className="w-5 h-5 text-brand-red" />
+          <SourceIcon className="w-5 h-5 text-orange-500" />
           <span className="text-gray-400">{total} items total</span>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -1206,7 +1208,7 @@ function CatalogTab({
             value={selectedCategory}
             onChange={(e) => { setSelectedCategory(e.target.value); setPage(1); }}
             disabled={categoriesLoading || categories.length === 0}
-            className="bg-brand-card border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-brand-red disabled:opacity-40 disabled:cursor-not-allowed"
+            className="bg-[#12121a] border border-white/10 rounded-2xl px-3 py-2 text-white text-sm focus:outline-none focus:border-orange-500 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <option value="">
               {categoriesLoading ? "Loading categories…" : categories.length === 0 ? "No categories" : "All Categories"}
@@ -1219,7 +1221,7 @@ function CatalogTab({
           <select
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value)}
-            className="bg-brand-card border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-brand-red"
+            className="bg-[#12121a] border border-white/10 rounded-2xl px-3 py-2 text-white text-sm focus:outline-none focus:border-orange-500"
           >
             <option value="">All Types</option>
             <option value="movies">Movies</option>
@@ -1229,8 +1231,8 @@ function CatalogTab({
             onClick={() => setShowSearch(!showSearch)}
             className={`px-4 py-2 rounded-lg transition-colors ${
               showSearch 
-                ? "bg-brand-red text-white" 
-                : "bg-brand-card text-gray-400 hover:text-white border border-brand-border"
+                ? "bg-orange-500 text-white" 
+                : "bg-[#12121a] text-gray-400 hover:text-white border border-white/10"
             }`}
           >
             <Search className="w-4 h-4 inline mr-2" />
@@ -1240,7 +1242,7 @@ function CatalogTab({
       </div>
 
       {/* Direct URL Import panel */}
-      <div className="bg-brand-card border border-brand-border rounded-lg p-4">
+      <div className="bg-[#12121a] border border-white/10 rounded-2xl p-4">
         <h3 className="text-white font-semibold mb-3">Manba havolasi orqali import</h3>
         <div className="flex gap-2">
           <input
@@ -1249,12 +1251,12 @@ function CatalogTab({
             onChange={(e) => setDirectUrl(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleDirectUrlImport()}
             placeholder="Kino yoki serial sahifa linkini kiriting..."
-            className="flex-1 bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
+            className="flex-1 bg-black/30 border border-white/10 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-orange-500"
           />
           <button
             onClick={handleDirectUrlImport}
             disabled={directImporting || qualityProbing === directUrl.trim() || !directUrl.trim()}
-            className="bg-brand-red hover:bg-orange-700 disabled:opacity-60 px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
+            className="bg-orange-500 hover:bg-orange-400 disabled:opacity-60 px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
           >
             {directImporting || qualityProbing === directUrl.trim() ? (
               <Loader2 className="w-5 h-5 animate-spin" />
@@ -1273,7 +1275,7 @@ function CatalogTab({
 
       {/* Search panel */}
       {showSearch && (
-        <div className="bg-brand-card border border-brand-border rounded-lg p-4">
+        <div className="bg-[#12121a] border border-white/10 rounded-2xl p-4">
           <div className="flex gap-2">
             <input
               type="text"
@@ -1281,12 +1283,12 @@ function CatalogTab({
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSearch()}
               placeholder={`Search in ${source.name}...`}
-              className="flex-1 bg-brand-dark border border-brand-border rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
+              className="flex-1 bg-black/30 border border-white/10 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-orange-500"
             />
             <button
               onClick={handleSearch}
               disabled={searching}
-              className="bg-brand-red hover:bg-orange-700 disabled:opacity-60 px-4 py-2 rounded-lg transition-colors"
+              className="bg-orange-500 hover:bg-orange-400 disabled:opacity-60 px-4 py-2 rounded-lg transition-colors"
             >
               {searching ? (
                 <Loader2 className="w-5 h-5 animate-spin" />
@@ -1300,9 +1302,9 @@ function CatalogTab({
           {searchResults.length > 0 && (
             <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-96 overflow-y-auto">
               {searchResults.map((result, index) => (
-                <div key={index} className="bg-brand-dark border border-brand-border rounded-lg p-3 flex gap-3">
+                <div key={index} className="bg-black/30 border border-white/10 rounded-lg p-3 flex gap-3">
                   {(result.img || result.poster) && (
-                    <div className="w-16 h-24 bg-brand-card rounded overflow-hidden flex-shrink-0">
+                    <div className="w-16 h-24 bg-[#12121a] rounded overflow-hidden flex-shrink-0">
                       <MediaImage
                         src={result.img || result.poster || ""}
                         alt={result.title}
@@ -1337,7 +1339,7 @@ function CatalogTab({
                     <button
                       onClick={() => handleImportSearch(result)}
                       disabled={importing === result.source_id || qualityProbing === result.source_id}
-                      className="mt-2 w-full bg-brand-red hover:bg-orange-700 disabled:opacity-60 py-1.5 rounded text-sm flex items-center justify-center gap-2 transition-colors"
+                      className="mt-2 w-full bg-orange-500 hover:bg-orange-400 disabled:opacity-60 py-1.5 rounded text-sm flex items-center justify-center gap-2 transition-colors"
                     >
                       {importing === result.source_id || qualityProbing === result.source_id ? (
                         <Loader2 className="w-3 h-3 animate-spin" />
@@ -1369,7 +1371,7 @@ function CatalogTab({
         return (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4" onClick={() => setQualityConfirm(null)}>
             <div
-              className="w-full max-w-md bg-brand-card border border-brand-border rounded-2xl p-6 space-y-4 shadow-2xl"
+              className="w-full max-w-md bg-[#12121a] border border-white/10 rounded-2xl p-6 space-y-4 shadow-2xl"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center gap-2">
@@ -1399,14 +1401,14 @@ function CatalogTab({
                 <button
                   onClick={confirmQualityImport}
                   disabled={!!importing || !!directImporting}
-                  className={`flex-1 ${isLow ? "bg-amber-600 hover:bg-amber-700" : "bg-brand-red hover:bg-orange-700"} disabled:opacity-60 px-4 py-2.5 rounded-lg text-sm font-medium text-white flex items-center justify-center gap-2 transition-colors`}
+                  className={`flex-1 ${isLow ? "bg-amber-600 hover:bg-amber-700" : "bg-orange-500 hover:bg-orange-400"} disabled:opacity-60 px-4 py-2.5 rounded-lg text-sm font-medium text-white flex items-center justify-center gap-2 transition-colors`}
                 >
                   {(!!importing || !!directImporting) && <Loader2 className="w-4 h-4 animate-spin" />}
                   Baribir import qilish
                 </button>
                 <button
                   onClick={() => setQualityConfirm(null)}
-                  className="flex-1 bg-brand-dark border border-brand-border hover:bg-gray-700 px-4 py-2.5 rounded-lg text-sm text-gray-300 transition-colors"
+                  className="flex-1 bg-black/30 border border-white/10 hover:bg-gray-700 px-4 py-2.5 rounded-lg text-sm text-gray-300 transition-colors"
                 >
                   Bekor qilish
                 </button>
@@ -1427,14 +1429,14 @@ function CatalogTab({
             Confidence {(pendingConfirmation.response.confidence * 100).toFixed(1)}%. Selected result does not confidently match fetched detail page.
           </p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-            <div className="bg-brand-dark/60 rounded p-3 border border-brand-border">
+            <div className="bg-black/60 rounded p-3 border border-white/10">
               <p className="text-gray-400 mb-1">Selected</p>
               <p>{pendingConfirmation.response.selected.title || "-"}</p>
               <p className="text-gray-400">{pendingConfirmation.response.selected.year || "-"}</p>
               <p className="text-gray-400">{pendingConfirmation.response.selected.type || "-"}</p>
               <p className="text-gray-500 break-all mt-1">{pendingConfirmation.response.selected.detail_url || "-"}</p>
             </div>
-            <div className="bg-brand-dark/60 rounded p-3 border border-brand-border">
+            <div className="bg-black/60 rounded p-3 border border-white/10">
               <p className="text-gray-400 mb-1">Fetched</p>
               <p>{pendingConfirmation.response.fetched.title || "-"}</p>
               <p className="text-gray-400">{pendingConfirmation.response.fetched.year || "-"}</p>
@@ -1452,7 +1454,7 @@ function CatalogTab({
             </button>
             <button
               onClick={() => setPendingConfirmation(null)}
-              className="bg-brand-card border border-brand-border hover:bg-gray-700 px-4 py-2 rounded-lg text-sm"
+              className="bg-[#12121a] border border-white/10 hover:bg-gray-700 px-4 py-2 rounded-2xl text-sm"
             >
               Cancel
             </button>
@@ -1472,7 +1474,7 @@ function CatalogTab({
         </div>
       ) : loading ? (
         <div className="flex items-center justify-center py-12">
-          <Loader2 className="w-8 h-8 animate-spin text-brand-red" />
+          <Loader2 className="w-8 h-8 animate-spin text-orange-500" />
           <span className="ml-3 text-gray-400">Loading catalog...</span>
         </div>
       ) : catalog.length === 0 ? (
@@ -1483,10 +1485,10 @@ function CatalogTab({
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {catalog.map((item) => (
-              <div key={item.source_id} className="bg-brand-card border border-brand-border rounded-lg overflow-hidden">
+              <div key={item.source_id} className="bg-[#12121a] border border-white/10 rounded-2xl overflow-hidden">
                 <div className="relative">
                   {item.poster ? (
-                    <div className="w-full h-48 bg-brand-dark">
+                    <div className="w-full h-48 bg-black/30">
                       <MediaImage
                         src={item.poster}
                         alt={item.title}
@@ -1495,7 +1497,7 @@ function CatalogTab({
                       />
                     </div>
                   ) : (
-                    <div className="w-full h-48 bg-brand-dark flex items-center justify-center">
+                    <div className="w-full h-48 bg-black/30 flex items-center justify-center">
                       <Film className="w-12 h-12 text-gray-600" />
                     </div>
                   )}
@@ -1547,7 +1549,7 @@ function CatalogTab({
                   <button
                     onClick={() => handleImportCatalog(item)}
                     disabled={importing === item.source_id || qualityProbing === item.source_id}
-                    className="mt-3 w-full bg-brand-red hover:bg-orange-700 disabled:opacity-60 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors"
+                    className="mt-3 w-full bg-orange-500 hover:bg-orange-400 disabled:opacity-60 py-2 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors"
                   >
                     {importing === item.source_id || qualityProbing === item.source_id ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -1570,7 +1572,7 @@ function CatalogTab({
               <button
                 onClick={() => fetchCatalog(page - 1)}
                 disabled={page <= 1 || loadingMore}
-                className="px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white disabled:opacity-50 hover:bg-gray-700 transition-colors flex items-center gap-2"
+                className="px-4 py-2 bg-[#12121a] border border-white/10 rounded-2xl text-white disabled:opacity-50 hover:bg-gray-700 transition-colors flex items-center gap-2"
               >
                 <ChevronLeft className="w-4 h-4" />
                 Previous
@@ -1578,7 +1580,7 @@ function CatalogTab({
               <button
                 onClick={() => fetchCatalog(page + 1)}
                 disabled={page >= totalPages || loadingMore}
-                className="px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white disabled:opacity-50 hover:bg-gray-700 transition-colors flex items-center gap-2"
+                className="px-4 py-2 bg-[#12121a] border border-white/10 rounded-2xl text-white disabled:opacity-50 hover:bg-gray-700 transition-colors flex items-center gap-2"
               >
                 Next
                 <ChevronRight className="w-4 h-4" />
@@ -1588,7 +1590,7 @@ function CatalogTab({
           
           {loadingMore && (
             <div className="flex items-center justify-center py-4">
-              <Loader2 className="w-6 h-6 animate-spin text-brand-red" />
+              <Loader2 className="w-6 h-6 animate-spin text-orange-500" />
             </div>
           )}
         </>
@@ -1663,9 +1665,9 @@ function ManualTab({
 
   return (
     <div className="max-w-2xl">
-      <div className="bg-brand-card border border-brand-border rounded-lg p-6">
+      <div className="bg-[#12121a] border border-white/10 rounded-2xl p-6">
         <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-          <Link className="w-5 h-5 text-brand-red" />
+          <Link className="w-5 h-5 text-orange-500" />
           Manual Video Import
         </h3>
 
@@ -1685,13 +1687,13 @@ function ManualTab({
           {/* Source type toggle */}
           <div>
             <label className="block text-sm text-gray-400 mb-2">Manba turi</label>
-            <div className="flex rounded-lg border border-brand-border overflow-hidden">
+            <div className="flex rounded-lg border border-white/10 overflow-hidden">
               <button
                 type="button"
                 onClick={() => { setSourceType("direct"); setVideoUrl(""); }}
                 className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-medium transition-colors ${
                   sourceType === "direct"
-                    ? "bg-brand-red text-white"
+                    ? "bg-orange-500 text-white"
                     : "text-gray-400 hover:text-white hover:bg-white/5"
                 }`}
               >
@@ -1729,7 +1731,7 @@ function ManualTab({
                   : "https://example.com/video.mp4"
               }
               required
-              className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
+              className="w-full bg-black/30 border border-white/10 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-orange-500"
             />
             {sourceType === "youtube" && (
               <p className="text-xs text-gray-600 mt-1">
@@ -1749,7 +1751,7 @@ function ManualTab({
                   value="movie"
                   checked={type === "movie"}
                   onChange={() => setType("movie")}
-                  className="text-brand-red focus:ring-brand-red"
+                  className="text-orange-500 focus:ring-orange-500"
                 />
                 <span className="text-white flex items-center gap-1">
                   <Film className="w-4 h-4" /> Movie
@@ -1762,7 +1764,7 @@ function ManualTab({
                   value="serial"
                   checked={type === "serial"}
                   onChange={() => setType("serial")}
-                  className="text-brand-red focus:ring-brand-red"
+                  className="text-orange-500 focus:ring-orange-500"
                 />
                 <span className="text-white flex items-center gap-1">
                   <Tv className="w-4 h-4" /> Serial
@@ -1779,7 +1781,7 @@ function ManualTab({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Movie or series title"
-              className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
+              className="w-full bg-black/30 border border-white/10 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-orange-500"
             />
           </div>
 
@@ -1793,7 +1795,7 @@ function ManualTab({
               placeholder="2024"
               min="1900"
               max="2099"
-              className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
+              className="w-full bg-black/30 border border-white/10 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-orange-500"
             />
           </div>
 
@@ -1805,7 +1807,7 @@ function ManualTab({
               value={poster}
               onChange={(e) => setPoster(e.target.value)}
               placeholder="https://example.com/poster.jpg"
-              className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
+              className="w-full bg-black/30 border border-white/10 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-orange-500"
             />
           </div>
 
@@ -1817,7 +1819,7 @@ function ManualTab({
               value={backdrop}
               onChange={(e) => setBackdrop(e.target.value)}
               placeholder="https://example.com/backdrop.jpg"
-              className="w-full bg-brand-dark border border-brand-border rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
+              className="w-full bg-black/30 border border-white/10 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-orange-500"
             />
           </div>
 
@@ -1825,7 +1827,7 @@ function ManualTab({
           <button
             type="submit"
             disabled={submitting || !videoUrl.trim()}
-            className="w-full bg-brand-red hover:bg-orange-700 disabled:opacity-60 py-3 rounded-lg text-white font-semibold transition-colors flex items-center justify-center gap-2"
+            className="w-full bg-orange-500 hover:bg-orange-400 disabled:opacity-60 py-3 rounded-lg text-white font-semibold transition-colors flex items-center justify-center gap-2"
           >
             {submitting ? (
               <>
@@ -2024,7 +2026,7 @@ function JobCardBase({
   if (compact) {
     return (
       <div
-        className="bg-brand-card border border-brand-border rounded-lg p-3 ml-6"
+        className="bg-[#12121a] border border-white/10 rounded-2xl p-3 ml-6"
       >
         <div className="flex items-center gap-3">
           <div className={`p-1.5 rounded-full ${statusConfig.color} bg-opacity-20`}>
@@ -2051,7 +2053,7 @@ function JobCardBase({
               <span className="capitalize truncate">{activeStage}</span>
               <span>{displayProgress}%</span>
             </div>
-            <div className="h-1.5 bg-brand-border rounded-full overflow-hidden">
+            <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
               <div
                 className={`h-full ${statusConfig.color} transition-all duration-300`}
                 style={{ width: `${displayProgress}%` }}
@@ -2062,7 +2064,7 @@ function JobCardBase({
             <button
               onClick={() => onRetry(safeJob.id, "download")}
               disabled={retryingStage !== null}
-              className="p-1.5 bg-brand-dark hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
+              className="p-1.5 bg-black/30 hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
               title="Retry Download"
             >
               {retryingStage === "download" ? (
@@ -2074,7 +2076,7 @@ function JobCardBase({
             <button
               onClick={() => onRetry(safeJob.id, "process")}
               disabled={retryingStage !== null}
-              className="p-1.5 bg-brand-dark hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
+              className="p-1.5 bg-black/30 hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
               title="Retry Processing"
             >
               {retryingStage === "process" ? (
@@ -2085,7 +2087,7 @@ function JobCardBase({
             </button>
             <button
               onClick={() => onDelete(safeJob.id)}
-              className="p-1.5 bg-brand-dark hover:bg-red-900/40 rounded transition-colors"
+              className="p-1.5 bg-black/30 hover:bg-red-900/40 rounded transition-colors"
               title="Delete job from MongoDB"
             >
               <Trash2 className="w-3 h-3 text-red-400" />
@@ -2104,7 +2106,7 @@ function JobCardBase({
 
   return (
     <div
-      className="bg-brand-card border border-brand-border rounded-lg p-4"
+      className="bg-[#12121a] border border-white/10 rounded-2xl p-4"
     >
       <div className="flex items-center gap-4">
         <div className={`p-2 rounded-full ${statusConfig.color} bg-opacity-20`}>
@@ -2196,7 +2198,7 @@ function JobCardBase({
             <span className="capitalize">{activeStage}</span>
             <span>{displayProgress}%</span>
           </div>
-          <div className="h-2 bg-brand-border rounded-full overflow-hidden">
+          <div className="h-2 bg-white/10 rounded-full overflow-hidden">
             <div
               className={`h-full ${statusConfig.color} transition-all duration-300`}
               style={{ width: `${displayProgress}%` }}
@@ -2253,7 +2255,7 @@ function JobCardBase({
           <button
             onClick={() => onRetry(safeJob.id, "download")}
             disabled={retryingStage !== null}
-            className="p-2 bg-brand-card hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
+            className="p-2 bg-[#12121a] hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
             title="Retry Download"
           >
             {retryingStage === "download" ? (
@@ -2265,7 +2267,7 @@ function JobCardBase({
           <button
             onClick={() => onRetry(safeJob.id, "process")}
             disabled={retryingStage !== null}
-            className="p-2 bg-brand-card hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
+            className="p-2 bg-[#12121a] hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
             title="Retry Processing"
           >
             {retryingStage === "process" ? (
@@ -2277,7 +2279,7 @@ function JobCardBase({
           <button
             onClick={() => onRetry(safeJob.id, "upload")}
             disabled={retryingStage !== null}
-            className="p-2 bg-brand-card hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
+            className="p-2 bg-[#12121a] hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
             title="Retry Upload"
           >
             {retryingStage === "upload" ? (
@@ -2288,7 +2290,7 @@ function JobCardBase({
           </button>
           <button
             onClick={() => onDelete(safeJob.id)}
-            className="p-2 bg-brand-card hover:bg-red-900/40 rounded-lg transition-colors"
+            className="p-2 bg-[#12121a] hover:bg-red-900/40 rounded-lg transition-colors"
             title="Delete job from MongoDB"
           >
             <Trash2 className="w-4 h-4 text-red-400" />
@@ -2428,90 +2430,37 @@ function JobsTab({
 
 
   const paginationControls = totalPages > 1 ? (
-    <div className="flex items-center justify-between gap-2 rounded-lg border border-brand-border bg-brand-card/50 px-3 py-2">
-      <div className="text-sm text-gray-400">
-        Page {currentPage} of {Math.max(totalPages, 1)}
-      </div>
-      <div className="flex items-center gap-2">
-        <button
-          onClick={() => handlePageChange(currentPage - 1)}
-          disabled={currentPage <= 1}
-          className="px-3 py-1.5 rounded-lg text-sm border border-brand-border bg-brand-card text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
-        >
-          <ChevronLeft className="w-4 h-4" />
-          Prev
-        </button>
-        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-          const pageNum = Math.max(1, Math.min(totalPages - 4, currentPage - 2)) + i;
-          if (pageNum > totalPages || pageNum < 1) return null;
-          return (
-            <button
-              key={pageNum}
-              onClick={() => handlePageChange(pageNum)}
-              className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
-                pageNum === currentPage
-                  ? "bg-brand-red text-white border-brand-red"
-                  : "border-brand-border bg-brand-card text-gray-400 hover:text-white"
-              }`}
-            >
-              {pageNum}
-            </button>
-          );
-        })}
-        <button
-          onClick={() => handlePageChange(currentPage + 1)}
-          disabled={currentPage >= totalPages}
-          className="px-3 py-1.5 rounded-lg text-sm border border-brand-border bg-brand-card text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
-        >
-          Next
-          <ChevronRight className="w-4 h-4" />
-        </button>
-      </div>
-    </div>
+    <Pager page={currentPage} totalPages={totalPages} total={totalJobs} unit="ta" onChange={handlePageChange} />
   ) : null;
+
+  const filterCount = (id: JobFilter): number | undefined => {
+    if (id === "all") return statusCounts?.all ?? undefined;
+    if (id === "completed") return statusCounts?.completed ?? undefined;
+    return (summary as Record<string, number>)[id];
+  };
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="text-sm text-gray-400">
-          Page {currentPage} of {Math.max(totalPages, 1)} • {totalJobs} top-level item{totalJobs === 1 ? "" : "s"}
-        </div>
-        <div className="flex flex-wrap gap-2 text-xs text-gray-500">
-          <span className="rounded-md border border-brand-border bg-brand-card px-2 py-1">Active: {summary.active}</span>
-          <span className="rounded-md border border-brand-border bg-brand-card px-2 py-1">Pending: {summary.pending}</span>
-          <span className="rounded-md border border-brand-border bg-brand-card px-2 py-1">Processing: {summary.processing}</span>
-          <span className="rounded-md border border-brand-border bg-brand-card px-2 py-1">Failed: {summary.failed}</span>
-          <span className="rounded-md border border-brand-border bg-brand-card px-2 py-1">Stuck: {summary.stuck}</span>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <Tabs<JobFilter>
+          value={currentFilter}
+          onChange={handleFilterChange}
+          items={JOB_FILTERS.map((item) => ({ key: item.id, label: item.label, count: filterCount(item.id) }))}
+        />
+        <div className="flex items-center gap-2 text-xs text-gray-500">
+          {loadingJobs && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {totalJobs} ta element · {currentPage}/{Math.max(totalPages, 1)} sahifa
         </div>
       </div>
-
-      <div className="flex flex-wrap gap-2">
-        {JOB_FILTERS.map((item) => (
-          <button
-            key={item.id}
-            onClick={() => handleFilterChange(item.id)}
-            className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
-              currentFilter === item.id
-                ? "bg-brand-red text-white border-brand-red"
-                : "bg-brand-card text-gray-400 border-brand-border hover:text-white"
-            }`}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
-
-      {paginationControls}
 
       {loadingJobs && jobs.length === 0 ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="w-8 h-8 animate-spin text-brand-red" />
-          <span className="ml-3 text-gray-400">Loading jobs...</span>
-        </div>
+        <SkeletonList rows={4} height={110} />
       ) : jobGroups.length === 0 ? (
-        <div className="text-center text-gray-500 py-12">
-          {totalJobs === 0 ? "No ingestion jobs yet. Import movies from sources above to get started." : "No jobs match this filter."}
-        </div>
+        <EmptyState
+          icon={Clock}
+          title={currentFilter === "all" ? "Hali job yo'q" : "Bu filtrda job yo'q"}
+          text={currentFilter === "all" ? "Manbalardan kino yoki serial tanlab import qiling — u shu yerda paydo bo'ladi." : "Boshqa filtrni tanlab ko'ring."}
+        />
       ) : (
         <div className="space-y-4">
           {jobGroups.map((group) => {
@@ -2530,9 +2479,9 @@ function JobsTab({
             const serialElapsed = formatSerialElapsedTime(allEpisodes, now);
 
             return (
-              <div key={serial.id} className="bg-brand-card border border-brand-border rounded-lg overflow-hidden">
+              <div key={serial.id} className="bg-[#12121a] border border-white/10 rounded-2xl overflow-hidden">
                 <div
-                  className="p-4 flex items-center gap-4 cursor-pointer hover:bg-brand-dark/50 transition-colors"
+                  className="p-4 flex items-center gap-4 cursor-pointer hover:bg-black/50 transition-colors"
                   onClick={() => toggleSerial(serial.id)}
                 >
                   <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform ${isExpanded ? "" : "-rotate-90"}`} />
@@ -2572,7 +2521,7 @@ function JobsTab({
                       <span>Progress</span>
                       <span>{serialSummary.overallProgress}%</span>
                     </div>
-                    <div className="h-2 bg-brand-border rounded-full overflow-hidden">
+                    <div className="h-2 bg-white/10 rounded-full overflow-hidden">
                       <div
                         className={`h-full ${statusColor} transition-all duration-300`}
                         style={{ width: `${serialSummary.overallProgress}%` }}
@@ -2584,7 +2533,7 @@ function JobsTab({
                       e.stopPropagation();
                       handleDeleteSeries(serial.seriesSlug, serial.title, serial.totalEpisodes);
                     }}
-                    className="p-2 bg-brand-dark hover:bg-red-900/40 rounded-lg transition-colors"
+                    className="p-2 bg-black/30 hover:bg-red-900/40 rounded-lg transition-colors"
                     title={`Delete all ${serial.totalEpisodes} episodes from MongoDB`}
                   >
                     <Trash2 className="w-4 h-4 text-red-400" />
@@ -2592,7 +2541,7 @@ function JobsTab({
                 </div>
 
                 {isExpanded && (
-                  <div className="border-t border-brand-border bg-brand-dark/30">
+                  <div className="border-t border-white/10 bg-black/30">
                     {serial.seasons.map((season) => {
                       const seasonName = `S${season.season_number}`;
                       const seasonKey = `${serial.id}-${seasonName}`;
@@ -2600,9 +2549,9 @@ function JobsTab({
                       const seasonCompleted = season.episodes.filter((job) => job.status === "completed").length;
 
                       return (
-                        <div key={seasonName} className="border-b border-brand-border last:border-b-0">
+                        <div key={seasonName} className="border-b border-white/10 last:border-b-0">
                           <div
-                            className="p-3 ml-6 flex items-center gap-3 cursor-pointer hover:bg-brand-dark/50 transition-colors"
+                            className="p-3 ml-6 flex items-center gap-3 cursor-pointer hover:bg-black/50 transition-colors"
                             onClick={() => toggleSeason(seasonKey)}
                           >
                             <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${seasonExpanded ? "" : "-rotate-90"}`} />
@@ -2659,10 +2608,18 @@ export default function IngestionPage() {
   // queue. We don't switch tabs anymore — losing search results forced the
   // user to re-pick the source and re-query, which was the whole reason
   // they paginated through search in the first place.
-  const [importToast, setImportToast] = useState<string | null>(null);
-  const importToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toast = useToast();
   const [hasInitialized, setHasInitialized] = useState<boolean>(false);
   const isMounted = useRef(true);
+  // Declared before the fetch effects so the flag is set when they run.
+  useEffect(() => {
+    // Re-arm on (re)mount: StrictMode runs this cleanup once in dev, which
+    // otherwise left the flag false and every fetch was silently dropped.
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
 
   // Keep ref to latest fetchJobs to avoid stale closures in effects
   const fetchJobsRef = useRef<any>(null);
@@ -2771,12 +2728,6 @@ export default function IngestionPage() {
     hasInitialized && !!token && activeTab === "jobs" && syncEnabled
   );
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      isMounted.current = false;
-    };
-  }, []);
 
   // Handlers are useCallback-wrapped so memoized <JobCard/>s keep stable props.
   const handleRetry = useCallback(async (jobId: string, stage: "download" | "process" | "upload" = "download") => {
@@ -2834,198 +2785,157 @@ export default function IngestionPage() {
     if (fetchJobsRef.current) {
       fetchJobsRef.current();
     }
-    setImportToast("Jobs ro'yxatiga qo'shildi");
-    if (importToastTimer.current) clearTimeout(importToastTimer.current);
-    importToastTimer.current = setTimeout(() => setImportToast(null), 2500);
+    toast.success("Jobs ro'yxatiga qo'shildi");
   };
 
   if (!token) {
     return (
-      <div className="min-h-screen bg-brand-dark flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-brand-red" />
+      <div className="mx-auto max-w-7xl p-4 sm:p-6">
+        <SkeletonList rows={4} height={96} />
       </div>
     );
   }
 
-  const activeJobCount = Array.isArray(jobs) ? jobs.filter(j => !isTerminalJobStatus(j.status)).length : 0;
+  const activeJobCount = statusCounts?.active ?? (Array.isArray(jobs) ? jobs.filter(j => !isTerminalJobStatus(j.status)).length : 0);
+  const catalogSources = SOURCES.filter((s) => s.id !== "manual");
+  const openJobs = (filter: JobFilter) => {
+    setActiveTab("jobs");
+    handleFilterChange(filter);
+  };
+  const toggleSync = () => {
+    const newState = !syncEnabled;
+    setSyncEnabled(newState);
+    localStorage.setItem("ingestion-sync-enabled", String(newState));
+  };
 
   return (
-    <div className="min-h-screen bg-brand-dark text-white">
-      {/* Floating import-accepted confirmation. Positioned fixed so it
-          floats over any tab content without nudging layout. */}
-      {importToast && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="fixed top-6 right-6 z-50 bg-emerald-600 text-white px-4 py-2.5 rounded-lg shadow-lg flex items-center gap-2 text-sm font-medium animate-in fade-in slide-in-from-top-2"
-        >
-          <CheckCircle2 className="w-4 h-4" />
-          {importToast}
+    <div className="mx-auto max-w-7xl p-4 sm:p-6 text-white">
+      <PageHead
+        icon={Download}
+        gradient="from-sky-500 to-indigo-700"
+        title="Import Movies"
+        subtitle="Saytlardan kino va seriallarni topib, yuklab olish navbatiga qo'shish"
+        actions={
+          <button
+            type="button"
+            onClick={toggleSync}
+            role="switch"
+            aria-checked={syncEnabled}
+            title={syncEnabled ? "Jobs har 3 soniyada yangilanadi" : "Avtomatik yangilash o'chiq"}
+            className={`inline-flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-sm transition ${
+              syncEnabled ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-white/10 bg-white/[0.03] text-gray-400 hover:text-white"
+            }`}
+          >
+            <span className={`relative h-4 w-7 rounded-full transition ${syncEnabled ? "bg-emerald-500" : "bg-white/15"}`}>
+              <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${syncEnabled ? "left-3.5" : "left-0.5"}`} />
+            </span>
+            Jonli yangilash
+          </button>
+        }
+      />
+
+      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatTile icon={Loader2} tone="sky" label="Faol" value={statusCounts?.active ?? activeJobCount} active={activeTab === "jobs" && currentFilter === "active"} onClick={() => openJobs("active")} />
+        <StatTile icon={Clock} tone="yellow" label="Navbatda" value={statusCounts?.pending ?? "—"} active={activeTab === "jobs" && currentFilter === "pending"} onClick={() => openJobs("pending")} />
+        <StatTile icon={XCircle} tone="red" label="Xato" value={statusCounts?.failed ?? "—"} active={activeTab === "jobs" && currentFilter === "failed"} onClick={() => openJobs("failed")} />
+        <StatTile
+          icon={AlertTriangle}
+          tone="orange"
+          label="Qotib qolgan"
+          value={statusCounts?.stuck ?? "—"}
+          hint="30 daqiqadan beri o'zgarmagan"
+          active={activeTab === "jobs" && currentFilter === "stuck"}
+          onClick={() => openJobs("stuck")}
+        />
+      </div>
+
+      {/* Mode switcher */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {([
+          { id: "catalog", label: "Manbalar", icon: Search, on: catalogSources.some((s) => s.id === activeTab), go: () => setActiveTab(catalogSources.some((s) => s.id === activeTab) ? activeTab : catalogSources[0].id) },
+          { id: "manual", label: "Havola orqali", icon: Link, on: activeTab === "manual", go: () => setActiveTab("manual") },
+          { id: "bulk", label: "Bulk import", icon: Database, on: activeTab === "bulk", go: () => setActiveTab("bulk") },
+          { id: "jobs", label: "Jobs", icon: Clock, on: activeTab === "jobs", go: () => setActiveTab("jobs"), badge: activeJobCount },
+        ] as const).map((m) => {
+          const Icon = m.icon;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              onClick={m.go}
+              className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition ${
+                m.on ? "bg-white text-gray-900 shadow" : "border border-white/10 bg-white/[0.03] text-gray-400 hover:bg-white/[0.07] hover:text-white"
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              {m.label}
+              {"badge" in m && m.badge > 0 && (
+                <span className={`rounded-full px-1.5 text-[11px] font-bold ${m.on ? "bg-gray-900 text-white" : "bg-amber-400 text-black"}`}>{m.badge}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Source picker (catalog mode) */}
+      {catalogSources.some((s) => s.id === activeTab) && (
+        <div className="scrollbar-hide mb-5 flex gap-2 overflow-x-auto pb-1">
+          {catalogSources.map((source) => (
+            <button
+              key={source.id}
+              type="button"
+              onClick={() => setActiveTab(source.id)}
+              className={`group flex shrink-0 items-center gap-2.5 rounded-xl border px-3 py-2 text-left transition ${
+                activeTab === source.id ? "border-orange-500/50 bg-orange-500/10" : "border-white/10 bg-[#12121a] hover:border-white/20"
+              }`}
+            >
+              <span className={`flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold uppercase ${activeTab === source.id ? "bg-orange-500 text-white" : "bg-white/5 text-gray-400"}`}>
+                {source.name.slice(0, 2)}
+              </span>
+              <span>
+                <span className={`block text-sm font-medium ${activeTab === source.id ? "text-white" : "text-gray-300"}`}>{source.name}</span>
+                <span className="block text-[11px] text-gray-500">{source.url}</span>
+              </span>
+            </button>
+          ))}
         </div>
       )}
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        <h1 className="text-3xl font-display mb-8">Import Movies</h1>
 
-        {/* Source Tabs */}
-        <div className="flex gap-2 mb-6 flex-wrap border-b border-brand-border pb-4">
-          {SOURCES.map((source) => {
-            const Icon = source.icon;
-            return (
-              <button
-                key={source.id}
-                onClick={() => setActiveTab(source.id)}
-                className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
-                  activeTab === source.id 
-                    ? "bg-brand-red text-white" 
-                    : "bg-brand-card text-gray-400 hover:text-white border border-brand-border"
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                {source.name}
-                {source.url && <span className="text-xs opacity-60">{source.url}</span>}
-              </button>
-            );
-          })}
-          
-          {/* Jobs tab */}
-          <button
-            onClick={() => setActiveTab("jobs")}
-            className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
-              activeTab === "jobs" 
-                ? "bg-brand-red text-white" 
-                : "bg-brand-card text-gray-400 hover:text-white border border-brand-border"
-            }`}
-          >
-            <Clock className="w-4 h-4" />
-            Jobs
-            {activeJobCount > 0 && (
-              <span className="bg-yellow-500 text-black text-xs font-bold px-2 py-0.5 rounded-full">
-                {activeJobCount}
-              </span>
-            )}
-          </button>
-          
-          {/* Bulk tab */}
-          <button
-            onClick={() => setActiveTab("bulk")}
-            className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
-              activeTab === "bulk" 
-                ? "bg-brand-red text-white" 
-                : "bg-brand-card text-gray-400 hover:text-white border border-brand-border"
-            }`}
-          >
-            <Database className="w-4 h-4" />
-            Bulk Import
-          </button>
-          
-          {/* Sync toggle button (only show on jobs tab) */}
-          {activeTab === "jobs" && (
-            <button
-              onClick={() => {
-                const newState = !syncEnabled;
-                setSyncEnabled(newState);
-                localStorage.setItem("ingestion-sync-enabled", String(newState));
-              }}
-              className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 border ${
-                syncEnabled
-                  ? "bg-green-600 text-white border-green-500 hover:bg-green-700"
-                  : "bg-brand-card text-gray-400 hover:text-white border-brand-border"
-              }`}
-              title={syncEnabled ? "Auto-refresh ON" : "Auto-refresh OFF"}
-            >
-              <Power className={`w-4 h-4 ${syncEnabled ? "fill-current" : ""}`} />
-              Sync {syncEnabled ? "ON" : "OFF"}
-            </button>
-          )}
-        </div>
-
-        {/* Source Content */}
-        {activeTab === "uzmovi" && (
-          <CatalogTab 
-            source={SOURCES[0]} 
-            token={token} 
-            onImportSuccess={handleImportSuccess}
-          />
-        )}
-        {activeTab === "freekino" && (
-          <CatalogTab 
-            source={SOURCES[1]} 
-            token={token} 
-            onImportSuccess={handleImportSuccess}
-          />
-        )}
-        {activeTab === "asilmedia" && (
-          <CatalogTab 
-            source={SOURCES[2]} 
-            token={token} 
-            onImportSuccess={handleImportSuccess}
-          />
-        )}
-        {activeTab === "kinochilar" && (
-          <CatalogTab 
-            source={SOURCES[3]} 
-            token={token} 
-            onImportSuccess={handleImportSuccess}
-          />
-        )}
-        {activeTab === "uzmedia" && (
-          <CatalogTab 
-            source={SOURCES[4]} 
-            token={token} 
-            onImportSuccess={handleImportSuccess}
-          />
-        )}
-        {activeTab === "kinolar" && (
-          <CatalogTab
-            source={SOURCES[5]}
-            token={token}
-            onImportSuccess={handleImportSuccess}
-          />
-        )}
-        {activeTab === "uzbeklar" && (
-          <CatalogTab
-            source={SOURCES[6]}
-            token={token}
-            onImportSuccess={handleImportSuccess}
-          />
-        )}
-        {activeTab === "seezntv" && (
-          <CatalogTab
-            source={SOURCES[7]}
-            token={token}
-            onImportSuccess={handleImportSuccess}
-          />
-        )}
-        {activeTab === "manual" && (
-          <ManualTab 
-            token={token} 
-            onImportSuccess={handleImportSuccess}
-          />
-        )}
-        {activeTab === "jobs" && (
-          <JobsTab
-            jobs={jobs}
-            loadingJobs={loadingJobs}
-            retryingStage={retryingStage}
-            handleRetry={handleRetry}
-            handleDelete={handleDelete}
-            handleDeleteSeries={handleDeleteSeries}
-            currentFilter={currentFilter}
-            handleFilterChange={handleFilterChange}
-            currentPage={currentPage}
-            totalPages={totalPages}
-            totalJobs={totalJobs}
-            handlePageChange={handlePageChange}
-            statusCounts={statusCounts}
-          />
-        )}
-        {activeTab === "bulk" && (
-          <BulkTab 
-            token={token} 
-            onImportSuccess={handleImportSuccess}
-          />
-        )}
-      </div>
+      {/* Source Content */}
+      {catalogSources.map((source) =>
+        activeTab === source.id ? (
+          <CatalogTab key={source.id} source={source} token={token} onImportSuccess={handleImportSuccess} />
+        ) : null
+      )}
+      {activeTab === "manual" && (
+        <ManualTab 
+          token={token} 
+          onImportSuccess={handleImportSuccess}
+        />
+      )}
+      {activeTab === "jobs" && (
+        <JobsTab
+          jobs={jobs}
+          loadingJobs={loadingJobs}
+          retryingStage={retryingStage}
+          handleRetry={handleRetry}
+          handleDelete={handleDelete}
+          handleDeleteSeries={handleDeleteSeries}
+          currentFilter={currentFilter}
+          handleFilterChange={handleFilterChange}
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalJobs={totalJobs}
+          handlePageChange={handlePageChange}
+          statusCounts={statusCounts}
+        />
+      )}
+      {activeTab === "bulk" && (
+        <BulkTab 
+          token={token} 
+          onImportSuccess={handleImportSuccess}
+        />
+      )}
     </div>
   );
 }

@@ -1,355 +1,278 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { MessageSquare, Search, ChevronLeft, ChevronRight, Check, X, Trash2, Eye, EyeOff } from "lucide-react";
+import { AlertTriangle, Check, CornerDownRight, Film, Heart, Link2, Loader2, MessageSquare, Settings, ShieldAlert, Trash2, X } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { isStaffRole } from "@/lib/roles";
 import { getAdminComments, updateCommentStatus, adminDeleteComment, AdminComment, CommentStatus } from "@/lib/comments-api";
+import { normalizeMediaUrl } from "@/lib/image-utils";
 import ReportedCommentsPanel from "@/components/admin/ReportedCommentsPanel";
+import { useToast } from "@/components/admin/Toast";
+import { Avatar, Chip, EmptyState, IconBtn, PageHead, Pager, SearchBox, SkeletonList, Tabs, Tone, fmtDate, timeAgo, useDebounced } from "@/components/admin/kit";
+
+type Filter = CommentStatus | "all";
+
+const STATUS: Record<string, { label: string; tone: Tone }> = {
+  approved: { label: "Tasdiqlangan", tone: "green" },
+  pending: { label: "Kutilmoqda", tone: "yellow" },
+  rejected: { label: "Rad etilgan", tone: "red" },
+};
+
+const authorOf = (c: AdminComment) => c.user?.display_name || c.user?.username || c.user_display_name || "O'chirilgan foydalanuvchi";
+const targetHref = (c: AdminComment) =>
+  c.target_url || (c.target_type === "episode" && c.target_id ? `/episode/${c.target_id}` : c.target_type !== "episode" && c.target_slug ? `/movies/${c.target_slug}` : null);
 
 export default function AdminCommentsPage() {
   const { token, isLoading: authLoading, user } = useAuth();
   const router = useRouter();
+  const toast = useToast();
 
   const [comments, setComments] = useState<AdminComment[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [limit] = useState(20);
   const [totalPages, setTotalPages] = useState(0);
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState<CommentStatus | "all">("all");
+  const [searchInput, setSearchInput] = useState("");
+  const search = useDebounced(searchInput.trim(), 350);
+  const [status, setStatus] = useState<Filter>("all");
   const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [busy, setBusy] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  // Redirect if not admin
   useEffect(() => {
-    if (!authLoading && (!token || !isStaffRole(user?.role))) {
-      router.push("/");
-    }
+    if (!authLoading && (!token || !isStaffRole(user?.role))) router.push("/");
   }, [authLoading, token, user, router]);
 
-  // Fetch comments
-  useEffect(() => {
-    if (!token) return;
+  useEffect(() => setPage(1), [search, status]);
 
+  const load = useCallback(async () => {
+    if (!token) return;
     setLoading(true);
-    getAdminComments(token, { 
-      page, 
-      limit, 
-      search: search || undefined, 
-      status: status !== "all" ? status : undefined 
-    })
-      .then((data) => {
-        setComments(data.data);
-        setTotal(data.total);
-        setTotalPages(data.total_pages);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [token, page, search, status]);
-
-  const handleStatusChange = async (commentId: string, newStatus: CommentStatus) => {
-    if (!token) return;
-    setActionLoading(commentId);
     try {
-      await updateCommentStatus(token, commentId, newStatus);
-      // Refresh comments
-      const data = await getAdminComments(token, { 
-        page, 
-        limit, 
-        search: search || undefined, 
-        status: status !== "all" ? status : undefined 
-      });
+      const data = await getAdminComments(token, { page, limit: 20, search: search || undefined, status: status !== "all" ? status : undefined });
       setComments(data.data);
-    } catch (error) {
-      console.error("Failed to update status:", error);
+      setTotal(data.total);
+      setTotalPages(data.total_pages);
+      setSelected(new Set());
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Izohlarni yuklab bo'lmadi");
     } finally {
-      setActionLoading(null);
+      setLoading(false);
     }
-  };
+  }, [token, page, search, status, toast]);
 
-  const handleDelete = async (commentId: string) => {
-    if (!token || !confirm("Haqiqatanham bu izohni o'chirmoqchimisiz?")) return;
-    setActionLoading(commentId);
-    try {
-      await adminDeleteComment(token, commentId);
-      // Refresh comments
-      const data = await getAdminComments(token, { 
-        page, 
-        limit, 
-        search: search || undefined, 
-        status: status !== "all" ? status : undefined 
-      });
-      setComments(data.data);
-    } catch (error) {
-      console.error("Failed to delete comment:", error);
-    } finally {
-      setActionLoading(null);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const run = async (ids: string[], action: "approved" | "rejected" | "delete") => {
+    if (!token || ids.length === 0) return;
+    if (action === "delete" && !confirm(ids.length > 1 ? `${ids.length} ta izohni o'chirasizmi?` : "Izohni o'chirasizmi?")) return;
+    setBusy((b) => new Set([...Array.from(b), ...ids]));
+    let ok = 0;
+    for (const id of ids) {
+      try {
+        if (action === "delete") await adminDeleteComment(token, id);
+        else await updateCommentStatus(token, id, action);
+        ok++;
+      } catch {
+        /* counted below */
+      }
     }
+    const verb = action === "delete" ? "o'chirildi" : action === "approved" ? "tasdiqlandi" : "rad etildi";
+    if (ok === ids.length) toast.success(`${ok} ta izoh ${verb}`);
+    else toast.error(`${ok}/${ids.length} ta izoh ${verb}, qolganida xato`);
+    setBusy(new Set());
+    await load();
   };
 
-  // Format date
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return "—";
-    const d = new Date(dateStr);
-    return d.toLocaleDateString("uz-UZ") + " " + d.toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit" });
+  const toggle = (set: Set<string>, id: string) => {
+    const next = new Set(set);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
   };
 
-  const getAuthorLabel = (comment: AdminComment) => {
-    return comment.user?.display_name || comment.user?.username || comment.user_display_name || "O‘chirilgan user";
-  };
-
-  const getAuthorHref = (comment: AdminComment) => {
-    const userId = comment.user?.id || comment.user_id;
-    return userId ? `/user/${userId}` : null;
-  };
-
-  const getTargetHref = (comment: AdminComment) => {
-    if (comment.target_url) return comment.target_url;
-    if (comment.target_type === "episode" && comment.target_id) return `/episode/${comment.target_id}`;
-    if (comment.target_type === "movie" && comment.target_slug) return `/movies/${comment.target_slug}`;
-    return null;
-  };
-
-  const getTargetLabel = (comment: AdminComment) => {
-    return comment.target_title || comment.movie_title || comment.movie_id || "—";
-  };
-
-  // Get status badge
-  const getStatusBadge = (s: string) => {
-    switch (s) {
-      case "approved":
-        return { bg: "bg-green-500/20", text: "green-400", label: "Tasdiqlangan" };
-      case "pending":
-        return { bg: "bg-yellow-500/20", text: "yellow-400", label: "Kutilmoqda" };
-      case "rejected":
-        return { bg: "bg-red-500/20", text: "red-400", label: "Rad etilgan" };
-      default:
-        return { bg: "bg-gray-500/20", text: "gray-400", label: s };
-    }
-  };
-
-  if (authLoading) {
+  if (authLoading || !token || !isStaffRole(user?.role)) {
     return (
-      <div className="min-h-screen bg-brand-dark flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-brand-red"></div>
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <Loader2 className="animate-spin text-gray-500" />
       </div>
     );
   }
 
-  if (!token || !isStaffRole(user?.role)) {
-    return null;
-  }
+  const allSelected = comments.length > 0 && comments.every((c) => selected.has(c.id));
 
   return (
-    <div className="p-4 sm:p-8">
-      <div className="mb-6 sm:mb-8">
-        <h1 className="text-xl sm:text-2xl font-bold text-white">Izohlar Moderatsiyasi</h1>
-        <p className="text-gray-500 text-sm mt-1">
-          Film izohlarini boshqarish va moderatsiya qilish
-        </p>
-      </div>
+    <div className="mx-auto max-w-6xl p-4 sm:p-6">
+      <PageHead
+        icon={MessageSquare}
+        gradient="from-sky-500 to-indigo-600"
+        title="Izohlar"
+        subtitle="Kino va seriallardagi izohlarni moderatsiya qilish"
+        actions={
+          user?.role !== "moderator" ? (
+            <Link
+              href="/admin/comments/settings"
+              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-sm text-gray-300 transition hover:bg-white/[0.07] hover:text-white"
+            >
+              <Settings size={15} /> Sozlamalar
+            </Link>
+          ) : undefined
+        }
+      />
 
-      {/* User reports ("shikoyatlar") — hidden when there are none */}
-      {token && <ReportedCommentsPanel token={token} />}
+      <ReportedCommentsPanel token={token} />
 
-      {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-4 mb-6">
-        {/* Search */}
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
-          <input
-            type="text"
-            placeholder="Izoh matni bo'yicha qidirish..."
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
-            className="w-full bg-brand-card border border-brand-border rounded-lg pl-10 pr-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
-          />
-        </div>
-
-        {/* Status Filter */}
-        <select
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row">
+        <SearchBox value={searchInput} onChange={setSearchInput} placeholder="Izoh matni bo'yicha qidirish..." />
+        <Tabs<Filter>
           value={status}
-          onChange={(e) => {
-            setStatus(e.target.value as CommentStatus | "all");
-            setPage(1);
-          }}
-          className="bg-brand-card border border-brand-border rounded-lg px-4 py-2 text-white focus:outline-none focus:border-brand-red"
-        >
-          <option value="all">Barcha holatlar</option>
-          <option value="pending">Kutilmoqda</option>
-          <option value="approved">Tasdiqlangan</option>
-          <option value="rejected">Rad etilgan</option>
-        </select>
+          onChange={setStatus}
+          items={[
+            { key: "all", label: "Hammasi" },
+            { key: "pending", label: "Kutilmoqda" },
+            { key: "approved", label: "Tasdiqlangan" },
+            { key: "rejected", label: "Rad etilgan" },
+          ]}
+        />
       </div>
 
-      {/* Comments Table */}
-      <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden">
-        {loading ? (
-          <div className="p-8 text-center">
-            <p className="text-gray-500">Yuklanmoqda...</p>
-          </div>
-        ) : comments.length === 0 ? (
-          <div className="p-8 text-center">
-            <MessageSquare size={32} className="text-gray-600 mx-auto mb-3" />
-            <p className="text-gray-500">Izohlar topilmadi</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-brand-border text-gray-500 text-xs uppercase tracking-wider">
-                  <th className="text-left px-3 sm:px-5 py-3">Foydalanuvchi</th>
-                  <th className="text-left px-3 sm:px-5 py-3">Izoh</th>
-                  <th className="text-left px-3 sm:px-5 py-3 hidden md:table-cell">Film</th>
-                  <th className="text-left px-3 sm:px-5 py-3 hidden lg:table-cell">Holat</th>
-                  <th className="text-left px-3 sm:px-5 py-3 hidden lg:table-cell">Sana</th>
-                  <th className="text-right px-3 sm:px-5 py-3">Amallar</th>
-                </tr>
-              </thead>
-              <tbody>
-                {comments.map((comment) => {
-                  const statusBadge = getStatusBadge(comment.status);
-                  return (
-                    <tr
-                      key={comment.id}
-                      className="border-b border-brand-border/50 last:border-0 hover:bg-brand-border/30 transition-colors"
-                    >
-                      <td className="px-3 sm:px-5 py-3">
-                        <div className="min-w-0">
-                          {getAuthorHref(comment) ? (
-                            <Link
-                              href={getAuthorHref(comment)!}
-                              className="text-white font-medium truncate max-w-[150px] hover:text-brand-red transition-colors inline-block"
-                            >
-                              {getAuthorLabel(comment)}
-                            </Link>
-                          ) : (
-                            <p className="text-white font-medium truncate max-w-[150px]">
-                              {getAuthorLabel(comment)}
-                            </p>
-                          )}
-                          {comment.user?.username && (
-                            <p className="text-gray-500 text-xs">@{comment.user.username}</p>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-3 sm:px-5 py-3">
-                        <p className="text-white max-w-[250px] truncate" title={comment.content}>
-                          {comment.content}
-                        </p>
-                        {comment.parent_id && (
-                          <p className="text-gray-500 text-xs mt-1">
-                            ↳ Javob: {comment.parent_id.slice(0, 8)}...
-                          </p>
-                        )}
-                      </td>
-                      <td className="px-3 sm:px-5 py-3 hidden md:table-cell">
-                        {getTargetHref(comment) ? (
-                          <Link
-                            href={getTargetHref(comment)!}
-                            className="text-gray-400 hover:text-white transition-colors max-w-[120px] truncate inline-block"
-                            title={getTargetLabel(comment)}
-                          >
-                            {getTargetLabel(comment)}
-                          </Link>
-                        ) : (
-                          <p className="text-gray-400 max-w-[120px] truncate" title={getTargetLabel(comment)}>
-                            {getTargetLabel(comment)}
-                          </p>
-                        )}
-                      </td>
-                      <td className="px-3 sm:px-5 py-3 hidden lg:table-cell">
-                        <span className={`inline-flex items-center text-xs px-2 py-1 rounded ${statusBadge.bg} ${statusBadge.text}`}>
-                          {statusBadge.label}
-                        </span>
-                      </td>
-                      <td className="px-3 sm:px-5 py-3 hidden lg:table-cell text-gray-400 text-xs">
-                        {formatDate(comment.created_at)}
-                      </td>
-                      <td className="px-3 sm:px-5 py-3 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          {comment.status !== "approved" && (
-                            <button
-                              onClick={() => handleStatusChange(comment.id, "approved")}
-                              disabled={actionLoading === comment.id}
-                              className="p-2 rounded-lg bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors disabled:opacity-50"
-                              title="Tasdiqlash"
-                            >
-                              <Check size={16} />
-                            </button>
-                          )}
-                          {comment.status !== "rejected" && (
-                            <button
-                              onClick={() => handleStatusChange(comment.id, "rejected")}
-                              disabled={actionLoading === comment.id}
-                              className="p-2 rounded-lg bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 transition-colors disabled:opacity-50"
-                              title="Rad qilish"
-                            >
-                              <X size={16} />
-                            </button>
-                          )}
-                          {comment.status === "pending" && (
-                            <button
-                              onClick={() => handleStatusChange(comment.id, "approved")}
-                              disabled={actionLoading === comment.id}
-                              className="p-2 rounded-lg bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 transition-colors disabled:opacity-50"
-                              title="Ko'rinish"
-                            >
-                              <Eye size={16} />
-                            </button>
-                          )}
-                          <button
-                            onClick={() => handleDelete(comment.id)}
-                            disabled={actionLoading === comment.id}
-                            className="p-2 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors disabled:opacity-50"
-                            title="O'chirish"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between mt-4">
-          <p className="text-gray-500 text-sm">
-            Jami: {total} ta izoh
-          </p>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={page === 1}
-              className="p-2 rounded-lg bg-brand-card border border-brand-border text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-brand-border transition-colors"
-            >
-              <ChevronLeft size={18} />
-            </button>
-            <span className="text-white text-sm px-2">
-              {page} / {totalPages}
-            </span>
-            <button
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-              className="p-2 rounded-lg bg-brand-card border border-brand-border text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-brand-border transition-colors"
-            >
-              <ChevronRight size={18} />
-            </button>
-          </div>
+      {comments.length > 0 && !loading && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-[#12121a] px-3 py-2">
+          <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-gray-400">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={() => setSelected(allSelected ? new Set() : new Set(comments.map((c) => c.id)))}
+              className="h-4 w-4 accent-orange-500"
+            />
+            {selected.size > 0 ? `${selected.size} ta tanlandi` : "Hammasini tanlash"}
+          </label>
+          {selected.size > 0 && (
+            <div className="ml-auto flex gap-1.5">
+              <button onClick={() => run(Array.from(selected), "approved")} className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/15 px-2.5 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/25">
+                <Check size={13} /> Tasdiqlash
+              </button>
+              <button onClick={() => run(Array.from(selected), "rejected")} className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 px-2.5 py-1.5 text-xs text-amber-300 hover:bg-amber-500/25">
+                <X size={13} /> Rad etish
+              </button>
+              <button onClick={() => run(Array.from(selected), "delete")} className="inline-flex items-center gap-1 rounded-lg bg-red-500/15 px-2.5 py-1.5 text-xs text-red-300 hover:bg-red-500/25">
+                <Trash2 size={13} /> O&apos;chirish
+              </button>
+            </div>
+          )}
         </div>
       )}
+
+      {loading ? (
+        <SkeletonList rows={6} height={96} />
+      ) : comments.length === 0 ? (
+        <EmptyState icon={MessageSquare} title="Izoh topilmadi" text={search || status !== "all" ? "Filtr yoki qidiruvni o'zgartirib ko'ring." : "Hali izoh qoldirilmagan."} />
+      ) : (
+        <ul className="space-y-2.5">
+          {comments.map((c) => {
+            const st = STATUS[c.status] ?? { label: c.status, tone: "gray" as Tone };
+            const href = targetHref(c);
+            const isBusy = busy.has(c.id);
+            const long = c.content.length > 220;
+            const open = expanded.has(c.id);
+            const authorId = c.user?.id || c.user_id;
+            const avatar = c.user?.avatar_url || c.user_avatar_url;
+            return (
+              <li
+                key={c.id}
+                className={`rounded-2xl border bg-[#12121a] p-4 transition ${selected.has(c.id) ? "border-orange-500/40" : "border-white/10 hover:border-white/20"} ${isBusy ? "opacity-60" : ""}`}
+              >
+                <div className="flex gap-3">
+                  <input type="checkbox" checked={selected.has(c.id)} onChange={() => setSelected((s) => toggle(s, c.id))} className="mt-2.5 h-4 w-4 shrink-0 accent-orange-500" aria-label="Tanlash" />
+                  <Avatar name={authorOf(c)} src={avatar ? normalizeMediaUrl(avatar) : undefined} size={36} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      {authorId ? (
+                        <Link href={`/user/${authorId}`} className="font-medium text-white hover:text-orange-300">
+                          {authorOf(c)}
+                        </Link>
+                      ) : (
+                        <span className="font-medium text-gray-400">{authorOf(c)}</span>
+                      )}
+                      {c.user?.username && <span className="text-xs text-gray-500">@{c.user.username}</span>}
+                      <span className="text-xs text-gray-600" title={fmtDate(c.created_at)}>
+                        · {timeAgo(c.created_at)}
+                      </span>
+                      <Chip tone={st.tone} dot>
+                        {st.label}
+                      </Chip>
+                      {c.has_blocked_word && (
+                        <Chip tone="red" icon={ShieldAlert}>
+                          Taqiqlangan so&apos;z
+                        </Chip>
+                      )}
+                      {c.has_link && (
+                        <Chip tone="yellow" icon={Link2}>
+                          Havola
+                        </Chip>
+                      )}
+                      {c.is_spoiler && <Chip tone="violet">Spoyler</Chip>}
+                      {(c.reports_count ?? 0) > 0 && (
+                        <Chip tone="red" icon={AlertTriangle}>
+                          {c.reports_count} shikoyat
+                        </Chip>
+                      )}
+                    </div>
+                    {c.parent_id && (
+                      <p className="mt-1 inline-flex items-center gap-1 text-[11px] text-gray-500">
+                        <CornerDownRight size={11} /> javob
+                      </p>
+                    )}
+                    <p className={`mt-1.5 whitespace-pre-line break-words text-sm leading-relaxed text-gray-200 ${long && !open ? "line-clamp-3" : ""}`}>{c.content}</p>
+                    {long && (
+                      <button onClick={() => setExpanded((s) => toggle(s, c.id))} className="mt-0.5 text-xs text-orange-400 hover:text-orange-300">
+                        {open ? "Yig'ish" : "To'liq o'qish"}
+                      </button>
+                    )}
+                    <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                      {href ? (
+                        <Link href={href} target="_blank" className="inline-flex max-w-[260px] items-center gap-1 truncate hover:text-white">
+                          <Film size={12} /> {c.target_title || c.movie_title || "Kontent"}
+                        </Link>
+                      ) : (
+                        <span className="inline-flex items-center gap-1">
+                          <Film size={12} /> {c.target_title || c.movie_title || "—"}
+                        </span>
+                      )}
+                      {(c.likes_count ?? 0) > 0 && (
+                        <span className="inline-flex items-center gap-1">
+                          <Heart size={11} /> {c.likes_count}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-col gap-0.5 sm:flex-row sm:items-start">
+                    {c.status !== "approved" && (
+                      <IconBtn label="Tasdiqlash" tone="green" disabled={isBusy} onClick={() => run([c.id], "approved")}>
+                        <Check size={16} />
+                      </IconBtn>
+                    )}
+                    {c.status !== "rejected" && (
+                      <IconBtn label="Rad etish" tone="yellow" disabled={isBusy} onClick={() => run([c.id], "rejected")}>
+                        <X size={16} />
+                      </IconBtn>
+                    )}
+                    <IconBtn label="O'chirish" tone="red" disabled={isBusy} onClick={() => run([c.id], "delete")}>
+                      <Trash2 size={16} />
+                    </IconBtn>
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      <Pager page={page} totalPages={totalPages} total={total} unit="ta izoh" onChange={setPage} />
     </div>
   );
 }

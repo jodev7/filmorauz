@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Folder, Plus, Trash2, Loader2, Upload, X } from "lucide-react";
+import { Clapperboard, Folder, FolderPlus, Plus, Trash2, Video } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
   adminListContentFolders,
@@ -12,60 +12,168 @@ import {
   ContentFolder,
 } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
-import MediaImage from "@/components/ui/MediaImage";
+import { useToast } from "@/components/admin/Toast";
+import { EmptyState, GhostButton, IconBtn, Modal, PageHead, PrimaryButton, SearchBox, SkeletonList, StatTile, Thumb, fmtDate } from "@/components/admin/kit";
+import { ErrorBanner, Field, inputCls } from "@/components/admin/form/ui";
+import MediaUploadField from "@/components/admin/form/MediaUploadField";
 
 export default function AdminContentPage() {
   const { token } = useAuth();
+  const toast = useToast();
   const [folders, setFolders] = useState<ContentFolder[]>([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
-  // Create form
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [posterURL, setPosterURL] = useState("");
-  const [uploadingPoster, setUploadingPoster] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const reload = async () => {
+  const reload = useCallback(async () => {
     if (!token) return;
     try {
-      const data = await adminListContentFolders(token);
-      setFolders(data);
+      setFolders((await adminListContentFolders(token)) || []);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load");
+      toast.error(e instanceof Error ? e.message : "Yuklab bo'lmadi");
     } finally {
       setLoading(false);
     }
-  };
+  }, [token, toast]);
 
   useEffect(() => {
     void reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [reload]);
 
-  const resetForm = () => {
+  const totalClips = useMemo(() => folders.reduce((s, f) => s + (f.clips_count || 0), 0), [folders]);
+  const emptyFolders = useMemo(() => folders.filter((f) => !f.clips_count).length, [folders]);
+
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? folders.filter((f) => f.title.toLowerCase().includes(q) || (f.description || "").toLowerCase().includes(q)) : folders;
+  }, [folders, search]);
+
+  const handleDelete = async (folder: ContentFolder) => {
+    if (!token) return;
+    if (!window.confirm(`«${folder.title}» papkasini va uning ichidagi barcha cliplarni o'chirasizmi?`)) return;
+    setDeleting(folder.id);
+    try {
+      await adminDeleteContentFolder(token, folder.id);
+      setFolders((list) => list.filter((f) => f.id !== folder.id));
+      toast.success("Papka o'chirildi");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "O'chirishda xato");
+    } finally {
+      setDeleting(null);
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-7xl p-4 sm:p-6">
+      <PageHead
+        icon={Clapperboard}
+        gradient="from-fuchsia-500 to-purple-700"
+        title="Content"
+        subtitle="CapCut'dan eksport qilingan kliplar va ularni Instagram / YouTube / TikTok'ga rejalashtirish"
+        actions={
+          <PrimaryButton onClick={() => setShowCreate(true)}>
+            <Plus size={16} /> Yangi papka
+          </PrimaryButton>
+        }
+      />
+
+      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-3">
+        <StatTile icon={Folder} tone="violet" label="Papkalar" value={folders.length} />
+        <StatTile icon={Video} tone="sky" label="Jami cliplar" value={totalClips} />
+        <StatTile icon={FolderPlus} tone="gray" label="Bo'sh papkalar" value={emptyFolders} hint={emptyFolders ? "Clip yuklanmagan" : undefined} />
+      </div>
+
+      {folders.length > 6 && (
+        <div className="mb-4">
+          <SearchBox value={search} onChange={setSearch} placeholder="Papka nomi..." />
+        </div>
+      )}
+
+      {loading ? (
+        <SkeletonList rows={3} height={140} />
+      ) : visible.length === 0 ? (
+        <EmptyState
+          icon={Folder}
+          title={folders.length ? "Papka topilmadi" : "Hali papka yo'q"}
+          text={folders.length ? "Qidiruvni o'zgartirib ko'ring." : "Har bir kino yoki kampaniya uchun alohida papka yarating va kliplarni shu yerga yuklang."}
+          action={
+            !folders.length ? (
+              <GhostButton onClick={() => setShowCreate(true)}>
+                <Plus size={15} /> Birinchi papkani yaratish
+              </GhostButton>
+            ) : undefined
+          }
+        />
+      ) : (
+        <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+          {visible.map((folder) => (
+            <li
+              key={folder.id}
+              className={`group relative overflow-hidden rounded-2xl border border-white/10 bg-[#12121a] transition hover:-translate-y-0.5 hover:border-fuchsia-500/40 hover:shadow-xl hover:shadow-fuchsia-500/5 ${
+                deleting === folder.id ? "pointer-events-none opacity-50" : ""
+              }`}
+            >
+              <Link href={`/admin/content/${folder.id}`} className="block">
+                <div className="relative aspect-[2/3] overflow-hidden bg-gradient-to-br from-fuchsia-500/15 via-purple-500/10 to-transparent">
+                  <Thumb
+                    src={folder.poster_url ? normalizeMediaUrl(folder.poster_url) : undefined}
+                    alt={folder.title}
+                    className="h-full w-full transition duration-300 group-hover:scale-105"
+                    icon={Folder}
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
+                  <span className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/70 px-2 py-0.5 text-[11px] font-medium text-white">
+                    <Video size={11} /> {folder.clips_count}
+                  </span>
+                  <div className="absolute inset-x-0 bottom-0 p-3">
+                    <h3 className="line-clamp-2 font-semibold leading-tight text-white">{folder.title}</h3>
+                    {folder.description && <p className="mt-1 line-clamp-2 text-[11px] text-gray-300">{folder.description}</p>}
+                    {folder.created_at && <p className="mt-1.5 text-[10px] text-gray-500">{fmtDate(folder.created_at, false)}</p>}
+                  </div>
+                </div>
+              </Link>
+              <div className="absolute left-2 top-2 rounded-lg bg-black/70 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+                <IconBtn label="O'chirish" tone="red" onClick={() => handleDelete(folder)}>
+                  <Trash2 size={14} />
+                </IconBtn>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <CreateFolderModal
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+        onCreated={() => {
+          setShowCreate(false);
+          toast.success("Papka yaratildi");
+          void reload();
+        }}
+      />
+    </div>
+  );
+}
+
+function CreateFolderModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
+  const { token } = useAuth();
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [posterURL, setPosterURL] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
     setTitle("");
     setDescription("");
     setPosterURL("");
     setError(null);
-  };
+  }, [open]);
 
-  const handlePosterUpload = async (file: File) => {
-    if (!token) return;
-    setUploadingPoster(true);
-    try {
-      const res = await adminUploadContentPoster(token, file);
-      setPosterURL(res.url);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Poster upload failed");
-    } finally {
-      setUploadingPoster(false);
-    }
-  };
-
-  const handleCreate = async (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token || !title.trim()) return;
     setSaving(true);
@@ -76,200 +184,56 @@ export default function AdminContentPage() {
         poster_url: posterURL || undefined,
         description: description.trim() || undefined,
       });
-      setShowCreate(false);
-      resetForm();
-      await reload();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Create failed");
+      onCreated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Yaratib bo'lmadi");
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDelete = async (folder: ContentFolder) => {
-    if (!token) return;
-    const ok = window.confirm(`"${folder.title}" papkasini va uning ichidagi barcha cliplarni o'chirishni tasdiqlaysizmi?`);
-    if (!ok) return;
-    try {
-      await adminDeleteContentFolder(token, folder.id);
-      await reload();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "Delete failed");
-    }
-  };
-
   return (
-    <div className="p-4 sm:p-8">
-      <div className="flex items-center justify-between mb-6 sm:mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Content</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            CapCut'dan eksport qilingan kliplar va ularni Instagramga rejalashtirish.
-          </p>
-        </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 bg-brand-red hover:bg-red-600 text-white px-4 py-2 rounded-lg transition-colors"
-        >
-          <Plus size={18} />
-          Yangi folder
-        </button>
-      </div>
-
-      {loading ? (
-        <div className="flex justify-center py-16">
-          <Loader2 className="animate-spin text-brand-red" size={32} />
-        </div>
-      ) : folders.length === 0 ? (
-        <div className="bg-brand-card border border-brand-border rounded-xl py-16 text-center">
-          <Folder size={48} className="text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-500">Hali folder yo'q. Birinchi folderni yarating.</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-          {folders.map((folder) => (
-            <div
-              key={folder.id}
-              className="group relative overflow-hidden rounded-xl bg-brand-card border border-brand-border hover:border-brand-red/60 transition-colors"
-            >
-              <Link
-                href={`/admin/content/${folder.id}`}
-                className="block"
-              >
-                <div className="relative aspect-[2/3] bg-brand-dark overflow-hidden">
-                  {folder.poster_url ? (
-                    <MediaImage
-                      src={normalizeMediaUrl(folder.poster_url)}
-                      alt={folder.title}
-                      className="absolute inset-0 h-full w-full object-cover transition-transform group-hover:scale-105"
-                    />
-                  ) : (
-                    <div className="absolute inset-0 flex items-center justify-center text-gray-700">
-                      <Folder size={48} />
-                    </div>
-                  )}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent" />
-                  <div className="absolute top-2 right-2 rounded-full bg-black/70 px-2 py-0.5 text-[11px] text-white backdrop-blur-sm">
-                    {folder.clips_count} clip
-                  </div>
-                  <div className="absolute inset-x-0 bottom-0 p-3">
-                    <h3 className="text-base font-semibold text-white line-clamp-2">{folder.title}</h3>
-                    {folder.description && (
-                      <p className="mt-1 text-[11px] text-gray-300 line-clamp-2">{folder.description}</p>
-                    )}
-                  </div>
-                </div>
-              </Link>
-              <button
-                onClick={() => handleDelete(folder)}
-                className="absolute top-2 left-2 p-1.5 rounded-full bg-black/70 text-gray-300 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                title="O'chirish"
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Create folder modal */}
-      {showCreate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-md rounded-xl bg-brand-card border border-brand-border p-6">
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="text-lg font-semibold text-white">Yangi folder</h2>
-              <button
-                onClick={() => {
-                  setShowCreate(false);
-                  resetForm();
-                }}
-                className="text-gray-400 hover:text-white"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            {error && (
-              <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/40 text-sm text-red-400">
-                {error}
-              </div>
-            )}
-
-            <form onSubmit={handleCreate} className="space-y-4">
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Nomi *</label>
-                <input
-                  type="text"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  className="w-full px-3 py-2 bg-brand-dark border border-brand-border rounded-lg text-white text-sm focus:outline-none focus:border-brand-red"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Tavsif</label>
-                <textarea
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  rows={2}
-                  className="w-full px-3 py-2 bg-brand-dark border border-brand-border rounded-lg text-white text-sm focus:outline-none focus:border-brand-red resize-none"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Poster</label>
-                <label className="flex items-center gap-2 cursor-pointer w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-sm text-gray-300 hover:border-brand-red transition-colors">
-                  {uploadingPoster ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-                  <span>
-                    {uploadingPoster
-                      ? "Yuklanmoqda..."
-                      : posterURL
-                      ? "Posterni almashtirish"
-                      : "Poster yuklash"}
-                  </span>
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp,image/gif"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      e.target.value = "";
-                      if (file) void handlePosterUpload(file);
-                    }}
-                  />
-                </label>
-                {posterURL && (
-                  <MediaImage
-                    src={normalizeMediaUrl(posterURL)}
-                    alt="Poster"
-                    className="mt-2 h-24 rounded object-cover border border-brand-border"
-                  />
-                )}
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowCreate(false);
-                    resetForm();
-                  }}
-                  className="px-4 py-2 text-sm text-gray-300 hover:text-white"
-                >
-                  Bekor qilish
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving || !title.trim()}
-                  className="flex items-center gap-2 bg-brand-red text-white px-4 py-2 rounded-lg hover:bg-red-600 disabled:opacity-50 text-sm"
-                >
-                  {saving && <Loader2 size={14} className="animate-spin" />}
-                  Yaratish
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
+    <Modal
+      open={open}
+      onClose={onClose}
+      busy={saving}
+      icon={FolderPlus}
+      iconTone="violet"
+      title="Yangi papka"
+      subtitle="Kliplar shu papka ichida saqlanadi"
+      footer={
+        <>
+          <GhostButton onClick={onClose} disabled={saving}>
+            Bekor qilish
+          </GhostButton>
+          <button
+            type="submit"
+            form="content-folder-form"
+            disabled={saving || uploading || !title.trim()}
+            className="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-orange-400 disabled:opacity-50"
+          >
+            {saving ? "Yaratilmoqda..." : "Yaratish"}
+          </button>
+        </>
+      }
+    >
+      <form id="content-folder-form" onSubmit={submit} className="space-y-4">
+        {error && <ErrorBanner message={error} />}
+        <Field label="Nomi" required htmlFor="cf-title">
+          <input id="cf-title" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} placeholder="Masalan: Avatar 3 — reklama kliplari" />
+        </Field>
+        <Field label="Tavsif" htmlFor="cf-desc">
+          <textarea id="cf-desc" value={description} onChange={(e) => setDescription(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
+        </Field>
+        <MediaUploadField
+          label="Poster"
+          value={posterURL}
+          onChange={setPosterURL}
+          onBusyChange={setUploading}
+          upload={(file) => adminUploadContentPoster(token || "", file)}
+          hint="Ixtiyoriy — papka kartasida ko'rinadi"
+        />
+      </form>
+    </Modal>
   );
 }

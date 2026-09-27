@@ -7,6 +7,8 @@ import {
   Download,
   Clock,
   Loader2,
+  Scissors,
+  Tv,
   Upload,
   CheckCircle,
   XCircle,
@@ -26,6 +28,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/components/admin/Toast";
+import { EmptyState, GhostButton, PageHead, SkeletonList, StatTile } from "@/components/admin/kit";
 import { readUrlBool, readUrlList, readUrlNumber, readUrlParam, useSyncUrlParams } from "@/lib/url-state";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -414,7 +417,7 @@ function PaginationControls({ page, totalPages, onPrev, onNext }: PaginationCont
       <button
         onClick={onPrev}
         disabled={page <= 1}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-brand-border text-xs text-gray-400 hover:text-white hover:border-gray-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/10 text-xs text-gray-400 hover:text-white hover:border-gray-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         Prev
       </button>
@@ -424,7 +427,7 @@ function PaginationControls({ page, totalPages, onPrev, onNext }: PaginationCont
       <button
         onClick={onNext}
         disabled={page >= totalPages}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-brand-border text-xs text-gray-400 hover:text-white hover:border-gray-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/10 text-xs text-gray-400 hover:text-white hover:border-gray-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         Next
       </button>
@@ -601,7 +604,7 @@ function ClipTableBase({
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-brand-border text-gray-500 text-xs uppercase tracking-wider">
+          <tr className="border-b border-white/10 text-gray-500 text-xs uppercase tracking-wider">
             <th className="text-left px-4 py-3">#</th>
             <th className="text-left px-4 py-3">Fayl</th>
             <th className="text-left px-4 py-3">Davom</th>
@@ -616,7 +619,7 @@ function ClipTableBase({
             return (
               <tr
                 key={clip.id}
-                className="border-b border-brand-border/50 last:border-0 hover:bg-orange-500/10 transition-colors"
+                className="border-b border-white/5 last:border-0 hover:bg-orange-500/10 transition-colors"
               >
                 <td className="px-4 py-3 text-gray-500">{getClipSequence(clip)}</td>
                 <td className="px-4 py-3">
@@ -665,7 +668,7 @@ function ClipTableBase({
                       onClick={() => onDownload(clip)}
                       disabled={!token || downloading[clip.id]}
                       title="Klipni yuklab olish"
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-white/10 text-gray-300 border border-white/10 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {downloading[clip.id] ? (
                         <Loader2 size={12} className="animate-spin" />
@@ -678,7 +681,7 @@ function ClipTableBase({
                       onClick={() => onPublish(clip)}
                       disabled={uploading[clip.id]}
                       title="Ijtimoiy tarmoqlarga yuklash"
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-brand-border text-gray-300 border border-brand-border hover:bg-white/10 disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors bg-white/10 text-gray-300 border border-white/10 hover:bg-white/10 disabled:opacity-50"
                     >
                       {uploading[clip.id] ? (
                         <Loader2 size={12} className="animate-spin" />
@@ -695,7 +698,7 @@ function ClipTableBase({
         </tbody>
       </table>
       {totalPages > 1 && (
-        <div className="flex justify-end px-4 py-2 border-t border-brand-border/40">
+        <div className="flex justify-end px-4 py-2 border-t border-white/5">
           <PaginationControls
             page={pageNum}
             totalPages={totalPages}
@@ -835,8 +838,8 @@ function PublishModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
-      <div className="bg-brand-card border border-brand-border rounded-xl w-full max-w-sm shadow-2xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-brand-border sticky top-0 bg-brand-card">
+      <div className="bg-[#12121a] border border-white/10 rounded-2xl w-full max-w-sm shadow-2xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 sticky top-0 bg-[#12121a]">
           <div>
             <h2 className="text-white font-semibold text-sm">Ijtimoiy tarmoqlarga yuklash</h2>
             <p className="text-gray-500 text-xs mt-0.5 truncate max-w-[220px]">
@@ -867,7 +870,7 @@ function PublishModal({
               {selectedJobs.map((j) => `${PLATFORM_META[j.platform].label}/${j.account_name}`).join(", ")}
             </p>
             {selectedJobs.some((j) => j.platform === "instagram") && (
-              <div className="rounded-lg border border-brand-border bg-brand-dark/40 px-3 py-2 text-left">
+              <div className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-left">
                 <p className="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Instagram caption</p>
                 <pre className="whitespace-pre-wrap text-xs text-gray-200 font-sans">
                   {caption}
@@ -876,7 +879,7 @@ function PublishModal({
             )}
             <button
               onClick={onClose}
-              className="w-full mt-2 py-2 rounded-lg bg-brand-border text-gray-300 text-sm hover:bg-white/10 transition-colors"
+              className="w-full mt-2 py-2 rounded-lg bg-white/10 text-gray-300 text-sm hover:bg-white/10 transition-colors"
             >
               Yopish
             </button>
@@ -915,7 +918,7 @@ function PublishModal({
             ))}
             <button
               onClick={onClose}
-              className="w-full py-2 rounded-lg bg-brand-border text-gray-300 text-sm hover:bg-white/10 transition-colors"
+              className="w-full py-2 rounded-lg bg-white/10 text-gray-300 text-sm hover:bg-white/10 transition-colors"
             >
               Yopish
             </button>
@@ -955,7 +958,7 @@ function PublishModal({
                       }
                     };
                     return (
-                      <div key={platform} className="rounded-lg border border-brand-border overflow-hidden">
+                      <div key={platform} className="rounded-lg border border-white/10 overflow-hidden">
                         <label
                           className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors ${
                             someChecked ? meta.bgColor : "bg-white/5"
@@ -976,7 +979,7 @@ function PublishModal({
                             ).length}/{accounts.length}
                           </span>
                         </label>
-                        <div className="divide-y divide-brand-border">
+                        <div className="divide-y divide-white/10">
                           {accounts.map((name) => {
                             const checked = selectedJobs.some(
                               (j) => j.platform === platform && j.account_name === name
@@ -1014,7 +1017,7 @@ function PublishModal({
                 )}
 
                 {selectedJobs.some((j) => j.platform === "instagram") && (
-                  <div className="rounded-lg border border-brand-border bg-brand-dark/40 px-3 py-2">
+                  <div className="rounded-lg border border-white/10 bg-black/40 px-3 py-2">
                     <div className="flex items-center justify-between mb-1">
                       <p className="text-[11px] uppercase tracking-wide text-gray-500">Instagram caption</p>
                       <button
@@ -1030,7 +1033,7 @@ function PublishModal({
                       onChange={(e) => setCaption(e.target.value)}
                       rows={6}
                       placeholder="Instagram uchun caption..."
-                      className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-gray-200 text-xs focus:outline-none focus:border-pink-500 resize-y"
+                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-gray-200 text-xs focus:outline-none focus:border-pink-500 resize-y"
                     />
                     <p className="mt-1 text-[10px] text-gray-600">
                       AI tomonidan yozilgan — yuklashdan oldin tahrirlashingiz mumkin.
@@ -1038,12 +1041,12 @@ function PublishModal({
                   </div>
                 )}
 
-                <div className="flex rounded-lg border border-brand-border overflow-hidden">
+                <div className="flex rounded-lg border border-white/10 overflow-hidden">
                   <button
                     onClick={() => setMode("now")}
                     className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors ${
                       mode === "now"
-                        ? "bg-brand-red text-white"
+                        ? "bg-orange-500 text-white"
                         : "text-gray-400 hover:text-white hover:bg-white/5"
                     }`}
                   >
@@ -1073,7 +1076,7 @@ function PublishModal({
                       type="datetime-local"
                       value={scheduledFor}
                       onChange={(e) => setScheduledFor(e.target.value)}
-                      className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
                     />
                   </div>
                 )}
@@ -1083,7 +1086,7 @@ function PublishModal({
             <div className="flex gap-2 pt-1">
               <button
                 onClick={onClose}
-                className="flex-1 py-2 rounded-lg border border-brand-border text-gray-400 text-sm hover:bg-white/5 transition-colors"
+                className="flex-1 py-2 rounded-lg border border-white/10 text-gray-400 text-sm hover:bg-white/5 transition-colors"
               >
                 Bekor
               </button>
@@ -1091,7 +1094,7 @@ function PublishModal({
                 <button
                   onClick={handleUploadNow}
                   disabled={selectedJobs.length === 0 || busy || !hasAnyAccount}
-                  className="flex-1 py-2 rounded-lg bg-brand-red text-white text-sm font-medium hover:bg-brand-red/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
+                  className="flex-1 py-2 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
                 >
                   {busy ? (
                     <>
@@ -1214,7 +1217,7 @@ function ClipFilterBarBase(props: ClipFilterBarProps) {
   ];
 
   return (
-    <div className="bg-brand-card border border-brand-border rounded-xl p-3 sm:p-4 mb-4 space-y-3">
+    <div className="bg-[#12121a] border border-white/10 rounded-2xl p-3 sm:p-4 mb-4 space-y-3">
       {/* Tabs */}
       <div className="flex items-center gap-1 overflow-x-auto -mx-1 px-1">
         {tabs.map((t) => {
@@ -1248,7 +1251,7 @@ function ClipFilterBarBase(props: ClipFilterBarProps) {
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
             placeholder="Kontent nomi bo'yicha qidirish..."
-            className="w-full bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-500"
+            className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-500"
           />
           {query && (
             <button
@@ -1264,7 +1267,7 @@ function ClipFilterBarBase(props: ClipFilterBarProps) {
         <select
           value={account}
           onChange={(e) => onAccountChange(e.target.value)}
-          className="md:col-span-3 bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-gray-500"
+          className="md:col-span-3 bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-gray-500"
         >
           <option value="">Barcha akkauntlar</option>
           {accounts.map((a) => {
@@ -1282,7 +1285,7 @@ function ClipFilterBarBase(props: ClipFilterBarProps) {
         <select
           value={sort}
           onChange={(e) => onSortChange(e.target.value as ClipSort)}
-          className="md:col-span-3 bg-brand-dark border border-brand-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-gray-500"
+          className="md:col-span-3 bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-gray-500"
         >
           <option value="title">Tartib: Nom (A→Z)</option>
           <option value="newest">Tartib: Yangi yuklanganlar</option>
@@ -1314,7 +1317,7 @@ function ClipFilterBarBase(props: ClipFilterBarProps) {
                   className={`px-2 py-0.5 rounded-full text-xs border transition-colors ${
                     active
                       ? "bg-white text-black border-white"
-                      : "bg-transparent text-gray-400 border-brand-border hover:text-white hover:border-gray-500"
+                      : "bg-transparent text-gray-400 border-white/10 hover:text-white hover:border-gray-500"
                   }`}
                 >
                   {g}
@@ -1409,7 +1412,7 @@ function ClipAICostPanelBase({ token }: { token: string | null }) {
   if (!totals || totals.analyses === 0) return null;
 
   return (
-    <div className="mb-6 bg-brand-card border border-brand-border rounded-xl overflow-hidden">
+    <div className="mb-6 bg-[#12121a] border border-white/10 rounded-2xl overflow-hidden">
       <div className="flex flex-wrap items-center gap-x-8 gap-y-3 p-4 sm:p-5">
         <div>
           <p className="text-xs text-gray-500">AI umumiy xarajat</p>
@@ -1435,7 +1438,7 @@ function ClipAICostPanelBase({ token }: { token: string | null }) {
         </div>
         <button
           onClick={() => setOpen((v) => !v)}
-          className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-brand-border text-xs text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
+          className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/10 text-xs text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
         >
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
           Tafsilotlar ({items.length})
@@ -1443,10 +1446,10 @@ function ClipAICostPanelBase({ token }: { token: string | null }) {
       </div>
 
       {open && (
-        <div className="border-t border-brand-border overflow-x-auto">
+        <div className="border-t border-white/10 overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-xs text-gray-500 border-b border-brand-border">
+              <tr className="text-left text-xs text-gray-500 border-b border-white/10">
                 <th className="px-4 py-2 font-medium">Nomi</th>
                 <th className="px-4 py-2 font-medium">Turi</th>
                 <th className="px-4 py-2 font-medium text-right">Xarajat</th>
@@ -1457,7 +1460,7 @@ function ClipAICostPanelBase({ token }: { token: string | null }) {
             </thead>
             <tbody>
               {items.map((it) => (
-                <tr key={`${it.content_kind}:${it.content_id}`} className="border-b border-brand-border/50 last:border-0">
+                <tr key={`${it.content_kind}:${it.content_id}`} className="border-b border-white/5 last:border-0">
                   <td className="px-4 py-2 text-white max-w-[260px] truncate" title={it.title}>
                     {it.title || "—"}
                   </td>
@@ -1482,6 +1485,94 @@ function ClipAICostPanelBase({ token }: { token: string | null }) {
 const ClipAICostPanel = React.memo(ClipAICostPanelBase);
 
 // ─── Main page ────────────────────────────────────────────────────────────────
+
+function GroupHeader({
+  kind,
+  expanded,
+  title,
+  code,
+  genres,
+  clipCount,
+  uploaded,
+  lastUpload,
+  scheduled,
+  href,
+}: {
+  kind: "movie" | "series";
+  expanded: boolean;
+  title: string;
+  code?: string;
+  genres?: string[];
+  clipCount: number;
+  uploaded: number;
+  lastUpload?: string;
+  scheduled: number;
+  href?: string;
+}) {
+  const pct = clipCount > 0 ? Math.min(100, Math.round((uploaded / clipCount) * 100)) : 0;
+  const Icon = kind === "movie" ? Film : Tv;
+  return (
+    <div className="flex items-center gap-3">
+      <span className="flex-shrink-0 text-gray-500">{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
+      <span
+        className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl ${
+          kind === "movie" ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"
+        }`}
+      >
+        <Icon size={18} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="truncate font-semibold text-white">{title}</span>
+          {code && <span className="font-mono text-xs text-gray-500">#{code}</span>}
+          {genres?.slice(0, 3).map((g) => (
+            <span key={g} className="rounded-md bg-white/5 px-1.5 py-0.5 text-[10px] text-gray-400">
+              {g}
+            </span>
+          ))}
+        </div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+          <span className="text-gray-400">{clipCount} ta klip</span>
+          {uploaded > 0 ? (
+            <span className="inline-flex items-center gap-1 text-pink-300">
+              <Instagram size={11} /> {uploaded}/{clipCount} joylangan
+            </span>
+          ) : (
+            <span className="text-gray-600">Hali joylanmagan</span>
+          )}
+          {lastUpload && <span className="text-gray-600">oxirgisi {formatTashkent(lastUpload)}</span>}
+          {scheduled > 0 && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-amber-300">
+              <CalendarClock size={11} /> {scheduled} rejalashtirilgan
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="hidden w-28 flex-shrink-0 sm:block" title={`${pct}% joylangan`}>
+        <div className="mb-1 flex justify-between text-[10px] text-gray-500">
+          <span>Instagram</span>
+          <span className="tabular-nums">{pct}%</span>
+        </div>
+        <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+          <div className="h-full rounded-full bg-gradient-to-r from-pink-500 to-amber-400" style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+      {href && (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="flex-shrink-0 rounded-lg p-2 text-gray-500 transition-colors hover:bg-white/5 hover:text-white"
+          title="Saytda ko'rish"
+          aria-label="Saytda ko'rish"
+        >
+          <ExternalLink size={15} />
+        </a>
+      )}
+    </div>
+  );
+}
 
 export default function AdminClipsPage() {
   const { token } = useAuth();
@@ -2091,32 +2182,31 @@ export default function AdminClipsPage() {
   // ── Render ───────────────────────────────────────────────────────────
 
   return (
-    <div className="p-4 sm:p-8">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-white">Kliplar</h1>
-          <p className="text-gray-500 text-sm mt-1">
-            {groups?.total_contents ?? 0} ta kontent · {groups?.total_clips ?? 0} ta klip
-          </p>
-        </div>
-        {flatGroups.length > 0 && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={expandAll}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-brand-border text-xs text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
-            >
-              <ChevronsUpDown size={13} />
-              Barchasini ochish
-            </button>
-            <button
-              onClick={collapseAll}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-brand-border text-xs text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
-            >
-              <ChevronsDownUp size={13} />
-              Barchasini yopish
-            </button>
-          </div>
-        )}
+    <div className="mx-auto max-w-7xl p-4 sm:p-6">
+      <PageHead
+        icon={Scissors}
+        gradient="from-pink-500 to-amber-500"
+        title="Kliplar"
+        subtitle="AI yaratgan qisqa kliplar — Instagram, YouTube va TikTok'ga joylash"
+        actions={
+          flatGroups.length > 0 ? (
+            <>
+              <GhostButton onClick={expandAll}>
+                <ChevronsUpDown size={15} /> Ochish
+              </GhostButton>
+              <GhostButton onClick={collapseAll}>
+                <ChevronsDownUp size={15} /> Yopish
+              </GhostButton>
+            </>
+          ) : undefined
+        }
+      />
+
+      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatTile icon={Scissors} tone="violet" label="Jami kliplar" value={groups?.total_clips ?? "—"} hint={`${groups?.total_contents ?? 0} ta kontentda`} />
+        <StatTile icon={Film} tone="green" label="Kinolar" value={groups?.total_movies ?? "—"} active={filterKind === "movie"} onClick={() => handleKindChange(filterKind === "movie" ? "all" : "movie")} />
+        <StatTile icon={Tv} tone="yellow" label="Seriallar" value={groups?.total_series ?? "—"} active={filterKind === "series"} onClick={() => handleKindChange(filterKind === "series" ? "all" : "series")} />
+        <StatTile icon={CalendarClock} tone="sky" label="Rejalashtirilgan" value={allPendingJobs.length} hint="navbatdagi joylashlar" />
       </div>
 
       {/* ── AI (Gemini) clip-generation spend summary */}
@@ -2144,21 +2234,16 @@ export default function AdminClipsPage() {
       />
 
       {groupsLoading && !groups ? (
-        <div className="flex items-center gap-2 text-gray-500 py-12 justify-center">
-          <Loader2 size={18} className="animate-spin" />
-          Kliplar yuklanmoqda...
-        </div>
+        <SkeletonList rows={5} height={76} />
       ) : flatGroups.length === 0 ? (
-        <div className="bg-brand-card border border-brand-border rounded-xl p-8 sm:p-12 text-center">
-          <Film className="mx-auto text-gray-600 mb-4" size={48} />
-          <p className="text-gray-500">Hali klip yaratilmagan.</p>
-          <p className="text-gray-600 text-sm mt-2">
-            Kino yoki serial episode tayyor bo&apos;lganda klip avtomatik yaratiladi.
-          </p>
-        </div>
+        <EmptyState
+          icon={Scissors}
+          title={(groups?.total_clips ?? 0) > 0 ? "Filtrga mos klip yo'q" : "Hali klip yaratilmagan"}
+          text={(groups?.total_clips ?? 0) > 0 ? "Filtrlarni o'zgartirib ko'ring." : "Kino yoki serial qismi tayyor bo'lganda klip avtomatik yaratiladi."}
+        />
       ) : (
         <div
-          className={`space-y-8 transition-opacity ${groupsLoading ? "opacity-50 pointer-events-none" : ""}`}
+          className={`space-y-3 transition-opacity ${groupsLoading ? "opacity-50 pointer-events-none" : ""}`}
           aria-busy={groupsLoading}
         >
           <div className="flex justify-end items-center gap-3">
@@ -2183,68 +2268,24 @@ export default function AdminClipsPage() {
               return (
                 <div
                   key={key}
-                  className="bg-brand-card border border-brand-border rounded-xl overflow-hidden"
+                  className="bg-[#12121a] border border-white/10 rounded-2xl overflow-hidden transition hover:border-white/20"
                 >
                   <button
                     onClick={() => toggleMovieGroup(m)}
-                    className="w-full px-4 sm:px-6 py-4 border-b border-brand-border bg-brand-dark/50 hover:bg-brand-dark/80 transition-colors text-left"
+                    className="w-full px-4 sm:px-5 py-3.5 border-b border-white/5 hover:bg-white/[0.03] transition-colors text-left"
                   >
-                    <div className="flex items-center gap-3">
-                      <span className="text-gray-500 flex-shrink-0">
-                        {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-3 flex-wrap">
-                          <span className="text-white font-medium truncate">{m.title || "Untitled movie"}</span>
-                          {m.code && (
-                            <span className="text-xs font-mono text-gray-500">#{m.code}</span>
-                          )}
-                          <span className="text-xs text-emerald-300/80">Movie</span>
-                          <span className="text-xs text-gray-600">{m.clip_count} ta klip</span>
-                          {m.genre && m.genre.length > 0 && (
-                            <div className="flex flex-wrap gap-1">
-                              {m.genre.slice(0, 3).map((g) => (
-                                <span key={g} className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-gray-400">
-                                  {g}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                          {m.ig_uploaded_count > 0 ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] text-pink-400">
-                              <Instagram size={10} />
-                              {m.ig_uploaded_count}/{m.clip_count}
-                            </span>
-                          ) : (
-                            <span className="text-[11px] text-gray-600">Yuklanmagan</span>
-                          )}
-                          {m.last_ig_upload_at && (
-                            <span className="text-[11px] text-gray-600">
-                              · {formatTashkent(m.last_ig_upload_at)}
-                            </span>
-                          )}
-                          {scheduledCount > 0 && (
-                            <span className="inline-flex items-center gap-1 text-[11px] text-amber-400 ml-2">
-                              <CalendarClock size={10} />
-                              Rejalashtirilgan ({scheduledCount})
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      {m.slug && (
-                        <a
-                          href={`/movies/${m.slug}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="text-gray-600 hover:text-white transition-colors flex-shrink-0"
-                        >
-                          <ExternalLink size={15} />
-                        </a>
-                      )}
-                    </div>
+                    <GroupHeader
+                      kind="movie"
+                      expanded={isExpanded}
+                      title={m.title || "Nomsiz kino"}
+                      code={m.code}
+                      genres={m.genre}
+                      clipCount={m.clip_count}
+                      uploaded={m.ig_uploaded_count}
+                      lastUpload={m.last_ig_upload_at}
+                      scheduled={scheduledCount}
+                      href={m.slug ? `/movies/${m.slug}` : undefined}
+                    />
                   </button>
 
                   {isExpanded && (
@@ -2273,80 +2314,38 @@ export default function AdminClipsPage() {
             return (
               <div
                 key={key}
-                className="bg-brand-card border border-brand-border rounded-xl overflow-hidden"
+                className="bg-[#12121a] border border-white/10 rounded-2xl overflow-hidden transition hover:border-white/20"
               >
                 <button
                   onClick={() => toggleSeriesGroup(s)}
-                  className="w-full px-4 sm:px-6 py-4 border-b border-brand-border bg-brand-dark/50 hover:bg-brand-dark/80 transition-colors text-left"
+                  className="w-full px-4 sm:px-5 py-3.5 border-b border-white/5 hover:bg-white/[0.03] transition-colors text-left"
                 >
-                  <div className="flex items-center gap-3">
-                    <span className="text-gray-500 flex-shrink-0">
-                      {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <span className="text-white font-medium truncate">{s.title || "Untitled series"}</span>
-                        <span className="text-xs text-amber-300/80">Series</span>
-                        <span className="text-xs text-gray-600">{s.clip_count} ta klip</span>
-                        {s.genre && s.genre.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {s.genre.slice(0, 3).map((g) => (
-                              <span key={g} className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-gray-400">
-                                {g}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                        {s.ig_uploaded_count > 0 ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] text-pink-400">
-                            <Instagram size={10} />
-                            {s.ig_uploaded_count}/{s.clip_count}
-                          </span>
-                        ) : (
-                          <span className="text-[11px] text-gray-600">Yuklanmagan</span>
-                        )}
-                        {s.last_ig_upload_at && (
-                          <span className="text-[11px] text-gray-600">
-                            · {formatTashkent(s.last_ig_upload_at)}
-                          </span>
-                        )}
-                        {scheduledCount > 0 && (
-                          <span className="inline-flex items-center gap-1 text-[11px] text-amber-400 ml-2">
-                            <CalendarClock size={10} />
-                            Rejalashtirilgan ({scheduledCount})
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    {s.slug && (
-                      <a
-                        href={`/series/${s.slug}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="text-gray-600 hover:text-white transition-colors flex-shrink-0"
-                      >
-                        <ExternalLink size={15} />
-                      </a>
-                    )}
-                  </div>
+                  <GroupHeader
+                    kind="series"
+                    expanded={isExpanded}
+                    title={s.title || "Nomsiz serial"}
+                    genres={s.genre}
+                    clipCount={s.clip_count}
+                    uploaded={s.ig_uploaded_count}
+                    lastUpload={s.last_ig_upload_at}
+                    scheduled={scheduledCount}
+                    href={s.slug ? `/series/${s.slug}` : undefined}
+                  />
                 </button>
 
                 {isExpanded && (
-                  <div className="divide-y divide-brand-border/50">
+                  <div className="divide-y divide-white/5">
                     <div className="px-4 sm:px-6 py-2 flex items-center justify-end gap-2 bg-white/[0.02]">
                       <button
                         onClick={() => expandAllSeriesEpisodes(s)}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-brand-border text-[11px] text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-white/10 text-[11px] text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
                       >
                         <ChevronsUpDown size={12} />
                         Barchasini ochish
                       </button>
                       <button
                         onClick={() => collapseAllSeriesEpisodes(s)}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-brand-border text-[11px] text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-white/10 text-[11px] text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
                       >
                         <ChevronsDownUp size={12} />
                         Barchasini yopish
@@ -2354,12 +2353,12 @@ export default function AdminClipsPage() {
                     </div>
                     {s.seasons.map((season) => (
                       <div key={`${key}:season:${season.season_number}`}>
-                        <div className="px-4 sm:px-6 py-3 bg-white/[0.03] border-b border-brand-border/50">
+                        <div className="px-4 sm:px-6 py-3 bg-white/[0.03] border-b border-white/5">
                           <p className="text-sm font-medium text-gray-200">
                             Season {season.season_number} · {season.clip_count} ta klip
                           </p>
                         </div>
-                        <div className="divide-y divide-brand-border/30">
+                        <div className="divide-y divide-white/5">
                           {season.episodes.map((ep) => {
                             const epExpanded = expandedEpisodes.has(ep.group_key);
                             const epLabel = `S${padEpisodeNumber(season.season_number)}E${padEpisodeNumber(ep.episode_number)}`;
@@ -2454,11 +2453,11 @@ export default function AdminClipsPage() {
           </div>
 
           {pagedPendingJobs.length > 0 && (
-            <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden mb-4">
-              <div className="px-4 py-3 border-b border-brand-border bg-brand-dark/50">
+            <div className="bg-[#12121a] border border-white/10 rounded-2xl overflow-hidden mb-4">
+              <div className="px-4 py-3 border-b border-white/10 bg-black/50">
                 <span className="text-sm text-gray-400">Kutilayotgan</span>
               </div>
-              <div className="divide-y divide-brand-border/50">
+              <div className="divide-y divide-white/5">
                 {pagedPendingJobs.map((j) => (
                   <div
                     key={j.id}
@@ -2489,7 +2488,7 @@ export default function AdminClipsPage() {
                                 onChange={(e) =>
                                   setEditingJob({ id: j.id, value: e.target.value })
                                 }
-                                className="bg-brand-dark border border-brand-border rounded px-2 py-1 text-xs text-white"
+                                className="bg-black/30 border border-white/10 rounded px-2 py-1 text-xs text-white"
                               />
                               <button
                                 onClick={() => handleSaveEditTime(j.id, editingJob.value)}
@@ -2549,11 +2548,11 @@ export default function AdminClipsPage() {
           )}
 
           {doneJobs.length > 0 && (
-            <div className="bg-brand-card border border-brand-border rounded-xl overflow-hidden">
-              <div className="px-4 py-3 border-b border-brand-border bg-brand-dark/50">
+            <div className="bg-[#12121a] border border-white/10 rounded-2xl overflow-hidden transition hover:border-white/20">
+              <div className="px-4 py-3 border-b border-white/10 bg-black/50">
                 <span className="text-sm text-gray-400">Bajarilgan</span>
               </div>
-              <div className="divide-y divide-brand-border/50">
+              <div className="divide-y divide-white/5">
                 {doneJobs.map((j) => (
                   <div
                     key={j.id}

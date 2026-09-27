@@ -1,234 +1,191 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import {
-  PlusCircle,
-  Pencil,
-  Trash2,
-  ExternalLink,
-  Search,
-  Loader2,
-  Eye,
-  EyeOff,
-  Star,
-  StarOff,
-} from "lucide-react";
+import { ExternalLink, Eye, EyeOff, Film, Layers, Pencil, Plus, Star, Trash2, Tv } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import {
-  getAdminCollections,
-  deleteCollection,
-  CollectionInput,
-} from "@/lib/api";
+import { getAdminCollections, deleteCollection, updateCollection, CollectionInput } from "@/lib/api";
+import { normalizeMediaUrl } from "@/lib/image-utils";
+import { useToast } from "@/components/admin/Toast";
+import { Chip, EmptyState, IconBtn, PageHead, SearchBox, SkeletonList, StatTile, Tabs, Thumb } from "@/components/admin/kit";
+
+type Filter = "all" | "published" | "draft" | "featured";
 
 export default function AdminCollectionsPage() {
   const { token } = useAuth();
+  const toast = useToast();
   const [collections, setCollections] = useState<CollectionInput[]>([]);
-  const [filtered, setFiltered] = useState<CollectionInput[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [deleting, setDeleting] = useState<string | null>(null);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [busy, setBusy] = useState<string | null>(null);
 
-  const fetchCollections = async () => {
+  useEffect(() => {
     if (!token) return;
+    getAdminCollections(token)
+      .then((d) => setCollections(d || []))
+      .catch((e) => toast.error(e instanceof Error ? e.message : "Yuklab bo'lmadi"))
+      .finally(() => setLoading(false));
+  }, [token, toast]);
+
+  const counts = useMemo(
+    () => ({
+      all: collections.length,
+      published: collections.filter((c) => c.is_published).length,
+      draft: collections.filter((c) => !c.is_published).length,
+      featured: collections.filter((c) => c.is_featured).length,
+    }),
+    [collections]
+  );
+
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return collections
+      .filter((c) => (filter === "all" ? true : filter === "published" ? c.is_published : filter === "draft" ? !c.is_published : c.is_featured))
+      .filter((c) => !q || c.title.toLowerCase().includes(q) || c.slug.toLowerCase().includes(q))
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  }, [collections, filter, search]);
+
+  const toggle = async (c: CollectionInput, key: "is_published" | "is_featured") => {
+    if (!token || !c.id) return;
+    setBusy(c.id);
     try {
-      const data = await getAdminCollections(token);
-      setCollections(data || []);
-      setFiltered(data || []);
-    } catch (err) {
-      console.error(err);
+      const next = { ...c, [key]: !c[key] };
+      await updateCollection(token, c.id, next);
+      setCollections((list) => list.map((x) => (x.id === c.id ? next : x)));
+      toast.success(key === "is_published" ? (next.is_published ? "Saytga chiqarildi" : "Saytdan yashirildi") : next.is_featured ? "Tanlanganlarga qo'shildi" : "Tanlanganlardan olindi");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Xatolik");
     } finally {
-      setLoading(false);
+      setBusy(null);
     }
   };
 
-  useEffect(() => {
-    fetchCollections();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
-
-  // Client-side filter
-  useEffect(() => {
-    if (!search.trim()) {
-      setFiltered(collections);
-    } else {
-      const q = search.toLowerCase();
-      setFiltered(
-        collections.filter(
-          (c) =>
-            c.title.toLowerCase().includes(q) ||
-            c.slug.toLowerCase().includes(q)
-        )
-      );
-    }
-  }, [search, collections]);
-
-  const handleDelete = async (collection: CollectionInput) => {
-    if (
-      !confirm(
-        `Haqiqatan ham "${collection.title}" kolleksiyani o'chirmoqchimisiz? Bu amalni bekor qilib bo'lmaydi.`
-      )
-    )
-      return;
-
-    setDeleting(collection.id || "");
+  const remove = async (c: CollectionInput) => {
+    if (!token || !c.id || !confirm(`«${c.title}» to'plamini o'chirasizmi? Bu amalni qaytarib bo'lmaydi.`)) return;
+    setBusy(c.id);
     try {
-      await deleteCollection(token!, collection.id!);
-      setCollections((prev) => prev.filter((c) => c.id !== collection.id));
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "O'chirishda xato");
+      await deleteCollection(token, c.id);
+      setCollections((list) => list.filter((x) => x.id !== c.id));
+      toast.success("To'plam o'chirildi");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "O'chirishda xato");
     } finally {
-      setDeleting(null);
+      setBusy(null);
     }
-  };
-
-  // Helper to get movie count from movie_ids
-  const getMovieCount = (collection: CollectionInput) => {
-    return collection.movie_ids?.length || 0;
   };
 
   return (
-    <div className="p-4 sm:p-8">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Kolleksiyalar</h1>
-          <p className="text-gray-400 mt-1">
-            Boshqaruv: {filtered.length} kolleksiya
-          </p>
-        </div>
-        <Link
-          href="/admin/collections/new"
-          className="flex items-center gap-2 bg-brand-red text-white px-4 py-2 rounded-lg hover:bg-red-600 transition-colors"
-        >
-          <PlusCircle size={20} />
-          Yangi kolleksiya
-        </Link>
+    <div className="mx-auto max-w-7xl p-4 sm:p-6">
+      <PageHead
+        icon={Layers}
+        gradient="from-pink-500 to-rose-700"
+        title="To'plamlar"
+        subtitle="Mavzuli kino va serial to'plamlari"
+        actions={
+          <Link href="/admin/collections/new" className="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-orange-500/20 hover:bg-orange-400">
+            <Plus size={16} /> Yangi to&apos;plam
+          </Link>
+        }
+      />
+
+      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatTile icon={Layers} tone="violet" label="Jami" value={counts.all} active={filter === "all"} onClick={() => setFilter("all")} />
+        <StatTile icon={Eye} tone="green" label="Saytda" value={counts.published} active={filter === "published"} onClick={() => setFilter("published")} />
+        <StatTile icon={EyeOff} tone="gray" label="Yashirin" value={counts.draft} active={filter === "draft"} onClick={() => setFilter("draft")} />
+        <StatTile icon={Star} tone="yellow" label="Tanlangan" value={counts.featured} active={filter === "featured"} onClick={() => setFilter("featured")} />
       </div>
 
-      {/* Search */}
-      <div className="relative mb-6">
-        <Search
-          className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-          size={20}
-        />
-        <input
-          type="text"
-          placeholder="Qidirish..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full pl-10 pr-4 py-3 bg-brand-card border border-brand-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row">
+        <SearchBox value={search} onChange={setSearch} placeholder="To'plam nomi yoki slug..." />
+        <Tabs<Filter>
+          value={filter}
+          onChange={setFilter}
+          items={[
+            { key: "all", label: "Hammasi", count: counts.all },
+            { key: "published", label: "Saytda", count: counts.published },
+            { key: "draft", label: "Yashirin", count: counts.draft },
+            { key: "featured", label: "Tanlangan", count: counts.featured },
+          ]}
         />
       </div>
 
-      {/* Table */}
       {loading ? (
-        <div className="flex justify-center py-12">
-          <Loader2 className="animate-spin text-brand-red" size={32} />
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="text-center py-12">
-          <p className="text-gray-500">Kolleksiyalar topilmadi</p>
-        </div>
+        <SkeletonList rows={4} height={120} />
+      ) : visible.length === 0 ? (
+        <EmptyState
+          icon={Layers}
+          title="To'plam topilmadi"
+          text={collections.length ? "Qidiruv yoki filtrni o'zgartirib ko'ring." : "Masalan: «Oilaviy kechalar uchun», «Eng yaxshi Marvel kinolari»."}
+          action={
+            !collections.length ? (
+              <Link href="/admin/collections/new" className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-4 py-2 text-sm text-white hover:bg-white/15">
+                <Plus size={15} /> To&apos;plam yaratish
+              </Link>
+            ) : undefined
+          }
+        />
       ) : (
-        <div className="bg-brand-card rounded-xl border border-brand-border overflow-hidden">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-brand-border">
-                <th className="text-left px-4 py-3 text-gray-400 font-medium text-sm">
-                  Nomi
-                </th>
-                <th className="text-left px-4 py-3 text-gray-400 font-medium text-sm">
-                  Slug
-                </th>
-                <th className="text-center px-4 py-3 text-gray-400 font-medium text-sm">
-                  Kinolar
-                </th>
-                <th className="text-center px-4 py-3 text-gray-400 font-medium text-sm">
-                  Holat
-                </th>
-                <th className="text-center px-4 py-3 text-gray-400 font-medium text-sm">
-                  Tanlangan
-                </th>
-                <th className="text-right px-4 py-3 text-gray-400 font-medium text-sm">
-                  Amallar
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((collection) => (
-                <tr
-                  key={collection.id}
-                  className="border-b border-brand-border last:border-0 hover:bg-brand-border/30"
-                >
-                  <td className="px-4 py-4">
-                    <div className="font-medium text-white">{collection.title}</div>
-                    {collection.description && (
-                      <div className="text-gray-500 text-sm mt-0.5 line-clamp-1">
-                        {collection.description}
-                      </div>
+        <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {visible.map((c) => {
+            const movies = c.movie_ids?.length || 0;
+            const series = c.series_ids?.length || 0;
+            const isBusy = busy === c.id;
+            return (
+              <li key={c.id} className={`group flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#12121a] transition hover:border-white/20 ${isBusy ? "opacity-60" : ""}`}>
+                <Link href={`/admin/collections/${c.id}/edit`} className="relative block aspect-[16/7] overflow-hidden bg-gradient-to-br from-pink-500/20 via-violet-500/10 to-transparent">
+                  <Thumb src={c.poster_url ? normalizeMediaUrl(c.poster_url) : undefined} alt={c.title} className="h-full w-full transition group-hover:scale-[1.03]" icon={Layers} />
+                  <div className="absolute inset-0 bg-gradient-to-t from-[#12121a] via-transparent to-transparent" />
+                  <div className="absolute left-3 top-3 flex gap-1.5">
+                    <Chip tone={c.is_published ? "green" : "gray"} dot>
+                      {c.is_published ? "Saytda" : "Yashirin"}
+                    </Chip>
+                    {c.is_featured && (
+                      <Chip tone="yellow" icon={Star}>
+                        Tanlangan
+                      </Chip>
                     )}
-                  </td>
-                  <td className="px-4 py-4">
-                    <code className="text-gray-400 text-sm">{collection.slug}</code>
-                  </td>
-                  <td className="px-4 py-4 text-center text-gray-300">
-                    {getMovieCount(collection)}
-                  </td>
-                  <td className="px-4 py-4 text-center">
-                    {collection.is_published ? (
-                      <span className="inline-flex items-center gap-1 text-green-400 text-sm">
-                        <Eye size={16} /> Chop etilgan
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-gray-500 text-sm">
-                        <EyeOff size={16} /> Noshir
+                  </div>
+                </Link>
+                <div className="flex flex-1 flex-col p-4 pt-2">
+                  <Link href={`/admin/collections/${c.id}/edit`} className="truncate font-semibold text-white hover:text-orange-300">
+                    {c.title}
+                  </Link>
+                  <p className="truncate font-mono text-[11px] text-gray-600">/{c.slug}</p>
+                  {c.description && <p className="mt-1.5 line-clamp-2 text-sm text-gray-400">{c.description}</p>}
+                  <div className="mt-auto flex items-center gap-3 pt-3 text-xs text-gray-400">
+                    <span className="inline-flex items-center gap-1">
+                      <Film size={12} /> {movies} kino
+                    </span>
+                    {series > 0 && (
+                      <span className="inline-flex items-center gap-1">
+                        <Tv size={12} /> {series} serial
                       </span>
                     )}
-                  </td>
-                  <td className="px-4 py-4 text-center">
-                    {collection.is_featured ? (
-                      <Star className="inline text-yellow-400" size={16} />
-                    ) : (
-                      <StarOff className="inline text-gray-600" size={16} />
-                    )}
-                  </td>
-                  <td className="px-4 py-4">
-                    <div className="flex items-center justify-end gap-2">
-                      <Link
-                        href={`/admin/collections/${collection.id}/edit`}
-                        className="p-2 text-gray-400 hover:text-white hover:bg-brand-border rounded-lg transition-colors"
-                        title="Tahrirlash"
-                      >
-                        <Pencil size={18} />
+                    <span className="text-gray-600">#{c.sort_order ?? 0}</span>
+                    <div className="ml-auto flex items-center">
+                      <IconBtn label={c.is_published ? "Saytdan yashirish" : "Saytga chiqarish"} tone="green" disabled={isBusy} onClick={() => toggle(c, "is_published")}>
+                        {c.is_published ? <EyeOff size={15} /> : <Eye size={15} />}
+                      </IconBtn>
+                      <IconBtn label={c.is_featured ? "Tanlanganlardan olish" : "Tanlanganlarga qo'shish"} tone="yellow" disabled={isBusy} onClick={() => toggle(c, "is_featured")}>
+                        <Star size={15} className={c.is_featured ? "fill-yellow-400 text-yellow-400" : ""} />
+                      </IconBtn>
+                      <Link href={`/collections/${c.slug}`} target="_blank" className="rounded-lg p-2 text-gray-400 hover:bg-white/5 hover:text-white" title="Saytda ko'rish" aria-label="Saytda ko'rish">
+                        <ExternalLink size={15} />
                       </Link>
-                      <Link
-                        href={`/collections/${collection.slug}`}
-                        target="_blank"
-                        className="p-2 text-gray-400 hover:text-brand-red hover:bg-brand-border rounded-lg transition-colors"
-                        title="Ko'rish"
-                      >
-                        <ExternalLink size={18} />
+                      <Link href={`/admin/collections/${c.id}/edit`} className="rounded-lg p-2 text-gray-400 hover:bg-white/5 hover:text-white" title="Tahrirlash" aria-label="Tahrirlash">
+                        <Pencil size={15} />
                       </Link>
-                      <button
-                        onClick={() => handleDelete(collection)}
-                        disabled={deleting === collection.id}
-                        className="p-2 text-gray-400 hover:text-red-500 hover:bg-brand-border rounded-lg transition-colors disabled:opacity-50"
-                        title="O'chirish"
-                      >
-                        {deleting === collection.id ? (
-                          <Loader2 size={18} className="animate-spin" />
-                        ) : (
-                          <Trash2 size={18} />
-                        )}
-                      </button>
+                      <IconBtn label="O'chirish" tone="red" disabled={isBusy} onClick={() => remove(c)}>
+                        <Trash2 size={15} />
+                      </IconBtn>
                     </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );

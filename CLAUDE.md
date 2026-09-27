@@ -167,6 +167,12 @@ Ads have two generations of fields:
 - Premium movies locked behind `PremiumLockOverlay` on watch page
 - Users notified 3 days before expiry and on expiry
 
+### SEO files (sitemap / robots / llms.txt)
+
+- `sitemap.xml`, `robots.txt` — `handlers/sitemap_handler.go`; admin "SEO" page resubmits them.
+- `llms.txt` (index), `llms-full.txt` (all titles), `llms/movies/:slug.md`, `llms/series/:slug.md` — `handlers/llms_handler.go` + `repositories/llms_repository.go`, wired via `ExtraDeps.LLMS`. Output is cached and rebuilt automatically when the published catalog changes (count + latest `updated_at` of movies/series, checked at most once a minute; forced rebuild every 6h). `GET/POST /api/admin/seo/llms` shows status / forces a rebuild.
+- Frontend proxies all of these via rewrites in `next.config.js`; movie/series pages link their `.md` via `alternates.types["text/markdown"]`.
+
 ---
 
 ## Frontend (`frontend/`)

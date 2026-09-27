@@ -501,6 +501,10 @@ func (h *SitemapHandler) GetRobotsTxt(c *gin.Context) {
 		"",
 		fmt.Sprintf("Sitemap: %s/sitemap.xml", h.baseSiteURL),
 		"",
+		"# AI assistants: site summary and every title in Markdown",
+		fmt.Sprintf("# llms.txt: %s/llms.txt", h.baseSiteURL),
+		fmt.Sprintf("# llms-full.txt: %s/llms-full.txt", h.baseSiteURL),
+		"",
 	}, "\n")
 	c.Header("Content-Type", "text/plain; charset=utf-8")
 	c.Header("Cache-Control", "public, max-age=600")
