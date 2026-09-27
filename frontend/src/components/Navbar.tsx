@@ -7,7 +7,7 @@ import { useI18n } from "@/lib/i18n";
 import { useAuth } from "@/lib/auth-context";
 import { openSearch } from "@/lib/search-overlay";
 import TelegramLoginModal from "./TelegramLoginModal";
-import SuggestionModal from "./SuggestionModal";
+import { openSuggestion } from "@/lib/suggestion-modal";
 import NotificationBell from "./NotificationBell";
 import ActiveRoomBadge from "./ActiveRoomBadge";
 import { resolveIsPremium } from "./PremiumComponents";
@@ -26,7 +26,6 @@ export default function Navbar() {
   const [menuOpen, setMenuOpen] = useState(false);
   const { isAuthenticated, user, isLoading, checkAuthStatus } = useAuth();
   const [loginModalOpen, setLoginModalOpen] = useState(false);
-  const [suggestionModalOpen, setSuggestionModalOpen] = useState(false);
 
   // Handle Telegram auth status check on page load (if URL has auth code)
   useEffect(() => {
@@ -139,7 +138,7 @@ export default function Navbar() {
                 <ActiveRoomBadge />
                 <NotificationBell />
                 <button
-                  onClick={() => setSuggestionModalOpen(true)}
+                  onClick={() => openSuggestion()}
                   className="hidden sm:flex text-zinc-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5"
                   aria-label="Kino tavsiya qilish"
                   title="Kino tavsiya qilish"
@@ -210,6 +209,23 @@ export default function Navbar() {
             {t("common.searchPlaceholder")}
           </button>
 
+          {/* Suggest a movie — prominent on phones where the header icon is hidden */}
+          <button
+            onClick={() => {
+              setMenuOpen(false);
+              openSuggestion();
+            }}
+            className="mb-2 flex w-full items-center gap-3 rounded-2xl border border-yellow-500/25 bg-gradient-to-r from-yellow-500/10 to-orange-500/10 px-3 py-3 text-left"
+          >
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-yellow-400 to-orange-600">
+              <Lightbulb size={18} className="text-white" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold text-white">Kino tavsiya qilish</span>
+              <span className="block text-xs text-zinc-400">Saytda yo&apos;q kinoni so&apos;rang — qo&apos;shamiz</span>
+            </span>
+          </button>
+
           {/* Nav links */}
           {[
             { href: "/", label: t("common.home") },
@@ -274,10 +290,6 @@ export default function Navbar() {
       />
 
       {/* Suggestion Modal */}
-      <SuggestionModal
-        isOpen={suggestionModalOpen}
-        onClose={() => setSuggestionModalOpen(false)}
-      />
     </header>
   );
 }

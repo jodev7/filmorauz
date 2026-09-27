@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { ArrowUpRight, Clock, Film, Loader2, Search, Tv, TrendingUp, X } from "lucide-react";
+import { ArrowUpRight, Clock, Film, Lightbulb, Loader2, Search, Tv, TrendingUp, X } from "lucide-react";
 import { getTrendingMovies, Movie, searchMovies } from "@/lib/api";
 import { getLocalizedTitle, localizeSingleGenre } from "@/lib/localization";
 import { DEFAULT_POSTER_PLACEHOLDER } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
+import { openSuggestion } from "@/lib/suggestion-modal";
 import { OPEN_SEARCH_EVENT, pushRecentSearch, readRecentSearches, removeRecentSearch } from "@/lib/search-overlay";
 
 const QUICK_GENRES = ["action", "comedy", "drama", "horror", "animation", "anime"];
@@ -235,6 +236,18 @@ export default function SearchOverlay() {
                   ))}
                 </div>
               </section>
+              <button
+                onClick={() => {
+                  close();
+                  openSuggestion();
+                }}
+                className="flex w-full items-center gap-3 rounded-2xl border border-yellow-500/20 bg-yellow-500/[0.06] px-3 py-3 text-left hover:border-yellow-500/40"
+              >
+                <Lightbulb size={18} className="shrink-0 text-yellow-400" />
+                <span className="text-sm text-gray-200">
+                  Kerakli kinoni topolmayapsizmi? <span className="font-semibold text-yellow-300">Tavsiya qiling</span>
+                </span>
+              </button>
               {trending && trending.length > 0 && (
                 <section>
                   <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-gray-500">
@@ -257,6 +270,15 @@ export default function SearchOverlay() {
             <div className="px-4 py-12 text-center">
               <p className="text-gray-300">&quot;{q}&quot; bo&apos;yicha hech narsa topilmadi</p>
               <p className="mt-1 text-sm text-gray-500">Boshqacha yozib ko&apos;ring — masalan lotin yoki kirill harflarida, yoki kino kodini kiriting.</p>
+              <button
+                onClick={() => {
+                  close();
+                  openSuggestion({ title: q });
+                }}
+                className="mt-5 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-yellow-500 to-orange-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-orange-500/20"
+              >
+                <Lightbulb size={16} /> Saytga qo&apos;shishni so&apos;rash
+              </button>
             </div>
           ) : (
             <div className="space-y-4">

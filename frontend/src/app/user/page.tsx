@@ -17,7 +17,7 @@ import NotificationSettings from "@/components/NotificationSettings";
 import ProfileTabs, { PROFILE_TABS, ProfileTab } from "@/components/profile/ProfileTabs";
 import YearReviewTeaser from "@/components/profile/YearReviewTeaser";
 import { getFavorites, getWatchHistory, getCurrentUser, updateProfile, uploadProfileImage, updateProfileStyle, updatePrivacySettings, ProfileStyle } from "@/lib/api";
-import SuggestionModal from "@/components/SuggestionModal";
+import { openSuggestion } from "@/lib/suggestion-modal";
 import UserLibrarySections from "@/components/UserLibrarySections";
 import ReferralCard from "@/components/ReferralCard";
 import TelegramLoginModal from "@/components/TelegramLoginModal";
@@ -179,7 +179,6 @@ export default function UserPage() {
   const [isSavingPrivacy, setIsSavingPrivacy] = useState(false);
   
   // Suggestion modal state
-  const [suggestionModalOpen, setSuggestionModalOpen] = useState(false);
 
   // Active tab lives in ?tab= so links like /user?tab=lists open it directly.
   const [tab, setTabState] = useState<ProfileTab>("overview");
@@ -741,7 +740,7 @@ export default function UserPage() {
 
             {/* Suggestion button */}
             <button
-              onClick={() => setSuggestionModalOpen(true)}
+              onClick={() => openSuggestion()}
               className="mt-4 w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-brand-dark hover:bg-brand-border rounded-lg border border-white/10 text-gray-300 hover:text-white transition-colors"
             >
               <Lightbulb size={18} className="text-yellow-400" />
@@ -1249,12 +1248,6 @@ export default function UserPage() {
           <div className="max-w-7xl mx-auto px-4 mt-6 mb-4">
             <WebsiteAdSlot placement="profile_page_inline_block" variant="inline" />
           </div>
-
-          {/* Suggestion Modal */}
-          <SuggestionModal 
-            isOpen={suggestionModalOpen} 
-            onClose={() => setSuggestionModalOpen(false)} 
-          />
         </div>
       </main>
       <Footer />

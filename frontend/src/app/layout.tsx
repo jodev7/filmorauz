@@ -16,6 +16,7 @@ import AnnouncementGate from "@/components/AnnouncementGate";
 import AlertBanner from "@/components/AlertBanner";
 import SearchOverlay from "@/components/SearchOverlay";
 import BottomNav from "@/components/BottomNav";
+import SuggestionModalHost from "@/components/SuggestionModalHost";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 const GA_MEASUREMENT_ID = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID || "G-EJ1VL229GK";
@@ -194,6 +195,7 @@ export default function RootLayout({
                 <FixedBottomAd placement="website_fixed_bottom" />
                 <AnnouncementGate />
                 <SearchOverlay />
+                <SuggestionModalHost />
                 <BottomNav />
               </BanGuardWrapper>
             </AdSlotProvider>
