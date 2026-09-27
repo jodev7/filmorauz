@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { usePathname } from "next/navigation";
-import { X, ExternalLink } from "lucide-react";
 import { Announcement, getActiveAnnouncements } from "@/lib/api";
+import AnnouncementModal from "@/components/AnnouncementModal";
 
 const DISMISSED_KEY = "dismissed_announcements_v1";
 const POLL_INTERVAL_MS = 60_000;
@@ -53,9 +53,12 @@ export default function AnnouncementGate() {
 
   // Only modal-type announcements are shown here; "alert" types render as a
   // top banner via AlertBanner instead.
-  const current = items.find(
-    (a) => a.type !== "alert" && !dismissed.includes(a.id),
-  );
+  // Not on admin pages — like AlertBanner, it's for site visitors (admins
+  // see a live preview in /admin/announcements).
+  const onAdmin = pathname?.startsWith("/admin");
+  const current = onAdmin
+    ? undefined
+    : items.find((a) => a.type !== "alert" && !dismissed.includes(a.id));
   if (!current) return null;
 
   const dismissNow = () => {
@@ -75,68 +78,17 @@ export default function AnnouncementGate() {
     dismissNow();
   };
 
-  const hasLink = !!current.link_url;
+  const queued = items.filter((x) => x.type !== "alert" && !dismissed.includes(x.id)).length;
+  const total = items.filter((x) => x.type !== "alert").length;
+  const counter = total > 1 && queued > 0 ? `${total - queued + 1}/${total}` : undefined;
 
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center px-4">
-      <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-md"
-        onClick={handleClose}
-        aria-hidden="true"
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="announcement-title"
-        className="relative w-full max-w-md rounded-2xl bg-[#15151f] border border-white/10 shadow-2xl overflow-hidden"
-      >
-        {current.dismissible && (
-          <button
-            onClick={handleClose}
-            className="absolute top-3 right-3 w-9 h-9 rounded-full bg-black/30 hover:bg-black/60 flex items-center justify-center transition-colors"
-            aria-label="Yopish"
-          >
-            <X size={18} className="text-white" />
-          </button>
-        )}
-
-        <div className="p-6 sm:p-7">
-          <h2
-            id="announcement-title"
-            className="font-display text-xl sm:text-2xl text-white tracking-wide pr-10"
-          >
-            {current.title}
-          </h2>
-          {current.body && (
-            <p className="mt-3 text-sm sm:text-base text-gray-300 whitespace-pre-line leading-relaxed">
-              {current.body}
-            </p>
-          )}
-
-          <div className="mt-6 flex flex-col sm:flex-row gap-3">
-            {hasLink && (
-              <a
-                href={current.link_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={handleLinkClick}
-                className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-medium transition-colors"
-              >
-                {current.link_label || "Batafsil"}
-                <ExternalLink size={16} />
-              </a>
-            )}
-            {current.dismissible && (
-              <button
-                onClick={handleClose}
-                className={`${hasLink ? "sm:w-32" : "flex-1"} px-4 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-white font-medium transition-colors`}
-              >
-                {hasLink ? "Yopish" : "Tushundim"}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
+    <AnnouncementModal
+      key={current.id}
+      a={current}
+      counter={counter}
+      onClose={handleClose}
+      onLink={handleLinkClick}
+    />
   );
 }

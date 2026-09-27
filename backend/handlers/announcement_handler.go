@@ -122,6 +122,8 @@ func (h *AnnouncementHandler) AdminCreate(c *gin.Context) {
 		Body:        input.Body,
 		LinkURL:     strings.TrimSpace(input.LinkURL),
 		LinkLabel:   strings.TrimSpace(input.LinkLabel),
+		Variant:     models.NormalizeAnnouncementVariant(input.Variant),
+		ImageURL:    strings.TrimSpace(input.ImageURL),
 		StartsAt:    input.StartsAt,
 		EndsAt:      input.EndsAt,
 		Dismissible: input.Dismissible,
@@ -162,6 +164,7 @@ func (h *AnnouncementHandler) AdminUpdate(c *gin.Context) {
 	input.Title = strings.TrimSpace(input.Title)
 	input.LinkURL = strings.TrimSpace(input.LinkURL)
 	input.LinkLabel = strings.TrimSpace(input.LinkLabel)
+	input.ImageURL = strings.TrimSpace(input.ImageURL)
 	updated, err := h.repo.Update(c.Request.Context(), id, &input)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

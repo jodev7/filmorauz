@@ -440,6 +440,10 @@ func main() {
 		}
 	}
 	creditsService.Start(context.Background())
+	// Telegram profile photo → profile picture (on login + background backfill).
+	avatarImporter := handlers.NewTelegramAvatarImporter(db, uploadHandler, botToken)
+	authHandler.SetAvatarImporter(avatarImporter)
+	avatarImporter.Start(context.Background())
 	routes.SetupExtras(r, routes.ExtraDeps{
 		AuthService:  authService,
 		AuditLogRepo: auditLogRepo,
@@ -453,6 +457,7 @@ func main() {
 		Lists:        handlers.NewUserListHandler(userListRepo),
 		NotifyPrefs:  handlers.NewNotifySettingsHandler(notificationService, userRepo),
 		Credits:      handlers.NewCreditsHandler(creditsService),
+		Avatars:      avatarImporter,
 	})
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)

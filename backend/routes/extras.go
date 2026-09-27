@@ -25,6 +25,7 @@ type ExtraDeps struct {
 	Lists        *handlers.UserListHandler
 	NotifyPrefs  *handlers.NotifySettingsHandler
 	Credits      *handlers.CreditsHandler
+	Avatars      *handlers.TelegramAvatarImporter
 }
 
 // SetupExtras registers user-library, community and growth routes.
@@ -142,5 +143,6 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 	{
 		superadmin.GET("/daily-report/preview", d.DailyReport.Preview)
 		superadmin.POST("/daily-report/send", d.DailyReport.SendNow)
+		superadmin.POST("/users/telegram-avatars/backfill", d.Avatars.BackfillNow)
 	}
 }

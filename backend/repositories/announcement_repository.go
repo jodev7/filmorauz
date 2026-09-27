@@ -56,6 +56,8 @@ func (r *AnnouncementRepository) Update(ctx context.Context, id primitive.Object
 		"body":         input.Body,
 		"link_url":     input.LinkURL,
 		"link_label":   input.LinkLabel,
+		"variant":      models.NormalizeAnnouncementVariant(input.Variant),
+		"image_url":    input.ImageURL,
 		"starts_at":    input.StartsAt,
 		"ends_at":      input.EndsAt,
 		"dismissible":  input.Dismissible,

@@ -238,3 +238,41 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .animate-\[sheetUp_\.22s_ease-out\], .animate-\[fadeIn_\.15s_ease-out\] { animation: none; }
 }
+
+/* Announcement modal (components/AnnouncementModal.tsx) */
+@keyframes annPop {
+  from { opacity: 0; transform: translateY(18px) scale(0.94); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes annFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+@keyframes annShine {
+  0% { transform: translateX(-120%) skewX(-20deg); }
+  60%, 100% { transform: translateX(260%) skewX(-20deg); }
+}
+@keyframes annFall {
+  0% { transform: translateY(-20px) rotate(0deg); opacity: 0; }
+  10% { opacity: 1; }
+  100% { transform: translateY(260px) rotate(320deg); opacity: 0; }
+}
+.ann-pop { animation: annPop 0.42s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.ann-float { animation: annFloat 3.2s ease-in-out infinite; }
+.ann-shine { animation: annShine 3.4s ease-in-out 0.8s infinite; }
+.ann-fall { animation: annFall 3.6s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .ann-pop, .ann-float, .ann-shine, .ann-fall { animation: none; }
+}
+
+/* Telegram post preview (admin/telegram-post) */
+.tg-preview b, .tg-preview strong { font-weight: 700; }
+.tg-preview i, .tg-preview em { font-style: italic; }
+.tg-preview u, .tg-preview ins { text-decoration: underline; }
+.tg-preview s, .tg-preview strike, .tg-preview del { text-decoration: line-through; }
+.tg-preview a { color: #6ab3f3; }
+.tg-preview code, .tg-preview pre { font-family: ui-monospace, monospace; font-size: 0.92em; color: #7fd1ff; }
+.tg-preview pre { white-space: pre-wrap; background: rgba(0, 0, 0, 0.25); padding: 0.4rem 0.5rem; border-radius: 0.4rem; }
+.tg-preview blockquote { border-left: 3px solid #6ab3f3; padding-left: 0.5rem; margin: 0.25rem 0; }
+.tg-preview .tg-spoiler { background: rgba(255, 255, 255, 0.18); color: transparent; border-radius: 0.2rem; filter: blur(0.5px); }
+.tg-preview.tg-show-spoilers .tg-spoiler { color: inherit; background: rgba(255, 255, 255, 0.08); filter: none; }
