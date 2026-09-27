@@ -68,7 +68,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         description,
         images: [imageUrl],
       },
-      alternates: { canonical: canonicalUrl },
+      alternates: { canonical: canonicalUrl, types: { "text/markdown": `${SITE_URL}/llms/series/${encodeURIComponent(slug)}.md` } },
       robots: { index: true, follow: true },
     };
   } catch {

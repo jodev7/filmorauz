@@ -458,6 +458,7 @@ func main() {
 		NotifyPrefs:  handlers.NewNotifySettingsHandler(notificationService, userRepo),
 		Credits:      handlers.NewCreditsHandler(creditsService),
 		Avatars:      avatarImporter,
+		LLMS:         handlers.NewLLMSHandler(repositories.NewLLMSRepository(db), cfg.BaseSiteURL),
 	})
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)

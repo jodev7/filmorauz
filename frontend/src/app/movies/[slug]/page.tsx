@@ -94,6 +94,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       },
       alternates: {
         canonical: canonicalUrl,
+        // Markdown copy for AI assistants (see /llms.txt).
+        types: { "text/markdown": `${SITE_URL}/llms/movies/${encodeURIComponent(slug)}.md` },
       },
       robots: {
         index: true,

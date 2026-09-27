@@ -26,12 +26,19 @@ type ExtraDeps struct {
 	NotifyPrefs  *handlers.NotifySettingsHandler
 	Credits      *handlers.CreditsHandler
 	Avatars      *handlers.TelegramAvatarImporter
+	LLMS         *handlers.LLMSHandler
 }
 
 // SetupExtras registers user-library, community and growth routes.
 // Gin lets several groups share the same prefix, so these live alongside the
 // ones in Setup.
 func SetupExtras(r *gin.Engine, d ExtraDeps) {
+	// llms.txt for AI assistants (proxied to the apex domain by Next).
+	r.GET("/llms.txt", d.LLMS.GetIndex)
+	r.GET("/llms-full.txt", d.LLMS.GetFull)
+	r.GET("/llms/movies/:file", d.LLMS.GetMovie)
+	r.GET("/llms/series/:file", d.LLMS.GetSeries)
+
 	api := r.Group("/api")
 
 	// Browser error beacon (rate-limited per IP; optional auth for user id).
@@ -130,6 +137,10 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 		admin.POST("/series/:id/credits", d.Credits.FetchSeries)
 		admin.POST("/credits/backfill", d.Credits.Backfill)
 		admin.GET("/tmdb/search", d.Credits.Search)
+
+		// llms.txt status / rebuild now (SEO page)
+		admin.GET("/seo/llms", d.LLMS.Status)
+		admin.POST("/seo/llms", d.LLMS.Status)
 
 		// Error tracking (client + server)
 		admin.GET("/errors", d.Errors.ListErrors)
