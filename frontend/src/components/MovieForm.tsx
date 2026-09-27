@@ -13,7 +13,7 @@ import {
 } from "@/lib/api";
 import { buildSeoTitle, buildSeoDescription } from "@/lib/seo-template";
 import { logger } from "@/lib/logger";
-import { ErrorBanner, Field, FormSection, Segmented, StickySaveBar, SwitchRow, inputCls, useLeaveGuard } from "@/components/admin/form/ui";
+import { ErrorBanner, Field, FormSection, StickySaveBar, SwitchRow, inputCls, useLeaveGuard } from "@/components/admin/form/ui";
 import GenrePicker, { normalizeGenre } from "@/components/admin/form/GenrePicker";
 import ChipsInput from "@/components/admin/form/ChipsInput";
 import SlugInput from "@/components/admin/form/SlugInput";
@@ -21,7 +21,9 @@ import MediaUploadField from "@/components/admin/form/MediaUploadField";
 import ContentPreviewCard from "@/components/admin/form/ContentPreviewCard";
 import DraftBanner from "@/components/admin/form/DraftBanner";
 import { useDraft } from "@/components/admin/form/useDraft";
-import { COUNTRY_SUGGESTIONS, QUALITIES } from "@/components/admin/form/constants";
+import { bestQuality, normalizeCountry, normalizeQuality, splitCountries, toSiteCountries } from "@/components/admin/form/constants";
+import QualityField from "@/components/admin/form/QualityField";
+import { useSiteCountries } from "@/components/admin/form/useSiteCountries";
 
 
 const SOURCE_TYPES: { value: VideoSourceType; label: string; description: string; icon: typeof Film }[] = [
@@ -42,6 +44,8 @@ interface Props {
   mode?: "create" | "edit";
   /** Public page link shown in the preview (edit). */
   previewHref?: string;
+  /** Renditions already in storage (B2); the best one is auto-selected. */
+  storageQualities?: string[];
 }
 
 const emptyForm: MovieInput = {
@@ -70,18 +74,21 @@ function durationLabel(min: number) {
   return h ? `${h} soat ${m ? `${m} daqiqa` : ""}` : `${m} daqiqa`;
 }
 
-export default function MovieForm({ initialData, onSubmit, submitLabel = "Saqlash", token, onDirectUploadJobCreated, mode = "edit", previewHref }: Props) {
+export default function MovieForm({ initialData, onSubmit, submitLabel = "Saqlash", token, onDirectUploadJobCreated, mode = "edit", previewHref, storageQualities = [] }: Props) {
   const initial = useMemo<MovieInput>(
     () => ({
       ...emptyForm,
       ...(initialData ?? {}),
       genre: Array.isArray(initialData?.genre) ? initialData!.genre.map(normalizeGenre).filter(Boolean) : [],
       cast: initialData?.cast ?? [],
+      quality: bestQuality(storageQualities) || normalizeQuality(initialData?.quality) || emptyForm.quality,
+      country: normalizeCountry(initialData?.country),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
   const [form, setForm] = useState<MovieInput>(initial);
+  const siteCountries = useSiteCountries();
   const [saved, setSaved] = useState(JSON.stringify(initial));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -316,10 +323,10 @@ export default function MovieForm({ initialData, onSubmit, submitLabel = "Saqlas
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Davlat" hint="Bir nechta bo'lsa vergul bilan">
                 <ChipsInput
-                  value={form.country ? form.country.split(",").map((s) => s.trim()).filter(Boolean) : []}
+                  value={toSiteCountries(splitCountries(form.country), siteCountries)}
                   onChange={(v) => set("country", v.join(", "))}
-                  placeholder="USA"
-                  suggestions={COUNTRY_SUGGESTIONS.slice(0, 6)}
+                  placeholder="Masalan: Janubiy Koreya"
+                  suggestions={siteCountries.slice(0, 10)}
                   max={5}
                 />
               </Field>
@@ -327,9 +334,7 @@ export default function MovieForm({ initialData, onSubmit, submitLabel = "Saqlas
                 <input id="m-dur" type="number" inputMode="numeric" min={0} value={form.duration || ""} onChange={(e) => set("duration", parseInt(e.target.value) || 0)} placeholder="120" className={inputCls} />
               </Field>
             </div>
-            <Field label="Sifat">
-              <Segmented ariaLabel="Sifat" value={form.quality || "1080p"} options={QUALITIES.map((q) => ({ value: q, label: q }))} onChange={(v) => set("quality", v)} />
-            </Field>
+            <QualityField value={form.quality} onChange={(v) => set("quality", v)} storage={storageQualities} />
             <div className="grid gap-4 sm:grid-cols-[1fr_220px]">
               <Field label="Aktyorlar" hint="Enter yoki vergul bilan; ro'yxatni birdan qo'yish ham mumkin">
                 <ChipsInput value={form.cast ?? []} onChange={(v) => set("cast", v)} placeholder="Tom Hanks, Emma Watson…" />

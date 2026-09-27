@@ -36,6 +36,7 @@ import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
 import AdminPageHeader from "@/components/admin/form/PageHeader";
 import SeriesInfoForm from "@/components/admin/SeriesInfoForm";
+import { storageQualityList } from "@/components/admin/form/constants";
 import { useToast } from "@/components/admin/Toast";
 import {
   DndContext,
@@ -73,6 +74,8 @@ interface Episode {
   thumbnail_url: string;
   video_url: string;
   duration: number;
+  generated_qualities?: string[];
+  available_qualities?: string[];
 }
 
 
@@ -309,7 +312,7 @@ export default function EditSeriesPage() {
             genre: (series.genre || []).map((g) => g.toLowerCase().replace(/[_\s]+/g, "-")),
             country: series.country,
             is_premium: series.is_premium,
-            quality: series.quality || "1080p",
+            quality: series.quality || "",
           });
         }
 
@@ -683,6 +686,9 @@ export default function EditSeriesPage() {
         code={seriesCode}
         seasonsCount={seasons.length}
         episodesCount={episodesCount}
+        storageQualities={storageQualityList(
+          ...seasons.flatMap((s) => s.episodes.map((e) => (e.generated_qualities?.length ? e.generated_qualities : e.available_qualities)))
+        )}
       />
 
       <div id="seasons" className="mt-8 scroll-mt-24 rounded-2xl border border-white/10 bg-[#12121a] p-5 sm:p-6">

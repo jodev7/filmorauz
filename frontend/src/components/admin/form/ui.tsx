@@ -81,7 +81,7 @@ export function Segmented<T extends string>({
   ariaLabel,
 }: {
   value: T;
-  options: { value: T; label: ReactNode }[];
+  options: { value: T; label: ReactNode; disabled?: boolean; title?: string }[];
   onChange: (v: T) => void;
   ariaLabel: string;
 }) {
@@ -93,9 +93,15 @@ export function Segmented<T extends string>({
           type="button"
           role="radio"
           aria-checked={value === o.value}
+          disabled={o.disabled}
+          title={o.title}
           onClick={() => onChange(o.value)}
           className={`flex-1 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-            value === o.value ? "bg-orange-500 text-white shadow" : "text-gray-400 hover:bg-white/5 hover:text-white"
+            value === o.value
+              ? "bg-orange-500 text-white shadow"
+              : o.disabled
+                ? "cursor-not-allowed text-gray-700"
+                : "text-gray-400 hover:bg-white/5 hover:text-white"
           }`}
         >
           {o.label}
