@@ -107,3 +107,31 @@ func TestTMDBErrorsHideAPIKey(t *testing.T) {
 		t.Fatalf("want 401 message, got %v", err)
 	}
 }
+
+func TestTMDBBadTokenFallsBackToAPIKey(t *testing.T) {
+	var bearerCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			bearerCalls++
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Query().Get("api_key") != "good" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"cast":[{"id":1,"name":"A"}],"crew":[]}`))
+	}))
+	defer srv.Close()
+	c := NewTMDBClient("good", "bad-token")
+	c.baseURL = srv.URL
+	for i := 0; i < 2; i++ {
+		cr, err := c.Credits(context.Background(), "movie", 1)
+		if err != nil || len(cr.Cast) != 1 {
+			t.Fatalf("call %d: %+v %v", i, cr, err)
+		}
+	}
+	if bearerCalls != 1 {
+		t.Fatalf("rejected token should be tried once, got %d", bearerCalls)
+	}
+}

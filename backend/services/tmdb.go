@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/filmorauz/backend/models"
@@ -28,6 +30,7 @@ type TMDBClient struct {
 	apiKey, token string
 	baseURL       string
 	http          *http.Client
+	tokenRejected atomic.Bool
 }
 
 // NewTMDBClient returns nil when no credentials are configured.
@@ -39,15 +42,33 @@ func NewTMDBClient(apiKey, readToken string) *TMDBClient {
 }
 
 func (c *TMDBClient) get(ctx context.Context, path string, q url.Values, out interface{}) error {
+	token := c.token
+	if c.tokenRejected.Load() {
+		token = ""
+	}
+	err := c.getOnce(ctx, path, q, out, token)
+	// A bad/revoked read token shouldn't break everything when the api key works.
+	if errors.Is(err, errTMDBUnauthorized) && token != "" && c.apiKey != "" {
+		if !c.tokenRejected.Swap(true) {
+			log.Printf("[CREDITS] TMDB_READ_TOKEN rejected (401) — falling back to TMDB_API_KEY")
+		}
+		err = c.getOnce(ctx, path, q, out, "")
+	}
+	return err
+}
+
+func (c *TMDBClient) getOnce(ctx context.Context, path string, q url.Values, out interface{}, token string) error {
 	if q == nil {
 		q = url.Values{}
+	} else {
+		q = cloneValues(q)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return err
 	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	} else {
 		q.Set("api_key", c.apiKey)
 	}
@@ -70,7 +91,7 @@ func (c *TMDBClient) get(ctx context.Context, path string, q url.Values, out int
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		switch resp.StatusCode {
 		case http.StatusUnauthorized:
-			return fmt.Errorf("TMDB kaliti noto'g'ri yoki bekor qilingan (401) — TMDB_API_KEY / TMDB_READ_TOKEN ni tekshiring")
+			return errTMDBUnauthorized
 		case http.StatusTooManyRequests:
 			return fmt.Errorf("TMDB so'rovlar limiti (429) — birozdan keyin qayta urinib ko'ring")
 		}
@@ -79,7 +100,18 @@ func (c *TMDBClient) get(ctx context.Context, path string, q url.Values, out int
 	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(out)
 }
 
-var errTMDBNotFound = fmt.Errorf("tmdb: not found")
+var (
+	errTMDBNotFound     = fmt.Errorf("tmdb: not found")
+	errTMDBUnauthorized = fmt.Errorf("TMDB kaliti noto'g'ri yoki bekor qilingan (401) — TMDB_API_KEY / TMDB_READ_TOKEN ni tekshiring")
+)
+
+func cloneValues(q url.Values) url.Values {
+	out := make(url.Values, len(q))
+	for k, v := range q {
+		out[k] = append([]string(nil), v...)
+	}
+	return out
+}
 
 func tmdbProfileURL(path string) string {
 	if path == "" {
