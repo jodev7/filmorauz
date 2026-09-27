@@ -26,7 +26,11 @@ func sanitizeDisplayName(firstName, username string) string {
 type AuthHandler struct {
 	authService         *services.AuthService
 	notificationService *services.NotificationService
+	avatars             *TelegramAvatarImporter
 }
+
+// SetAvatarImporter enables copying the Telegram profile photo on login.
+func (h *AuthHandler) SetAvatarImporter(a *TelegramAvatarImporter) { h.avatars = a }
 
 func NewAuthHandler(authService *services.AuthService, notificationService *services.NotificationService) *AuthHandler {
 	return &AuthHandler{authService: authService, notificationService: notificationService}
@@ -110,6 +114,11 @@ func (h *AuthHandler) TelegramAuthComplete(c *gin.Context) {
 
 	log.Printf("[AUTH HANDLER] Auth session completed: code=%s, status=%s, user_id=%s",
 		session.Code, session.Status, user.ID.Hex())
+
+	// No profile picture yet → use the Telegram one (in the background).
+	if h.avatars != nil && strings.TrimSpace(user.ProfileImageURL) == "" {
+		h.avatars.ImportAsync(user.ID, req.TelegramID)
+	}
 
 	// Generate web token for the user
 	token, err := h.authService.GenerateWebToken(user)

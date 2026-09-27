@@ -1141,6 +1141,17 @@ export async function uploadProfileImage(token: string, file: File): Promise<str
   return data.profile_image_url || data.user?.profile_image_url || "";
 }
 
+// Use the current Telegram profile photo as the profile picture.
+export async function applyTelegramProfilePhoto(token: string): Promise<string> {
+  const res = await fetch(`${API_URL}/user/avatar/telegram`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Telegram rasmini olib bo'lmadi");
+  return data.profile_image_url || "";
+}
+
 // Update profile image by URL
 export async function updateProfileImageByURL(token: string, imageURL: string): Promise<void> {
   const formData = new FormData();

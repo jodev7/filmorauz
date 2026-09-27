@@ -25,6 +25,7 @@ type ExtraDeps struct {
 	Lists        *handlers.UserListHandler
 	NotifyPrefs  *handlers.NotifySettingsHandler
 	Credits      *handlers.CreditsHandler
+	Avatars      *handlers.TelegramAvatarImporter
 }
 
 // SetupExtras registers user-library, community and growth routes.
@@ -85,6 +86,9 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 		user.DELETE("/lists/:id/items/:type/:targetId", d.Lists.RemoveItem)
 		user.GET("/lists-containing/:type/:id", d.Lists.Containing)
 
+		// Put the Telegram profile photo back as the profile picture
+		user.POST("/avatar/telegram", d.Avatars.UseTelegramPhoto)
+
 		// Referral program
 		user.GET("/referral", d.Referral.GetMyReferral)
 		user.POST("/referral/claim", d.Referral.ClaimReferral)
@@ -142,5 +146,6 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 	{
 		superadmin.GET("/daily-report/preview", d.DailyReport.Preview)
 		superadmin.POST("/daily-report/send", d.DailyReport.SendNow)
+		superadmin.POST("/users/telegram-avatars/backfill", d.Avatars.BackfillNow)
 	}
 }
