@@ -1,64 +1,36 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Loader2, Plus, X, Info, Upload, CheckCircle, AlertCircle, Sparkles } from "lucide-react";
-import { MovieInput, VideoSourceType, directB2Upload, backendUploadMovieImage, createDirectUploadJob, DirectUploadInput, IngestionJob, UploadProgressInfo } from "@/lib/api";
+import { useMemo, useState } from "react";
+import { Clapperboard, Crown, Film, Image as ImageIcon, Info, Sparkles, Tags, Upload, Video } from "lucide-react";
+import {
+  MovieInput,
+  VideoSourceType,
+  directB2Upload,
+  backendUploadMovieImage,
+  createDirectUploadJob,
+  DirectUploadInput,
+  IngestionJob,
+} from "@/lib/api";
 import { buildSeoTitle, buildSeoDescription } from "@/lib/seo-template";
-import { normalizeMediaUrl } from "@/lib/image-utils";
-import MediaImage from "@/components/ui/MediaImage";
 import { logger } from "@/lib/logger";
+import { ErrorBanner, Field, FormSection, Segmented, StickySaveBar, SwitchRow, inputCls, useLeaveGuard } from "@/components/admin/form/ui";
+import GenrePicker, { normalizeGenre } from "@/components/admin/form/GenrePicker";
+import ChipsInput from "@/components/admin/form/ChipsInput";
+import SlugInput from "@/components/admin/form/SlugInput";
+import MediaUploadField from "@/components/admin/form/MediaUploadField";
+import ContentPreviewCard from "@/components/admin/form/ContentPreviewCard";
+import DraftBanner from "@/components/admin/form/DraftBanner";
+import { useDraft } from "@/components/admin/form/useDraft";
+import { COUNTRY_SUGGESTIONS, QUALITIES } from "@/components/admin/form/constants";
 
-const QUALITIES = ["480p", "720p", "1080p", "1080p Ultra", "4K"];
-const GENRE_OPTIONS = [
-  "Action", "Adventure", "Animation", "Anime", "Comedy",
-  "Crime", "Documentary", "Dorama", "Drama", "Fantasy",
-  "Horror", "Mystery", "Romance", "Sci-Fi", "Thriller", "Western",
+
+const SOURCE_TYPES: { value: VideoSourceType; label: string; description: string; icon: typeof Film }[] = [
+  { value: "direct_upload", label: "Fayl yuklash", description: "MP4 yuklanadi, HLS va sifatlarga avtomatik o'giriladi", icon: Upload },
+  { value: "iframe_embed", label: "Iframe embed", description: "YouTube, Vimeo va boshqa embed pleyerlar", icon: Film },
+  { value: "direct_hls", label: "HLS (.m3u8)", description: "Tayyor adaptiv oqim havolasi", icon: Video },
+  { value: "direct_mp4", label: "To'g'ridan MP4", description: "Tayyor .mp4 havola (CDN bloklashi mumkin)", icon: Video },
+  { value: "external_restricted", label: "Cheklangan", description: "Tashqi manba — saytda cheklov xabari chiqadi", icon: Info },
 ];
-
-const SOURCE_TYPE_OPTIONS: { value: VideoSourceType; label: string; description: string }[] = [
-  { 
-    value: "iframe_embed", 
-    label: "Iframe Embed", 
-    description: "Use for YouTube, Vimeo, or other iframe-based players. Requires embed URL." 
-  },
-  { 
-    value: "direct_mp4", 
-    label: "Direct MP4", 
-    description: "Direct video file link (.mp4). May return 403 if CDN blocks hotlinking." 
-  },
-  { 
-    value: "direct_hls", 
-    label: "Direct HLS (.m3u8)", 
-    description: "HLS streaming format for adaptive quality." 
-  },
-  { 
-    value: "external_restricted", 
-    label: "External (Restricted)", 
-    description: "For sources that block external playback. Shows restricted message." 
-  },
-  { 
-    value: "direct_upload", 
-    label: "Direct Upload", 
-    description: "Upload MP4 file for processing (HLS encoding, clips generation)." 
-  },
-];
-
-interface UploadState {
-  status: "idle" | "uploading" | "success" | "error";
-  message?: string;
-  tempKey?: string;
-  progress?: number;
-  uploadedMB?: number;
-  totalMB?: number;
-  speedMBps?: number;
-  etaSeconds?: number;
-}
-
-interface DirectUploadState {
-  status: "idle" | "uploading" | "creating_job" | "job_created" | "error";
-  job?: IngestionJob;
-  message?: string;
-}
 
 interface Props {
   initialData?: Partial<MovieInput>;
@@ -66,6 +38,10 @@ interface Props {
   submitLabel?: string;
   token?: string;
   onDirectUploadJobCreated?: (job: IngestionJob) => void;
+  /** "create" enables local draft autosave. */
+  mode?: "create" | "edit";
+  /** Public page link shown in the preview (edit). */
+  previewHref?: string;
 }
 
 const emptyForm: MovieInput = {
@@ -87,880 +63,322 @@ const emptyForm: MovieInput = {
   director: "",
 };
 
-function normalizeGenreValue(value: string): string {
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed) return "";
-  const normalized = trimmed.replace(/[_\s]+/g, "-").replace(/-+/g, "-");
-  if (normalized === "science-fiction" || normalized === "sciencefiction" || normalized === "scifi") {
-    return "sci-fi";
-  }
-  return normalized;
+function durationLabel(min: number) {
+  if (!min) return "";
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return h ? `${h} soat ${m ? `${m} daqiqa` : ""}` : `${m} daqiqa`;
 }
 
-function formatSpeed(speedMBps?: number) {
-  if (!speedMBps || !Number.isFinite(speedMBps) || speedMBps <= 0) return "";
-  return `${speedMBps.toFixed(1)} MB/s`;
-}
-
-function formatETA(seconds?: number) {
-  if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return "";
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return `${minutes}m ${remainingSeconds}s`;
-}
-
-export default function MovieForm({
-  initialData,
-  onSubmit,
-  submitLabel = "Save Movie",
-  token,
-  onDirectUploadJobCreated,
-}: Props) {
-  const safeInitialData = initialData ? {
-    ...initialData,
-    genre: Array.isArray(initialData.genre) ? initialData.genre.map((g: string) => normalizeGenreValue(g)).filter(Boolean) : [],
-  } : emptyForm;
-
-  const [form, setForm] = useState<MovieInput>({ ...emptyForm, ...safeInitialData });
+export default function MovieForm({ initialData, onSubmit, submitLabel = "Saqlash", token, onDirectUploadJobCreated, mode = "edit", previewHref }: Props) {
+  const initial = useMemo<MovieInput>(
+    () => ({
+      ...emptyForm,
+      ...(initialData ?? {}),
+      genre: Array.isArray(initialData?.genre) ? initialData!.genre.map(normalizeGenre).filter(Boolean) : [],
+      cast: initialData?.cast ?? [],
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+  const [form, setForm] = useState<MovieInput>(initial);
+  const [saved, setSaved] = useState(JSON.stringify(initial));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [genreInput, setGenreInput] = useState("");
-  // Upload state always starts idle; initial poster/backdrop/video URLs live on
-  // `form` directly. The "Choose …" button stays visible so the admin can
-  // optionally replace media; if they don't upload, the existing form value is
-  // what gets submitted.
-  const [uploads, setUploads] = useState<{
-    poster: UploadState;
-    backdrop: UploadState;
-    video: UploadState;
-  }>({
-    poster: { status: "idle" },
-    backdrop: { status: "idle" },
-    video: { status: "idle" },
-  });
+  const [busy, setBusy] = useState({ poster: false, backdrop: false, video: false });
+  const [tempFileKey, setTempFileKey] = useState("");
+  const [jobCreated, setJobCreated] = useState(false);
 
-  const [directUploadJob, setDirectUploadJob] = useState<DirectUploadState>({ status: "idle" });
-  const [tempFileKey, setTempFileKey] = useState<string>("");
+  const set = <K extends keyof MovieInput>(field: K, value: MovieInput[K]) => setForm((prev) => ({ ...prev, [field]: value }));
+  const isUploading = busy.poster || busy.backdrop || busy.video;
+  const dirty = JSON.stringify(form) !== saved;
+  useLeaveGuard((dirty && !jobCreated) || isUploading);
 
-  // Warn before leaving while any file is still uploading. A multi-GB video
-  // upload is tied to this tab — navigating away aborts it and the admin loses
-  // all progress.
-  const isUploading =
-    uploads.poster.status === "uploading" ||
-    uploads.backdrop.status === "uploading" ||
-    uploads.video.status === "uploading";
-  useEffect(() => {
-    if (!isUploading) return;
-    const handler = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = "";
-    };
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
-  }, [isUploading]);
+  const { draft, acceptDraft, discardDraft, clearDraft } = useDraft("filmora_admin_movie_draft", form, mode === "create" && dirty);
 
-  const set = (field: keyof MovieInput, value: unknown) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
-  };
-
-  // Wrap the plain name + base description into the site's standard SEO
-  // title/description. Idempotent — re-clicking (or editing an already-generated
-  // movie) strips the old wrapper first, so it never stacks.
-  const applySeoTemplate = () => {
+  const applySeoTemplate = () =>
     setForm((prev) => ({
       ...prev,
       title: buildSeoTitle(prev.title, prev.year),
       description: buildSeoDescription(prev.title, prev.year, prev.description),
     }));
+
+  const imageUpload = (type: "poster" | "backdrop") => (file: File, onProgress: Parameters<typeof backendUploadMovieImage>[3]) => {
+    if (!token) return Promise.reject(new Error("Tizimga qayta kiring"));
+    return backendUploadMovieImage(token, file, type, onProgress);
   };
-
-  const handleUpload = async (type: "poster" | "backdrop" | "video", file: File) => {
-    if (!token) {
-      setUploads(prev => ({
-        ...prev,
-        [type]: { status: "error", message: "No auth token available" }
-      }));
-      return;
-    }
-
-    logger.debug("[MovieForm] file chosen", { type, size: file.size });
-
-    setUploads(prev => ({
-      ...prev,
-      [type]: { status: "uploading", progress: 0 }
-    }));
-
-    const onUploadProgress = (uploadProgress: UploadProgressInfo) => {
-      setUploads(prev => ({
-        ...prev,
-        [type]: {
-          status: "uploading",
-          progress: uploadProgress.progress,
-          uploadedMB: uploadProgress.uploadedMB,
-          totalMB: uploadProgress.total ? uploadProgress.total / 1024 / 1024 : undefined,
-          speedMBps: uploadProgress.speedMBps,
-          etaSeconds: uploadProgress.etaSeconds,
-        }
-      }));
-    };
-
-    try {
-      // Poster/backdrop go through backend proxy (same pattern as profile image /
-      // telegram-post). Only video stays on the direct-to-B2 path.
-      const result =
-        type === "video"
-          ? await directB2Upload(token, file, type, onUploadProgress)
-          : await backendUploadMovieImage(token, file, type, onUploadProgress);
-
-      logger.debug("[MovieForm] upload success", { type });
-
-      setUploads(prev => ({
-        ...prev,
-        [type]: { status: "success", message: result.url, tempKey: result.file_key, progress: 100 }
-      }));
-      if (type === "poster") {
-        set("poster_url", result.url);
-      } else if (type === "backdrop") {
-        set("backdrop_url", result.url);
-      } else {
-        set("video_url", result.url);
-        setTempFileKey(result.file_key);
-      }
-    } catch (err) {
-      logger.error("[MovieForm] upload failed", type);
-      setUploads(prev => ({
-        ...prev,
-        [type]: {
-          status: "error",
-          message: err instanceof Error ? err.message : "Upload failed"
-        }
-      }));
-    }
-  };
-
-  const addGenre = () => {
-    const g = normalizeGenreValue(genreInput);
-    if (g && !form.genre.includes(g)) {
-      set("genre", [...form.genre, g]);
-    }
-    setGenreInput("");
-  };
-
-  const removeGenre = (g: string) => {
-    set("genre", form.genre.filter((x) => x !== g));
-  };
-
-  const selectGenre = (g: string) => {
-    const slug = normalizeGenreValue(g);
-    if (form.genre.includes(slug)) {
-      removeGenre(slug);
-    } else {
-      set("genre", [...form.genre, slug]);
-    }
-  };
-
-  const renderUploadProgress = (state: UploadState, label: string) => {
-    const progress = state.progress ?? 0;
-    const speed = formatSpeed(state.speedMBps);
-    const eta = formatETA(state.etaSeconds);
-
-    return (
-      <div className="upload-progress">
-        <Loader2 size={20} className="animate-spin" />
-        <div className="progress-content">
-          <span>
-            {state.progress !== undefined
-              ? `Uploading ${label}: ${progress}%`
-              : `Uploading ${label}: ${(state.uploadedMB ?? 0).toFixed(1)} MB`}
-          </span>
-          {state.progress !== undefined && (
-            <div className="progress-bar">
-              <div className="progress-fill" style={{ width: `${progress}%` }} />
-            </div>
-          )}
-          <div className="progress-meta">
-            {speed && <span>Speed: {speed}</span>}
-            {eta && <span>ETA: {eta}</span>}
-            {state.progress === undefined && state.uploadedMB !== undefined && (
-              <span>Uploaded: {state.uploadedMB.toFixed(1)} MB</span>
-            )}
-          </div>
-        </div>
-      </div>
-    );
+  const videoUpload = (file: File, onProgress: Parameters<typeof directB2Upload>[3]) => {
+    if (!token) return Promise.reject(new Error("Tizimga qayta kiring"));
+    return directB2Upload(token, file, "video", onProgress);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    
-    // Validate source type requirements
-    if (form.source_type === "iframe_embed" && !form.embed_url) {
-      setError("Embed URL is required for iframe embed source type");
-      return;
-    }
-    if (["direct_mp4", "direct_hls", "external_restricted"].includes(form.source_type) && !form.video_url) {
-      setError("Video URL is required for this source type");
-      return;
-    }
-    const shouldCreateDirectUploadJob =
-      form.source_type === "direct_upload" ||
-      (form.source_type === "direct_mp4" && uploads.video.status === "success" && !!tempFileKey);
+    if (isUploading) return setError("Fayl yuklanib bo'lishini kuting.");
+    if (!form.title.trim()) return setError("Kino nomini kiriting");
+    if (!form.description.trim()) return setError("Tavsif kiriting");
+    if (form.source_type === "iframe_embed" && !form.embed_url) return setError("Embed URL kerak");
+    if (["direct_mp4", "direct_hls", "external_restricted"].includes(form.source_type) && !form.video_url) return setError("Video URL kerak");
 
-    if (shouldCreateDirectUploadJob) {
-      // Handle direct upload flow
-      if (!token) {
-        setError("Authentication required");
-        return;
-      }
-      if (uploads.poster.status === "uploading" || uploads.backdrop.status === "uploading" || uploads.video.status === "uploading") {
-        setError("Iltimos, fayl yuklanib bo'lishini kuting.");
-        return;
-      }
-      if (!form.title) {
-        setError("Title is required");
-        return;
-      }
-      if (uploads.poster.status === "error") {
-        setError(`Poster upload failed: ${uploads.poster.message || "please retry"}`);
-        return;
-      }
-      if (!form.poster_url) {
-        setError("Poster yuklash majburiy. Iltimos, poster faylini yuklang.");
-        return;
-      }
-      if (uploads.video.status === "error") {
-        setError(`Video upload failed: ${uploads.video.message || "please retry"}`);
-        return;
-      }
-      if (uploads.video.status !== "success" || !form.video_url) {
-        setError("Please upload a video file first");
-        return;
-      }
+    const genre = Array.from(new Set(form.genre.map(normalizeGenre).filter(Boolean)));
+    const cast = (form.cast ?? []).map((s) => s.trim()).filter(Boolean);
+    const data: MovieInput = { ...form, genre, cast };
 
-      setLoading(true);
-      try {
-        // Create direct upload ingestion job
+    const directJob = form.source_type === "direct_upload" || (form.source_type === "direct_mp4" && !!tempFileKey);
+    setLoading(true);
+    try {
+      if (directJob) {
+        if (!token) throw new Error("Tizimga qayta kiring");
+        if (!form.poster_url) throw new Error("Poster yuklash majburiy");
+        if (!form.video_url) throw new Error("Avval video faylni yuklang");
         const input: DirectUploadInput = {
           title: form.title,
           temp_file_url: form.video_url,
-          temp_file_key: tempFileKey, // Include temp file key for cleanup tracking
+          temp_file_key: tempFileKey,
           poster_url: form.poster_url,
           backdrop_url: form.backdrop_url,
           year: form.year,
-          genres: form.genre,
+          genres: genre,
           country: form.country,
           duration: form.duration,
           quality: form.quality,
           is_premium: form.is_premium,
         };
         const job = await createDirectUploadJob(token, input);
-        setDirectUploadJob({ status: "job_created", job });
+        setJobCreated(true);
+        clearDraft();
+        setSaved(JSON.stringify(form));
         onDirectUploadJobCreated?.(job);
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Failed to create job");
-      } finally {
-        setLoading(false);
+      } else {
+        await onSubmit(data);
+        clearDraft();
+        setSaved(JSON.stringify(form));
       }
-      return;
-    }
-
-    if (uploads.poster.status === "uploading" || uploads.backdrop.status === "uploading" || uploads.video.status === "uploading") {
-      setError("Iltimos, fayl yuklanib bo'lishini kuting.");
-      return;
-    }
-    if (uploads.poster.status === "error") {
-      setError(`Poster upload failed: ${uploads.poster.message || "please retry"}`);
-      return;
-    }
-    if (uploads.backdrop.status === "error") {
-      setError(`Backdrop upload failed: ${uploads.backdrop.message || "please retry"}`);
-      return;
-    }
-
-    logger.debug("[MovieForm] submitting");
-
-    setLoading(true);
-    try {
-      // Normalize genres before submit: trim, lowercase, dedupe
-      const normalizedGenres = form.genre
-        .map((g: string) => normalizeGenreValue(g))
-        .filter((g: string, i: number, arr: string[]) => g && arr.indexOf(g) === i);
-
-      const submitData = { ...form, genre: normalizedGenres };
-      await onSubmit(submitData);
-    } catch (err: unknown) {
+    } catch (err) {
       logger.error("[MovieForm] submit failed");
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      setError(err instanceof Error ? err.message : "Xatolik yuz berdi");
     } finally {
       setLoading(false);
     }
   };
 
-  // Check if we need video_url field based on source type
-  const requiresVideoURL = form.source_type !== "iframe_embed" && form.source_type !== "direct_upload";
-  // Check if we need embed_url field based on source type  
-  const requiresEmbedURL = form.source_type === "iframe_embed";
-  // Check if we show video upload area (includes direct_upload)
-  const showsVideoUpload = form.source_type === "direct_mp4" || form.source_type === "direct_hls" || form.source_type === "direct_upload";
+  const showsVideoUpload = form.source_type === "direct_upload" || form.source_type === "direct_mp4" || form.source_type === "direct_hls";
+  const needsEmbed = form.source_type === "iframe_embed";
+  const needsVideoUrl = form.source_type !== "iframe_embed" && form.source_type !== "direct_upload";
+
+  const checklist = [
+    { label: "Nomi va yili", ok: !!form.title.trim() && !!form.year },
+    { label: "Tavsif (80+ belgi)", ok: form.description.trim().length >= 80 },
+    { label: "Poster", ok: !!form.poster_url },
+    { label: "Backdrop (fon rasm)", ok: !!form.backdrop_url },
+    { label: "Video manbasi", ok: needsEmbed ? !!form.embed_url : !!form.video_url },
+    { label: "Kamida 1 ta janr", ok: form.genre.length > 0 },
+    { label: "Aktyorlar yoki rejissyor", ok: (form.cast ?? []).length > 0 || !!form.director },
+  ];
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6 max-w-3xl">
-      {/* Error banner */}
-      {error && (
-        <div className="bg-red-400/10 border border-red-400/30 text-red-400 rounded-lg px-4 py-3 text-sm">
-          {error}
-        </div>
-      )}
-
-      {/* Two-column: Title + Year */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="md:col-span-2">
-          <label className="block text-sm text-gray-400 mb-1.5">
-            Title <span className="text-brand-red">*</span>
-          </label>
-          <input
-            type="text"
-            value={form.title}
-            onChange={(e) => set("title", e.target.value)}
-            placeholder="Movie title"
-            required
-            className="field"
-          />
-        </div>
-        <div>
-          <label className="block text-sm text-gray-400 mb-1.5">
-            Year <span className="text-brand-red">*</span>
-          </label>
-          <input
-            type="number"
-            value={form.year}
-            onChange={(e) => set("year", parseInt(e.target.value))}
-            min={1900}
-            max={2100}
-            required
-            className="field"
-          />
-        </div>
-      </div>
-
-      {/* Description */}
-      <div>
-        <label className="block text-sm text-gray-400 mb-1.5">
-          Description <span className="text-brand-red">*</span>
-        </label>
-        <textarea
-          value={form.description}
-          onChange={(e) => set("description", e.target.value)}
-          placeholder="Movie description..."
-          required
-          rows={4}
-          className="field resize-none"
-        />
-      </div>
-
-      {/* Auto-fill SEO title + description from the plain name/year/description */}
-      <div className="flex flex-col gap-2 rounded-lg border border-brand-border bg-gray-900/40 p-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-xs text-gray-500 leading-relaxed">
-          Faqat kino nomini, yilini va qisqa tavsifini kiriting — tugmani bosing,
-          SEO sarlavha va tavsif avtomatik yoziladi.
-        </p>
-        <button
-          type="button"
-          onClick={applySeoTemplate}
-          className="flex shrink-0 items-center justify-center gap-2 rounded-lg border border-brand-red/40 bg-brand-red/10 px-4 py-2 text-sm font-medium text-brand-red transition-colors hover:bg-brand-red/20"
-        >
-          <Sparkles size={16} />
-          SEO shablonni qo&apos;llash
-        </button>
-      </div>
-
-      {/* Slug */}
-      <div>
-        <label className="block text-sm text-gray-400 mb-1.5">
-          Slug <span className="text-gray-500">(URL-friendly, lowercase, hyphens)</span>
-        </label>
-        <input
-          type="text"
-          value={form.slug || ""}
-          onChange={(e) => set("slug", e.target.value.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, ""))}
-          placeholder="movie-slug"
-          className="field font-mono"
-        />
-        <p className="text-xs text-gray-500 mt-1">
-          Only lowercase letters, numbers, and hyphens allowed
-        </p>
-      </div>
-
-      {/* Poster Upload + Backdrop Upload */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Poster Upload */}
-        <div>
-          <label className="block text-sm text-gray-400 mb-1.5">
-            Upload Poster <span className="text-brand-red">*</span>
-          </label>
-          <div className="upload-box">
-            {uploads.poster.status === "uploading" && (
-              renderUploadProgress(uploads.poster, "poster")
-            )}
-            {uploads.poster.status === "success" && (
-              <div className="upload-status success">
-                <CheckCircle size={20} />
-                <span>Uploaded successfully</span>
-              </div>
-            )}
-            {uploads.poster.status === "error" && (
-              <div className="upload-status error">
-                <AlertCircle size={20} />
-                <span>{uploads.poster.message}</span>
-              </div>
-            )}
-            {uploads.poster.status === "idle" && (
-              <>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,image/gif"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) handleUpload("poster", file);
-                  }}
-                  className="hidden"
-                  id="poster-upload"
-                />
-                <label htmlFor="poster-upload" className="upload-label">
-                  <Upload size={20} />
-                  <span>Choose poster image (jpg, png, webp, gif)</span>
-                </label>
-              </>
-            )}
-          </div>
-          {/* Preview */}
-          {form.poster_url && (
-            <MediaImage
-              src={normalizeMediaUrl(form.poster_url)}
-              alt="Poster preview"
-              className="mt-2 h-24 rounded object-cover border border-brand-border"
+    <>
+      <form id="movie-form" onSubmit={handleSubmit} className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="min-w-0 space-y-6">
+          {draft && (
+            <DraftBanner
+              savedAt={draft.savedAt}
+              onRestore={() => {
+                setForm(draft.value);
+                acceptDraft();
+              }}
+              onDiscard={discardDraft}
             />
           )}
-        </div>
+          <ErrorBanner message={error} />
 
-        {/* Backdrop Upload */}
-        <div>
-          <label className="block text-sm text-gray-400 mb-1.5">
-            Upload Backdrop
-          </label>
-          <div className="upload-box">
-            {uploads.backdrop.status === "uploading" && (
-              renderUploadProgress(uploads.backdrop, "backdrop")
-            )}
-            {uploads.backdrop.status === "success" && (
-              <div className="upload-status success">
-                <CheckCircle size={20} />
-                <span>Uploaded successfully</span>
-              </div>
-            )}
-            {uploads.backdrop.status === "error" && (
-              <div className="upload-status error">
-                <AlertCircle size={20} />
-                <span>{uploads.backdrop.message}</span>
-              </div>
-            )}
-            {uploads.backdrop.status === "idle" && (
-              <>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,image/gif"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) handleUpload("backdrop", file);
-                  }}
-                  className="hidden"
-                  id="backdrop-upload"
-                />
-                <label htmlFor="backdrop-upload" className="upload-label">
-                  <Upload size={20} />
-                  <span>Choose backdrop image (jpg, png, webp, gif)</span>
-                </label>
-              </>
-            )}
-          </div>
-          {form.backdrop_url && (
-            <MediaImage
-              src={normalizeMediaUrl(form.backdrop_url)}
-              alt="Backdrop preview"
-              className="mt-2 h-24 rounded object-cover border border-brand-border w-full"
-            />
-          )}
-        </div>
-      </div>
-
-      {/* Video Source Type */}
-      <div>
-        <label className="block text-sm text-gray-400 mb-1.5">
-          Video Source Type <span className="text-brand-red">*</span>
-        </label>
-        <select
-          value={form.source_type}
-          onChange={(e) => set("source_type", e.target.value as VideoSourceType)}
-          required
-          className="field"
-        >
-          {SOURCE_TYPE_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-        <div className="mt-2 flex items-start gap-2 text-xs text-gray-500 bg-gray-900/50 p-2 rounded">
-          <Info size={14} className="mt-0.5 flex-shrink-0" />
-          <p>
-            {SOURCE_TYPE_OPTIONS.find(o => o.value === form.source_type)?.description}
-          </p>
-        </div>
-      </div>
-
-      {/* Embed URL (for iframe_embed) */}
-      {requiresEmbedURL && (
-        <div>
-          <label className="block text-sm text-gray-400 mb-1.5">
-            Embed URL <span className="text-brand-red">*</span>
-          </label>
-          <input
-            type="url"
-            value={form.embed_url}
-            onChange={(e) => set("embed_url", e.target.value)}
-            placeholder="https://www.youtube.com/embed/VIDEO_ID or iframe embed URL"
-            required={requiresEmbedURL}
-            className="field"
-          />
-          <p className="text-xs text-gray-600 mt-1">
-            Use the embed URL (not watch URL). For YouTube: use /embed/ format.
-          </p>
-        </div>
-      )}
-
-      {/* Video Upload (for direct types including direct_upload) */}
-      {showsVideoUpload && (
-        <div>
-          <label className="block text-sm text-gray-400 mb-1.5">
-            {form.source_type === "direct_upload" ? "Upload Video (for processing)" : "Upload Video"} <span className="text-brand-red">*</span>
-          </label>
-          <div className="upload-box">
-            {uploads.video.status === "uploading" && (
-              renderUploadProgress(uploads.video, "video")
-            )}
-            {uploads.video.status === "success" && (
-              <div className="upload-status success">
-                <CheckCircle size={20} />
-                <span>Video yuklandi — &quot;Create&quot; bosgach qayta ishlashga yuboriladi</span>
-              </div>
-            )}
-            {uploads.video.status === "error" && (
-              <div className="upload-status error">
-                <AlertCircle size={20} />
-                <span>{uploads.video.message}</span>
-              </div>
-            )}
-            {uploads.video.status === "idle" && (
-              <>
-                <input
-                  type="file"
-                  accept="video/mp4,video/webm,video/ogg,.m3u8"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) handleUpload("video", file);
-                  }}
-                  className="hidden"
-                  id="video-upload"
-                />
-                <label htmlFor="video-upload" className="upload-label">
-                  <Upload size={20} />
-                  <span>Choose video file (mp4, webm, m3u8)</span>
-                </label>
-              </>
-            )}
-          </div>
-          {form.source_type === "direct_upload" && (
-            <p className="mt-2 flex items-start gap-1.5 text-xs text-gray-500">
-              <Info size={14} className="mt-0.5 shrink-0" />
-              <span>
-                Video yuklab bo&apos;lingach, &quot;Create&quot; tugmasi uni qayta ishlash navbatiga qo&apos;yadi
-                (HLS/sifatlarga o&apos;girish). Kino darhol chiqmaydi — process tugagach efirga chiqadi.
-                Yuklash davomida bu sahifani yopmang.
-              </span>
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* Genre selector */}
-      <div>
-        <label className="block text-sm text-gray-400 mb-2">Genres</label>
-
-        {/* Quick-select chips */}
-        <div className="flex flex-wrap gap-2 mb-3">
-          {GENRE_OPTIONS.map((g) => {
-            const genreKey = g.toLowerCase();
-            const selected = form.genre.includes(genreKey);
-            return (
+          <FormSection
+            title="Asosiy ma'lumot"
+            icon={<Clapperboard size={16} />}
+            actions={
               <button
-                key={g}
                 type="button"
-                onClick={() => selectGenre(genreKey)}
-                className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                  selected
-                    ? "bg-brand-red border-brand-red text-white"
-                    : "border-brand-border text-gray-400 hover:border-gray-500 hover:text-white"
-                }`}
+                onClick={applySeoTemplate}
+                title="Nom va yildan SEO sarlavha/tavsif yasash"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-1.5 text-xs font-medium text-orange-300 hover:bg-orange-500/20"
               >
-                {g}
+                <Sparkles size={13} /> SEO shablon
               </button>
-            );
-          })}
-        </div>
-
-        {/* Custom genre input */}
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={genreInput}
-            onChange={(e) => setGenreInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                addGenre();
-              }
-            }}
-            placeholder="Custom genre..."
-            className="field flex-1 py-2"
-          />
-          <button
-            type="button"
-            onClick={addGenre}
-            className="px-3 py-2 bg-brand-border hover:bg-gray-600 text-white rounded-lg transition-colors"
+            }
           >
-            <Plus size={16} />
-          </button>
+            <div className="grid gap-4 sm:grid-cols-[1fr_120px]">
+              <Field label="Nomi" required htmlFor="m-title">
+                <input id="m-title" value={form.title} onChange={(e) => set("title", e.target.value)} placeholder="Masalan: Interstellar" className={inputCls} />
+              </Field>
+              <Field label="Yili" required htmlFor="m-year">
+                <input
+                  id="m-year"
+                  type="number"
+                  inputMode="numeric"
+                  value={form.year || ""}
+                  onChange={(e) => set("year", parseInt(e.target.value) || 0)}
+                  min={1900}
+                  max={2100}
+                  className={inputCls}
+                />
+              </Field>
+            </div>
+            <Field label="Slug (havola)" htmlFor="m-slug" hint="Nomdan avtomatik yasaladi. Qo'lda o'zgartirsangiz, avto-rejim o'chadi.">
+              <SlugInput id="m-slug" value={form.slug || ""} title={form.title} onChange={(v) => set("slug", v)} prefix="/movies/" lockedInitially={mode === "edit"} />
+            </Field>
+            <Field label="Tavsif" required htmlFor="m-desc" right={<span className="text-[11px] text-gray-600">{form.description.length} belgi</span>}>
+              <textarea id="m-desc" value={form.description} onChange={(e) => set("description", e.target.value)} rows={5} placeholder="Syujet haqida qisqacha…" className={`${inputCls} resize-y`} />
+            </Field>
+          </FormSection>
+
+          <FormSection title="Rasmlar" description="Faylni tashlang, tanlang yoki Ctrl+V bilan qo'ying" icon={<ImageIcon size={16} />}>
+            <div className="grid gap-4 sm:grid-cols-[180px_1fr]">
+              <MediaUploadField
+                label="Poster"
+                required
+                kind="poster"
+                value={form.poster_url}
+                onChange={(v) => set("poster_url", v)}
+                upload={imageUpload("poster")}
+                onBusyChange={(b) => setBusy((s) => ({ ...s, poster: b }))}
+              />
+              <MediaUploadField
+                label="Backdrop (fon)"
+                kind="backdrop"
+                value={form.backdrop_url}
+                onChange={(v) => set("backdrop_url", v)}
+                upload={imageUpload("backdrop")}
+                hint="16:9 gorizontal kadr — kino sahifasi tepasida chiqadi"
+                onBusyChange={(b) => setBusy((s) => ({ ...s, backdrop: b }))}
+              />
+            </div>
+          </FormSection>
+
+          <FormSection title="Video" description="Kino qayerdan ijro etiladi" icon={<Video size={16} />}>
+            <div role="radiogroup" aria-label="Video manbasi" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {SOURCE_TYPES.map(({ value, label, description, icon: Icon }) => {
+                const on = form.source_type === value;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    onClick={() => set("source_type", value)}
+                    className={`flex items-start gap-3 rounded-xl border p-3 text-left transition-colors ${
+                      on ? "border-orange-500 bg-orange-500/10" : "border-white/10 hover:border-white/25"
+                    }`}
+                  >
+                    <Icon size={16} className={on ? "mt-0.5 text-orange-400" : "mt-0.5 text-gray-500"} />
+                    <span>
+                      <span className="block text-sm font-medium text-white">{label}</span>
+                      <span className="block text-[11px] leading-snug text-gray-500">{description}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {needsEmbed && (
+              <Field label="Embed URL" required htmlFor="m-embed" hint="YouTube uchun /embed/ ko'rinishidagi havola">
+                <input id="m-embed" type="url" value={form.embed_url} onChange={(e) => set("embed_url", e.target.value.trim())} placeholder="https://www.youtube.com/embed/…" className={inputCls} />
+              </Field>
+            )}
+            {showsVideoUpload && (
+              <MediaUploadField
+                label={form.source_type === "direct_upload" ? "Video fayl (qayta ishlash uchun)" : "Video fayl"}
+                required={form.source_type === "direct_upload"}
+                kind="video"
+                value={form.video_url}
+                onChange={(v) => set("video_url", v)}
+                upload={videoUpload}
+                onUploaded={(r) => setTempFileKey(r.file_key || "")}
+                onBusyChange={(b) => setBusy((s) => ({ ...s, video: b }))}
+                hint={
+                  form.source_type === "direct_upload"
+                    ? "Saqlagach navbatga qo'yiladi va HLS/sifatlarga o'giriladi. Yuklash davomida sahifani yopmang."
+                    : undefined
+                }
+              />
+            )}
+            {needsVideoUrl && (
+              <Field label="yoki video havolasi" htmlFor="m-video">
+                <input id="m-video" type="url" value={form.video_url} onChange={(e) => set("video_url", e.target.value.trim())} placeholder="https://…/video.m3u8" className={inputCls} />
+              </Field>
+            )}
+          </FormSection>
+
+          <FormSection title="Tasnif" icon={<Tags size={16} />}>
+            <Field label="Janrlar">
+              <GenrePicker value={form.genre} onChange={(v) => set("genre", v)} />
+            </Field>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Davlat" hint="Bir nechta bo'lsa vergul bilan">
+                <ChipsInput
+                  value={form.country ? form.country.split(",").map((s) => s.trim()).filter(Boolean) : []}
+                  onChange={(v) => set("country", v.join(", "))}
+                  placeholder="USA"
+                  suggestions={COUNTRY_SUGGESTIONS.slice(0, 6)}
+                  max={5}
+                />
+              </Field>
+              <Field label="Davomiyligi (daqiqa)" htmlFor="m-dur" hint={durationLabel(form.duration)}>
+                <input id="m-dur" type="number" inputMode="numeric" min={0} value={form.duration || ""} onChange={(e) => set("duration", parseInt(e.target.value) || 0)} placeholder="120" className={inputCls} />
+              </Field>
+            </div>
+            <Field label="Sifat">
+              <Segmented ariaLabel="Sifat" value={form.quality || "1080p"} options={QUALITIES.map((q) => ({ value: q, label: q }))} onChange={(v) => set("quality", v)} />
+            </Field>
+            <div className="grid gap-4 sm:grid-cols-[1fr_220px]">
+              <Field label="Aktyorlar" hint="Enter yoki vergul bilan; ro'yxatni birdan qo'yish ham mumkin">
+                <ChipsInput value={form.cast ?? []} onChange={(v) => set("cast", v)} placeholder="Tom Hanks, Emma Watson…" />
+              </Field>
+              <Field label="Rejissyor" htmlFor="m-dir">
+                <input id="m-dir" value={form.director ?? ""} onChange={(e) => set("director", e.target.value)} placeholder="Christopher Nolan" className={inputCls} />
+              </Field>
+            </div>
+          </FormSection>
+
+          <FormSection title="Kirish" icon={<Crown size={16} />}>
+            <SwitchRow
+              checked={!!form.is_premium}
+              onChange={(v) => set("is_premium", v)}
+              title="Premium kino"
+              description="Faqat premium obunachilar tomosha qila oladi"
+              icon={<Crown size={18} className={form.is_premium ? "text-yellow-400" : "text-gray-500"} />}
+            />
+          </FormSection>
         </div>
 
-        {/* Selected genres */}
-        {form.genre.length > 0 && (
-          <div className="flex flex-wrap gap-2 mt-2">
-            {form.genre.map((g) => (
-              <span
-                key={g}
-                className="flex items-center gap-1.5 text-xs bg-brand-red/20 text-brand-red border border-brand-red/30 px-2.5 py-1 rounded-full"
-              >
-                {g}
-                <button
-                  type="button"
-                  onClick={() => removeGenre(g)}
-                  className="hover:text-white"
-                >
-                  <X size={11} />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Credits — searchable on the site ("aktyor bo'yicha qidirish") */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="md:col-span-2">
-          <label className="block text-sm text-gray-400 mb-1.5">Aktyorlar</label>
-          <input
-            type="text"
-            value={(form.cast ?? []).join(", ")}
-            onChange={(e) => set("cast", e.target.value.split(",").map((s) => s.trimStart()))}
-            onBlur={() => set("cast", (form.cast ?? []).map((s) => s.trim()).filter(Boolean))}
-            placeholder="Vergul bilan: Tom Hanks, Emma Watson"
-            className="field"
+        <aside className="space-y-4 xl:sticky xl:top-6 xl:self-start">
+          <ContentPreviewCard
+            kindLabel="Kino"
+            title={form.title}
+            year={form.year}
+            genres={form.genre}
+            posterUrl={form.poster_url}
+            backdropUrl={form.backdrop_url}
+            quality={form.quality}
+            isPremium={form.is_premium}
+            href={previewHref}
+            checklist={checklist}
           />
-        </div>
-        <div>
-          <label className="block text-sm text-gray-400 mb-1.5">Rejissyor</label>
-          <input
-            type="text"
-            value={form.director ?? ""}
-            onChange={(e) => set("director", e.target.value)}
-            placeholder="Christopher Nolan"
-            className="field"
-          />
-        </div>
-      </div>
+        </aside>
+      </form>
 
-      {/* Country + Duration + Quality */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div>
-          <label className="block text-sm text-gray-400 mb-1.5">Country</label>
-          <input
-            type="text"
-            value={form.country}
-            onChange={(e) => set("country", e.target.value)}
-            placeholder="e.g. USA"
-            className="field"
-          />
-        </div>
-        <div>
-          <label className="block text-sm text-gray-400 mb-1.5">
-            Duration (minutes)
-          </label>
-          <input
-            type="number"
-            value={form.duration || ""}
-            onChange={(e) => set("duration", parseInt(e.target.value) || 0)}
-            placeholder="120"
-            min={0}
-            className="field"
-          />
-        </div>
-        <div>
-          <label className="block text-sm text-gray-400 mb-1.5">Quality</label>
-          <select
-            value={form.quality}
-            onChange={(e) => set("quality", e.target.value)}
-            className="field"
-          >
-            <option value="">Select quality</option>
-            {QUALITIES.map((q) => (
-              <option key={q} value={q}>
-                {q}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {/* Premium toggle */}
-      <div className="flex items-center gap-3">
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={form.is_premium || false}
-            onChange={(e) => set("is_premium", e.target.checked)}
-            className="w-5 h-5 rounded border-gray-600 bg-gray-700 text-yellow-500 focus:ring-yellow-500 focus:ring-offset-gray-900"
-          />
-          <span className="text-white font-medium">Premium Content</span>
-        </label>
-        <span className="text-gray-500 text-sm">Only premium users can watch this movie</span>
-      </div>
-
-      {/* Submit */}
-      <div className="flex items-center gap-3 pt-2">
-        <button
-          type="submit"
-          disabled={loading || isUploading || directUploadJob.status === "job_created"}
-          className="flex items-center gap-2 bg-brand-red hover:bg-orange-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold px-8 py-3 rounded-xl transition-colors"
-        >
-          {loading && <Loader2 size={16} className="animate-spin" />}
-          {isUploading ? "Yuklanmoqda..." : loading ? "Saving..." : submitLabel}
-        </button>
-        {directUploadJob.status === "job_created" && (
-          <span className="text-green-500 text-sm">
-            Ingestion job created! Check job status in Ingestion Jobs.
-          </span>
-        )}
-      </div>
-
-      {/* Field styles injected via style tag for simplicity */}
-      <style jsx global>{`
-        .field {
-          width: 100%;
-          background: #0a0a0f;
-          border: 1px solid #1e1e2e;
-          border-radius: 0.5rem;
-          padding: 0.625rem 1rem;
-          color: white;
-          font-size: 0.875rem;
-          transition: border-color 0.15s;
+      <StickySaveBar
+        formId="movie-form"
+        dirty={dirty}
+        saving={loading}
+        disabled={isUploading || jobCreated}
+        label={isUploading ? "Yuklanmoqda…" : submitLabel}
+        status={
+          jobCreated ? (
+            <span className="text-emerald-400">Qayta ishlash navbatiga qo&apos;yildi — holatini &quot;Import&quot; bo&apos;limida kuzating.</span>
+          ) : undefined
         }
-        .field:focus {
-          outline: none;
-          border-color: #e63946;
-        }
-        .field::placeholder {
-          color: #4b5563;
-        }
-        select.field option {
-          background: #12121a;
-        }
-        .upload-box {
-          border: 2px dashed #1e1e2e;
-          border-radius: 0.5rem;
-          padding: 1rem;
-          text-align: center;
-          background: #0a0a0f;
-          min-height: 80px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-        .upload-box:hover {
-          border-color: #e63946;
-        }
-        .upload-label {
-          cursor: pointer;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: 0.5rem;
-          color: #9ca3af;
-          font-size: 0.875rem;
-        }
-        .upload-label:hover {
-          color: white;
-        }
-        .upload-status {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          color: #9ca3af;
-          font-size: 0.875rem;
-        }
-        .upload-status.success {
-          color: #10b981;
-        }
-        .upload-status.error {
-          color: #ef4444;
-        }
-        .upload-progress {
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-          color: #9ca3af;
-          font-size: 0.875rem;
-        }
-        .progress-content {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          gap: 0.25rem;
-          min-width: 0;
-        }
-        .progress-bar {
-          width: 100%;
-          height: 6px;
-          background: #1e1e2e;
-          border-radius: 3px;
-          overflow: hidden;
-        }
-        .progress-fill {
-          height: 100%;
-          background: #e63946;
-          border-radius: 3px;
-          transition: width 0.2s ease;
-        }
-        .progress-meta {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.25rem 0.75rem;
-          color: #6b7280;
-          font-size: 0.75rem;
-          line-height: 1.2;
-        }
-      `}</style>
-    </form>
+      />
+    </>
   );
 }

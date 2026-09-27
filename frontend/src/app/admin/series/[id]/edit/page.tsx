@@ -1,12 +1,10 @@
 "use client";
 
-import { ChangeEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import Link from "next/link";
 import {
-  ArrowLeft,
-  Save,
   Loader2,
+  Save,
   PlusCircle,
   Trash2,
   Tv,
@@ -16,12 +14,8 @@ import {
   Plus,
   X,
   Upload,
-  CheckCircle,
-  AlertCircle,
   GripVertical,
-  Sparkles,
 } from "lucide-react";
-import { buildSeoTitle, buildSeoDescription } from "@/lib/seo-template";
 import { useAuth } from "@/lib/auth-context";
 import {
   adminGetSeries,
@@ -35,12 +29,14 @@ import {
   adminMoveEpisodeToSeason,
   CreateSeriesData,
   UploadProgressInfo,
-  uploadSeriesImage,
   directB2Upload,
   createEpisodeDirectUpload,
 } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
+import AdminPageHeader from "@/components/admin/form/PageHeader";
+import SeriesInfoForm from "@/components/admin/SeriesInfoForm";
+import { useToast } from "@/components/admin/Toast";
 import {
   DndContext,
   closestCenter,
@@ -79,29 +75,8 @@ interface Episode {
   duration: number;
 }
 
-interface UploadState {
-  status: "idle" | "uploading" | "success" | "error";
-  message?: string;
-  tempKey?: string;
-  progress?: number;
-  uploadedMB?: number;
-  totalMB?: number;
-  speedMBps?: number;
-  etaSeconds?: number;
-}
 
-function formatSpeed(speedMBps?: number) {
-  if (!speedMBps || !Number.isFinite(speedMBps) || speedMBps <= 0) return "";
-  return `${speedMBps.toFixed(1)} MB/s`;
-}
 
-function formatETA(seconds?: number) {
-  if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return "";
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return `${minutes}m ${remainingSeconds}s`;
-}
 
 // Sortable Episode Item Component
 function SortableEpisodeItem({
@@ -201,14 +176,10 @@ interface SeasonWithEpisodes {
 }
 
 // Stored lowercase English (matches DB). Displayed with `capitalize` CSS.
-const GENRE_OPTIONS = [
-  "action", "adventure", "animation", "anime", "comedy",
-  "crime", "documentary", "dorama", "drama", "fantasy",
-  "horror", "mystery", "romance", "sci-fi", "thriller", "western",
-];
 
 export default function EditSeriesPage() {
   const { token } = useAuth();
+  const toast = useToast();
   const params = useParams();
   const id = params.id as string;
 
@@ -235,16 +206,6 @@ export default function EditSeriesPage() {
     quality: "1080p",
   });
 
-  const [genreInput, setGenreInput] = useState("");
-
-  // Upload states for poster and backdrop
-  const [uploads, setUploads] = useState<{
-    poster: UploadState;
-    backdrop: UploadState;
-  }>({
-    poster: { status: "idle" },
-    backdrop: { status: "idle" },
-  });
 
   // Seasons and episodes
   const [seasons, setSeasons] = useState<SeasonWithEpisodes[]>([]);
@@ -313,7 +274,6 @@ export default function EditSeriesPage() {
 
   const [addingSeason, setAddingSeason] = useState(false);
   const [addingEpisode, setAddingEpisode] = useState(false);
-  const isUploadingMedia = uploads.poster.status === "uploading" || uploads.backdrop.status === "uploading";
   const [savingSeasonId, setSavingSeasonId] = useState<string | null>(null);
   const [deletingSeasonId, setDeletingSeasonId] = useState<string | null>(null);
 
@@ -379,140 +339,30 @@ export default function EditSeriesPage() {
     loadData();
   }, [token, id]);
 
-  const handleSaveSeries = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!token || !id) return;
-
-    if (!form.title) {
-      setError("Title is required");
-      return;
-    }
-    if (isUploadingMedia) {
-      setError("Iltimos, rasm yuklanib bo'lishini kuting.");
-      return;
-    }
-    if (uploads.poster.status === "error") {
-      setError(`Poster upload failed: ${uploads.poster.message || "please retry"}`);
-      return;
-    }
-    if (uploads.backdrop.status === "error") {
-      setError(`Backdrop upload failed: ${uploads.backdrop.message || "please retry"}`);
-      return;
-    }
-
-    setSaving(true);
-    setError("");
-
-    try {
-      const normalizedGenres = Array.from(
-        new Set((form.genre || []).map((g) => g.trim().toLowerCase().replace(/[_\s]+/g, "-")).filter(Boolean))
-      );
-      await adminUpdateSeries(token, id, { ...form, genre: normalizedGenres });
-      alert("Series saved!");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Xatolik yuz berdi");
-    } finally {
-      setSaving(false);
-    }
+  const saveSeriesInfo = async (data: CreateSeriesData) => {
+    if (!token || !id) throw new Error("Tizimga qayta kiring");
+    await adminUpdateSeries(token, id, data);
+    setForm(data);
+    toast.success("Serial ma'lumotlari saqlandi");
   };
 
-  const handleUpload = async (type: "poster" | "backdrop", file: File) => {
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
-      setUploads(prev => ({
-        ...prev,
-        [type]: { status: "error", message: "Invalid file type. Allowed: jpg, png, webp" }
-      }));
-      return;
-    }
-
-    if (!token) {
-      setUploads(prev => ({
-        ...prev,
-        [type]: { status: "error", message: "No auth token available" }
-      }));
-      return;
-    }
-
-    setUploads(prev => ({
-      ...prev,
-      [type]: { status: "uploading", progress: 0 }
-    }));
-
-    const onUploadProgress = (uploadProgress: UploadProgressInfo) => {
-      setUploads(prev => ({
-        ...prev,
-        [type]: {
-          status: "uploading",
-          progress: uploadProgress.progress,
-          uploadedMB: uploadProgress.uploadedMB,
-          totalMB: uploadProgress.total ? uploadProgress.total / 1024 / 1024 : undefined,
-          speedMBps: uploadProgress.speedMBps,
-          etaSeconds: uploadProgress.etaSeconds,
-        }
-      }));
-    };
-
-    try {
-      const result = await uploadSeriesImage(token, file, type, onUploadProgress);
-
-      setUploads(prev => ({
-        ...prev,
-        [type]: { status: "success", message: result.url, tempKey: result.file_key, progress: 100 }
-      }));
-
-      if (type === "poster") {
-        setForm(prev => ({ ...prev, poster_url: result.url }));
-      } else {
-        setForm(prev => ({ ...prev, backdrop_url: result.url }));
-      }
-    } catch (err) {
-      setUploads(prev => ({
-        ...prev,
-        [type]: {
-          status: "error",
-          message: err instanceof Error ? err.message : "Upload failed"
-        }
-      }));
-    }
+  // Next free numbers so adding seasons/episodes needs no typing.
+  const nextSeasonNumber = () => Math.max(0, ...seasons.map((x) => x.season.season_number || 0)) + 1;
+  const nextEpisodeNumber = (seasonId: string) => {
+    const eps = seasons.find((x) => x.season.id === seasonId)?.episodes ?? [];
+    return Math.max(0, ...eps.map((e) => e.episode_number || 0)) + 1;
   };
-
-  const handleImageFileChange = (type: "poster" | "backdrop") => (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (file) {
-      void handleUpload(type, file);
-    }
+  const openAddSeason = () => {
+    const n = nextSeasonNumber();
+    setNewSeason({ season_number: n, title: `${n}-fasl`, poster_url: "", description: "" });
+    setShowAddSeason(true);
   };
-
-  // Wrap the plain name + base description into the site's standard SEO
-  // title/description. Idempotent — safe to click twice or on an already-generated
-  // series (the old wrapper is stripped before re-wrapping).
-  const applySeoTemplate = () => {
-    setForm((prev) => ({
-      ...prev,
-      title: buildSeoTitle(prev.title, prev.year),
-      description: buildSeoDescription(prev.title, prev.year, prev.description),
-    }));
-  };
-
-  const addGenre = () => {
-    const g = genreInput.trim().toLowerCase().replace(/\s+/g, "-");
-    if (g && !(form.genre || []).includes(g)) {
-      setForm({ ...form, genre: [...(form.genre || []), g] });
-    }
-    setGenreInput("");
-  };
-
-  const removeGenre = (g: string) => {
-    setForm({ ...form, genre: (form.genre || []).filter((x) => x !== g) });
-  };
-
-  const toggleGenre = (g: string) => {
-    if ((form.genre || []).includes(g)) {
-      removeGenre(g);
-    } else {
-      setForm({ ...form, genre: [...(form.genre || []), g] });
-    }
+  const openAddEpisode = (seasonId: string) => {
+    const n = nextEpisodeNumber(seasonId);
+    setNewEpisode({ episode_number: n, title: `${n}-qism`, description: "", thumbnail_url: "", video_url: "", duration: 0 });
+    resetEpisodeUpload();
+    setActiveSeasonId(seasonId);
+    setExpandedSeasons((prev) => new Set(prev).add(seasonId));
   };
 
   const handleAddSeason = async (e: React.FormEvent) => {
@@ -575,7 +425,7 @@ export default function EditSeriesPage() {
       const nextNumber = newEpisode.episode_number + 1;
       setNewEpisode({
         episode_number: nextNumber,
-        title: "",
+        title: `${nextNumber}-qism`,
         description: "",
         thumbnail_url: "",
         video_url: "",
@@ -798,37 +648,6 @@ export default function EditSeriesPage() {
     });
   };
 
-  const renderUploadProgress = (state: UploadState, type: string) => {
-    const progress = state.progress ?? 0;
-    const speed = formatSpeed(state.speedMBps);
-    const eta = formatETA(state.etaSeconds);
-
-    return (
-      <div className="upload-progress">
-        <Loader2 size={20} className="animate-spin" />
-        <div className="progress-content">
-          <span>
-            {state.progress !== undefined
-              ? `Uploading ${type}: ${progress}%`
-              : `Uploading ${type}: ${(state.uploadedMB ?? 0).toFixed(1)} MB`}
-          </span>
-          {state.progress !== undefined && (
-            <div className="progress-bar">
-              <div className="progress-fill" style={{ width: `${progress}%` }} />
-            </div>
-          )}
-          <div className="progress-meta">
-            {speed && <span>Speed: {speed}</span>}
-            {eta && <span>ETA: {eta}</span>}
-            {state.progress === undefined && state.uploadedMB !== undefined && (
-              <span>Uploaded: {state.uploadedMB.toFixed(1)} MB</span>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -837,329 +656,49 @@ export default function EditSeriesPage() {
     );
   }
 
+  const episodesCount = seasons.reduce((n, x) => n + x.episodes.length, 0);
+
   return (
-    <div className="p-4 sm:p-8 max-w-5xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center gap-4 mb-6">
-        <Link
-          href="/admin/series"
-          className="p-2 hover:bg-brand-card rounded-lg transition-colors"
-        >
-          <ArrowLeft className="w-5 h-5 text-gray-400" />
-        </Link>
-        <div>
-          <h1 className="text-2xl font-bold text-white">Tahrirlash</h1>
-          <p className="text-gray-400 text-sm mt-1">{form.title}</p>
-        </div>
-      </div>
+    <div className="p-4 sm:p-8">
+      <AdminPageHeader
+        backHref="/admin/series"
+        backLabel="Seriallar"
+        title={form.title || "Serial"}
+        subtitle={<span className="font-mono text-xs">{seriesCode ? `#${seriesCode} · ` : ""}/series/{form.slug}</span>}
+        actions={
+          <a href="#seasons" className="rounded-xl border border-white/10 px-3 py-2 text-sm text-gray-300 hover:bg-white/5">
+            Fasllar va qismlar ↓
+          </a>
+        }
+      />
 
-      {error && (
-        <div className="bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded-lg mb-6">
-          {error}
-        </div>
-      )}
+      {error && <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</div>}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Left: Series Info */}
-        <div>
-          <h2 className="text-lg font-semibold text-white mb-4">Series ma'lumotlari</h2>
-          <form onSubmit={handleSaveSeries} className="space-y-4">
-            {/* Title */}
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">
-                Title *
-              </label>
-              <input
-                type="text"
-                value={form.title}
-                onChange={(e) => setForm({ ...form, title: e.target.value })}
-                className="w-full px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
-                required
-              />
-            </div>
+      <SeriesInfoForm
+        mode="edit"
+        token={token}
+        initial={form}
+        onSubmit={saveSeriesInfo}
+        previewHref={form.slug ? `/series/${form.slug}` : undefined}
+        code={seriesCode}
+        seasonsCount={seasons.length}
+        episodesCount={episodesCount}
+      />
 
-            {/* Slug */}
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">
-                Slug <span className="text-gray-500">(lowercase, hyphens)</span>
-              </label>
-              <input
-                type="text"
-                value={form.slug}
-                onChange={(e) => setForm({ ...form, slug: e.target.value.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") })}
-                className="w-full px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white font-mono focus:outline-none focus:border-brand-red"
-              />
-            </div>
-
-            {seriesCode && (
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Serial kodi
-                </label>
-                <div className="w-full px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white font-mono">
-                  {seriesCode}
-                </div>
-              </div>
-            )}
-
-            {/* Description */}
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Description</label>
-              <textarea
-                value={form.description}
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
-                rows={3}
-                className="w-full px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
-              />
-            </div>
-
-            {/* Auto-fill SEO title + description from the plain name/year/description */}
-            <div className="flex flex-col gap-2 rounded-lg border border-brand-border bg-brand-card/60 p-3">
-              <p className="text-xs text-gray-500 leading-relaxed">
-                Faqat serial nomini, yilini va qisqa tavsifini kiriting — tugmani
-                bosing, SEO sarlavha va tavsif avtomatik yoziladi.
-              </p>
-              <button
-                type="button"
-                onClick={applySeoTemplate}
-                className="flex items-center justify-center gap-2 rounded-lg border border-brand-red/40 bg-brand-red/10 px-4 py-2 text-sm font-medium text-brand-red transition-colors hover:bg-brand-red/20"
-              >
-                <Sparkles size={16} />
-                SEO shablonni qo'llash
-              </button>
-            </div>
-
-            {/* Poster & Backdrop - Movie-Style Uploads */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">Poster</label>
-                <div className="upload-box">
-                  {uploads.poster.status === "uploading" && (
-                    renderUploadProgress(uploads.poster, "poster")
-                  )}
-                  {uploads.poster.status === "success" && (
-                    <div className="upload-status success">
-                      <CheckCircle size={20} />
-                      <span>Uploaded successfully</span>
-                    </div>
-                  )}
-                  {uploads.poster.status === "error" && (
-                    <div className="upload-status error">
-                      <AlertCircle size={20} />
-                      <span>{uploads.poster.message}</span>
-                    </div>
-                  )}
-                  {uploads.poster.status !== "uploading" && (
-                    <>
-                      <input
-                        type="file"
-                        accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
-                        onChange={handleImageFileChange("poster")}
-                        className="hidden"
-                        id="series-poster-upload"
-                      />
-                      <label htmlFor="series-poster-upload" className="upload-label">
-                        <Upload size={20} />
-                        <span>Choose poster image (jpg, png, webp)</span>
-                      </label>
-                    </>
-                  )}
-                </div>
-                {form.poster_url && (
-                  <MediaImage
-                    src={normalizeMediaUrl(form.poster_url)}
-                    alt="Poster preview"
-                    className="mt-2 h-24 rounded object-cover border border-brand-border"
-                  />
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">Backdrop</label>
-                <div className="upload-box">
-                  {uploads.backdrop.status === "uploading" && (
-                    renderUploadProgress(uploads.backdrop, "backdrop")
-                  )}
-                  {uploads.backdrop.status === "success" && (
-                    <div className="upload-status success">
-                      <CheckCircle size={20} />
-                      <span>Uploaded successfully</span>
-                    </div>
-                  )}
-                  {uploads.backdrop.status === "error" && (
-                    <div className="upload-status error">
-                      <AlertCircle size={20} />
-                      <span>{uploads.backdrop.message}</span>
-                    </div>
-                  )}
-                  {uploads.backdrop.status !== "uploading" && (
-                    <>
-                      <input
-                        type="file"
-                        accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
-                        onChange={handleImageFileChange("backdrop")}
-                        className="hidden"
-                        id="series-backdrop-upload"
-                      />
-                      <label htmlFor="series-backdrop-upload" className="upload-label">
-                        <Upload size={20} />
-                        <span>Choose backdrop image (jpg, png, webp)</span>
-                      </label>
-                    </>
-                  )}
-                </div>
-                {form.backdrop_url && (
-                  <MediaImage
-                    src={normalizeMediaUrl(form.backdrop_url)}
-                    alt="Backdrop preview"
-                    className="mt-2 h-24 rounded object-cover border border-brand-border w-full"
-                  />
-                )}
-              </div>
-            </div>
-
-            {/* Year & Country */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">Year</label>
-                <input
-                  type="number"
-                  value={form.year}
-                  onChange={(e) => setForm({ ...form, year: parseInt(e.target.value) || 2024 })}
-                  className="w-full px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">Country</label>
-                <input
-                  type="text"
-                  value={form.country}
-                  onChange={(e) => setForm({ ...form, country: e.target.value })}
-                  className="w-full px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
-                />
-              </div>
-            </div>
-
-            {/* Quality */}
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Sifat (Quality)</label>
-              <select
-                value={form.quality}
-                onChange={(e) => setForm({ ...form, quality: e.target.value })}
-                className="w-full px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white focus:outline-none focus:border-brand-red"
-              >
-                <option value="480p">480p</option>
-                <option value="720p">720p</option>
-                <option value="1080p">1080p</option>
-                <option value="1080p Ultra">1080p Ultra</option>
-                <option value="4K">4K</option>
-              </select>
-            </div>
-            {/* Genres */}
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">Janrlar</label>
-
-              {/* Quick-select chips */}
-              <div className="flex flex-wrap gap-2 mb-3">
-                {GENRE_OPTIONS.map((g) => {
-                  const selected = (form.genre || []).includes(g);
-                  return (
-                    <button
-                      key={g}
-                      type="button"
-                      onClick={() => toggleGenre(g)}
-                      className={`text-xs px-3 py-1.5 rounded-full border transition-colors capitalize ${
-                        selected
-                          ? "bg-brand-red border-brand-red text-white"
-                          : "border-brand-border text-gray-400 hover:border-gray-500 hover:text-white"
-                      }`}
-                    >
-                      {g}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Custom genre input */}
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={genreInput}
-                  onChange={(e) => setGenreInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addGenre();
-                    }
-                  }}
-                  placeholder="Boshqa janr..."
-                  className="flex-1 px-4 py-2 bg-brand-card border border-brand-border rounded-lg text-white text-sm focus:outline-none focus:border-brand-red"
-                />
-                <button
-                  type="button"
-                  onClick={addGenre}
-                  className="px-3 py-2 bg-brand-border hover:bg-gray-600 text-white rounded-lg transition-colors"
-                >
-                  <Plus size={16} />
-                </button>
-              </div>
-
-              {/* Selected genres */}
-              {(form.genre || []).length > 0 && (
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {(form.genre || []).map((g) => (
-                    <span
-                      key={g}
-                      className="flex items-center gap-1.5 text-xs bg-brand-red/20 text-brand-red border border-brand-red/30 px-2.5 py-1 rounded-full capitalize"
-                    >
-                      {g}
-                      <button
-                        type="button"
-                        onClick={() => removeGenre(g)}
-                        className="hover:text-white"
-                      >
-                        <X size={11} />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Premium */}
-            <div className="flex items-center gap-3">
-              <input
-                type="checkbox"
-                id="is_premium"
-                checked={form.is_premium}
-                onChange={(e) => setForm({ ...form, is_premium: e.target.checked })}
-                className="w-4 h-4 rounded bg-brand-card border-brand-border text-brand-red"
-              />
-              <label htmlFor="is_premium" className="text-gray-300">Premium content</label>
-            </div>
-
-            {/* Save Button */}
-            <button
-              type="submit"
-              disabled={saving || isUploadingMedia}
-              className="w-full flex items-center justify-center gap-2 bg-brand-red hover:bg-orange-700 text-white px-6 py-3 rounded-lg font-medium transition-colors disabled:opacity-50"
-            >
-              {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
-              Saqlash
-            </button>
-          </form>
-        </div>
-
-        {/* Right: Seasons & Episodes */}
+      <div id="seasons" className="mt-8 scroll-mt-24 rounded-2xl border border-white/10 bg-[#12121a] p-5 sm:p-6">
+        {/* Seasons & Episodes */}
         <div>
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-white">Seasonlar va Epizodlar</h2>
+            <div>
+              <h2 className="font-semibold text-white">Fasllar va qismlar</h2>
+              <p className="text-xs text-gray-500">{seasons.length} fasl · {episodesCount} qism · qismlarni sudrab tartiblash mumkin</p>
+            </div>
             <button
-              onClick={() => setShowAddSeason(!showAddSeason)}
+              onClick={() => (showAddSeason ? setShowAddSeason(false) : openAddSeason())}
               className="flex items-center gap-1 text-sm text-brand-red hover:text-orange-400"
             >
               <PlusCircle className="w-4 h-4" />
-              Season qo'shish
+              Fasl qo&apos;shish
             </button>
           </div>
 
@@ -1296,7 +835,7 @@ export default function EditSeriesPage() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          setActiveSeasonId(s.season.id);
+                          openAddEpisode(s.season.id);
                         }}
                         className="p-2 text-brand-red hover:text-orange-400"
                       >
