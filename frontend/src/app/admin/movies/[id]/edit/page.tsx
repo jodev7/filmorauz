@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
-import { ChevronLeft, Loader2 } from "lucide-react";
 import MovieForm from "@/components/MovieForm";
+import AdminPageHeader from "@/components/admin/form/PageHeader";
+import { useToast } from "@/components/admin/Toast";
 import { useAuth } from "@/lib/auth-context";
 import { adminUpdateMovie, adminGetMovie, Movie, MovieInput } from "@/lib/api";
 
@@ -21,6 +22,7 @@ function normalizeGenreValue(value: string): string {
 export default function EditMoviePage() {
   const { token } = useAuth();
   const router = useRouter();
+  const toast = useToast();
   const params = useParams();
   const id = params.id as string;
 
@@ -33,21 +35,28 @@ export default function EditMoviePage() {
     // Fetch this one movie by id (the old "load 500 and find" missed older titles).
     adminGetMovie(token, id)
       .then(setMovie)
-      .catch((err) => setError(err instanceof Error && err.message === "not_found" ? "Movie not found" : "Failed to load movie"))
+      .catch((err) => setError(err instanceof Error && err.message === "not_found" ? "Kino topilmadi" : "Kinoni yuklab bo'lmadi"))
       .finally(() => setLoading(false));
   }, [token, id]);
 
   const handleSubmit = async (data: MovieInput) => {
     if (!token) throw new Error("Not authenticated");
     await adminUpdateMovie(token, id, data);
-    router.push("/admin/movies");
+    toast.success("O'zgarishlar saqlandi");
   };
 
   if (loading) {
     return (
-      <div className="p-8 flex items-center gap-2 text-gray-500">
-        <Loader2 size={18} className="animate-spin" />
-        Loading movie...
+      <div className="p-4 sm:p-8">
+        <div className="mb-6 h-8 w-64 animate-pulse rounded-lg bg-white/5" />
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="space-y-6">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="h-56 animate-pulse rounded-2xl bg-white/5" />
+            ))}
+          </div>
+          <div className="h-80 animate-pulse rounded-2xl bg-white/5" />
+        </div>
       </div>
     );
   }
@@ -55,12 +64,9 @@ export default function EditMoviePage() {
   if (error || !movie) {
     return (
       <div className="p-8">
-        <p className="text-red-400">{error || "Movie not found"}</p>
-        <Link
-          href="/admin/movies"
-          className="text-sm text-brand-red hover:underline mt-2 block"
-        >
-          ← Back to movies
+        <p className="text-red-400">{error || "Kino topilmadi"}</p>
+        <Link href="/admin/movies" className="mt-2 block text-sm text-orange-400 hover:underline">
+          ← Kinolarga qaytish
         </Link>
       </div>
     );
@@ -92,26 +98,34 @@ export default function EditMoviePage() {
     director: movie.director ?? "",
   };
 
-  return (
-    <div className="p-8">
-      {/* Header */}
-      <div className="mb-8">
-        <Link
-          href="/admin/movies"
-          className="flex items-center gap-1 text-sm text-gray-500 hover:text-white mb-4 transition-colors"
-        >
-          <ChevronLeft size={16} />
-          Back to Movies
-        </Link>
-        <h1 className="text-2xl font-bold text-white">Edit Movie</h1>
-        <p className="text-gray-500 text-sm mt-1 font-mono">{movie.slug}</p>
-      </div>
+  const statusBadge =
+    movie.approval_status === "pending" ? (
+      <span className="rounded-full bg-yellow-500/15 px-2 py-0.5 text-xs font-medium text-yellow-300">Kutmoqda</span>
+    ) : movie.approval_status === "rejected" ? (
+      <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-medium text-red-300">Rad etilgan</span>
+    ) : (
+      <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-300">Saytda</span>
+    );
 
+  return (
+    <div className="p-4 sm:p-8">
+      <AdminPageHeader
+        backHref="/admin/movies"
+        backLabel="Kinolar"
+        title={movie.title}
+        badges={statusBadge}
+        subtitle={
+          <span className="font-mono text-xs">
+            {movie.code ? `#${movie.code} · ` : ""}/movies/{movie.slug}
+          </span>
+        }
+      />
       <MovieForm
         initialData={initialData}
         onSubmit={handleSubmit}
-        submitLabel="Update Movie"
+        submitLabel="Saqlash"
         token={token ?? undefined}
+        previewHref={movie.approval_status === "approved" || !movie.approval_status ? `/movies/${movie.slug}` : undefined}
       />
     </div>
   );
