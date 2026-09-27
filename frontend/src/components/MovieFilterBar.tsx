@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { SlidersHorizontal, X } from "lucide-react";
 import { getMovieFilterFacets, MovieFilterFacets } from "@/lib/api";
+import { localizeSingleCountry } from "@/lib/localization";
 
 const FILTER_KEYS = ["year_from", "year_to", "min_rating", "country", "duration", "free", "sort"] as const;
 
@@ -115,7 +116,7 @@ export default function MovieFilterBar() {
             <select value={v("country")} onChange={(e) => update("country", e.target.value)} className={selectCls}>
               <option value="">Istalgan</option>
               {(facets?.countries || []).map((c) => (
-                <option key={c} value={c}>{c}</option>
+                <option key={c} value={c}>{localizeSingleCountry(c)}</option>
               ))}
             </select>
           </label>

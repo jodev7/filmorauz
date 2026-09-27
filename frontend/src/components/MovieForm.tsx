@@ -21,7 +21,8 @@ import MediaUploadField from "@/components/admin/form/MediaUploadField";
 import ContentPreviewCard from "@/components/admin/form/ContentPreviewCard";
 import DraftBanner from "@/components/admin/form/DraftBanner";
 import { useDraft } from "@/components/admin/form/useDraft";
-import { COUNTRY_SUGGESTIONS, QUALITIES } from "@/components/admin/form/constants";
+import { normalizeCountry, normalizeQuality, qualityOptions, splitCountries, toSiteCountries } from "@/components/admin/form/constants";
+import { useSiteCountries } from "@/components/admin/form/useSiteCountries";
 
 
 const SOURCE_TYPES: { value: VideoSourceType; label: string; description: string; icon: typeof Film }[] = [
@@ -77,11 +78,14 @@ export default function MovieForm({ initialData, onSubmit, submitLabel = "Saqlas
       ...(initialData ?? {}),
       genre: Array.isArray(initialData?.genre) ? initialData!.genre.map(normalizeGenre).filter(Boolean) : [],
       cast: initialData?.cast ?? [],
+      quality: normalizeQuality(initialData?.quality) || emptyForm.quality,
+      country: normalizeCountry(initialData?.country),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
   const [form, setForm] = useState<MovieInput>(initial);
+  const siteCountries = useSiteCountries();
   const [saved, setSaved] = useState(JSON.stringify(initial));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -316,10 +320,10 @@ export default function MovieForm({ initialData, onSubmit, submitLabel = "Saqlas
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Davlat" hint="Bir nechta bo'lsa vergul bilan">
                 <ChipsInput
-                  value={form.country ? form.country.split(",").map((s) => s.trim()).filter(Boolean) : []}
+                  value={toSiteCountries(splitCountries(form.country), siteCountries)}
                   onChange={(v) => set("country", v.join(", "))}
-                  placeholder="USA"
-                  suggestions={COUNTRY_SUGGESTIONS.slice(0, 6)}
+                  placeholder="Masalan: Janubiy Koreya"
+                  suggestions={siteCountries.slice(0, 10)}
                   max={5}
                 />
               </Field>
@@ -328,7 +332,7 @@ export default function MovieForm({ initialData, onSubmit, submitLabel = "Saqlas
               </Field>
             </div>
             <Field label="Sifat">
-              <Segmented ariaLabel="Sifat" value={form.quality || "1080p"} options={QUALITIES.map((q) => ({ value: q, label: q }))} onChange={(v) => set("quality", v)} />
+              <Segmented ariaLabel="Sifat" value={form.quality || "1080p"} options={qualityOptions(form.quality)} onChange={(v) => set("quality", v)} />
             </Field>
             <div className="grid gap-4 sm:grid-cols-[1fr_220px]">
               <Field label="Aktyorlar" hint="Enter yoki vergul bilan; ro'yxatni birdan qo'yish ham mumkin">

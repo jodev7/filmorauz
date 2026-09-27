@@ -13,7 +13,8 @@ import MediaUploadField from "@/components/admin/form/MediaUploadField";
 import ContentPreviewCard from "@/components/admin/form/ContentPreviewCard";
 import DraftBanner from "@/components/admin/form/DraftBanner";
 import { useDraft } from "@/components/admin/form/useDraft";
-import { COUNTRY_SUGGESTIONS, QUALITIES } from "@/components/admin/form/constants";
+import { normalizeCountry, normalizeQuality, qualityOptions, splitCountries, toSiteCountries } from "@/components/admin/form/constants";
+import { useSiteCountries } from "@/components/admin/form/useSiteCountries";
 
 export const EMPTY_SERIES: CreateSeriesData = {
   title: "",
@@ -61,11 +62,15 @@ export default function SeriesInfoForm({
   episodesCount?: number;
 }) {
   const start = useMemo<CreateSeriesData>(
-    () => ({ ...EMPTY_SERIES, ...(initial ?? {}), genre: (initial?.genre ?? []).map(normalizeGenre) }),
+    () => ({ ...EMPTY_SERIES, ...(initial ?? {}), genre: (initial?.genre ?? []).map(normalizeGenre),
+      quality: normalizeQuality(initial?.quality) || EMPTY_SERIES.quality,
+      country: normalizeCountry(initial?.country),
+    }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
   const [form, setForm] = useState<CreateSeriesData>(start);
+  const siteCountries = useSiteCountries();
   const [saved, setSaved] = useState(JSON.stringify(start));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -257,15 +262,15 @@ export default function SeriesInfoForm({
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Davlat">
                 <ChipsInput
-                  value={form.country ? form.country.split(",").map((s) => s.trim()).filter(Boolean) : []}
+                  value={toSiteCountries(splitCountries(form.country), siteCountries)}
                   onChange={(v) => set("country", v.join(", "))}
                   placeholder="South Korea"
-                  suggestions={COUNTRY_SUGGESTIONS.slice(0, 6)}
+                  suggestions={siteCountries.slice(0, 10)}
                   max={5}
                 />
               </Field>
               <Field label="Sifat">
-                <Segmented ariaLabel="Sifat" value={form.quality || "1080p"} options={QUALITIES.map((q) => ({ value: q, label: q }))} onChange={(v) => set("quality", v)} />
+                <Segmented ariaLabel="Sifat" value={form.quality || "1080p"} options={qualityOptions(form.quality)} onChange={(v) => set("quality", v)} />
               </Field>
             </div>
           </FormSection>

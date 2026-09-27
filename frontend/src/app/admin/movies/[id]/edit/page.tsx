@@ -5,6 +5,7 @@ import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import MovieForm from "@/components/MovieForm";
 import AdminPageHeader from "@/components/admin/form/PageHeader";
+import { bestQuality } from "@/components/admin/form/constants";
 import { useToast } from "@/components/admin/Toast";
 import { useAuth } from "@/lib/auth-context";
 import { adminUpdateMovie, adminGetMovie, Movie, MovieInput } from "@/lib/api";
@@ -91,7 +92,7 @@ export default function EditMoviePage() {
     embed_url: movie.embed_url,
     source_type: sourceType,
     duration: movie.duration,
-    quality: movie.quality,
+    quality: movie.quality || movie.default_quality || bestQuality(movie.available_qualities?.length ? movie.available_qualities : movie.generated_qualities),
     is_premium: movie.is_premium ?? false,
     slug: movie.slug,
     cast: movie.cast ?? [],
