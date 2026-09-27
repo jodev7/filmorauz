@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 export const dynamic = "force-dynamic";
 import dynamicImport from "next/dynamic";
 import { notFound } from "next/navigation";
-import Script from "next/script";
 import Link from "next/link";
 import { Clock, Calendar, Globe, ChevronLeft } from "lucide-react";
 import Navbar from "@/components/Navbar";
@@ -17,7 +16,9 @@ import MovieWatchSection from "@/components/MovieWatchSection";
 import MediaTitle from "@/components/MediaTitle";
 import { WatchPlayerProvider } from "@/lib/watch-player-context";
 import { isMoviePremium, PremiumBadge } from "@/components/PremiumComponents";
-import { getMovie, getRecommendations } from "@/lib/api";
+import { getMovie, getRecommendations, getTopReviewsForSeo, reviewsToJsonLd, personPath } from "@/lib/api";
+import JsonLd from "@/components/JsonLd";
+import PersonChip from "@/components/PersonChip";
 import { getTranslations } from "@/lib/i18n-server";
 import { formatDuration } from "@/lib/movie-utils";
 import { normalizeMediaUrl } from "@/lib/image-utils";
@@ -33,8 +34,10 @@ import {
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 const MovieActions = dynamicImport(() => import("@/components/MovieActions"));
+const LibraryButtons = dynamicImport(() => import("@/components/LibraryButtons"));
 const StarRating = dynamicImport(() => import("@/components/StarRating"));
 const Comments = dynamicImport(() => import("@/components/Comments"));
+const Reviews = dynamicImport(() => import("@/components/Reviews"));
 const ShareButton = dynamicImport(() => import("@/components/ShareButton"));
 const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
 
@@ -183,6 +186,17 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
       target: `${movieUrl}?play=1`,
     },
   };
+  // Top written reviews (if any) — eligible for review snippets.
+  const topReviews = await getTopReviewsForSeo("movie", movie.id);
+  if (topReviews.length > 0) {
+    movieJsonLd.review = reviewsToJsonLd(topReviews);
+  }
+  if (movie.cast && movie.cast.length > 0) {
+    movieJsonLd.actor = movie.cast.slice(0, 10).map((name) => ({ "@type": "Person", name, url: `${SITE_URL}${personPath(name)}` }));
+  }
+  if (movie.director) {
+    movieJsonLd.director = { "@type": "Person", name: movie.director };
+  }
   if (movie.rating_count && movie.rating_count > 0 && movie.rating_avg) {
     movieJsonLd.aggregateRating = {
       "@type": "AggregateRating",
@@ -215,28 +229,16 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
   return (
     <>
       {/* Breadcrumbs JSON-LD */}
-      <Script
-        id="breadcrumb-schema"
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
-      />
+      <JsonLd data={breadcrumbJsonLd} />
       {/* Movie JSON-LD */}
-      <Script
-        id="movie-schema"
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(movieJsonLd) }}
-      />
+      <JsonLd data={movieJsonLd} />
       {/* VideoObject JSON-LD — drives Google Video Search */}
-      <Script
-        id="video-schema"
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(videoJsonLd) }}
-      />
+      <JsonLd data={videoJsonLd} />
       <Navbar />
       <WatchPlayerProvider initialOpen={autoOpenPlayer}>
       <main className="min-h-screen">
         {/* Backdrop hero */}
-        <div className="relative h-[50vh] sm:h-[55vh] min-h-[300px] sm:min-h-[380px]">
+        <div className="relative h-[36vh] sm:h-[55vh] min-h-[240px] sm:min-h-[380px]">
           <MediaImage
             src={movie.backdrop_url || movie.poster_url}
             alt={movie.title}
@@ -248,40 +250,34 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
         </div>
 
         {/* Main content */}
-        <div className="max-w-7xl mx-auto px-4 -mt-24 sm:-mt-32 relative">
-          <div className="flex flex-col md:flex-row gap-6 sm:gap-8">
-            {/* Poster */}
+        <div className="max-w-7xl mx-auto px-4 -mt-28 sm:-mt-36 relative">
+          {/* Header: poster beside title on every screen size */}
+          <div className="flex gap-4 sm:gap-6 md:gap-8">
             <div className="shrink-0">
               <MoviePoster
                 src={movie.poster_url}
                 alt={localizedTitle}
-                className="w-36 sm:w-44 md:w-48 lg:w-56 rounded-xl shadow-2xl border border-white/10"
+                className="w-28 sm:w-40 md:w-48 lg:w-56 rounded-xl shadow-2xl border border-white/10"
               />
             </div>
 
-            {/* Details */}
-            <div className="flex-1 pt-2 md:pt-6 sm:pt-8">
+            <div className="min-w-0 flex-1 pt-10 sm:pt-16 md:pt-24">
               <Link
                 href="/movies"
-                className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-white mb-3 sm:mb-4 transition-colors"
+                className="hidden sm:inline-flex items-center gap-1 text-sm text-gray-400 hover:text-white mb-3 transition-colors"
               >
                 <ChevronLeft size={16} />
                 {t("common.backToMovies")}
               </Link>
 
-              {/* Movie code with copy button */}
-              <div className="mb-3">
-                <MovieCode code={movie.code} />
-              </div>
-
-              <h1 className="font-display text-3xl sm:text-4xl md:text-5xl lg:text-6xl text-white tracking-wide leading-none mb-3 flex flex-wrap items-center gap-3">
+              <h1 className="font-display text-2xl sm:text-4xl md:text-5xl lg:text-6xl text-white tracking-wide leading-none mb-3 flex flex-wrap items-center gap-2 sm:gap-3">
                 <MediaTitle title={localizedTitle} />
                 {isMoviePremium(movie) && (
                   <PremiumBadge size="default" showCrown />
                 )}
               </h1>
 
-              <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-sm text-gray-400 mb-4">
+              <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-400 mb-3 sm:mb-4">
                 <span className="flex items-center gap-1">
                   <Calendar size={14} />
                   {movie.year}
@@ -306,7 +302,7 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
               </div>
 
               {movieGenres.length > 0 && (
-                <div className="flex flex-wrap gap-2 mb-5">
+                <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-3">
                   {movieGenres.map((g) => (
                     <Link
                       key={g}
@@ -319,40 +315,73 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
                 </div>
               )}
 
-              <p className="text-gray-300 leading-relaxed max-w-2xl mb-6 sm:mb-8 text-sm sm:text-base">
-                {localizedDescription}
-              </p>
 
-              <div className="flex flex-wrap items-center gap-4">
-                <WatchButton
-                  movieSlug={movie.slug}
-                  movieTitle={localizedTitle}
-                  isPremium={isMoviePremium(movie)}
-                />
-
-                <WatchTogetherButton
-                  contentType="movie"
-                  contentID={movie.id}
-                  className="inline-flex items-center gap-1.5 px-4 py-3 glass-card border border-white/10 hover:border-brand-red rounded-xl text-sm text-white transition-colors"
-                />
-
-                <ShareButton
-                  movieId={movie.id}
-                  movieTitle={localizedTitle}
-                  movieSlug={movie.slug}
-                />
-                
-                <div className="flex items-center gap-4">
-                  <MovieActions movie={movie} />
-                </div>
-                
-                {/* Rating */}
-                <div className="flex items-center gap-2 mt-4">
-                  <StarRating movieId={movie.id} />
-                </div>
+              <div className="hidden sm:block">
+                <MovieCode code={movie.code} />
               </div>
             </div>
           </div>
+
+          {/* Body: full width on phones, aligned with the title column on desktop */}
+          <div className="mt-5 md:ml-[14rem] lg:ml-[16rem]">
+            <div className="sm:hidden mb-4">
+              <MovieCode code={movie.code} />
+            </div>
+
+            {/* Primary actions */}
+            <div className="flex flex-wrap items-center gap-3 [&>*:first-child]:w-full sm:[&>*:first-child]:w-auto">
+              <WatchButton
+                movieSlug={movie.slug}
+                movieTitle={localizedTitle}
+                isPremium={isMoviePremium(movie)}
+              />
+              <LibraryButtons targetType="movie" targetId={movie.id} title={localizedTitle} />
+            </div>
+
+            {/* Secondary actions */}
+            <div className="mt-3 flex flex-wrap items-center gap-2 sm:gap-3">
+              <WatchTogetherButton
+                contentType="movie"
+                contentID={movie.id}
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 glass-card border border-white/10 hover:border-brand-red rounded-xl text-sm text-white transition-colors"
+              />
+              <ShareButton
+                movieId={movie.id}
+                movieTitle={localizedTitle}
+                movieSlug={movie.slug}
+              />
+              <MovieActions movie={movie} />
+            </div>
+
+            <p className="mt-6 text-gray-300 leading-relaxed max-w-3xl text-sm sm:text-base">
+              {localizedDescription}
+            </p>
+
+            <div className="mt-4">
+              <StarRating movieId={movie.id} />
+            </div>
+          </div>
+
+          {/* Cast & crew */}
+          {(movie.director || (movie.cast && movie.cast.length > 0)) && (
+            <section className="mt-8" aria-labelledby="cast-title">
+              <h2 id="cast-title" className="font-display text-xl sm:text-2xl tracking-wide text-white mb-4">
+                ROLLARDA VA IJODKORLAR
+              </h2>
+              <ul className="scrollbar-hide -mx-4 flex gap-3 overflow-x-auto px-4 pb-2">
+                {movie.director && (
+                  <li className="shrink-0">
+                    <PersonChip name={movie.director} role="Rejissyor" />
+                  </li>
+                )}
+                {(movie.cast || []).slice(0, 15).map((name) => (
+                  <li key={name} className="shrink-0">
+                    <PersonChip name={name} role="Aktyor" />
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
         </div>
 
         {/* Inline player — opens here when "Tomosha qilish" is clicked */}
@@ -364,18 +393,19 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
           <WebsiteAdSlot placement="movie_detail_banner" variant="banner" />
         </div>
 
-        {/* Recommendations Section */}
+        {/* Similar titles */}
         {recommendations.length > 0 && (
           <section className="max-w-7xl mx-auto px-4 pb-8">
             <h2 className="font-display text-2xl sm:text-3xl tracking-wide text-white mb-6">
-              {t("movie.recommendations")}
+              O&apos;XSHASH KINOLAR
             </h2>
             <MovieCarousel movies={recommendations} />
           </section>
         )}
 
-        {/* Comments Section */}
+        {/* Reviews + Comments */}
         <section className="max-w-7xl mx-auto px-4 pb-12">
+          <Reviews targetType="movie" targetId={movie.id} />
           <Comments movieId={movie.id} />
         </section>
       </main>

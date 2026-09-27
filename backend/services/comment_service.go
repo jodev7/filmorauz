@@ -411,3 +411,24 @@ func (s *CommentService) checkLinks(content string) bool {
 
 	return false
 }
+
+// MarkSpoiler flags a freshly created comment as a spoiler.
+func (s *CommentService) MarkSpoiler(id primitive.ObjectID) error {
+	return s.commentRepo.SetSpoiler(id, true)
+}
+
+// CheckTextAllowed applies the comment moderation rules (banned words and,
+// when enabled, links) to other user text such as reviews.
+func (s *CommentService) CheckTextAllowed(text string) error {
+	settings, err := s.commentRepo.GetModerationSettings()
+	if err != nil || settings == nil {
+		return nil
+	}
+	if hit, _ := s.checkBannedWords(text, settings.BannedWords); hit {
+		return fmt.Errorf("matnda taqiqlangan so'z bor")
+	}
+	if settings.BlockLinks && s.checkLinks(text) {
+		return fmt.Errorf("havolalar ruxsat etilmagan")
+	}
+	return nil
+}

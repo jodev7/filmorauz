@@ -5,11 +5,12 @@ import (
 
 	"github.com/filmorauz/backend/handlers"
 	"github.com/filmorauz/backend/middleware"
+	"github.com/filmorauz/backend/repositories"
 	"github.com/filmorauz/backend/services"
 	"github.com/gin-gonic/gin"
 )
 
-func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler, contentHandler *handlers.ContentHandler, systemHandler *handlers.SystemHandler, deleteJobHandler *handlers.DeleteJobHandler, expenseHandler *handlers.ExpenseHandler, announcementHandler *handlers.AnnouncementHandler, gifHandler *handlers.GifHandler, analyticsHandler *handlers.AnalyticsHandler) {
+func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *handlers.AuthHandler, movieHandler *handlers.MovieHandler, homepageHandler *handlers.HomepageHandler, ingestionHandler *handlers.IngestionHandler, uploadHandler *handlers.UploadHandler, adminUserHandler *handlers.AdminUserHandler, userHandler *handlers.UserHandler, collectionHandler *handlers.CollectionHandler, authService *services.AuthService, ratingHandler *handlers.RatingHandler, commentHandler *handlers.CommentHandler, shareHandler *handlers.ShareHandler, seriesHandler *handlers.SeriesHandler, mediaHandler *handlers.MediaHandler, banAppealHandler *handlers.BanAppealHandler, notificationHandler *handlers.NotificationHandler, telegramHandler *handlers.TelegramHandler, clipHandler *handlers.ClipHandler, adHandler *handlers.AdHandler, telegramPostHandler *handlers.TelegramPostHandler, igScheduleHandler *handlers.InstagramScheduleHandler, publishJobHandler *handlers.PublishJobHandler, suggestionHandler *handlers.SuggestionHandler, premiumHandler *handlers.PremiumHandler, watchRoomHandler *handlers.WatchRoomHandler, presenceHandler *handlers.PresenceHandler, contentHandler *handlers.ContentHandler, systemHandler *handlers.SystemHandler, deleteJobHandler *handlers.DeleteJobHandler, expenseHandler *handlers.ExpenseHandler, announcementHandler *handlers.AnnouncementHandler, gifHandler *handlers.GifHandler, analyticsHandler *handlers.AnalyticsHandler, adminOverviewHandler *handlers.AdminOverviewHandler, auditLogHandler *handlers.AuditLogHandler, auditLogRepo *repositories.AuditLogRepository) {
 	r.GET("/sitemap.xml", sitemapHandler.GetSitemapIndex)
 	r.GET("/sitemap-static.xml", sitemapHandler.GetSitemapStatic)
 	r.GET("/sitemap-genres.xml", sitemapHandler.GetSitemapGenres)
@@ -304,6 +305,8 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	// Admin routes — protected by JWT and admin role check
 	admin := api.Group("/admin")
 	admin.Use(middleware.RequireAdmin(authService))
+	// Every mutating admin request is recorded (who / what / when).
+	admin.Use(middleware.AuditLog(auditLogRepo))
 	{
 		// Movie asset uploads
 		admin.POST("/movies/upload", uploadHandler.UploadMovieAssets)
@@ -321,6 +324,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		// Movie management
 		admin.GET("/movies", movieHandler.AdminListMovies)
 		admin.POST("/movies", movieHandler.CreateMovie)
+		admin.POST("/movies/bulk-update", movieHandler.BulkUpdateMovies)
 		admin.PUT("/movies/:id", movieHandler.UpdateMovie)
 		admin.DELETE("/movies/:id", movieHandler.DeleteMovie)
 		admin.PATCH("/movies/:id/approve", movieHandler.ApproveMovie)
@@ -369,6 +373,9 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 
 		// User management
 		admin.GET("/dashboard/stats", adminUserHandler.DashboardStats)
+		admin.GET("/overview", adminOverviewHandler.Overview)
+		admin.GET("/overview/badges", adminOverviewHandler.Badges)
+		admin.GET("/search", adminOverviewHandler.Search)
 		admin.GET("/analytics/top-movies", adminUserHandler.GetTopMovies)
 		admin.GET("/analytics/top-series", adminUserHandler.GetTopSeries)
 		admin.GET("/analytics/users", adminUserHandler.GetUserMetrics)
@@ -452,6 +459,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		admin.GET("/analytics/top-content", analyticsHandler.AdminTopContentByPeriod)
 		admin.GET("/analytics/completion-summary", analyticsHandler.AdminCompletionSummary)
 		admin.GET("/analytics/premium-funnel", analyticsHandler.AdminPremiumFunnel)
+		admin.GET("/analytics/timeseries", analyticsHandler.AdminDashboardTimeseries)
 		admin.GET("/analytics/playback-reports", analyticsHandler.AdminPlaybackReports)
 	}
 
@@ -493,6 +501,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	// Admin comment moderation - under /api/v1/admin/ (requires admin role)
 	v1Admin := v1.Group("/admin")
 	v1Admin.Use(middleware.RequireAdmin(authService))
+	v1Admin.Use(middleware.AuditLog(auditLogRepo))
 	{
 		v1Admin.GET("/comments", commentHandler.AdminGetComments)
 		v1Admin.PATCH("/comments/:id/status", commentHandler.AdminUpdateCommentStatus)
@@ -565,7 +574,11 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	// Superadmin-only ad management
 	superadmin := api.Group("/superadmin")
 	superadmin.Use(middleware.RequireSuperAdmin(authService))
+	superadmin.Use(middleware.AuditLog(auditLogRepo))
 	{
+		// Admin audit trail (read-only).
+		superadmin.GET("/audit-logs", auditLogHandler.List)
+
 		superadmin.GET("/ads", adHandler.AdminListAds)
 		superadmin.GET("/ads/stats", adHandler.AdminGetStats)
 		superadmin.POST("/ads", adHandler.AdminCreateAd)

@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import Logo from "@/components/Logo";
 import TelegramLoginModal from "@/components/TelegramLoginModal";
 import { useAuth } from "@/lib/auth-context";
-import { buyPremium, createPremiumStarsSession } from "@/lib/api";
+import { buyPremium, createPremiumStarsSession, recordPremiumEvent, safeReturnPath } from "@/lib/api";
 import {
   Crown,
   Check,
@@ -153,6 +154,15 @@ export default function PremiumPage() {
   const [starsFallbackUrl, setStarsFallbackUrl] = useState<string>("");
   const [manualLoadingPlan, setManualLoadingPlan] = useState<string | null>(null);
   const [manualMessage, setManualMessage] = useState<string>("");
+  // Where the viewer came from (e.g. a locked movie) — shown as context and
+  // offered as "continue watching" once premium is active.
+  const [returnPath, setReturnPath] = useState<string | null>(null);
+  const [returnTitle, setReturnTitle] = useState<string>("");
+  // Set after the Stars checkout opens in Telegram: we poll the profile so
+  // the page flips to "Premium faol" on its own when the payment lands.
+  const [awaitingPayment, setAwaitingPayment] = useState(false);
+  const [justActivated, setJustActivated] = useState(false);
+  const wasPremiumRef = useRef<boolean | null>(null);
 
   // Check if user is premium
   const isPremium = user?.is_premium === true || user?.is_premium_active === true;
@@ -163,6 +173,49 @@ export default function PremiumPage() {
   const canBuyStars = isLoggedIn && hasLinkedTelegram && !!token && !isPremium;
   const requiresLogin = !isLoggedIn;
   const requiresTelegramLink = isLoggedIn && !hasLinkedTelegram;
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setReturnPath(safeReturnPath(params.get("from")));
+    setReturnTitle((params.get("t") || "").slice(0, 120));
+  }, []);
+
+  // Detect the free → premium transition (Stars payment, wallet purchase,
+  // referral bonus …) and show the success card.
+  useEffect(() => {
+    if (!user) return;
+    if (wasPremiumRef.current === false && isPremium) {
+      setJustActivated(true);
+      setAwaitingPayment(false);
+    }
+    wasPremiumRef.current = isPremium;
+  }, [user, isPremium]);
+
+  // While waiting for a Stars payment: refresh every 5s (max 5 min) and
+  // whenever the user comes back to this tab from Telegram.
+  useEffect(() => {
+    if (!awaitingPayment || isPremium) return;
+    let tries = 0;
+    const tick = () => {
+      tries += 1;
+      if (tries > 60) {
+        setAwaitingPayment(false);
+        return;
+      }
+      void refreshUser();
+    };
+    const interval = window.setInterval(tick, 5000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refreshUser();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [awaitingPayment, isPremium, refreshUser]);
 
   const features = [
     {
@@ -277,6 +330,8 @@ export default function PremiumPage() {
       const session = await createPremiumStarsSession(token, packageId);
       const { webURL, appURL } = buildTelegramLinks(session.bot_url);
       setStarsFallbackUrl(webURL);
+      setAwaitingPayment(true);
+      recordPremiumEvent(token, "cta_click", { type: "premium_page", pkg: packageId });
 
       if (typeof window !== "undefined") {
         if (isMobileDevice()) {
@@ -332,6 +387,42 @@ export default function PremiumPage() {
     <>
       <Navbar />
       <main className="min-h-screen pt-20 sm:pt-24">
+        {/* Context / progress / success banner */}
+        {(justActivated || awaitingPayment || (returnPath && !isPremium)) && (
+          <div className="max-w-3xl mx-auto px-4 pt-4">
+            {justActivated ? (
+              <div role="status" className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 p-5 text-center">
+                <p className="text-lg font-semibold text-emerald-200">Premium faollashdi! 🎉</p>
+                <p className="mt-1 text-sm text-emerald-100/80">
+                  {premiumExpiresLabel ? `${premiumExpiresLabel} gacha amal qiladi.` : "Maroqli tomosha!"}
+                </p>
+                <Link
+                  href={returnPath || "/"}
+                  className="mt-4 inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-5 py-2.5 font-semibold text-black hover:bg-emerald-400"
+                >
+                  {returnPath ? `${returnTitle ? `«${returnTitle}»ni` : "Tomoshani"} davom ettirish` : "Bosh sahifaga"}
+                </Link>
+              </div>
+            ) : awaitingPayment ? (
+              <div role="status" className="rounded-2xl border border-yellow-500/30 bg-yellow-500/5 p-4 text-center text-sm text-yellow-100">
+                Telegram&apos;da to&apos;lovni yakunlang — to&apos;lov tushishi bilan bu sahifa o&apos;zi yangilanadi.
+                <button onClick={() => void refreshUser()} className="ml-2 underline hover:text-white">
+                  Tekshirish
+                </button>
+              </div>
+            ) : returnPath ? (
+              <div className="rounded-2xl border border-white/10 glass-card p-4 text-center text-sm text-gray-300">
+                {returnTitle ? <>«{returnTitle}»ni ko&apos;rish uchun Premium kerak. </> : null}
+                To&apos;lovdan so&apos;ng shu yerda &quot;davom ettirish&quot; tugmasi chiqadi yoki{" "}
+                <Link href={returnPath} className="text-yellow-400 underline hover:text-yellow-300">
+                  ortga qayting
+                </Link>
+                .
+              </div>
+            ) : null}
+          </div>
+        )}
+
         {/* Hero Section */}
         <section className="relative overflow-hidden">
           {/* Background glow effects */}

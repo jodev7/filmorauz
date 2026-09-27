@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo, useSyncExternalStore } from "react";
 import { useAuth } from "@/lib/auth-context";
+import { useVisibleInterval } from "@/lib/use-visible-interval";
 import { 
   Search, Play, RefreshCw, CheckCircle, CheckCircle2, XCircle,
   Clock, Download, Upload, Settings, AlertTriangle, Loader2,
@@ -1866,6 +1867,472 @@ function getSerialSummary(jobs: IngestionJob[]) {
 }
 
 // Jobs Tab Component
+// Keeps the previous object for every job whose payload didn't change, so a
+// poll that returns mostly-identical data doesn't invalidate every memoized
+// card. Returns `prev` itself when nothing changed at all.
+function reconcileJobs(prev: IngestionJob[], next: IngestionJob[]): IngestionJob[] {
+  if (!Array.isArray(prev) || prev.length === 0) return next;
+  const prevByKey = new Map<string, { job: IngestionJob; json: string }>();
+  prev.forEach((job) => prevByKey.set(getStableJobKey(job), { job, json: JSON.stringify(job) }));
+  let changed = prev.length !== next.length;
+  const merged = next.map((job, i) => {
+    const old = prevByKey.get(getStableJobKey(job));
+    if (old && old.json === JSON.stringify(job)) {
+      if (prev[i] !== old.job) changed = true;
+      return old.job;
+    }
+    changed = true;
+    return job;
+  });
+  return changed ? merged : prev;
+}
+
+function shallowEqualCounts(a: Record<string, number>, b: Record<string, number>): boolean {
+  const ak = Object.keys(a);
+  if (ak.length !== Object.keys(b).length) return false;
+  return ak.every((k) => a[k] === b[k]);
+}
+
+// ─── Shared clock ─────────────────────────────────────────────────────────────
+//
+// One interval per tick rate, shared by every subscriber. Components that show
+// relative times subscribe individually, so a tick only re-renders the cards
+// that actually display a changing value — not the whole jobs tab.
+
+type ClockStore = { now: number; timer: ReturnType<typeof setInterval> | null; listeners: Set<() => void> };
+const clockStores = new Map<number, ClockStore>();
+
+function getClockStore(intervalMs: number): ClockStore {
+  let store = clockStores.get(intervalMs);
+  if (!store) {
+    store = { now: Date.now(), timer: null, listeners: new Set() };
+    clockStores.set(intervalMs, store);
+  }
+  return store;
+}
+
+function useNow(intervalMs: number): number {
+  const store = getClockStore(intervalMs);
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      store.listeners.add(listener);
+      if (store.timer === null) {
+        store.now = Date.now();
+        store.timer = setInterval(() => {
+          store.now = Date.now();
+          store.listeners.forEach((l) => l());
+        }, intervalMs);
+      }
+      return () => {
+        store.listeners.delete(listener);
+        if (store.listeners.size === 0 && store.timer !== null) {
+          clearInterval(store.timer);
+          store.timer = null;
+        }
+      };
+    },
+    [store, intervalMs]
+  );
+  return useSyncExternalStore(subscribe, () => store.now, () => store.now);
+}
+
+// ─── Job card ─────────────────────────────────────────────────────────────────
+
+type RetryStage = "download" | "process" | "upload";
+
+function JobCardBase({
+  job,
+  compact = false,
+  logsExpanded,
+  retryingStage,
+  onRetry,
+  onDelete,
+  onToggleLogs,
+}: {
+  job: IngestionJob;
+  compact?: boolean;
+  logsExpanded: boolean;
+  // Stage currently being retried for THIS job, or null.
+  retryingStage: string | null;
+  onRetry: (jobId: string, stage: RetryStage) => void;
+  onDelete: (jobId: string) => void;
+  onToggleLogs: (jobId: string) => void;
+}) {
+  // Running jobs show a live per-second timer; finished ones only need a
+  // coarse "x ago" refresh. Compact cards don't render any relative time.
+  const now = useNow(compact ? 3_600_000 : isTerminalJobStatus(job.status) ? 60_000 : 1_000);
+
+  if (!job.id) return null;
+
+  const safeJob = {
+    id: getStableJobKey(job),
+    status: job.status || "unknown",
+    stage: job.stage,
+    progress: getJobProgress(job),
+    source: job.source || "unknown",
+    source_id: job.source_id || "",
+    title: job.title || "",
+    metadata: job.metadata,
+    downloaded_bytes: typeof job.downloaded_bytes === "number" ? job.downloaded_bytes : 0,
+    total_bytes: typeof job.total_bytes === "number" ? job.total_bytes : 0,
+    speed_mbps: typeof job.speed_mbps === "number" ? job.speed_mbps : 0,
+    eta_seconds: typeof job.eta_seconds === "number" ? job.eta_seconds : 0,
+    output_path: job.output_path,
+    playlist_path: job.playlist_path,
+    local_path: job.local_path,
+    source_file_deleted: job.source_file_deleted,
+    retry_count: typeof job.retry_count === "number" ? job.retry_count : 0,
+    error: job.error,
+    message: job.message,
+    logs: Array.isArray(job.logs) ? job.logs : [],
+    created_at: job.created_at || new Date().toISOString(),
+    updated_at: job.updated_at,
+    completed_at: job.completed_at,
+    episode_number: job.episode_number,
+  };
+
+  const elapsedInfo = computeElapsed(job, now);
+  const elapsedTime = elapsedInfo.text;
+  const elapsedLabel = elapsedInfo.kind === "queue"
+    ? "Process navbatida"
+    : elapsedInfo.kind === "download"
+      ? "Download"
+      : elapsedInfo.kind === "processing"
+        ? "Processing"
+        : "Elapsed";
+  const lastUpdateAge = getLastUpdateAgeMs(job, now);
+  const lastUpdateText = formatDurationShort(lastUpdateAge);
+  const stuck = isStuckJob(job, now);
+  const activeStage = safeJob.stage || safeJob.status;
+  const badgeStatus = STAGE_STATUS_MAP[activeStage] || safeJob.status;
+  const displayStatus = safeJob.stage ? STAGE_STATUS_MAP[safeJob.stage] || safeJob.status : badgeStatus;
+  const statusConfig = getStatusMeta(displayStatus);
+  const StatusIcon = statusConfig.icon;
+  const episodeInfo = safeJob.episode_number ? ` • E${safeJob.episode_number}` : "";
+  const isFailed = safeJob.status === "failed" || safeJob.status === "download_failed";
+  const displayProgress = safeJob.progress;
+  const statusSummary = getJobStatusSummary(job);
+  const showInlineTelemetry = displayStatus === "downloading" && safeJob.downloaded_bytes > 0;
+  const waitingForProcessing = isWaitingForProcessing(job);
+  const showAuxMessage = Boolean(
+    safeJob.message &&
+    safeJob.status !== "completed" &&
+    !isProgressStage(displayStatus) &&
+    safeJob.message.trim() !== statusSummary.trim()
+  );
+
+  if (compact) {
+    return (
+      <div
+        className="bg-brand-card border border-brand-border rounded-lg p-3 ml-6"
+      >
+        <div className="flex items-center gap-3">
+          <div className={`p-1.5 rounded-full ${statusConfig.color} bg-opacity-20`}>
+            <StatusIcon className={`w-4 h-4 ${activeStage === "parsing" || activeStage === "downloading" || activeStage === "download" ? "animate-spin" : ""}`} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <h4 className="font-medium text-white text-sm truncate">
+                {safeJob.title || safeJob.metadata?.title || safeJob.source_id}{episodeInfo}
+              </h4>
+              {safeJob.source_id && (
+                <span className="text-[10px] text-gray-500 shrink-0 font-mono">#{safeJob.source_id}</span>
+              )}
+              <span className={`px-1.5 py-0.5 rounded text-xs ${statusConfig.color} text-white shrink-0`}>
+                {statusConfig.label}
+              </span>
+            </div>
+            <p className="text-xs text-gray-500">
+              {statusSummary}
+            </p>
+          </div>
+          <div className="w-32">
+            <div className="flex justify-between text-xs text-gray-400 mb-1">
+              <span className="capitalize truncate">{activeStage}</span>
+              <span>{displayProgress}%</span>
+            </div>
+            <div className="h-1.5 bg-brand-border rounded-full overflow-hidden">
+              <div
+                className={`h-full ${statusConfig.color} transition-all duration-300`}
+                style={{ width: `${displayProgress}%` }}
+              />
+            </div>
+          </div>
+          <div className="flex gap-1">
+            <button
+              onClick={() => onRetry(safeJob.id, "download")}
+              disabled={retryingStage !== null}
+              className="p-1.5 bg-brand-dark hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
+              title="Retry Download"
+            >
+              {retryingStage === "download" ? (
+                <Loader2 className="w-3 h-3 text-yellow-400 animate-spin" />
+              ) : (
+                <Download className="w-3 h-3 text-yellow-400" />
+              )}
+            </button>
+            <button
+              onClick={() => onRetry(safeJob.id, "process")}
+              disabled={retryingStage !== null}
+              className="p-1.5 bg-brand-dark hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
+              title="Retry Processing"
+            >
+              {retryingStage === "process" ? (
+                <Loader2 className="w-3 h-3 text-purple-400 animate-spin" />
+              ) : (
+                <Settings className="w-3 h-3 text-purple-400" />
+              )}
+            </button>
+            <button
+              onClick={() => onDelete(safeJob.id)}
+              className="p-1.5 bg-brand-dark hover:bg-red-900/40 rounded transition-colors"
+              title="Delete job from MongoDB"
+            >
+              <Trash2 className="w-3 h-3 text-red-400" />
+            </button>
+          </div>
+        </div>
+        {safeJob.error && safeJob.status !== "downloading" && activeStage !== "downloading" && (
+          <div className="mt-2 flex items-start gap-2 text-red-400 text-xs">
+            <AlertTriangle className="w-3 h-3 mt-0.5" />
+            {safeJob.error}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="bg-brand-card border border-brand-border rounded-lg p-4"
+    >
+      <div className="flex items-center gap-4">
+        <div className={`p-2 rounded-full ${statusConfig.color} bg-opacity-20`}>
+          <StatusIcon className={`w-5 h-5 ${activeStage === "parsing" || activeStage === "downloading" || activeStage === "download" ? "animate-spin" : ""}`} />
+        </div>
+        <div className="flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="font-semibold text-white">
+              {safeJob.title || safeJob.metadata?.title || safeJob.source_id}
+            </h3>
+            {safeJob.source_id && (
+              <span className="text-xs text-gray-500 font-mono">#{safeJob.source_id}</span>
+            )}
+            <span className={`px-2 py-0.5 rounded text-xs ${statusConfig.color} text-white`}>
+              {statusConfig.label}
+            </span>
+          </div>
+          <p className="text-sm text-gray-400">
+            {statusSummary}
+          </p>
+          <p className="text-xs text-gray-500">
+            {elapsedLabel}: {elapsedTime} • Last update: {lastUpdateText} ago • Retry: {safeJob.retry_count}
+          </p>
+          {(job.worker_id || job.locked_until || (displayStatus === "queued" && !job.worker_id)) && (
+            <p className="text-xs text-gray-400 mt-1">
+              {job.worker_id ? <>Worker: <span className="text-white">{job.worker_id}</span></> : <>Waiting for worker</>}
+              {job.locked_until && <> • Locked until <span className="text-white">{new Date(job.locked_until).toLocaleString()}</span></>}
+            </p>
+          )}
+          {(job.source_quality || job.selected_quality || job.source_resolution || job.total_bytes || (job.available_qualities && job.available_qualities.length > 0)) && (
+            <p className="text-xs text-gray-400 mt-1">
+              {(job.selected_quality || job.source_quality) && <span className="mr-3">Selected quality: <span className="text-white">{job.selected_quality || job.source_quality}</span></span>}
+              {job.source_resolution && <span className="mr-3">Resolution: <span className="text-white">{job.source_resolution}</span></span>}
+              {job.available_qualities && job.available_qualities.length > 0 && <span className="mr-3">Available: <span className="text-white">{job.available_qualities.join(", ")}</span></span>}
+              {!!job.total_bytes && <span>Size: <span className="text-white">{(job.total_bytes / (1024 * 1024)).toFixed(1)} MB</span></span>}
+            </p>
+          )}
+          {(job.classifier_confidence || job.classifier_evidence) && (
+            <p className="text-xs text-gray-500 mt-1">
+              Classifier
+              {typeof job.classifier_confidence === "number" && job.classifier_confidence > 0 && (
+                <span className="ml-1 text-white">{(job.classifier_confidence * 100).toFixed(0)}%</span>
+              )}
+              {job.classifier_evidence && <span className="ml-2">{job.classifier_evidence}</span>}
+            </p>
+          )}
+          {job.content_type === "serial_parent" && (
+            <div className="mt-1 text-xs text-blue-300 space-y-0.5">
+              {!isTerminalJobStatus(job.status) && (
+                <p className="flex items-center gap-1.5">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Extracting episodes...
+                </p>
+              )}
+              <p>
+                Serial import • seasons: {job.seasons_count ?? 0} •
+                {" "}episodes: {job.episode_count ?? 0} •
+                {" "}new jobs: {job.child_jobs_created ?? 0}
+              </p>
+              {Array.isArray(job.missing_episodes) && job.missing_episodes.length > 0 && (
+                <p className="text-yellow-300">
+                  Missing episodes: {job.missing_episodes.slice(0, 30).join(", ")}
+                  {job.missing_episodes.length > 30 ? `, … (+${job.missing_episodes.length - 30} more)` : ""}
+                </p>
+              )}
+            </div>
+          )}
+          {job.content_type === "serial_parent" && job.status === "failed" && job.error && (
+            <p className="mt-1 flex items-start gap-1 text-xs text-red-400">
+              <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+              <span className="break-words">{job.error}</span>
+            </p>
+          )}
+          {stuck && (
+            <p className="mt-1 flex items-center gap-1 text-xs text-orange-400">
+              <AlertTriangle className="w-3 h-3" />
+              No update for {lastUpdateText}
+            </p>
+          )}
+          {waitingForProcessing && (
+            <p className="mt-1 flex items-center gap-1 text-xs text-amber-400">
+              <AlertTriangle className="w-3 h-3" />
+              Download complete but waiting for processing
+            </p>
+          )}
+        </div>
+        <div className="w-64">
+          <div className="flex justify-between text-xs text-gray-400 mb-1">
+            <span className="capitalize">{activeStage}</span>
+            <span>{displayProgress}%</span>
+          </div>
+          <div className="h-2 bg-brand-border rounded-full overflow-hidden">
+            <div
+              className={`h-full ${statusConfig.color} transition-all duration-300`}
+              style={{ width: `${displayProgress}%` }}
+            />
+          </div>
+          {showInlineTelemetry && (
+            <div className="mt-1 text-xs text-gray-500 flex flex-wrap gap-x-2">
+              <span>
+                {safeJob.total_bytes > 0
+                  ? `${formatBytes(safeJob.downloaded_bytes)} / ${formatBytes(safeJob.total_bytes)}`
+                  : formatBytes(safeJob.downloaded_bytes)}
+              </span>
+              {safeJob.speed_mbps > 0 && (
+                <>
+                  <span>•</span>
+                  <span>{formatSpeed(safeJob.speed_mbps)}</span>
+                </>
+              )}
+              {safeJob.eta_seconds > 0 && (
+                <>
+                  <span>•</span>
+                  <span>ETA {formatEta(safeJob.eta_seconds)}</span>
+                </>
+              )}
+            </div>
+          )}
+          {showAuxMessage && (
+            <div className="mt-1 text-xs text-gray-500 truncate">
+              {safeJob.message}
+            </div>
+          )}
+          {(safeJob.output_path || safeJob.playlist_path) && (
+            <div className="mt-2 flex items-center gap-2">
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-900 text-purple-200">
+                HLS Ready
+              </span>
+              <span className="text-xs text-gray-400 truncate" title={safeJob.playlist_path || safeJob.output_path}>
+                📁 {safeJob.playlist_path || safeJob.output_path}
+              </span>
+            </div>
+          )}
+          {safeJob.local_path && !safeJob.source_file_deleted && (
+            <div className="mt-2 flex items-center gap-2">
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-900 text-green-200">
+                Downloaded
+              </span>
+              <span className="text-xs text-gray-400 truncate" title={safeJob.local_path}>
+                📁 {safeJob.local_path}
+              </span>
+            </div>
+          )}
+        </div>
+        <div className="flex gap-1">
+          <button
+            onClick={() => onRetry(safeJob.id, "download")}
+            disabled={retryingStage !== null}
+            className="p-2 bg-brand-card hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
+            title="Retry Download"
+          >
+            {retryingStage === "download" ? (
+              <Loader2 className="w-4 h-4 text-yellow-400 animate-spin" />
+            ) : (
+              <Download className="w-4 h-4 text-yellow-400" />
+            )}
+          </button>
+          <button
+            onClick={() => onRetry(safeJob.id, "process")}
+            disabled={retryingStage !== null}
+            className="p-2 bg-brand-card hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
+            title="Retry Processing"
+          >
+            {retryingStage === "process" ? (
+              <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
+            ) : (
+              <Settings className="w-4 h-4 text-purple-400" />
+            )}
+          </button>
+          <button
+            onClick={() => onRetry(safeJob.id, "upload")}
+            disabled={retryingStage !== null}
+            className="p-2 bg-brand-card hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
+            title="Retry Upload"
+          >
+            {retryingStage === "upload" ? (
+              <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
+            ) : (
+              <Upload className="w-4 h-4 text-indigo-400" />
+            )}
+          </button>
+          <button
+            onClick={() => onDelete(safeJob.id)}
+            className="p-2 bg-brand-card hover:bg-red-900/40 rounded-lg transition-colors"
+            title="Delete job from MongoDB"
+          >
+            <Trash2 className="w-4 h-4 text-red-400" />
+          </button>
+        </div>
+      </div>
+      {safeJob.error && safeJob.status !== "downloading" && activeStage !== "downloading" && (
+        <div className="mt-3 flex items-start gap-2 text-red-400 text-sm">
+          <AlertTriangle className="w-4 h-4 mt-0.5" />
+          {safeJob.error}
+        </div>
+      )}
+      {safeJob.logs.length > 0 && safeJob.status !== "completed" && (
+        <div className="mt-3 text-xs text-gray-500 font-mono">
+          <div className="flex items-center justify-between mb-1">
+            <span>Logs ({safeJob.logs.length})</span>
+            <button
+              onClick={() => onToggleLogs(safeJob.id)}
+              className="text-gray-400 hover:text-white transition-colors"
+            >
+              {logsExpanded ? "Hide logs" : "Show logs"}
+            </button>
+          </div>
+          {(logsExpanded ? safeJob.logs : safeJob.logs.slice(-3)).map((log, i) => {
+            const relativeTime = formatLogTime(log.timestamp, now);
+            return (
+              <div key={`${log.timestamp || "log"}-${i}`} className="truncate">
+                <span className="text-gray-600">{relativeTime}</span>
+                {relativeTime && <span> • </span>}
+                <span>{log.message}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Memoized: with stable callbacks and per-job props, a jobs poll or a clock
+// tick only re-renders the cards whose data actually changed.
+const JobCard = React.memo(JobCardBase);
+
+
 function JobsTab({
   jobs,
   loadingJobs,
@@ -1895,11 +2362,13 @@ function JobsTab({
   handlePageChange: (page: number) => void;
   statusCounts: Record<string, number> | null;
 }) {
-  const [now, setNow] = useState(() => Date.now());
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set());
   const [expandedSerials, setExpandedSerials] = useState<Set<string>>(new Set());
   const [expandedSeasons, setExpandedSeasons] = useState<Set<string>>(new Set());
   const hasRunningJobs = jobs.some((job) => !isTerminalJobStatus(job.status));
+  // Drives only the tab-level summary and serial "Elapsed" rows; job cards
+  // subscribe to their own clock.
+  const now = useNow(hasRunningJobs ? 1_000 : 60_000);
   const localSummary = getJobSummary(jobs, now);
   const summary = statusCounts
     ? {
@@ -1911,12 +2380,6 @@ function JobsTab({
         stuck: statusCounts.stuck ?? 0,
       }
     : localSummary;
-
-  useEffect(() => {
-    if (!hasRunningJobs) return;
-    const interval = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, [hasRunningJobs]);
 
   const toggleLogs = useCallback((jobId: string) => {
     setExpandedLogs((prev) => {
@@ -1947,375 +2410,22 @@ function JobsTab({
 
   const jobGroups = useMemo(() => groupJobsBySerial(jobs), [jobs]);
 
-  const renderJobCard = useCallback((job: IngestionJob, compact = false) => {
-    if (!job.id) return null;
-
-    const safeJob = {
-      id: getStableJobKey(job),
-      status: job.status || "unknown",
-      stage: job.stage,
-      progress: getJobProgress(job),
-      source: job.source || "unknown",
-      source_id: job.source_id || "",
-      title: job.title || "",
-      metadata: job.metadata,
-      downloaded_bytes: typeof job.downloaded_bytes === "number" ? job.downloaded_bytes : 0,
-      total_bytes: typeof job.total_bytes === "number" ? job.total_bytes : 0,
-      speed_mbps: typeof job.speed_mbps === "number" ? job.speed_mbps : 0,
-      eta_seconds: typeof job.eta_seconds === "number" ? job.eta_seconds : 0,
-      output_path: job.output_path,
-      playlist_path: job.playlist_path,
-      local_path: job.local_path,
-      source_file_deleted: job.source_file_deleted,
-      retry_count: typeof job.retry_count === "number" ? job.retry_count : 0,
-      error: job.error,
-      message: job.message,
-      logs: Array.isArray(job.logs) ? job.logs : [],
-      created_at: job.created_at || new Date().toISOString(),
-      updated_at: job.updated_at,
-      completed_at: job.completed_at,
-      episode_number: job.episode_number,
-    };
-
-    const elapsedInfo = computeElapsed(job, now);
-    const elapsedTime = elapsedInfo.text;
-    const elapsedLabel = elapsedInfo.kind === "queue"
-      ? "Process navbatida"
-      : elapsedInfo.kind === "download"
-        ? "Download"
-        : elapsedInfo.kind === "processing"
-          ? "Processing"
-          : "Elapsed";
-    const lastUpdateAge = getLastUpdateAgeMs(job, now);
-    const lastUpdateText = formatDurationShort(lastUpdateAge);
-    const stuck = isStuckJob(job, now);
-    const logsExpanded = expandedLogs.has(safeJob.id);
-    const activeStage = safeJob.stage || safeJob.status;
-    const badgeStatus = STAGE_STATUS_MAP[activeStage] || safeJob.status;
-    const displayStatus = safeJob.stage ? STAGE_STATUS_MAP[safeJob.stage] || safeJob.status : badgeStatus;
-    const statusConfig = getStatusMeta(displayStatus);
-    const StatusIcon = statusConfig.icon;
-    const episodeInfo = safeJob.episode_number ? ` • E${safeJob.episode_number}` : "";
-    const isFailed = safeJob.status === "failed" || safeJob.status === "download_failed";
-    const displayProgress = safeJob.progress;
-    const statusSummary = getJobStatusSummary(job);
-    const showInlineTelemetry = displayStatus === "downloading" && safeJob.downloaded_bytes > 0;
-    const waitingForProcessing = isWaitingForProcessing(job);
-    const showAuxMessage = Boolean(
-      safeJob.message &&
-      safeJob.status !== "completed" &&
-      !isProgressStage(displayStatus) &&
-      safeJob.message.trim() !== statusSummary.trim()
-    );
-
-    if (compact) {
-      return (
-        <div
-          key={safeJob.id}
-          className="bg-brand-card border border-brand-border rounded-lg p-3 ml-6"
-        >
-          <div className="flex items-center gap-3">
-            <div className={`p-1.5 rounded-full ${statusConfig.color} bg-opacity-20`}>
-              <StatusIcon className={`w-4 h-4 ${activeStage === "parsing" || activeStage === "downloading" || activeStage === "download" ? "animate-spin" : ""}`} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <h4 className="font-medium text-white text-sm truncate">
-                  {safeJob.title || safeJob.metadata?.title || safeJob.source_id}{episodeInfo}
-                </h4>
-                {safeJob.source_id && (
-                  <span className="text-[10px] text-gray-500 shrink-0 font-mono">#{safeJob.source_id}</span>
-                )}
-                <span className={`px-1.5 py-0.5 rounded text-xs ${statusConfig.color} text-white shrink-0`}>
-                  {statusConfig.label}
-                </span>
-              </div>
-              <p className="text-xs text-gray-500">
-                {statusSummary}
-              </p>
-            </div>
-            <div className="w-32">
-              <div className="flex justify-between text-xs text-gray-400 mb-1">
-                <span className="capitalize truncate">{activeStage}</span>
-                <span>{displayProgress}%</span>
-              </div>
-              <div className="h-1.5 bg-brand-border rounded-full overflow-hidden">
-                <div
-                  className={`h-full ${statusConfig.color} transition-all duration-300`}
-                  style={{ width: `${displayProgress}%` }}
-                />
-              </div>
-            </div>
-            <div className="flex gap-1">
-              <button
-                onClick={() => handleRetry(safeJob.id, "download")}
-                disabled={retryingStage?.jobId === safeJob.id}
-                className="p-1.5 bg-brand-dark hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
-                title="Retry Download"
-              >
-                {retryingStage?.jobId === safeJob.id && retryingStage?.stage === "download" ? (
-                  <Loader2 className="w-3 h-3 text-yellow-400 animate-spin" />
-                ) : (
-                  <Download className="w-3 h-3 text-yellow-400" />
-                )}
-              </button>
-              <button
-                onClick={() => handleRetry(safeJob.id, "process")}
-                disabled={retryingStage?.jobId === safeJob.id}
-                className="p-1.5 bg-brand-dark hover:bg-gray-700 rounded transition-colors disabled:opacity-50"
-                title="Retry Processing"
-              >
-                {retryingStage?.jobId === safeJob.id && retryingStage?.stage === "process" ? (
-                  <Loader2 className="w-3 h-3 text-purple-400 animate-spin" />
-                ) : (
-                  <Settings className="w-3 h-3 text-purple-400" />
-                )}
-              </button>
-              <button
-                onClick={() => handleDelete(safeJob.id)}
-                className="p-1.5 bg-brand-dark hover:bg-red-900/40 rounded transition-colors"
-                title="Delete job from MongoDB"
-              >
-                <Trash2 className="w-3 h-3 text-red-400" />
-              </button>
-            </div>
-          </div>
-          {safeJob.error && safeJob.status !== "downloading" && activeStage !== "downloading" && (
-            <div className="mt-2 flex items-start gap-2 text-red-400 text-xs">
-              <AlertTriangle className="w-3 h-3 mt-0.5" />
-              {safeJob.error}
-            </div>
-          )}
-        </div>
-      );
-    }
-
+  const renderJobCard = (job: IngestionJob, compact: boolean) => {
+    const key = getStableJobKey(job);
     return (
-      <div
-        key={safeJob.id}
-        className="bg-brand-card border border-brand-border rounded-lg p-4"
-      >
-        <div className="flex items-center gap-4">
-          <div className={`p-2 rounded-full ${statusConfig.color} bg-opacity-20`}>
-            <StatusIcon className={`w-5 h-5 ${activeStage === "parsing" || activeStage === "downloading" || activeStage === "download" ? "animate-spin" : ""}`} />
-          </div>
-          <div className="flex-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="font-semibold text-white">
-                {safeJob.title || safeJob.metadata?.title || safeJob.source_id}
-              </h3>
-              {safeJob.source_id && (
-                <span className="text-xs text-gray-500 font-mono">#{safeJob.source_id}</span>
-              )}
-              <span className={`px-2 py-0.5 rounded text-xs ${statusConfig.color} text-white`}>
-                {statusConfig.label}
-              </span>
-            </div>
-            <p className="text-sm text-gray-400">
-              {statusSummary}
-            </p>
-            <p className="text-xs text-gray-500">
-              {elapsedLabel}: {elapsedTime} • Last update: {lastUpdateText} ago • Retry: {safeJob.retry_count}
-            </p>
-            {(job.worker_id || job.locked_until || (displayStatus === "queued" && !job.worker_id)) && (
-              <p className="text-xs text-gray-400 mt-1">
-                {job.worker_id ? <>Worker: <span className="text-white">{job.worker_id}</span></> : <>Waiting for worker</>}
-                {job.locked_until && <> • Locked until <span className="text-white">{new Date(job.locked_until).toLocaleString()}</span></>}
-              </p>
-            )}
-            {(job.source_quality || job.selected_quality || job.source_resolution || job.total_bytes || (job.available_qualities && job.available_qualities.length > 0)) && (
-              <p className="text-xs text-gray-400 mt-1">
-                {(job.selected_quality || job.source_quality) && <span className="mr-3">Selected quality: <span className="text-white">{job.selected_quality || job.source_quality}</span></span>}
-                {job.source_resolution && <span className="mr-3">Resolution: <span className="text-white">{job.source_resolution}</span></span>}
-                {job.available_qualities && job.available_qualities.length > 0 && <span className="mr-3">Available: <span className="text-white">{job.available_qualities.join(", ")}</span></span>}
-                {!!job.total_bytes && <span>Size: <span className="text-white">{(job.total_bytes / (1024 * 1024)).toFixed(1)} MB</span></span>}
-              </p>
-            )}
-            {(job.classifier_confidence || job.classifier_evidence) && (
-              <p className="text-xs text-gray-500 mt-1">
-                Classifier
-                {typeof job.classifier_confidence === "number" && job.classifier_confidence > 0 && (
-                  <span className="ml-1 text-white">{(job.classifier_confidence * 100).toFixed(0)}%</span>
-                )}
-                {job.classifier_evidence && <span className="ml-2">{job.classifier_evidence}</span>}
-              </p>
-            )}
-            {job.content_type === "serial_parent" && (
-              <div className="mt-1 text-xs text-blue-300 space-y-0.5">
-                {!isTerminalJobStatus(job.status) && (
-                  <p className="flex items-center gap-1.5">
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                    Extracting episodes...
-                  </p>
-                )}
-                <p>
-                  Serial import • seasons: {job.seasons_count ?? 0} •
-                  {" "}episodes: {job.episode_count ?? 0} •
-                  {" "}new jobs: {job.child_jobs_created ?? 0}
-                </p>
-                {Array.isArray(job.missing_episodes) && job.missing_episodes.length > 0 && (
-                  <p className="text-yellow-300">
-                    Missing episodes: {job.missing_episodes.slice(0, 30).join(", ")}
-                    {job.missing_episodes.length > 30 ? `, … (+${job.missing_episodes.length - 30} more)` : ""}
-                  </p>
-                )}
-              </div>
-            )}
-            {job.content_type === "serial_parent" && job.status === "failed" && job.error && (
-              <p className="mt-1 flex items-start gap-1 text-xs text-red-400">
-                <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
-                <span className="break-words">{job.error}</span>
-              </p>
-            )}
-            {stuck && (
-              <p className="mt-1 flex items-center gap-1 text-xs text-orange-400">
-                <AlertTriangle className="w-3 h-3" />
-                No update for {lastUpdateText}
-              </p>
-            )}
-            {waitingForProcessing && (
-              <p className="mt-1 flex items-center gap-1 text-xs text-amber-400">
-                <AlertTriangle className="w-3 h-3" />
-                Download complete but waiting for processing
-              </p>
-            )}
-          </div>
-          <div className="w-64">
-            <div className="flex justify-between text-xs text-gray-400 mb-1">
-              <span className="capitalize">{activeStage}</span>
-              <span>{displayProgress}%</span>
-            </div>
-            <div className="h-2 bg-brand-border rounded-full overflow-hidden">
-              <div
-                className={`h-full ${statusConfig.color} transition-all duration-300`}
-                style={{ width: `${displayProgress}%` }}
-              />
-            </div>
-            {showInlineTelemetry && (
-              <div className="mt-1 text-xs text-gray-500 flex flex-wrap gap-x-2">
-                <span>
-                  {safeJob.total_bytes > 0
-                    ? `${formatBytes(safeJob.downloaded_bytes)} / ${formatBytes(safeJob.total_bytes)}`
-                    : formatBytes(safeJob.downloaded_bytes)}
-                </span>
-                {safeJob.speed_mbps > 0 && (
-                  <>
-                    <span>•</span>
-                    <span>{formatSpeed(safeJob.speed_mbps)}</span>
-                  </>
-                )}
-                {safeJob.eta_seconds > 0 && (
-                  <>
-                    <span>•</span>
-                    <span>ETA {formatEta(safeJob.eta_seconds)}</span>
-                  </>
-                )}
-              </div>
-            )}
-            {showAuxMessage && (
-              <div className="mt-1 text-xs text-gray-500 truncate">
-                {safeJob.message}
-              </div>
-            )}
-            {(safeJob.output_path || safeJob.playlist_path) && (
-              <div className="mt-2 flex items-center gap-2">
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-900 text-purple-200">
-                  HLS Ready
-                </span>
-                <span className="text-xs text-gray-400 truncate" title={safeJob.playlist_path || safeJob.output_path}>
-                  📁 {safeJob.playlist_path || safeJob.output_path}
-                </span>
-              </div>
-            )}
-            {safeJob.local_path && !safeJob.source_file_deleted && (
-              <div className="mt-2 flex items-center gap-2">
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-900 text-green-200">
-                  Downloaded
-                </span>
-                <span className="text-xs text-gray-400 truncate" title={safeJob.local_path}>
-                  📁 {safeJob.local_path}
-                </span>
-              </div>
-            )}
-          </div>
-          <div className="flex gap-1">
-            <button
-              onClick={() => handleRetry(safeJob.id, "download")}
-              disabled={retryingStage?.jobId === safeJob.id}
-              className="p-2 bg-brand-card hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
-              title="Retry Download"
-            >
-              {retryingStage?.jobId === safeJob.id && retryingStage?.stage === "download" ? (
-                <Loader2 className="w-4 h-4 text-yellow-400 animate-spin" />
-              ) : (
-                <Download className="w-4 h-4 text-yellow-400" />
-              )}
-            </button>
-            <button
-              onClick={() => handleRetry(safeJob.id, "process")}
-              disabled={retryingStage?.jobId === safeJob.id}
-              className="p-2 bg-brand-card hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
-              title="Retry Processing"
-            >
-              {retryingStage?.jobId === safeJob.id && retryingStage?.stage === "process" ? (
-                <Loader2 className="w-4 h-4 text-purple-400 animate-spin" />
-              ) : (
-                <Settings className="w-4 h-4 text-purple-400" />
-              )}
-            </button>
-            <button
-              onClick={() => handleRetry(safeJob.id, "upload")}
-              disabled={retryingStage?.jobId === safeJob.id}
-              className="p-2 bg-brand-card hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
-              title="Retry Upload"
-            >
-              {retryingStage?.jobId === safeJob.id && retryingStage?.stage === "upload" ? (
-                <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
-              ) : (
-                <Upload className="w-4 h-4 text-indigo-400" />
-              )}
-            </button>
-            <button
-              onClick={() => handleDelete(safeJob.id)}
-              className="p-2 bg-brand-card hover:bg-red-900/40 rounded-lg transition-colors"
-              title="Delete job from MongoDB"
-            >
-              <Trash2 className="w-4 h-4 text-red-400" />
-            </button>
-          </div>
-        </div>
-        {safeJob.error && safeJob.status !== "downloading" && activeStage !== "downloading" && (
-          <div className="mt-3 flex items-start gap-2 text-red-400 text-sm">
-            <AlertTriangle className="w-4 h-4 mt-0.5" />
-            {safeJob.error}
-          </div>
-        )}
-        {safeJob.logs.length > 0 && safeJob.status !== "completed" && (
-          <div className="mt-3 text-xs text-gray-500 font-mono">
-            <div className="flex items-center justify-between mb-1">
-              <span>Logs ({safeJob.logs.length})</span>
-              <button
-                onClick={() => toggleLogs(safeJob.id)}
-                className="text-gray-400 hover:text-white transition-colors"
-              >
-                {logsExpanded ? "Hide logs" : "Show logs"}
-              </button>
-            </div>
-            {(logsExpanded ? safeJob.logs : safeJob.logs.slice(-3)).map((log, i) => {
-              const relativeTime = formatLogTime(log.timestamp, now);
-              return (
-                <div key={`${log.timestamp || "log"}-${i}`} className="truncate">
-                  <span className="text-gray-600">{relativeTime}</span>
-                  {relativeTime && <span> • </span>}
-                  <span>{log.message}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      <JobCard
+        key={key}
+        job={job}
+        compact={compact}
+        logsExpanded={expandedLogs.has(key)}
+        retryingStage={retryingStage?.jobId === key ? retryingStage.stage : null}
+        onRetry={handleRetry}
+        onDelete={handleDelete}
+        onToggleLogs={toggleLogs}
+      />
     );
-  }, [expandedLogs, handleRetry, handleDelete, now, retryingStage, toggleLogs]);
+  };
+
 
   const paginationControls = totalPages > 1 ? (
     <div className="flex items-center justify-between gap-2 rounded-lg border border-brand-border bg-brand-card/50 px-3 py-2">
@@ -2406,7 +2516,7 @@ function JobsTab({
         <div className="space-y-4">
           {jobGroups.map((group) => {
             if (group.type === "single") {
-              return renderJobCard(group.job);
+              return renderJobCard(group.job, false);
             }
 
             const serial = group;
@@ -2582,18 +2692,27 @@ export default function IngestionPage() {
   useEffect(() => { currentPageRef.current = currentPage; }, [currentPage]);
   useEffect(() => { currentFilterRef.current = currentFilter; }, [currentFilter]);
 
-  const fetchJobs = useCallback(async (page?: number, status?: JobFilter) => {
+  // Monotonic request id: only the newest response is applied, so a slow
+  // poll can't overwrite the result of a later page/filter click.
+  const latestRequestRef = useRef(0);
+
+  const fetchJobs = useCallback(async (page?: number, status?: JobFilter, opts?: { silent?: boolean }) => {
     if (!token || !isMounted.current) return;
     const reqPage = page ?? currentPageRef.current;
     const reqStatus = status ?? currentFilterRef.current;
+    const requestId = ++latestRequestRef.current;
+    // Background polls don't toggle the loading flag — that alone caused two
+    // extra full re-renders every poll.
+    const silent = opts?.silent === true;
 
-    setLoadingJobs(true);
+    if (!silent) setLoadingJobs(true);
     try {
       const result = await getIngestionJobs(token, {
         page: reqPage,
         limit: pageSize,
         status: reqStatus,
       });
+      if (!isMounted.current || requestId !== latestRequestRef.current) return;
 
       const jobsData = Array.isArray(result.data) ? result.data : [];
       setTotalJobs(result.total || 0);
@@ -2601,13 +2720,16 @@ export default function IngestionPage() {
       // Only sync currentPage from server response when this was an explicit
       // request; otherwise the silent auto-refresh would also overwrite it.
       if (page !== undefined) setCurrentPage(result.page || reqPage);
-      setJobs(jobsData);
-      if (result.status_counts) setStatusCounts(result.status_counts);
+      setJobs((prev) => reconcileJobs(prev, jobsData));
+      if (result.status_counts) {
+        const counts = result.status_counts;
+        setStatusCounts((prev) => (prev && shallowEqualCounts(prev, counts) ? prev : counts));
+      }
     } catch (err) {
       console.error("Failed to fetch jobs:", err);
       setJobs((prev) => (Array.isArray(prev) ? prev : []));
     } finally {
-      if (isMounted.current) {
+      if (isMounted.current && !silent) {
         setLoadingJobs(false);
       }
     }
@@ -2636,25 +2758,18 @@ export default function IngestionPage() {
     }
   }, [token]); // Only token, uses ref to get latest fetchJobs
 
-  // Polling effect - only sets up interval when sync is ON and on Jobs tab
-  useEffect(() => {
-    if (!hasInitialized || !token || activeTab !== "jobs" || !syncEnabled) {
-      return;
-    }
-
-    // Immediate fetch when sync is enabled and viewing jobs
-    fetchJobsRef.current();
-
-    // 3s instead of 1s — 1Hz polling against a 3-stage aggregation
-    // pipeline made tab switching feel unresponsive on busy queues.
-    // Active-only default keeps the result small, and a 3s heartbeat
-    // is plenty for "is this still moving?" UX.
-    const interval = setInterval(() => {
-      fetchJobsRef.current();
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [hasInitialized, token, activeTab, syncEnabled]); // fetchJobsRef is stable
+  // Polling — only when sync is ON and on the Jobs tab. Runs immediately when
+  // enabled, then every 3s (1Hz against a 3-stage aggregation pipeline made
+  // tab switching feel unresponsive on busy queues). Paused while the browser
+  // tab is hidden and refreshed as soon as it becomes visible again.
+  const pollJobs = useCallback(() => {
+    fetchJobsRef.current?.(undefined, undefined, { silent: true });
+  }, []);
+  useVisibleInterval(
+    pollJobs,
+    3000,
+    hasInitialized && !!token && activeTab === "jobs" && syncEnabled
+  );
 
   // Cleanup on unmount
   useEffect(() => {
@@ -2663,7 +2778,8 @@ export default function IngestionPage() {
     };
   }, []);
 
-  const handleRetry = async (jobId: string, stage: "download" | "process" | "upload" = "download") => {
+  // Handlers are useCallback-wrapped so memoized <JobCard/>s keep stable props.
+  const handleRetry = useCallback(async (jobId: string, stage: "download" | "process" | "upload" = "download") => {
     if (!token) return;
 
     setRetryingStage({ jobId, stage });
@@ -2674,9 +2790,9 @@ export default function IngestionPage() {
     } finally {
       setRetryingStage(null);
     }
-  };
+  }, [token]);
 
-  const handleDelete = async (jobId: string) => {
+  const handleDelete = useCallback(async (jobId: string) => {
     if (!token) return;
     if (!window.confirm("Bu ingestion job'ni MongoDB'dan o'chirishni tasdiqlaysizmi? Bu amalni qaytarib bo'lmaydi.")) {
       return;
@@ -2684,15 +2800,15 @@ export default function IngestionPage() {
     try {
       await deleteIngestionJob(token, jobId);
       if (fetchJobsRef.current) {
-        fetchJobsRef.current(currentPage, currentFilter);
+        fetchJobsRef.current(currentPageRef.current, currentFilterRef.current);
       }
     } catch (err) {
       console.error("Delete failed:", err);
       window.alert(err instanceof Error ? err.message : "Failed to delete job");
     }
-  };
+  }, [token]);
 
-  const handleDeleteSeries = async (seriesSlug: string, title: string, episodeCount: number) => {
+  const handleDeleteSeries = useCallback(async (seriesSlug: string, title: string, episodeCount: number) => {
     if (!token || !seriesSlug) return;
     if (!window.confirm(
       `"${title}" — barcha ${episodeCount} ta epizodni MongoDB'dan o'chirishni tasdiqlaysizmi? Bu amalni qaytarib bo'lmaydi.`
@@ -2702,14 +2818,14 @@ export default function IngestionPage() {
     try {
       const { deleted } = await deleteIngestionSeries(token, seriesSlug);
       if (fetchJobsRef.current) {
-        fetchJobsRef.current(currentPage, currentFilter);
+        fetchJobsRef.current(currentPageRef.current, currentFilterRef.current);
       }
       console.log(`Deleted ${deleted} episode jobs for series ${seriesSlug}`);
     } catch (err) {
       console.error("Series delete failed:", err);
       window.alert(err instanceof Error ? err.message : "Failed to delete series jobs");
     }
-  };
+  }, [token]);
 
   const handleImportSuccess = () => {
     // Stay on the source tab so the user can keep importing from the same

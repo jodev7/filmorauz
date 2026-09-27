@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { getNotifications, markNotificationAsRead, markAllNotificationsAsRead, Notification } from "@/lib/api";
-import { Bell, Check, CheckCheck, Clock, Gift, AlertTriangle, MessageCircle, Ban, Crown, ChevronRight, FileText } from "lucide-react";
+import { Bell, Check, CheckCheck, Clock, Gift, AlertTriangle, MessageCircle, Ban, Crown, ChevronRight, FileText, PlayCircle, Lightbulb, Settings } from "lucide-react";
+import Link from "next/link";
 
 export default function NotificationsPage() {
   const { user, token, isLoading: authLoading, setUnreadNotificationCount } = useAuth();
@@ -98,6 +99,13 @@ export default function NotificationsPage() {
         return <AlertTriangle className="w-6 h-6 text-red-400" />;
       case "COMMENT_REPLY":
         return <MessageCircle className="w-6 h-6 text-blue-400" />;
+      case "NEW_EPISODE":
+        return <PlayCircle className="w-6 h-6 text-emerald-400" />;
+      case "SUGGESTION_ADDED":
+      case "SUGGESTION_STATUS":
+        return <Lightbulb className="w-6 h-6 text-amber-400" />;
+      case "REFERRAL_REWARD":
+        return <Gift className="w-6 h-6 text-yellow-400" />;
       default:
         return <Bell className="w-6 h-6 text-gray-400" />;
     }
@@ -141,15 +149,26 @@ export default function NotificationsPage() {
             </div>
           </div>
           
-          {unreadCount > 0 && (
-            <button
-              onClick={handleMarkAllAsRead}
-              className="flex items-center gap-2 px-4 py-2 glass-card hover:bg-brand-border text-white rounded-lg transition-colors"
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {unreadCount > 0 && (
+              <button
+                onClick={handleMarkAllAsRead}
+                className="flex items-center gap-2 px-4 py-2 glass-card hover:bg-brand-border text-white rounded-lg transition-colors"
+              >
+                <CheckCheck className="w-4 h-4" />
+                <span className="hidden sm:inline">Hammasini o&apos;qilgan deb belgilash</span>
+                <span className="sm:hidden">O&apos;qildi</span>
+              </button>
+            )}
+            <Link
+              href="/notifications/settings"
+              className="flex items-center gap-2 px-3 py-2 glass-card hover:bg-brand-border text-gray-300 hover:text-white rounded-lg transition-colors"
+              aria-label="Bildirishnoma sozlamalari"
             >
-              <CheckCheck className="w-4 h-4" />
-              <span>Hammasini o'qilgan deb belgilash</span>
-            </button>
-          )}
+              <Settings className="w-4 h-4" />
+              <span className="hidden sm:inline">Sozlamalar</span>
+            </Link>
+          </div>
         </div>
 
         {/* Filters */}

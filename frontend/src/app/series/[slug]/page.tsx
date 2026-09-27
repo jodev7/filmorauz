@@ -3,7 +3,6 @@ export const dynamic = "force-dynamic";
 import dynamicImport from "next/dynamic";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import Script from "next/script";
 import { ChevronLeft, Calendar, Globe, Play } from "lucide-react";
 import MediaTitle from "@/components/MediaTitle";
 import Navbar from "@/components/Navbar";
@@ -18,11 +17,16 @@ import { localizeSingleGenre } from "@/lib/localization";
 import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 import { buildSeriesUrl } from "@/lib/content-routes";
 import { buildContentDescription, buildContentKeywords, buildContentTitle, pickSeoImage } from "@/lib/seo";
+import JsonLd from "@/components/JsonLd";
+import { getTopReviewsForSeo, reviewsToJsonLd } from "@/lib/api";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
 const StarRating = dynamicImport(() => import("@/components/StarRating"));
 const SeriesShareButton = dynamicImport(() => import("@/components/SeriesShareButton"));
+const LibraryButtons = dynamicImport(() => import("@/components/LibraryButtons"));
+const Reviews = dynamicImport(() => import("@/components/Reviews"));
+const SeriesResumeButton = dynamicImport(() => import("@/components/SeriesResumeButton"));
 
 interface Props {
   params: { slug: string };
@@ -96,6 +100,16 @@ export default async function SeriesDetailPage({ params }: Props) {
   const { series, seasons } = seriesData;
   const canonicalUrl = buildSeriesUrl(slug);
 
+  // First episode (lowest season, lowest episode) for the "start watching" CTA.
+  const firstEpisode = (() => {
+    const sorted = [...(seasons || [])].sort((a, b) => a.season.season_number - b.season.season_number);
+    for (const s of sorted) {
+      const eps = [...(s.episodes || [])].sort((a, b) => a.episode_number - b.episode_number);
+      if (eps[0]) return { id: eps[0].id, seasonNumber: s.season.season_number, episodeNumber: eps[0].episode_number };
+    }
+    return null;
+  })();
+
   const seriesJsonLd: Record<string, any> = {
     "@context": "https://schema.org",
     "@type": "TVSeries",
@@ -118,6 +132,12 @@ export default async function SeriesDetailPage({ params }: Props) {
     };
   }
 
+  // Top written reviews (if any) — eligible for review snippets.
+  const topReviews = await getTopReviewsForSeo("series", series.id);
+  if (topReviews.length > 0) {
+    seriesJsonLd.review = reviewsToJsonLd(topReviews);
+  }
+
   const breadcrumbJsonLd = {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
@@ -130,16 +150,8 @@ export default async function SeriesDetailPage({ params }: Props) {
 
   return (
     <>
-      <Script
-        id="series-schema"
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(seriesJsonLd) }}
-      />
-      <Script
-        id="series-breadcrumb-schema"
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
-      />
+      <JsonLd data={seriesJsonLd} />
+      <JsonLd data={breadcrumbJsonLd} />
       <Navbar />
       <main className="min-h-screen">
         {/* Backdrop hero */}
@@ -236,9 +248,19 @@ export default async function SeriesDetailPage({ params }: Props) {
                 {series.description}
               </p>
 
+              {firstEpisode && (
+                <div className="mb-4">
+                  <SeriesResumeButton seriesId={series.id} seriesSlug={series.slug} firstEpisode={firstEpisode} />
+                </div>
+              )}
+
               <div className="mb-4 flex flex-wrap items-start gap-2">
                 <WatchTogetherButton contentType="series" contentID={series.id} />
                 <SeriesShareButton seriesId={series.id} seriesTitle={series.title} />
+              </div>
+
+              <div className="mb-4">
+                <LibraryButtons targetType="series" targetId={series.id} title={series.title} />
               </div>
 
               <div className="mb-6">
@@ -262,9 +284,13 @@ export default async function SeriesDetailPage({ params }: Props) {
                 seriesBackdropUrl={series.backdrop_url}
                 seriesPosterUrl={series.poster_url}
                 seriesSlug={series.slug}
+                seriesId={series.id}
               />
             </section>
           )}
+
+          {/* Short reviews */}
+          <Reviews targetType="series" targetId={series.id} />
 
           {/* Content-similar series — "Sizga yoqishi mumkin" */}
           {relatedSeries.length > 0 && (

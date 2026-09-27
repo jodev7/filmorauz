@@ -6,7 +6,7 @@ import Link from "next/link";
 import { ChevronLeft, Loader2 } from "lucide-react";
 import MovieForm from "@/components/MovieForm";
 import { useAuth } from "@/lib/auth-context";
-import { adminUpdateMovie, adminGetMovies, Movie, MovieInput } from "@/lib/api";
+import { adminUpdateMovie, adminGetMovie, Movie, MovieInput } from "@/lib/api";
 
 function normalizeGenreValue(value: string): string {
   const trimmed = value.trim().toLowerCase();
@@ -30,16 +30,10 @@ export default function EditMoviePage() {
 
   useEffect(() => {
     if (!token) return;
-    adminGetMovies(token)
-      .then((movies) => {
-        const found = movies.find((m) => m.id === id);
-        if (!found) {
-          setError("Movie not found");
-        } else {
-          setMovie(found);
-        }
-      })
-      .catch(() => setError("Failed to load movie"))
+    // Fetch this one movie by id (the old "load 500 and find" missed older titles).
+    adminGetMovie(token, id)
+      .then(setMovie)
+      .catch((err) => setError(err instanceof Error && err.message === "not_found" ? "Movie not found" : "Failed to load movie"))
       .finally(() => setLoading(false));
   }, [token, id]);
 
@@ -94,6 +88,8 @@ export default function EditMoviePage() {
     quality: movie.quality,
     is_premium: movie.is_premium ?? false,
     slug: movie.slug,
+    cast: movie.cast ?? [],
+    director: movie.director ?? "",
   };
 
   return (

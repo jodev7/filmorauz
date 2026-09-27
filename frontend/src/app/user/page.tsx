@@ -11,8 +11,15 @@ import { useI18n } from "@/lib/i18n";
 import Link from "next/link";
 import { Heart, History, User as UserIcon, Crown, Calendar, Shield, Clock, Camera, Edit2, Check, X, Send, Hash, LayoutDashboard, BadgeCheck, Sparkles, RefreshCw, Zap, Palette, Eye, EyeOff, Lock, Star, LogOut, Lightbulb } from "lucide-react";
 import { PremiumBadge, PremiumButton, PremiumAvatarRing, resolveIsPremium, resolvePremiumStatus } from "@/components/PremiumComponents";
+import WatchHistoryList from "@/components/WatchHistoryList";
+import UserListsSection from "@/components/UserListsSection";
+import NotificationSettings from "@/components/NotificationSettings";
+import ProfileTabs, { PROFILE_TABS, ProfileTab } from "@/components/profile/ProfileTabs";
+import YearReviewTeaser from "@/components/profile/YearReviewTeaser";
 import { getFavorites, getWatchHistory, getCurrentUser, updateProfile, uploadProfileImage, updateProfileStyle, updatePrivacySettings, ProfileStyle } from "@/lib/api";
 import SuggestionModal from "@/components/SuggestionModal";
+import UserLibrarySections from "@/components/UserLibrarySections";
+import ReferralCard from "@/components/ReferralCard";
 import TelegramLoginModal from "@/components/TelegramLoginModal";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { CurrentUser } from "@/lib/api";
@@ -173,6 +180,20 @@ export default function UserPage() {
   
   // Suggestion modal state
   const [suggestionModalOpen, setSuggestionModalOpen] = useState(false);
+
+  // Active tab lives in ?tab= so links like /user?tab=lists open it directly.
+  const [tab, setTabState] = useState<ProfileTab>("overview");
+  useEffect(() => {
+    const v = new URLSearchParams(window.location.search).get("tab") as ProfileTab | null;
+    if (v && PROFILE_TABS.includes(v)) setTabState(v);
+  }, []);
+  const setTab = (t: ProfileTab) => {
+    setTabState(t);
+    const url = new URL(window.location.href);
+    if (t === "overview") url.searchParams.delete("tab");
+    else url.searchParams.set("tab", t);
+    window.history.replaceState(window.history.state, "", url.pathname + url.search);
+  };
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -499,8 +520,8 @@ export default function UserPage() {
       <style dangerouslySetInnerHTML={{ __html: premiumAnimations }} />
       <Navbar />
       <main className="min-h-screen pt-20 sm:pt-24">
-        <div className="max-w-3xl mx-auto px-4">
-          
+        <div className="max-w-6xl mx-auto px-4">
+          <div className="max-w-3xl mx-auto">
           {/* Centered profile header */}
           <div className={`relative rounded-2xl border p-8 mb-8 overflow-hidden text-center premium-card-hover ${
             displayIsPremium 
@@ -728,7 +749,56 @@ export default function UserPage() {
             </button>
           </div>
 
-          {/* Detailed profile info card */}
+          </div>
+
+          {/* Profile tabs */}
+          <ProfileTabs active={tab} onChange={setTab} counts={{ history: watchHistory.length, favorites: favorites.length }} />
+
+          {loading ? (
+            <div className="space-y-4 py-6">
+              <div className="h-40 animate-pulse rounded-2xl bg-white/5" />
+              <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
+                {[0, 1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="aspect-[2/3] animate-pulse rounded-xl bg-white/5" />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="pt-6">
+              {tab === "overview" && (
+                <>
+                  <YearReviewTeaser />
+              {/* Recent watched section - Carousel */}
+              {recentWatched.length > 0 && (
+                <section className="mb-10">
+                  <div className="flex items-center gap-3 mb-5">
+                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
+                      displayIsPremium 
+                        ? 'bg-yellow-500/10 border border-yellow-500/20' 
+                        : 'bg-blue-500/10 border border-blue-500/20'
+                    }`}>
+                      <Clock className={`w-4 h-4 ${displayIsPremium ? 'text-yellow-500' : 'text-blue-500'}`} />
+                    </div>
+                    <h2 className="font-display text-xl sm:text-2xl text-white tracking-wide">
+                      SO&apos;NGGI KO&apos;RILGANLAR
+                    </h2>
+                    <span className="px-2 py-0.5 bg-brand-border text-gray-400 text-xs rounded-full">
+                      {recentWatched.length}
+                    </span>
+                  </div>
+                  
+                  <MovieCarousel 
+                    movies={recentWatched.map((item) => item.movie || item)} 
+                  />
+                </section>
+              )}
+
+              {/* Invite friends → premium days */}
+              <ReferralCard />
+
+              
+                  <div className="max-w-3xl">
+                    {/* Detailed profile info card */}
           <div className={`rounded-2xl border p-6 mb-8 ${
             displayIsPremium 
               ? 'bg-gradient-to-br from-[#12121A] via-[#151520] to-[#1a1525] border-yellow-500/20' 
@@ -940,7 +1010,60 @@ export default function UserPage() {
             </div>
           </div>
 
-          {/* Premium Settings - Consolidated section for premium users */}
+
+                  </div>
+                </>
+              )}
+
+              {tab === "library" && (
+                <>
+              {/* Watch later + followed series */}
+              <UserLibrarySections />
+
+              {/* Favorites section - Carousel */}
+              <section className="mb-10">
+                <div className="flex items-center gap-3 mb-5">
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
+                    displayIsPremium 
+                      ? 'bg-yellow-500/10 border border-yellow-500/20' 
+                      : 'bg-brand-red/10 border border-brand-red/20'
+                  }`}>
+                    <Heart className={`w-4 h-4 ${displayIsPremium ? 'text-yellow-500' : 'text-brand-red'}`} />
+                  </div>
+                  <h2 className="font-display text-xl sm:text-2xl text-white tracking-wide">
+                    SEVIMLILAR
+                  </h2>
+                  {favorites.length > 0 && (
+                    <span className="px-2 py-0.5 bg-brand-border text-gray-400 text-xs rounded-full">
+                      {favorites.length}
+                    </span>
+                  )}
+                </div>
+                
+                {favorites.length > 0 ? (
+                  <MovieCarousel movies={favorites} />
+                ) : (
+                  <div className="py-10 text-center glass-card rounded-xl border border-white/5">
+                    <Heart className="w-8 h-8 text-gray-600 mx-auto mb-2" />
+                    <p className="text-gray-500 text-sm">{t("user.noFavorites")}</p>
+                    <p className="text-gray-600 text-xs mt-1">
+                      Kinolar sahifasida belgisini bosing
+                    </p>
+                  </div>
+                )}
+              </section>
+
+              
+                </>
+              )}
+
+              {tab === "lists" && token && <UserListsSection token={token} />}
+
+              {tab === "history" && token && <WatchHistoryList token={token} items={watchHistory} onChange={setWatchHistory} />}
+
+              {tab === "settings" && (
+                <div className="max-w-3xl">
+                    {/* Premium Settings - Consolidated section for premium users */}
           {displayIsPremium && (
             <div className={`rounded-2xl border p-6 mb-8 ${getProfileCardClasses()}`}>
               <div className="flex items-center justify-between mb-4">
@@ -1096,7 +1219,10 @@ export default function UserPage() {
             </div>
           )}
 
-          {/* Logout button */}
+
+                  <h3 className="font-display text-lg text-white mb-4 mt-2">Bildirishnomalar</h3>
+                  <NotificationSettings />
+                    {/* Logout button */}
           <div className="mt-8 pt-6 border-t border-white/10">
             <button
               onClick={async () => {
@@ -1110,104 +1236,10 @@ export default function UserPage() {
             </button>
           </div>
 
-          {/* Loading state */}
-          {loading && (
-            <div className="flex justify-center py-16">
-              <div className="animate-spin w-10 h-10 border-3 border-brand-red border-t-transparent rounded-full" />
-            </div>
-          )}
 
-          {!loading && (
-            <>
-              {/* Recent watched section - Carousel */}
-              {recentWatched.length > 0 && (
-                <section className="mb-10">
-                  <div className="flex items-center gap-3 mb-5">
-                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
-                      displayIsPremium 
-                        ? 'bg-yellow-500/10 border border-yellow-500/20' 
-                        : 'bg-blue-500/10 border border-blue-500/20'
-                    }`}>
-                      <Clock className={`w-4 h-4 ${displayIsPremium ? 'text-yellow-500' : 'text-blue-500'}`} />
-                    </div>
-                    <h2 className="font-display text-xl sm:text-2xl text-white tracking-wide">
-                      SO&apos;NGGI KO&apos;RILGANLAR
-                    </h2>
-                    <span className="px-2 py-0.5 bg-brand-border text-gray-400 text-xs rounded-full">
-                      {recentWatched.length}
-                    </span>
-                  </div>
-                  
-                  <MovieCarousel 
-                    movies={recentWatched.map((item) => item.movie || item)} 
-                  />
-                </section>
+                </div>
               )}
-
-              {/* Favorites section - Carousel */}
-              <section className="mb-10">
-                <div className="flex items-center gap-3 mb-5">
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
-                    displayIsPremium 
-                      ? 'bg-yellow-500/10 border border-yellow-500/20' 
-                      : 'bg-brand-red/10 border border-brand-red/20'
-                  }`}>
-                    <Heart className={`w-4 h-4 ${displayIsPremium ? 'text-yellow-500' : 'text-brand-red'}`} />
-                  </div>
-                  <h2 className="font-display text-xl sm:text-2xl text-white tracking-wide">
-                    SEVIMLILAR
-                  </h2>
-                  {favorites.length > 0 && (
-                    <span className="px-2 py-0.5 bg-brand-border text-gray-400 text-xs rounded-full">
-                      {favorites.length}
-                    </span>
-                  )}
-                </div>
-                
-                {favorites.length > 0 ? (
-                  <MovieCarousel movies={favorites} />
-                ) : (
-                  <div className="py-10 text-center glass-card rounded-xl border border-white/5">
-                    <Heart className="w-8 h-8 text-gray-600 mx-auto mb-2" />
-                    <p className="text-gray-500 text-sm">{t("user.noFavorites")}</p>
-                    <p className="text-gray-600 text-xs mt-1">
-                      Kinolar sahifasida belgisini bosing
-                    </p>
-                  </div>
-                )}
-              </section>
-
-              {/* Watch History section - Carousel */}
-              <section className="mb-10">
-                <div className="flex items-center gap-3 mb-5">
-                  <div className="w-9 h-9 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
-                    <History className="w-4 h-4 text-blue-500" />
-                  </div>
-                  <h2 className="font-display text-xl sm:text-2xl text-white tracking-wide">
-                    KO&apos;RISH TARIXI
-                  </h2>
-                  {watchHistory.length > 0 && (
-                    <span className="px-2 py-0.5 bg-brand-border text-gray-400 text-xs rounded-full">
-                      {watchHistory.length}
-                    </span>
-                  )}
-                </div>
-                
-                {watchHistory.length > 0 ? (
-                  <MovieCarousel 
-                    movies={watchHistory.map((item) => item.movie || item)} 
-                  />
-                ) : (
-                  <div className="py-10 text-center glass-card rounded-xl border border-white/5">
-                    <History className="w-8 h-8 text-gray-600 mx-auto mb-2" />
-                    <p className="text-gray-500 text-sm">{t("user.noWatchHistory")}</p>
-                    <p className="text-gray-600 text-xs mt-1">
-                      Haligacha hech qanday kino ko&apos;rmagansiz
-                    </p>
-                  </div>
-                )}
-              </section>
-            </>
+            </div>
           )}
 
           {/* Bottom padding */}

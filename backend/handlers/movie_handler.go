@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -47,7 +48,28 @@ func (h *MovieHandler) ListMovies(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 
-	movies, total, err := h.movieService.ListMovies(genre, page, limit)
+	// Advanced filter (year range, rating, country, duration, free-only,
+	// sort). Without any of these the original listing path is used.
+	filter := repositories.MovieListFilter{Genre: genre, Country: c.Query("country"), Duration: c.Query("duration"), Sort: c.Query("sort")}
+	filter.YearFrom, _ = strconv.Atoi(c.Query("year_from"))
+	filter.YearTo, _ = strconv.Atoi(c.Query("year_to"))
+	filter.MinRating, _ = strconv.ParseFloat(c.Query("min_rating"), 64)
+	filter.FreeOnly = c.Query("free") == "1" || c.Query("free") == "true"
+
+	var movies []models.Movie
+	var total int64
+	var err error
+	if filter.IsZero() {
+		movies, total, err = h.movieService.ListMovies(genre, page, limit)
+	} else {
+		if page < 1 {
+			page = 1
+		}
+		if limit < 1 || limit > 100 {
+			limit = 20
+		}
+		movies, total, err = h.movieService.ListMoviesFiltered(filter, page, limit)
+	}
 	if err != nil {
 		log.Printf("[ERROR] ListMovies: failed to fetch movies: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch movies"})
@@ -89,6 +111,16 @@ func (h *MovieHandler) ListMovies(c *gin.Context) {
 		"page":  page,
 		"limit": limit,
 	})
+}
+
+// MovieFilterFacets GET /api/movies/filters — options for the /movies filter UI.
+func (h *MovieHandler) MovieFilterFacets(c *gin.Context) {
+	facets, err := h.movieService.MovieFilterFacets()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load filters"})
+		return
+	}
+	c.JSON(http.StatusOK, facets)
 }
 
 // GetMovieBySlug GET /api/movies/slug/:slug
@@ -240,6 +272,15 @@ func (h *MovieHandler) SearchMovies(c *gin.Context) {
 		Code       string   `json:"code"`
 	}
 
+	// Rank movies and series together: exact code/title > prefix >
+	// substring > fuzzy match, then by popularity.
+	type ranked struct {
+		UnifiedResult
+		score int
+		views int64
+	}
+	rankedResults := make([]ranked, 0, len(movies)+len(series))
+
 	results := make([]UnifiedResult, 0, len(movies)+len(series))
 	for _, m := range movies {
 		results = append(results, UnifiedResult{
@@ -252,6 +293,11 @@ func (h *MovieHandler) SearchMovies(c *gin.Context) {
 			Quality:    m.Quality,
 			TargetType: "movie",
 			Code:       m.Code,
+		})
+		rankedResults = append(rankedResults, ranked{
+			UnifiedResult: results[len(results)-1],
+			score:         repositories.SearchScore(query, m.Code, append([]string{m.Title, m.TitleUz, m.OriginalTitle, m.Director}, m.Cast...)...),
+			views:         m.Views,
 		})
 	}
 	for _, s := range series {
@@ -266,6 +312,24 @@ func (h *MovieHandler) SearchMovies(c *gin.Context) {
 			TargetType: "series",
 			Code:       s.Code,
 		})
+		rankedResults = append(rankedResults, ranked{
+			UnifiedResult: results[len(results)-1],
+			score:         repositories.SearchScore(query, s.Code, s.Title, s.TitleUz),
+			views:         s.Views,
+		})
+	}
+	sort.SliceStable(rankedResults, func(i, j int) bool {
+		if rankedResults[i].score != rankedResults[j].score {
+			return rankedResults[i].score > rankedResults[j].score
+		}
+		return rankedResults[i].views > rankedResults[j].views
+	})
+	if len(rankedResults) > 40 {
+		rankedResults = rankedResults[:40]
+	}
+	results = results[:0]
+	for _, r := range rankedResults {
+		results = append(results, r.UnifiedResult)
 	}
 
 	if h.analyticsRepo != nil && strings.TrimSpace(query) != "" {
@@ -732,27 +796,28 @@ func lastIndex(s, substr string) int {
 // AdminListMovies GET /api/admin/movies
 // Returns ALL movies (pending, approved, rejected) for the admin dashboard.
 func (h *MovieHandler) AdminListMovies(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 500 {
-		limit = 200
-	}
+	// Server-side filters/paging: ?page=&limit=&status=&q=&premium=&media=&sort=
+	// plus ?counts=1 for the status-tab counters.
+	q := adminMovieQueryFromRequest(c, 200)
 
-	movies, total, err := h.movieService.ListAllMoviesAdmin(page, limit)
+	movies, total, err := h.movieService.ListAdminMovies(q)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch movies"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"data":  movies,
 		"total": total,
-		"page":  page,
-		"limit": limit,
-	})
+		"page":  q.Page,
+		"limit": q.Limit,
+	}
+	if c.Query("counts") == "1" {
+		if counts, err := h.movieService.AdminMovieCounts(q); err == nil {
+			resp["counts"] = counts
+		}
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // ApproveMovie PATCH /api/admin/movies/:id/approve
@@ -780,43 +845,8 @@ func (h *MovieHandler) ApproveMovie(c *gin.Context) {
 
 	// Async Telegram post — non-blocking
 	if h.telegramService != nil && !alreadyPosted {
-		go func() {
-			log.Printf("[TELEGRAM APPROVE] triggered for movie id=%s by user=%s", id, byUserID)
-			movie, err := h.movieService.GetMovieByID(id)
-			if err != nil {
-				log.Printf("[TELEGRAM APPROVE] could not fetch movie %s: %v", id, err)
-				return
-			}
-			if movie.TelegramPostedOnApproval {
-				log.Printf("[TELEGRAM APPROVE] movie id=%s already posted — skipping duplicate", id)
-				return
-			}
-			watchURL := h.telegramService.GetBaseSiteURL() + "/movies/" + movie.Slug
-			data := &services.TelegramMovieData{
-				Title:       movie.Title,
-				Year:        movie.Year,
-				Genres:      movie.Genre,
-				GenresUz:    movie.GenresUz,
-				Country:     movie.Country,
-				CountriesUz: movie.CountriesUz,
-				Code:        movie.Code,
-				PosterURL:   firstNonEmpty(movie.PosterURL, movie.BackdropURL),
-				Quality:     movie.Quality,
-				Description: movie.Description,
-				Slug:        movie.Slug,
-				MovieURL:    watchURL,
-			}
-			log.Printf("[TELEGRAM] movie=%s genres from DB: %v (len=%d)", movie.Title, movie.Genre, len(movie.Genre))
-			posted := h.telegramService.PostContentApproval(data, false)
-			log.Printf("[TELEGRAM APPROVE] movie id=%s result: posted_to=%v", id, posted)
-			if len(posted) == 0 {
-				log.Printf("[TELEGRAM APPROVE] movie id=%s no channels received the post — not marking as posted", id)
-				return
-			}
-			if err := h.movieService.MarkTelegramPostedOnApproval(id); err != nil {
-				log.Printf("[TELEGRAM APPROVE] failed to mark movie id=%s as posted: %v", id, err)
-			}
-		}()
+		log.Printf("[TELEGRAM APPROVE] triggered for movie id=%s by user=%s", id, byUserID)
+		go services.AnnounceApprovedMovie(h.movieService, h.telegramService, id)
 	} else if alreadyPosted {
 		log.Printf("[TELEGRAM APPROVE] movie id=%s already posted on a previous approval — skipping", id)
 	}

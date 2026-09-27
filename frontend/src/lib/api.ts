@@ -63,6 +63,8 @@ export interface Movie {
   rating_avg: number;
   rating_count: number;
   is_premium?: boolean;
+  cast?: string[];
+  director?: string;
   created_at: string;
   updated_at: string;
   // Approval workflow
@@ -70,6 +72,10 @@ export interface Movie {
   is_published?: boolean;
   approved_at?: string | null;
   approved_by?: string;
+  // Scheduled publish (admin)
+  scheduled_publish_at?: string | null;
+  scheduled_by?: string;
+  schedule_error?: string;
   type?: "movie" | "episode";
   target_type?: "movie" | "episode" | "series";
   target_id?: string;
@@ -108,6 +114,9 @@ export interface MovieInput {
   quality: string;
   is_premium?: boolean;
   slug?: string;
+  // Optional credits (searchable). Omit to leave unchanged on update.
+  cast?: string[];
+  director?: string;
 }
 
 export interface ListResponse {
@@ -263,11 +272,20 @@ export async function getMovies(params?: {
   genre?: string;
   page?: number;
   limit?: number;
+  filters?: MovieFilterParams;
 }): Promise<ListResponse> {
   const qs = new URLSearchParams();
   if (params?.genre) qs.set("genre", params.genre);
   if (params?.page) qs.set("page", String(params.page));
   if (params?.limit) qs.set("limit", String(params.limit));
+  const f = params?.filters;
+  if (f?.year_from) qs.set("year_from", String(f.year_from));
+  if (f?.year_to) qs.set("year_to", String(f.year_to));
+  if (f?.min_rating) qs.set("min_rating", String(f.min_rating));
+  if (f?.country) qs.set("country", f.country);
+  if (f?.duration) qs.set("duration", f.duration);
+  if (f?.free) qs.set("free", "1");
+  if (f?.sort && f.sort !== "new") qs.set("sort", f.sort);
 
   const res = await fetch(`${API_URL}/movies?${qs}`, {
     next: { revalidate: 60 }, // ISR: revalidate every 60s
@@ -436,6 +454,213 @@ export async function getMovie(slug: string): Promise<Movie> {
   const json = await res.json();
   if (!json.data) throw new Error(`Movie not found: ${slug} (null data)`);
   return normalizeMovieResponse(json.data);
+}
+
+// ── Notification settings & web push ──
+
+export type NotifyChannel = "site" | "telegram" | "push";
+export type NotifyPrefs = Record<string, Record<NotifyChannel, boolean>>;
+
+export interface NotificationSettings {
+  prefs: NotifyPrefs;
+  categories: string[];
+  push_public_key: string;
+  push_devices: number;
+  telegram_connected: boolean;
+}
+
+export async function getNotificationSettings(token: string): Promise<NotificationSettings> {
+  const res = await fetch(`${API_URL}/user/notification-settings`, { headers: authHeaders(token), cache: "no-store" });
+  if (!res.ok) throw new Error("Sozlamalarni yuklab bo'lmadi");
+  return res.json();
+}
+
+export async function saveNotificationSettings(token: string, prefs: NotifyPrefs): Promise<NotifyPrefs> {
+  const res = await fetch(`${API_URL}/user/notification-settings`, {
+    method: "PUT",
+    headers: authHeaders(token),
+    body: JSON.stringify({ prefs }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Saqlab bo'lmadi");
+  return json.prefs;
+}
+
+export async function savePushSubscription(token: string, sub: PushSubscriptionJSON): Promise<void> {
+  const res = await fetch(`${API_URL}/user/push-subscriptions`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(sub),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Obunani saqlab bo'lmadi");
+}
+
+export async function deletePushSubscription(token: string, endpoint: string): Promise<void> {
+  await fetch(`${API_URL}/user/push-subscriptions`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+    body: JSON.stringify({ endpoint }),
+  }).catch(() => {});
+}
+
+export async function sendTestPush(token: string): Promise<void> {
+  const res = await fetch(`${API_URL}/user/push-subscriptions/test`, { method: "POST", headers: authHeaders(token) });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Yuborib bo'lmadi");
+}
+
+// ── Year in review ──
+
+export interface YearReview {
+  year: number;
+  complete: boolean;
+  total_minutes: number;
+  movies_watched: number;
+  episodes_watched: number;
+  series_watched: number;
+  completed: number;
+  active_days: number;
+  top_genres: { key: string; count: number }[];
+  months: number[];
+  top_month: number;
+  top_weekday: number;
+  night_owl: boolean;
+  top_titles: { target_type: "movie" | "series"; target_id: string; title: string; slug: string; poster_url: string; minutes: number }[];
+  ratings: number;
+  reviews: number;
+  comments: number;
+}
+
+export async function getYearReview(token: string, year: number): Promise<YearReview> {
+  const res = await fetch(`${API_URL}/user/year-review?year=${year}`, { headers: authHeaders(token), cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to load year review");
+  return res.json();
+}
+
+// ── Personal lists ──
+
+export interface UserListSummary {
+  id: string;
+  title: string;
+  description?: string;
+  is_public: boolean;
+  share_slug: string;
+  count: number;
+  covers: string[];
+  updated_at: string;
+}
+
+export interface UserListItem {
+  target_type: "movie" | "series";
+  target_id: string;
+  title: string;
+  title_uz?: string;
+  slug: string;
+  poster_url: string;
+  year?: number;
+  quality?: string;
+  is_premium: boolean;
+  rating_avg: number;
+  added_at: string;
+}
+
+export interface UserListDetail extends UserListSummary {
+  owner_id: string;
+  owner_name: string;
+  is_owner: boolean;
+  items: UserListItem[];
+}
+
+async function listsCall<T>(token: string, method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, {
+    method,
+    headers: authHeaders(token),
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: "no-store",
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Xatolik yuz berdi");
+  return json as T;
+}
+
+export async function getMyLists(token: string): Promise<UserListSummary[]> {
+  const r = await listsCall<{ data: UserListSummary[] }>(token, "GET", "/user/lists");
+  return r.data || [];
+}
+
+export async function createList(token: string, input: { title: string; description?: string; is_public?: boolean }): Promise<UserListSummary> {
+  const r = await listsCall<{ data: UserListSummary }>(token, "POST", "/user/lists", input);
+  return r.data;
+}
+
+export function updateList(token: string, id: string, patch: { title?: string; description?: string; is_public?: boolean }) {
+  return listsCall(token, "PATCH", `/user/lists/${id}`, patch);
+}
+
+export function deleteList(token: string, id: string) {
+  return listsCall(token, "DELETE", `/user/lists/${id}`);
+}
+
+export function addToList(token: string, listId: string, type: "movie" | "series", targetId: string) {
+  return listsCall(token, "POST", `/user/lists/${listId}/items/${type}/${targetId}`);
+}
+
+export function removeFromList(token: string, listId: string, type: "movie" | "series", targetId: string) {
+  return listsCall(token, "DELETE", `/user/lists/${listId}/items/${type}/${targetId}`);
+}
+
+export async function getListsContaining(token: string, type: "movie" | "series", targetId: string): Promise<string[]> {
+  const r = await listsCall<{ data: string[] }>(token, "GET", `/user/lists-containing/${type}/${targetId}`);
+  return r.data || [];
+}
+
+// Share page; token (optional) lets the owner see a private list.
+export async function getListBySlug(slug: string, token?: string): Promise<UserListDetail | null> {
+  const res = await fetch(`${API_URL}/lists/${encodeURIComponent(slug)}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    cache: "no-store",
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error("Failed to load list");
+  const json = await res.json();
+  return json.data;
+}
+
+// ── Discovery: people pages & random movie ──
+
+export interface PersonCredits {
+  name: string;
+  acted: Movie[];
+  directed: Movie[];
+}
+
+// Actor / director page data; null when the person has no published titles.
+export async function getPersonCredits(name: string): Promise<PersonCredits | null> {
+  const res = await fetch(`${API_URL}/people/${encodeURIComponent(name)}`, { next: { revalidate: 300 } });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error("Failed to load person");
+  const json = await res.json();
+  return {
+    name: json.name,
+    acted: (json.acted || []).map(normalizeMovieResponse),
+    directed: (json.directed || []).map(normalizeMovieResponse),
+  };
+}
+
+export function personPath(name: string): string {
+  return `/person/${encodeURIComponent(name.trim())}`;
+}
+
+export async function getRandomMovie(genre?: string, exclude: string[] = []): Promise<Movie | null> {
+  const qs = new URLSearchParams();
+  if (genre) qs.set("genre", genre);
+  if (exclude.length) qs.set("exclude", exclude.slice(-50).join(","));
+  const res = await fetch(`${API_URL}/movies/random?${qs.toString()}`, { cache: "no-store" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error("Failed to pick a movie");
+  const json = await res.json();
+  return json.data ? normalizeMovieResponse(json.data) : null;
 }
 
 // Get movie by ID
@@ -1098,6 +1323,70 @@ export async function getWatchHistory(token: string): Promise<WatchHistoryItem[]
   return json.data || [];
 }
 
+// ── Watch history management ──
+
+export type HistoryTargetType = "movie" | "episode";
+
+async function historyCall(token: string, method: string, path: string): Promise<void> {
+  const res = await fetch(`${API_URL}${path}`, { method, headers: authHeaders(token) });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Amal bajarilmadi");
+  }
+}
+
+// Remove from "continue watching" only (history stays).
+export function hideFromContinueWatching(token: string, type: HistoryTargetType, id: string) {
+  return historyCall(token, "DELETE", `/user/continue-watching/${type}/${id}`);
+}
+
+export function restoreToContinueWatching(token: string, type: HistoryTargetType, id: string) {
+  return historyCall(token, "POST", `/user/continue-watching/${type}/${id}/restore`);
+}
+
+export function markAsWatched(token: string, type: HistoryTargetType, id: string) {
+  return historyCall(token, "POST", `/user/history/${type}/${id}/watched`);
+}
+
+export function deleteHistoryEntry(token: string, type: HistoryTargetType, id: string) {
+  return historyCall(token, "DELETE", `/user/history/${type}/${id}`);
+}
+
+export function clearWatchHistory(token: string) {
+  return historyCall(token, "DELETE", `/user/history`);
+}
+
+export interface EpisodeProgress {
+  episode_id: string;
+  season_number: number;
+  episode_number: number;
+  progress_percent: number;
+  last_position_sec: number;
+  completed: boolean;
+}
+
+export interface SeriesProgress {
+  episodes: EpisodeProgress[];
+  watched: number;
+  total: number;
+  resume?: {
+    episode_id: string;
+    season_number: number;
+    episode_number: number;
+    mode: "continue" | "next";
+    progress_percent: number;
+  };
+}
+
+export async function getSeriesProgress(token: string, seriesId: string): Promise<SeriesProgress> {
+  const res = await fetch(`${API_URL}/user/series-progress/${seriesId}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to load series progress");
+  return res.json();
+}
+
 // Add to favorites (authenticated)
 export async function addFavorite(token: string, targetId: string, options?: TargetOptions): Promise<void> {
   const query = options?.targetType ? `?target_type=${encodeURIComponent(options.targetType)}` : "";
@@ -1401,14 +1690,145 @@ export async function adminDeleteMovie(
   return json as MovieDeleteResponse;
 }
 
-export async function adminGetMovies(token: string): Promise<Movie[]> {
-  const res = await fetch(`${API_URL}/admin/movies?limit=500`, {
+export async function adminGetMovies(token: string, limit = 500): Promise<Movie[]> {
+  const res = await fetch(`${API_URL}/admin/movies?limit=${limit}`, {
     headers: authHeaders(token),
     cache: "no-store",
   });
   if (!res.ok) throw new Error("Failed to fetch");
   const json = await res.json();
   return (json.data || []).map((item: any) => normalizeMovieResponse(item));
+}
+
+// Every movie, any approval status, paging through the admin list (used by
+// pickers that filter client-side, e.g. the collection editor).
+export async function adminGetAllMovies(token: string): Promise<Movie[]> {
+  const out: Movie[] = [];
+  for (let page = 1; page <= 40; page++) {
+    const res = await adminListMovies(token, { page, limit: 500 });
+    out.push(...res.data);
+    if (res.data.length < 500 || out.length >= res.total) break;
+  }
+  return out;
+}
+
+export type AdminMovieStatus = "all" | "pending" | "approved" | "rejected" | "scheduled";
+
+export interface AdminMovieListParams {
+  page?: number;
+  limit?: number;
+  status?: AdminMovieStatus;
+  q?: string;
+  premium?: "" | "premium" | "free";
+  media?: "" | "missing";
+  sort?: "" | "newest" | "oldest" | "title" | "views" | "rating" | "schedule";
+  counts?: boolean;
+}
+
+export interface AdminMovieCounts {
+  all: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+  scheduled: number;
+}
+
+export interface AdminMovieListResponse {
+  data: Movie[];
+  total: number;
+  page: number;
+  limit: number;
+  counts?: AdminMovieCounts;
+}
+
+// Server-side paged/filtered admin movie list.
+export async function adminListMovies(
+  token: string,
+  params: AdminMovieListParams,
+  signal?: AbortSignal
+): Promise<AdminMovieListResponse> {
+  const qs = new URLSearchParams();
+  qs.set("page", String(params.page ?? 1));
+  qs.set("limit", String(params.limit ?? 20));
+  if (params.status && params.status !== "all") qs.set("status", params.status);
+  if (params.q?.trim()) qs.set("q", params.q.trim());
+  if (params.premium) qs.set("premium", params.premium);
+  if (params.media) qs.set("media", params.media);
+  if (params.sort) qs.set("sort", params.sort);
+  if (params.counts) qs.set("counts", "1");
+  const res = await fetch(`${API_URL}/admin/movies?${qs.toString()}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+    signal,
+  });
+  if (!res.ok) throw new Error("Failed to fetch");
+  const json = await res.json();
+  return {
+    data: (json.data || []).map((item: any) => normalizeMovieResponse(item)),
+    total: json.total || 0,
+    page: json.page || 1,
+    limit: json.limit || params.limit || 20,
+    counts: json.counts,
+  };
+}
+
+// One movie by id, any approval status (admin edit page).
+export async function adminGetMovie(token: string, id: string): Promise<Movie> {
+  const res = await fetch(`${API_URL}/admin/movies/${encodeURIComponent(id)}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (res.status === 404) throw new Error("not_found");
+  if (!res.ok) throw new Error("Failed to fetch");
+  const json = await res.json();
+  return normalizeMovieResponse(json.data);
+}
+
+export async function adminScheduleMovie(token: string, id: string, publishAtISO: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/movies/${encodeURIComponent(id)}/schedule`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ publish_at: publishAtISO }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Rejalashtirib bo'lmadi");
+  }
+}
+
+export async function adminCancelMovieSchedule(token: string, id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/movies/${encodeURIComponent(id)}/schedule`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Bekor qilib bo'lmadi");
+  }
+}
+
+// ── Daily Telegram report (superadmin) ──
+
+export async function getDailyReportPreview(token: string): Promise<{ html: string; recipients: number }> {
+  const res = await fetch(`${API_URL}/superadmin/daily-report/preview`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Hisobotni yuklab bo'lmadi");
+  }
+  return res.json();
+}
+
+export async function sendDailyReport(token: string): Promise<{ sent: number; recipients: number }> {
+  const res = await fetch(`${API_URL}/superadmin/daily-report/send`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Yuborib bo'lmadi");
+  return json;
 }
 
 export async function approveMovie(token: string, id: string): Promise<void> {
@@ -2641,6 +3061,11 @@ export interface DashboardStats {
     registered_today: number;
     registered_this_month: number;
     recent: AdminUser[];
+  };
+  // Optional so an older backend without these counts doesn't break the page.
+  movies?: {
+    total: number;
+    added_this_month: number;
   };
 }
 
@@ -4409,6 +4834,12 @@ export interface Suggestion {
   admin_message?: string;
   reviewed_by?: string;
   reviewed_at?: string;
+  // Content added because of this suggestion (see adminLinkSuggestion).
+  linked_type?: "movie" | "series";
+  linked_id?: string;
+  linked_slug?: string;
+  linked_title?: string;
+  linked_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -5298,4 +5729,421 @@ export async function getAdminPlaybackReports(token: string, status = "new") {
   });
   if (!res.ok) throw new Error("Failed to load playback reports");
   return res.json() as Promise<{ reports: PlaybackReport[]; counts: Record<string, number> }>;
+}
+
+// ─── Dashboard timeseries (charts + period comparison) ───────────────────────
+
+export interface DailyPoint {
+  date: string; // YYYY-MM-DD, Tashkent time
+  new_users: number;
+  views: number;
+  active_viewers: number;
+  premium_sales: number;
+  stars_revenue: number;
+}
+
+export interface PeriodTotals {
+  new_users: number;
+  views: number;
+  avg_active_viewers: number;
+  premium_sales: number;
+  stars_revenue: number;
+}
+
+export interface DashboardTimeseries {
+  days: number;
+  series: DailyPoint[];
+  current: PeriodTotals;
+  previous: PeriodTotals;
+}
+
+export async function getAdminDashboardTimeseries(token: string, days = 30): Promise<DashboardTimeseries> {
+  const res = await fetch(`${API_URL}/admin/analytics/timeseries?days=${days}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch dashboard timeseries");
+  return res.json();
+}
+
+// ─── Admin overview (attention / pipeline / quality / finance) ───────────────
+
+export interface OverviewQualityItem {
+  id: string;
+  title: string;
+  slug: string;
+  views: number;
+}
+
+export interface AdminOverview {
+  attention: {
+    pending_appeals: number;
+    pending_suggestions: number;
+    pending_comments: number;
+    reported_comments?: number;
+    playback_reports: number;
+    pending_approvals: number;
+    premium_expiring_3d: number;
+    failed_publish_jobs_7d: number;
+    open_errors_24h?: number;
+  };
+  ingestion: {
+    active: number;
+    pending: number;
+    processing: number;
+    stuck: number;
+    failed_24h: number;
+    completed_24h: number;
+  };
+  publish_queue: {
+    scheduled: number;
+    success_24h: number;
+    failed_24h: number;
+  };
+  quality: {
+    missing_poster: number;
+    missing_description: number;
+    missing_video: number;
+    low_views: number;
+    samples: {
+      missing_poster: OverviewQualityItem[];
+      missing_video: OverviewQualityItem[];
+      low_views: OverviewQualityItem[];
+    };
+  };
+  // Present only for superadmins.
+  finance?: {
+    month: string;
+    premium_sales: number;
+    stars_revenue: number;
+    stars_usd_rate: number;
+    revenue_usd: number;
+    recurring_expenses: number;
+    one_off_expenses: number;
+    ai_clip_cost: number;
+    expenses_usd: number;
+    net_usd: number;
+  };
+}
+
+export async function getAdminOverview(token: string): Promise<AdminOverview> {
+  const res = await fetch(`${API_URL}/admin/overview`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch admin overview");
+  return res.json();
+}
+
+// ─── Admin sidebar badges + global search ────────────────────────────────────
+
+export type AdminBadges = AdminOverview["attention"];
+
+export async function getAdminBadges(token: string): Promise<AdminBadges> {
+  const res = await fetch(`${API_URL}/admin/overview/badges`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch admin badges");
+  return res.json();
+}
+
+export interface AdminSearchResult {
+  kind: "movie" | "series" | "user";
+  id: string;
+  title: string;
+  subtitle?: string;
+}
+
+export async function adminGlobalSearch(token: string, q: string, signal?: AbortSignal): Promise<AdminSearchResult[]> {
+  const res = await fetch(`${API_URL}/admin/search?q=${encodeURIComponent(q)}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+    signal,
+  });
+  if (!res.ok) throw new Error("Admin search failed");
+  const json = await res.json();
+  return Array.isArray(json.results) ? json.results : [];
+}
+
+// Admin: bulk field updates for many movies (premium flag, add to collection).
+export async function adminBulkUpdateMovies(
+  token: string,
+  body: { ids: string[]; is_premium?: boolean; add_to_collection?: string }
+): Promise<{ success: boolean; premium_updated?: number; collection_updated?: boolean }> {
+  const res = await fetch(`${API_URL}/admin/movies/bulk-update`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || "Bulk update failed");
+  return json;
+}
+
+// ─── Admin audit log (superadmin) ────────────────────────────────────────────
+
+export interface AuditLogEntry {
+  id: string;
+  actor_id: string;
+  actor_role: string;
+  method: string;
+  route: string;
+  path: string;
+  params?: Record<string, string>;
+  body?: Record<string, unknown>;
+  status: number;
+  ip?: string;
+  user_agent?: string;
+  duration_ms: number;
+  created_at: string;
+  actor?: { first_name?: string; last_name?: string; display_name?: string; username?: string };
+}
+
+export interface AuditLogPage {
+  data: AuditLogEntry[];
+  total: number;
+  page: number;
+  limit: number;
+  total_pages: number;
+}
+
+export async function getAdminAuditLogs(
+  token: string,
+  opts: { page?: number; limit?: number; actor_id?: string; method?: string; q?: string; failed?: boolean }
+): Promise<AuditLogPage> {
+  const params = new URLSearchParams();
+  params.set("page", String(opts.page ?? 1));
+  params.set("limit", String(opts.limit ?? 50));
+  if (opts.actor_id) params.set("actor_id", opts.actor_id);
+  if (opts.method) params.set("method", opts.method);
+  if (opts.q) params.set("q", opts.q);
+  if (opts.failed) params.set("failed", "1");
+  const res = await fetch(`${API_URL}/superadmin/audit-logs?${params.toString()}`, {
+    headers: authHeaders(token),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to fetch audit logs");
+  return res.json();
+}
+
+// ─── User library: watch later + series subscriptions ────────────────────────
+
+export type LibraryTargetType = "movie" | "series";
+
+export interface LibraryItem {
+  target_type: LibraryTargetType;
+  target_id: string;
+  title: string;
+  title_uz?: string;
+  slug: string;
+  poster_url: string;
+  year?: number;
+  quality?: string;
+  is_premium: boolean;
+  rating_avg: number;
+  added_at: string;
+}
+
+export interface LibraryStatus {
+  in_watchlist: boolean;
+  subscribed?: boolean;
+}
+
+async function libraryRequest<T>(token: string, path: string, method = "GET"): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, { method, headers: authHeaders(token), cache: "no-store" });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || `Request failed: ${res.status}`);
+  return json as T;
+}
+
+export function getWatchlist(token: string): Promise<{ data: LibraryItem[]; total: number }> {
+  return libraryRequest(token, "/user/watchlist");
+}
+
+export function addToWatchlist(token: string, type: LibraryTargetType, id: string): Promise<LibraryStatus> {
+  return libraryRequest(token, `/user/watchlist/${type}/${id}`, "POST");
+}
+
+export function removeFromWatchlist(token: string, type: LibraryTargetType, id: string): Promise<LibraryStatus> {
+  return libraryRequest(token, `/user/watchlist/${type}/${id}`, "DELETE");
+}
+
+export function getLibraryStatus(token: string, type: LibraryTargetType, id: string): Promise<LibraryStatus> {
+  return libraryRequest(token, `/user/library/${type}/${id}`);
+}
+
+export function getSeriesSubscriptions(token: string): Promise<{ data: LibraryItem[]; total: number }> {
+  return libraryRequest(token, "/user/subscriptions");
+}
+
+export function subscribeSeries(token: string, seriesId: string): Promise<{ subscribed: boolean }> {
+  return libraryRequest(token, `/user/subscriptions/series/${seriesId}`, "POST");
+}
+
+export function unsubscribeSeries(token: string, seriesId: string): Promise<{ subscribed: boolean }> {
+  return libraryRequest(token, `/user/subscriptions/series/${seriesId}`, "DELETE");
+}
+
+// Admin: link a suggestion to the movie/series added for it (notifies the user).
+export async function adminLinkSuggestion(
+  token: string,
+  suggestionId: string,
+  targetType: LibraryTargetType,
+  targetId: string
+): Promise<{ success: boolean; notified: boolean; linked_title: string; linked_slug: string }> {
+  const res = await fetch(`${API_URL}/admin/suggestions/${suggestionId}/link`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ target_type: targetType, target_id: targetId }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || "Bog'lab bo'lmadi");
+  return json;
+}
+
+// ─── "Siz uchun" + advanced movie filter ─────────────────────────────────────
+
+export async function getForYou(token: string, limit = 18): Promise<{ data: Movie[]; genres: string[] }> {
+  const res = await fetch(`${API_URL}/user/for-you?limit=${limit}`, { headers: authHeaders(token), cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to fetch recommendations");
+  const json = await res.json();
+  return {
+    data: (json.data || []).map((item: any) => normalizeMovieResponse(item)),
+    genres: Array.isArray(json.genres) ? json.genres : [],
+  };
+}
+
+export interface MovieFilterParams {
+  year_from?: number;
+  year_to?: number;
+  min_rating?: number;
+  country?: string;
+  duration?: "short" | "medium" | "long";
+  free?: boolean;
+  sort?: "new" | "popular" | "rating" | "year";
+}
+
+export interface MovieFilterFacets {
+  countries: string[];
+  year_min: number;
+  year_max: number;
+}
+
+export async function getMovieFilterFacets(): Promise<MovieFilterFacets> {
+  const res = await fetch(`${API_URL}/movies/filters`, { next: { revalidate: 600 } });
+  if (!res.ok) throw new Error("Failed to fetch filter options");
+  return res.json();
+}
+
+// ─── Premium funnel events + referral program ────────────────────────────────
+
+// Fire-and-forget: powers the admin "Premium sotib olish" funnel
+// (lock_view → cta_click → session → paid). Requires login server-side.
+export function recordPremiumEvent(
+  token: string | null | undefined,
+  eventType: "lock_view" | "cta_click",
+  target?: { type?: string; id?: string; pkg?: string }
+): void {
+  if (!token) return;
+  fetch(`${API_URL}/analytics/premium-event`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ event_type: eventType, target_type: target?.type, target_id: target?.id, package: target?.pkg }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
+// Only same-site relative paths are allowed as a post-purchase return target.
+export function safeReturnPath(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  return raw.startsWith("/") && !raw.startsWith("//") && !raw.includes("://") ? raw : null;
+}
+
+export interface MyReferral {
+  code: string;
+  link: string;
+  invited: number;
+  rewarded: number;
+  reward_days: number;
+  days_per_friend: number;
+  welcome_days: number;
+}
+
+export async function getMyReferral(token: string): Promise<MyReferral> {
+  const res = await fetch(`${API_URL}/user/referral`, { headers: authHeaders(token), cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to load referral");
+  return res.json();
+}
+
+export async function claimReferral(token: string, code: string): Promise<{ claimed: boolean; reason?: string }> {
+  const res = await fetch(`${API_URL}/user/referral/claim`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) throw new Error("Failed to claim referral");
+  return res.json();
+}
+
+// ─── Error tracking (admin) ──────────────────────────────────────────────────
+
+export interface ErrorGroup {
+  id: string;
+  source: "client" | "server";
+  kind: string;
+  message: string;
+  stack?: string;
+  last_url: string;
+  release?: string;
+  status?: number;
+  count: number;
+  user_count: number;
+  last_user_agent?: string;
+  first_seen: string;
+  last_seen: string;
+  resolved: boolean;
+}
+
+export async function getAdminErrors(token: string, source: "" | "client" | "server", includeResolved: boolean): Promise<ErrorGroup[]> {
+  const qs = new URLSearchParams();
+  if (source) qs.set("source", source);
+  if (includeResolved) qs.set("resolved", "1");
+  const res = await fetch(`${API_URL}/admin/errors?${qs}`, { headers: authHeaders(token), cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to load errors");
+  const json = await res.json();
+  return json.data || [];
+}
+
+export async function resolveAdminError(token: string, id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/errors/${id}/resolve`, { method: "POST", headers: authHeaders(token) });
+  if (!res.ok) throw new Error("Failed to resolve");
+}
+
+// Top reviews for structured data (server-side, cached 5 min). Never throws.
+export async function getTopReviewsForSeo(
+  targetType: "movie" | "series",
+  targetId: string
+): Promise<{ user_name: string; rating: number; text: string; created_at: string }[]> {
+  try {
+    const res = await fetch(`${API_URL}/reviews/${targetType}/${targetId}?sort=helpful&limit=3`, {
+      next: { revalidate: 300 },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    return Array.isArray(json.data) ? json.data.slice(0, 3) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function reviewsToJsonLd(reviews: { user_name: string; rating: number; text: string; created_at: string }[]) {
+  return reviews.map((r) => ({
+    "@type": "Review",
+    author: { "@type": "Person", name: r.user_name || "FilmoraUz foydalanuvchisi" },
+    reviewRating: { "@type": "Rating", ratingValue: r.rating, bestRating: 5, worstRating: 1 },
+    reviewBody: r.text,
+    datePublished: r.created_at ? r.created_at.slice(0, 10) : undefined,
+  }));
 }

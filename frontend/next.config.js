@@ -60,6 +60,14 @@ const nextConfig = {
         source: "/:path*.(ico|png|jpg|jpeg|webp|avif|svg|gif|woff|woff2|ttf|otf)",
         headers: [{ key: "Cache-Control", value: oneYear }],
       },
+      // Service worker must always be revalidated so updates roll out.
+      {
+        source: "/sw.js",
+        headers: [
+          { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
+          { key: "Service-Worker-Allowed", value: "/" },
+        ],
+      },
       // Next.js image optimizer output — long TTL, revalidate if origin changes.
       {
         source: "/_next/image:path*",

@@ -12,7 +12,7 @@ interface WatchButtonProps {
 }
 
 const buttonClass =
-  "inline-flex items-center gap-2 sm:gap-3 bg-brand-red hover:bg-orange-700 text-white font-semibold px-6 sm:px-8 py-3 sm:py-4 rounded-xl transition-colors text-sm sm:text-base";
+  "inline-flex items-center justify-center gap-2 sm:gap-3 bg-brand-red hover:bg-orange-700 text-white font-semibold px-6 sm:px-8 py-3 sm:py-4 rounded-xl transition-colors text-sm sm:text-base";
 
 export default function WatchButton({ isPremium }: WatchButtonProps) {
   const { user } = useAuth();

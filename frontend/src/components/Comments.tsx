@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight, MessageCircle, Trash2, Heart } from "lucide-react";
+import { ChevronDown, ChevronRight, MessageCircle, Trash2, Heart, Flag, EyeOff } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
   getMovieComments,
@@ -13,6 +13,9 @@ import {
   createReply,
   deleteComment,
   toggleCommentLike,
+  reportComment,
+  REPORT_REASON_LABELS,
+  ReportReason,
   Comment,
   CommentWithReplies,
 } from "@/lib/comments-api";
@@ -37,6 +40,7 @@ export default function CommentsSection({
   const [comments, setComments] = useState<CommentWithReplies[]>([]);
   const [loading, setLoading] = useState(true);
   const [newComment, setNewComment] = useState("");
+  const [newIsSpoiler, setNewIsSpoiler] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   // Track which comment is being replied to
@@ -93,12 +97,14 @@ export default function CommentsSection({
         token,
         effectiveTargetType,
         effectiveTargetId,
-        newComment.trim()
+        newComment.trim(),
+        newIsSpoiler
       );
       if (result.status === "pending") {
         setError("");
       }
       setNewComment("");
+      setNewIsSpoiler(false);
       loadComments();
     } catch (err: any) {
       setError(err.message);
@@ -218,13 +224,24 @@ export default function CommentsSection({
             maxLength={2000}
           />
           {error && <p className="text-red-500 text-sm mt-2">{error}</p>}
-          <button
-            type="submit"
-            disabled={submitting || !newComment.trim()}
-            className="mt-2 bg-brand-red hover:bg-orange-700 text-white font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {submitting ? "..." : tt.submit}
-          </button>
+          <div className="mt-2 flex flex-wrap items-center gap-4">
+            <button
+              type="submit"
+              disabled={submitting || !newComment.trim()}
+              className="bg-brand-red hover:bg-orange-700 text-white font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {submitting ? "..." : tt.submit}
+            </button>
+            <label className="inline-flex items-center gap-2 text-sm text-gray-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={newIsSpoiler}
+                onChange={(e) => setNewIsSpoiler(e.target.checked)}
+                className="h-4 w-4 accent-brand-red"
+              />
+              Spoyler bor
+            </label>
+          </div>
         </form>
       ) : (
         <div className="mb-8 p-4 glass-card border border-white/10 rounded-2xl">
@@ -319,6 +336,9 @@ function CommentThread({
   // Get reply content for this specific comment
   const replyContent = replyContents.get(comment.id) || "";
   const isOwner = currentUserId === comment.user_id;
+  const [spoilerRevealed, setSpoilerRevealed] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportState, setReportState] = useState<"idle" | "sending" | "sent">("idle");
   const relativeTime = formatRelativeAddedTime(comment.created_at);
   const isReplying = replyingTo === comment.id;
   const isExpanded = expandedThreads.has(comment.id);
@@ -339,6 +359,9 @@ function CommentThread({
     }
     if (role === "admin") {
       return { text: tt.admin || "Admin", className: "bg-brand-red" };
+    }
+    if (role === "moderator") {
+      return { text: "Moderator", className: "bg-blue-600" };
     }
     return null;
   };
@@ -418,8 +441,29 @@ function CommentThread({
           )}
         </div>
 
-        {/* Comment content */}
-        <p className="text-gray-300 mb-2">{comment.content}</p>
+        {/* Comment content — spoilers stay blurred until the reader opts in */}
+        {comment.is_spoiler && !spoilerRevealed ? (
+          <button
+            type="button"
+            onClick={() => setSpoilerRevealed(true)}
+            className="group relative mb-2 block w-full text-left"
+            aria-label="Spoylerni ko'rsatish"
+          >
+            <p className="text-gray-300 blur-sm select-none" aria-hidden>{comment.content}</p>
+            <span className="absolute inset-0 flex items-center justify-center">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-black/70 px-3 py-1 text-xs text-white group-hover:bg-black/85">
+                <EyeOff size={13} /> Spoyler — ko&apos;rish uchun bosing
+              </span>
+            </span>
+          </button>
+        ) : (
+          <p className="text-gray-300 mb-2">
+            {comment.is_spoiler && (
+              <span className="mr-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 align-middle">SPOYLER</span>
+            )}
+            {comment.content}
+          </p>
+        )}
 
         {/* Action row: Reply button + toggle for replies */}
         <div className="flex items-center gap-4">
@@ -464,6 +508,48 @@ function CommentThread({
                 </>
               )}
             </button>
+          )}
+          {/* Report ("shikoyat") — logged-in users, not on their own comments */}
+          {isAuthenticated && token && !isOwner && (
+            <div className="relative ml-auto">
+              {reportState === "sent" ? (
+                <span className="text-xs text-gray-500">Shikoyat yuborildi</span>
+              ) : (
+                <button
+                  onClick={() => setReportOpen((o) => !o)}
+                  className="text-gray-500 text-sm hover:text-amber-400 flex items-center gap-1"
+                  aria-expanded={reportOpen}
+                  title="Shikoyat qilish"
+                >
+                  <Flag size={13} />
+                  <span className="hidden sm:inline">Shikoyat</span>
+                </button>
+              )}
+              {reportOpen && (
+                <div className="absolute right-0 top-full z-20 mt-1 w-52 overflow-hidden rounded-lg border border-white/10 bg-black/95 py-1 text-sm shadow-xl">
+                  {(Object.keys(REPORT_REASON_LABELS) as ReportReason[]).map((reason) => (
+                    <button
+                      key={reason}
+                      disabled={reportState === "sending"}
+                      onClick={async () => {
+                        setReportState("sending");
+                        try {
+                          await reportComment(token, comment.id, reason);
+                          setReportState("sent");
+                        } catch {
+                          setReportState("idle");
+                        } finally {
+                          setReportOpen(false);
+                        }
+                      }}
+                      className="block w-full px-3 py-1.5 text-left text-gray-200 hover:bg-white/10 disabled:opacity-50"
+                    >
+                      {REPORT_REASON_LABELS[reason]}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </div>
 

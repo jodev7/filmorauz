@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Users, Search, ChevronLeft, ChevronRight, User, Shield, Crown, Ban, Unlock, X, ShieldCheck, Wallet } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { isModeratorRole, isStaffRole, ROLE_LABELS } from "@/lib/roles";
+import { readUrlNumber, readUrlParam, useSyncUrlParams } from "@/lib/url-state";
 import { getAdminUsers, updateAdminUserRole, updateAdminUserPremium, updateUserWallet, banUser, unbanUser, AdminUser } from "@/lib/api";
 
 // Check if a user is SuperAdmin (case-insensitive)
@@ -18,11 +20,27 @@ export default function AdminUsersPage() {
 
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(() => readUrlNumber("page", 1));
   const [limit] = useState(20);
   const [totalPages, setTotalPages] = useState(0);
-  const [search, setSearch] = useState("");
-  const [role, setRole] = useState("all");
+  // Filters live in the URL (?search=&role=&page=) — refresh/back keep the
+  // view, and the Ctrl+K palette can deep-link to a user.
+  const [searchInput, setSearchInput] = useState(() => readUrlParam("search", ""));
+  const [search, setSearch] = useState(() => readUrlParam("search", "").trim());
+  const [role, setRole] = useState(() => readUrlParam("role", "all"));
+
+  useSyncUrlParams({ search, role, page }, { search: "", role: "all", page: 1 });
+
+  // Debounce typing so every keystroke doesn't hit the API.
+  useEffect(() => {
+    const next = searchInput.trim();
+    if (next === search) return;
+    const t = setTimeout(() => {
+      setSearch(next);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput, search]);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [showBanModal, setShowBanModal] = useState(false);
@@ -38,7 +56,7 @@ export default function AdminUsersPage() {
 
   // Redirect if not admin
   useEffect(() => {
-    if (!authLoading && (!token || (user?.role !== "admin" && user?.role !== "superadmin"))) {
+    if (!authLoading && (!token || !isStaffRole(user?.role))) {
       router.push("/");
     }
   }, [authLoading, token, user, router]);
@@ -46,16 +64,23 @@ export default function AdminUsersPage() {
   // Fetch users
   useEffect(() => {
     if (!token) return;
+    let cancelled = false;
 
     setLoading(true);
     getAdminUsers(token, { page, limit, search: search || undefined, role: role !== "all" ? role : undefined })
       .then((data) => {
+        if (cancelled) return;
         setUsers(data.data);
         setTotal(data.total);
         setTotalPages(data.total_pages);
       })
       .catch(console.error)
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [token, page, search, role]);
 
   const handleRoleChange = async (userId: string, newRole: string) => {
@@ -178,6 +203,7 @@ export default function AdminUsersPage() {
     switch (r) {
       case "superadmin": return "bg-red-500/20 text-red-400";
       case "admin": return "bg-orange-500/20 text-orange-400";
+      case "moderator": return "bg-blue-500/20 text-blue-400";
       default: return "bg-green-500/20 text-green-400";
     }
   };
@@ -187,6 +213,7 @@ export default function AdminUsersPage() {
     switch (r) {
       case "superadmin": return <Crown size={14} />;
       case "admin": return <Shield size={14} />;
+      case "moderator": return <ShieldCheck size={14} />;
       default: return <User size={14} />;
     }
   };
@@ -199,7 +226,7 @@ export default function AdminUsersPage() {
     );
   }
 
-  if (!token || (user?.role !== "admin" && user?.role !== "superadmin")) {
+  if (!token || !isStaffRole(user?.role)) {
     return null;
   }
 
@@ -220,11 +247,8 @@ export default function AdminUsersPage() {
           <input
             type="text"
             placeholder="Username, Telegram ID yoki MongoDB ID bo'yicha qidiring..."
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             className="w-full bg-brand-card border border-brand-border rounded-lg pl-10 pr-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-brand-red"
           />
         </div>
@@ -240,6 +264,7 @@ export default function AdminUsersPage() {
         >
           <option value="all">Barcha rollar</option>
           <option value="user">Foydalanuvchi</option>
+          <option value="moderator">Moderator</option>
           <option value="admin">Admin</option>
           <option value="superadmin">Super Admin</option>
         </select>
@@ -381,6 +406,7 @@ export default function AdminUsersPage() {
                               className={`text-xs px-2 py-1 rounded border-0 cursor-pointer ${getRoleBadgeColor(u.role)} disabled:opacity-50 disabled:cursor-not-allowed`}
                             >
                               <option value="user">Foydalanuvchi</option>
+                              <option value="moderator">Moderator</option>
                               <option value="admin">Admin</option>
                               <option value="superadmin">Super Admin</option>
                             </select>
@@ -389,7 +415,7 @@ export default function AdminUsersPage() {
                       ) : (
                         <span className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded ${getRoleBadgeColor(u.role)}`}>
                           {getRoleIcon(u.role)}
-                          {u.role === "superadmin" ? "Super Admin" : u.role === "admin" ? "Admin" : "Foydalanuvchi"}
+                          {ROLE_LABELS[u.role] ?? "Foydalanuvchi"}
                         </span>
                       )}
                     </td>
@@ -415,8 +441,8 @@ export default function AdminUsersPage() {
                             <Wallet size={14} />
                           </button>
                         )}
-                        {isSuperAdmin(u.role) ? (
-                          // SuperAdmin - show protected indicator, no actions
+                        {isSuperAdmin(u.role) || (isModeratorRole(user?.role) && u.role !== "user") ? (
+                          // SuperAdmin (or, for moderators, any staff account) — protected, no actions
                           <span className="text-yellow-400 text-xs flex items-center gap-1" title="Himoyalangan hisob">
                             <ShieldCheck size={12} />
                             Himoyalangan

@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Server, Cpu, MemoryStick, HardDrive, CheckCircle2, XCircle, AlertTriangle, RefreshCw, Clock } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { getAdminSystemStatus, SystemHostStatus } from "@/lib/api";
+import { useVisibleInterval } from "@/lib/use-visible-interval";
 
 function formatUptime(sec: number): string {
   if (!sec || sec < 0) return "—";
@@ -171,24 +172,23 @@ export default function SystemStatusBlock() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (isActive: () => boolean = () => true) => {
     if (!token) return;
     try {
       const res = await getAdminSystemStatus(token);
+      if (!isActive()) return;
       setHosts(res.hosts);
       setError(null);
     } catch (e) {
+      if (!isActive()) return;
       setError(e instanceof Error ? e.message : "Failed to load");
     } finally {
-      setLoading(false);
+      if (isActive()) setLoading(false);
     }
   }, [token]);
 
-  useEffect(() => {
-    void reload();
-    const t = setInterval(reload, 30_000);
-    return () => clearInterval(t);
-  }, [reload]);
+  // Paused while the tab is hidden; refreshes immediately when it comes back.
+  useVisibleInterval(reload, 30_000);
 
   return (
     <div className="mb-8 sm:mb-10">
@@ -199,7 +199,7 @@ export default function SystemStatusBlock() {
           <span className="text-xs text-gray-500">har 30 soniyada yangilanadi</span>
         </div>
         <button
-          onClick={reload}
+          onClick={() => void reload()}
           className="flex items-center gap-1 text-xs text-gray-400 hover:text-white"
           title="Yangilash"
         >

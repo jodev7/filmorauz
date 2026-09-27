@@ -4,6 +4,15 @@ import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 
+// Public, crawlable catalogue pages (exact path or a sub-path).
+const PUBLIC_CONTENT_PREFIXES = ["/movies", "/series", "/watch", "/episode", "/collections", "/genres", "/person", "/lists", "/contact", "/copyright", "/dmca"];
+
+export function isPublicContentPath(pathname: string | null): boolean {
+  if (!pathname) return false;
+  if (pathname === "/") return true;
+  return PUBLIC_CONTENT_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"));
+}
+
 interface BanGuardProps {
   children: React.ReactNode;
   excludePaths?: string[];
@@ -40,8 +49,11 @@ export default function BanGuard({ children, excludePaths = [] }: BanGuardProps)
     }
   }, [user, isLoading, isBanned, pathname, router, excludePaths]);
 
-  // Show loading state while checking auth
-  if (isLoading) {
+  // While auth is loading, public catalogue pages still render so their
+  // content (and JSON-LD) is in the server HTML for crawlers. Every other
+  // page (admin, profile, premium, rooms...) keeps the loading gate: those
+  // decide redirects from auth state and expect it to be resolved.
+  if (isLoading && !isPublicContentPath(pathname)) {
     return (
       <div className="min-h-screen bg-brand-dark flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-brand-red"></div>
@@ -51,7 +63,7 @@ export default function BanGuard({ children, excludePaths = [] }: BanGuardProps)
 
   // If user is banned and not on excluded path, don't render children
   // The redirect will happen via the useEffect
-  if (user && isBanned && pathname !== "/banned") {
+  if (!isLoading && user && isBanned && pathname !== "/banned") {
     return (
       <div className="min-h-screen bg-brand-dark flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-brand-red"></div>

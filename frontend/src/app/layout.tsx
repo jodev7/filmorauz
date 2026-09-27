@@ -1,7 +1,10 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import { Bebas_Neue, Inter, Poppins } from "next/font/google";
 import "./globals.css";
+import ReferralCapture from "@/components/ReferralCapture";
+import PwaSupport from "@/components/PwaSupport";
+import ErrorReporter from "@/components/ErrorReporter";
 import { AuthProvider } from "@/lib/auth-context";
 import { I18nProvider } from "@/lib/i18n";
 import { AdSlotProvider } from "@/components/ads/AdSlotContext";
@@ -11,6 +14,8 @@ import InAppBrowserBanner from "@/components/InAppBrowserBanner";
 import PresencePinger from "@/components/PresencePinger";
 import AnnouncementGate from "@/components/AnnouncementGate";
 import AlertBanner from "@/components/AlertBanner";
+import SearchOverlay from "@/components/SearchOverlay";
+import BottomNav from "@/components/BottomNav";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 const GA_MEASUREMENT_ID = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID || "G-EJ1VL229GK";
@@ -93,6 +98,24 @@ export const metadata: Metadata = {
   },
   category: "entertainment",
   classification: "Movies, Streaming, Entertainment",
+  applicationName: "FilmoraUz",
+  appleWebApp: {
+    capable: true,
+    title: "FilmoraUz",
+    statusBarStyle: "black-translucent",
+  },
+  icons: {
+    icon: [
+      { url: "/favicon.png", type: "image/png" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0A0A0F",
+  colorScheme: "dark",
 };
 
 export default function RootLayout({
@@ -143,7 +166,8 @@ export default function RootLayout({
                   inLanguage: "uz",
                   potentialAction: {
                     "@type": "SearchAction",
-                    target: `${SITE_URL}/search?q={search_term_string}`,
+                    // /search does not exist — site search lives on /movies?search=
+                    target: `${SITE_URL}/movies?search={search_term_string}`,
                     "query-input": "required name=search_term_string",
                   },
                 },
@@ -156,16 +180,21 @@ export default function RootLayout({
         {/* Global ambient aurora — sits behind everything (z-index:-1). Admin
             pages render their own opaque background so it stays hidden there. */}
         <div className="ambient-bg" aria-hidden="true" />
+        <ErrorReporter />
         <AuthProvider>
           <I18nProvider>
             <AdSlotProvider>
               <BanGuardWrapper>
                 <AlertBanner />
                 <PresencePinger />
+                <ReferralCapture />
+                <PwaSupport />
                 <InAppBrowserBanner />
                 {children}
                 <FixedBottomAd placement="website_fixed_bottom" />
                 <AnnouncementGate />
+                <SearchOverlay />
+                <BottomNav />
               </BanGuardWrapper>
             </AdSlotProvider>
           </I18nProvider>

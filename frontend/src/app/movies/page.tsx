@@ -6,8 +6,10 @@ import Footer from "@/components/Footer";
 import MovieCard from "@/components/MovieCard";
 import SeriesCard from "@/components/SeriesCard";
 import GenreFilter from "@/components/GenreFilter";
+import MovieFilterBar from "@/components/MovieFilterBar";
+import RandomMovieButton from "@/components/RandomMovie";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
-import { getMovies, searchMovies, Movie } from "@/lib/api";
+import { getMovies, searchMovies, Movie, MovieFilterParams } from "@/lib/api";
 import { getSeries, type Series } from "@/lib/series-api";
 import { getTranslations } from "@/lib/i18n-server";
 import { localizeSingleGenre } from "@/lib/localization";
@@ -48,7 +50,46 @@ export async function generateMetadata({
 }
 
 interface Props {
-  searchParams: { genre?: string; page?: string; search?: string };
+  searchParams: {
+    genre?: string;
+    page?: string;
+    search?: string;
+    year_from?: string;
+    year_to?: string;
+    min_rating?: string;
+    country?: string;
+    duration?: string;
+    free?: string;
+    sort?: string;
+  };
+}
+
+function parseFilters(sp: Props["searchParams"]): MovieFilterParams {
+  const num = (v?: string) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+  const duration = sp.duration === "short" || sp.duration === "medium" || sp.duration === "long" ? sp.duration : undefined;
+  const sort = sp.sort === "popular" || sp.sort === "rating" || sp.sort === "year" ? sp.sort : undefined;
+  return {
+    year_from: num(sp.year_from),
+    year_to: num(sp.year_to),
+    min_rating: num(sp.min_rating),
+    country: sp.country?.trim() || undefined,
+    duration,
+    free: sp.free === "1",
+    sort,
+  };
+}
+
+// Keeps every active filter in pagination links.
+function pageHref(sp: Props["searchParams"], page: number): string {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(sp)) {
+    if (v && k !== "page" && k !== "search") qs.set(k, v);
+  }
+  qs.set("page", String(page));
+  return `/movies?${qs}`;
 }
 
 export default async function MoviesPage({ searchParams }: Props) {
@@ -57,6 +98,8 @@ export default async function MoviesPage({ searchParams }: Props) {
   const page = parseInt(searchParams.page || "1");
   const search = searchParams.search || "";
   const limit = 24;
+  const filters = parseFilters(searchParams);
+  const hasFilters = Object.values(filters).some(Boolean);
 
   let movies: Movie[] = [];
   let total = 0;
@@ -72,7 +115,7 @@ export default async function MoviesPage({ searchParams }: Props) {
       movies = await searchMovies(search);
       total = movies.length;
     } else {
-      const res = await getMovies({ genre, page, limit });
+      const res = await getMovies({ genre, page, limit, filters });
       movies = res.data || [];
       total = res.total;
     }
@@ -80,7 +123,7 @@ export default async function MoviesPage({ searchParams }: Props) {
     // show empty state
   }
 
-  if (genre && !search && page === 1) {
+  if (genre && !search && !hasFilters && page === 1) {
     try {
       const sres = await getSeries(1, limit, genre);
       series = sres.data || [];
@@ -102,14 +145,17 @@ export default async function MoviesPage({ searchParams }: Props) {
       <Navbar />
       <main className="min-h-screen pt-20 sm:pt-24">
         <div className="max-w-7xl mx-auto px-4">
-          <div className="mb-6 sm:mb-8">
-            <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-white tracking-wide mb-2">
-              {pageTitle}
-            </h1>
-            <p className="text-gray-500 text-sm">
-              {total} ta film
-              {series.length > 0 ? ` · ${series.length} ta serial` : ""} topildi
-            </p>
+          <div className="mb-6 sm:mb-8 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-white tracking-wide mb-2">
+                {pageTitle}
+              </h1>
+              <p className="text-gray-500 text-sm">
+                {total} ta film
+                {series.length > 0 ? ` · ${series.length} ta serial` : ""} topildi
+              </p>
+            </div>
+            {!search && <RandomMovieButton />}
           </div>
 
           <div className="mb-6">
@@ -117,11 +163,17 @@ export default async function MoviesPage({ searchParams }: Props) {
           </div>
 
           {!search && (
-            <div className="mb-6 sm:mb-8 overflow-x-auto pb-2">
+            <div className="mb-4 overflow-x-auto pb-2">
               <Suspense>
                 <GenreFilter />
               </Suspense>
             </div>
+          )}
+
+          {!search && (
+            <Suspense>
+              <MovieFilterBar />
+            </Suspense>
           )}
 
           {search && (
@@ -182,7 +234,7 @@ export default async function MoviesPage({ searchParams }: Props) {
             <div className="flex items-center justify-center gap-4 mt-12 pb-8 flex-wrap">
               {page > 1 && (
                 <Link
-                  href={`/movies?${new URLSearchParams({ ...(genre && { genre }), page: String(page - 1) })}`}
+                  href={pageHref(searchParams, page - 1)}
                   className="flex items-center gap-1 px-4 sm:px-5 py-2 glass-card border border-white/10 rounded-lg text-sm text-gray-300 hover:text-white hover:border-gray-500 transition-colors"
                 >
                   <ChevronLeft size={16} />
@@ -192,7 +244,7 @@ export default async function MoviesPage({ searchParams }: Props) {
               <span className="text-sm text-gray-500">Sahifa {page} / {totalPages}</span>
               {page < totalPages && (
                 <Link
-                  href={`/movies?${new URLSearchParams({ ...(genre && { genre }), page: String(page + 1) })}`}
+                  href={pageHref(searchParams, page + 1)}
                   className="flex items-center gap-1 px-4 sm:px-5 py-2 glass-card border border-white/10 rounded-lg text-sm text-gray-300 hover:text-white hover:border-gray-500 transition-colors"
                 >
                   Keyingi

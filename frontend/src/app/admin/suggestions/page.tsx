@@ -10,6 +10,9 @@ import {
   ExternalLink,
   User,
   Image,
+  Link2,
+  Search,
+  X,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -18,7 +21,11 @@ import {
   adminListSuggestions,
   adminUpdateSuggestion,
   adminGetSuggestionStats,
+  adminLinkSuggestion,
+  adminGlobalSearch,
+  AdminSearchResult,
 } from "@/lib/api";
+import { useToast } from "@/components/admin/Toast";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 
 type StatusFilter = "all" | "pending" | "accepted" | "rejected";
@@ -63,8 +70,112 @@ function TypeBadge({ type }: { type?: string }) {
   );
 }
 
+// Pick the movie/series that was added for a suggestion; linking marks it
+// accepted and notifies the user on the site + Telegram.
+function LinkContentModal({
+  token,
+  suggestion,
+  onClose,
+  onLinked,
+}: {
+  token: string;
+  suggestion: Suggestion;
+  onClose: () => void;
+  onLinked: () => void;
+}) {
+  const toast = useToast();
+  const [q, setQ] = useState(suggestion.title);
+  const [results, setResults] = useState<AdminSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [linking, setLinking] = useState<string | null>(null);
+
+  useEffect(() => {
+    const query = q.trim();
+    if (query.length < 2) {
+      setResults([]);
+      return;
+    }
+    const ctrl = new AbortController();
+    setSearching(true);
+    const t = setTimeout(() => {
+      adminGlobalSearch(token, query, ctrl.signal)
+        .then((r) => setResults(r.filter((x) => x.kind === "movie" || x.kind === "series")))
+        .catch(() => {})
+        .finally(() => !ctrl.signal.aborted && setSearching(false));
+    }, 250);
+    return () => {
+      clearTimeout(t);
+      ctrl.abort();
+    };
+  }, [q, token]);
+
+  const link = async (r: AdminSearchResult) => {
+    setLinking(r.id);
+    try {
+      const res = await adminLinkSuggestion(token, suggestion.id, r.kind as "movie" | "series", r.id);
+      toast.success(res.notified ? `Bog'landi — foydalanuvchiga xabar yuborildi` : "Bog'landi");
+      onLinked();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Bog'lab bo'lmadi");
+    } finally {
+      setLinking(null);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="w-full max-w-lg rounded-xl border border-brand-border bg-brand-card p-5">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold text-white">Qo&apos;shilgan kontentni tanlang</h3>
+            <p className="text-sm text-gray-400">
+              «{suggestion.title}» — foydalanuvchiga &quot;Tavsiyangiz qo&apos;shildi&quot; xabari va havola yuboriladi.
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-500 hover:text-white" aria-label="Yopish">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="relative mb-3">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Kino yoki serial nomi / kodi"
+            className="w-full rounded-lg border border-brand-border bg-brand-dark py-2 pl-9 pr-3 text-sm text-white focus:border-brand-red focus:outline-none"
+          />
+        </div>
+        <ul className="max-h-72 divide-y divide-brand-border/60 overflow-y-auto">
+          {results.length === 0 ? (
+            <li className="py-6 text-center text-sm text-gray-500">{searching ? "Qidirilmoqda..." : "Hech narsa topilmadi"}</li>
+          ) : (
+            results.map((r) => (
+              <li key={`${r.kind}:${r.id}`} className="flex items-center gap-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm text-white">{r.title}</p>
+                  <p className="text-xs text-gray-500">{r.subtitle}</p>
+                </div>
+                <button
+                  onClick={() => link(r)}
+                  disabled={!!linking}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-green-500/20 px-3 py-1.5 text-xs text-green-300 hover:bg-green-500/30 disabled:opacity-50"
+                >
+                  {linking === r.id ? <Loader2 size={13} className="animate-spin" /> : <Link2 size={13} />}
+                  Bog&apos;lash
+                </button>
+              </li>
+            ))
+          )}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminSuggestionsPage() {
   const { token } = useAuth();
+  const [linkTarget, setLinkTarget] = useState<Suggestion | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -278,6 +389,16 @@ export default function AdminSuggestionsPage() {
                         Admin: {suggestion.admin_message}
                       </div>
                     )}
+                    {suggestion.linked_slug && (
+                      <a
+                        href={`/${suggestion.linked_type === "series" ? "series" : "movies"}/${suggestion.linked_slug}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-1 inline-flex items-center gap-1 text-xs text-emerald-300 hover:underline"
+                      >
+                        <Link2 size={11} /> Qo&apos;shildi: {suggestion.linked_title || suggestion.linked_slug}
+                      </a>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <StatusBadge status={suggestion.status} />
@@ -286,6 +407,16 @@ export default function AdminSuggestionsPage() {
                     {formatDate(suggestion.created_at)}
                   </td>
                   <td className="px-4 py-3 text-right">
+                    <div className="flex justify-end gap-2">
+                    {suggestion.status !== "rejected" && !suggestion.linked_id && (
+                      <button
+                        onClick={() => setLinkTarget(suggestion)}
+                        className="p-2 rounded-lg bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30"
+                        title="Qo'shildi — kontentga bog'lash va foydalanuvchiga xabar berish"
+                      >
+                        <Link2 size={16} />
+                      </button>
+                    )}
                     {suggestion.status === "pending" && (
                       <div className="flex justify-end gap-2">
                         <button
@@ -316,6 +447,7 @@ export default function AdminSuggestionsPage() {
                         </button>
                       </div>
                     )}
+                    </div>
                   </td>
                 </tr>
               ))
@@ -403,6 +535,19 @@ export default function AdminSuggestionsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {linkTarget && token && (
+        <LinkContentModal
+          token={token}
+          suggestion={linkTarget}
+          onClose={() => setLinkTarget(null)}
+          onLinked={() => {
+            setLinkTarget(null);
+            fetchSuggestions();
+            fetchStats();
+          }}
+        />
       )}
     </div>
   );

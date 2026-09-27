@@ -49,8 +49,15 @@ type Suggestion struct {
 	AdminMessage    string             `bson:"admin_message,omitempty" json:"admin_message,omitempty"`
 	ReviewedBy      string             `bson:"reviewed_by,omitempty" json:"reviewed_by,omitempty"`
 	ReviewedAt      *time.Time         `bson:"reviewed_at,omitempty" json:"reviewed_at,omitempty"`
-	CreatedAt       time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt       time.Time          `bson:"updated_at" json:"updated_at"`
+	// Set when an admin links the suggestion to the movie/series that was
+	// added because of it ("Tavsiyangiz qo'shildi").
+	LinkedType  string     `bson:"linked_type,omitempty" json:"linked_type,omitempty"`
+	LinkedID    string     `bson:"linked_id,omitempty" json:"linked_id,omitempty"`
+	LinkedSlug  string     `bson:"linked_slug,omitempty" json:"linked_slug,omitempty"`
+	LinkedTitle string     `bson:"linked_title,omitempty" json:"linked_title,omitempty"`
+	LinkedAt    *time.Time `bson:"linked_at,omitempty" json:"linked_at,omitempty"`
+	CreatedAt   time.Time  `bson:"created_at" json:"created_at"`
+	UpdatedAt   time.Time  `bson:"updated_at" json:"updated_at"`
 }
 
 // SuggestionInput is used for creating a suggestion via JSON

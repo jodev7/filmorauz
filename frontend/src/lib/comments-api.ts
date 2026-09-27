@@ -26,6 +26,8 @@ export interface Comment {
   replies?: Comment[]; // Nested replies
   likes_count?: number;
   liked_by_me?: boolean;
+  is_spoiler?: boolean;
+  reports_count?: number;
   user?: {
     id: string;
     display_name?: string;
@@ -150,9 +152,11 @@ export async function createComment(
   movieId: string,
   content: string,
   targetType?: string,
-  targetId?: string
+  targetId?: string,
+  isSpoiler = false
 ): Promise<CreateCommentResponse> {
-  const body: Record<string, string> = { content };
+  const body: Record<string, string | boolean> = { content };
+  if (isSpoiler) body.is_spoiler = true;
   
   // If targetType and targetId are provided, use the new format
   if (targetType && targetId) {
@@ -177,24 +181,26 @@ export async function createTargetComment(
   token: string,
   targetType: string,
   targetId: string,
-  content: string
+  content: string,
+  isSpoiler = false
 ): Promise<CreateCommentResponse> {
   // For backward compatibility, use movieId as targetId when targetType is movie
   const movieId = targetId; // Use targetId as movieId for backward compat
   
-  return createComment(token, movieId, content, targetType, targetId);
+  return createComment(token, movieId, content, targetType, targetId, isSpoiler);
 }
 
 // Create a reply (authenticated)
 export async function createReply(
   token: string,
   commentId: string,
-  content: string
+  content: string,
+  isSpoiler = false
 ): Promise<CreateCommentResponse> {
   const res = await fetch(`${API_URL}/v1/comments/${commentId}/replies`, {
     method: "POST",
     headers: authHeaders(token),
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(isSpoiler ? { content, is_spoiler: true } : { content }),
   });
   const json = await res.json();
   if (!res.ok) {
@@ -342,4 +348,125 @@ export async function updateCommentSettings(
     throw new Error(json.error || "Failed to update comment settings");
   }
   return res.json();
+}
+
+// ─── Comment reports ("shikoyat") ────────────────────────────────────────────
+
+export type ReportReason = "spam" | "haqorat" | "spoyler" | "boshqa";
+
+export const REPORT_REASON_LABELS: Record<ReportReason, string> = {
+  spam: "Spam / reklama",
+  haqorat: "Haqorat yoki nafrat",
+  spoyler: "Belgilanmagan spoyler",
+  boshqa: "Boshqa",
+};
+
+export async function reportComment(
+  token: string,
+  commentId: string,
+  reason: ReportReason
+): Promise<{ reported: boolean; already?: boolean; hidden?: boolean }> {
+  const res = await fetch(`${API_URL}/v1/comments/${commentId}/report`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ reason }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Shikoyat yuborilmadi");
+  return json;
+}
+
+export interface ReportedComment {
+  id: string;
+  content: string;
+  status: string;
+  auto_hidden: boolean;
+  reports_count: number;
+  reasons?: ReportReason[];
+  author_id: string;
+  author_name: string;
+  target_type: string;
+  target_id: string;
+  target_title: string;
+  target_slug: string;
+  created_at: string;
+  reported_at: string;
+}
+
+export async function getReportedComments(token: string): Promise<ReportedComment[]> {
+  const res = await fetch(`${API_URL}/v1/admin/comments/reported`, { headers: authHeaders(token), cache: "no-store" });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Failed to load reported comments");
+  return json.data || [];
+}
+
+export async function dismissCommentReports(token: string, commentId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/v1/admin/comments/${commentId}/dismiss-reports`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new Error(json.error || "Failed to dismiss reports");
+  }
+}
+
+// ─── Reviews ("qisqa taqriz") ────────────────────────────────────────────────
+
+export interface Review {
+  id: string;
+  target_type: "movie" | "series";
+  target_id: string;
+  user_id: string;
+  user_name: string;
+  user_avatar?: string;
+  user_premium: boolean;
+  rating: number;
+  text: string;
+  helpful_count: number;
+  helpful_by_me: boolean;
+  mine: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getReviews(
+  targetType: "movie" | "series",
+  targetId: string,
+  sort: "helpful" | "new",
+  token?: string | null
+): Promise<{ data: Review[]; total: number }> {
+  const res = await fetch(`${API_URL}/reviews/${targetType}/${targetId}?sort=${sort}`, {
+    headers: token ? authHeaders(token) : undefined,
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error("Failed to load reviews");
+  return res.json();
+}
+
+export async function saveReview(token: string, targetType: "movie" | "series", targetId: string, rating: number, text: string): Promise<void> {
+  const res = await fetch(`${API_URL}/user/reviews/${targetType}/${targetId}`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ rating, text }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Taqriz saqlanmadi");
+}
+
+export async function deleteMyReview(token: string, targetType: "movie" | "series", targetId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/user/reviews/${targetType}/${targetId}`, { method: "DELETE", headers: authHeaders(token) });
+  if (!res.ok) throw new Error("Taqriz o'chirilmadi");
+}
+
+export async function toggleReviewHelpful(token: string, reviewId: string): Promise<{ helpful_by_me: boolean; helpful_count: number }> {
+  const res = await fetch(`${API_URL}/user/review-helpful/${reviewId}`, { method: "POST", headers: authHeaders(token) });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "Xatolik");
+  return json;
+}
+
+export async function adminDeleteReview(token: string, reviewId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/v1/admin/reviews/${reviewId}`, { method: "DELETE", headers: authHeaders(token) });
+  if (!res.ok) throw new Error("Taqriz o'chirilmadi");
 }

@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import Script from "next/script";
 import { ChevronLeft } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
@@ -9,6 +8,7 @@ import SeasonList from "@/components/SeasonList";
 import { getSeriesBySlug } from "@/lib/series-api";
 import { buildSeasonUrl, buildSeriesPath, buildSeriesUrl, SITE_URL } from "@/lib/content-routes";
 import { buildContentDescription, buildContentKeywords, buildContentTitle, pickSeoImage } from "@/lib/seo";
+import JsonLd from "@/components/JsonLd";
 
 interface Props {
   params: { slug: string; seasonNumber: string };
@@ -95,11 +95,7 @@ export default async function SeasonPage({ params }: Props) {
 
   return (
     <>
-      <Script
-        id="season-schema"
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(seasonJsonLd) }}
-      />
+      <JsonLd data={seasonJsonLd} />
       <Navbar />
       <main className="min-h-screen pt-20 sm:pt-24">
         <div className="max-w-7xl mx-auto px-4 pb-12">
@@ -123,6 +119,7 @@ export default async function SeasonPage({ params }: Props) {
             seriesBackdropUrl={data.series.backdrop_url}
             seriesPosterUrl={data.series.poster_url}
             seriesSlug={data.series.slug}
+            seriesId={data.series.id}
           />
         </div>
       </main>

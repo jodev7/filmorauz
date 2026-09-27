@@ -38,6 +38,11 @@ type MovieComment struct {
 	IsPremiumUser bool                 `bson:"is_premium_user" json:"is_premium_user"`
 	LikedBy       []primitive.ObjectID `bson:"liked_by,omitempty" json:"liked_by,omitempty"`
 	LikesCount    int                  `bson:"likes_count" json:"likes_count"`
+
+	// Author marked the comment as a spoiler — shown blurred until clicked.
+	IsSpoiler bool `bson:"is_spoiler,omitempty" json:"is_spoiler,omitempty"`
+	// User reports ("shikoyat"); see comment_reports collection.
+	ReportsCount int `bson:"reports_count,omitempty" json:"reports_count,omitempty"`
 }
 
 // CommentWithUser combines comment with user info for API responses
@@ -71,6 +76,9 @@ type CommentWithUser struct {
 	LikesCount int                  `json:"likes_count"`
 	LikedByMe  bool                 `json:"liked_by_me"`
 	LikedBy    []primitive.ObjectID `json:"-"`
+	// Spoiler flag + report count
+	IsSpoiler    bool `json:"is_spoiler,omitempty"`
+	ReportsCount int  `json:"reports_count,omitempty"`
 }
 
 // CommentModerationSettings holds global moderation settings

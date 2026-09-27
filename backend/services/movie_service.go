@@ -439,6 +439,16 @@ func (s *MovieService) ListMovies(genre string, page, limit int) ([]models.Movie
 	return s.repo.List(genre, page, limit)
 }
 
+// ListMoviesFiltered backs the advanced filter on the public /movies page.
+func (s *MovieService) ListMoviesFiltered(f repositories.MovieListFilter, page, limit int) ([]models.Movie, int64, error) {
+	return s.repo.ListFiltered(f, page, limit)
+}
+
+// MovieFilterFacets returns the countries / year range the filter UI offers.
+func (s *MovieService) MovieFilterFacets() (*repositories.MovieFilterFacets, error) {
+	return s.repo.FilterFacets()
+}
+
 // ListMostViewed returns the most-viewed published movies.
 func (s *MovieService) ListMostViewed(limit int) ([]models.Movie, error) {
 	return s.repo.ListMostViewed(limit)
@@ -533,6 +543,8 @@ func (s *MovieService) CreateMovie(input *models.MovieInput) (*models.Movie, err
 		Year:               input.Year,
 		Genre:              normalizeMovieGenres(input.Genre),
 		Country:            input.Country,
+		Cast:               cleanCredits(input.Cast),
+		Director:           derefTrim(input.Director),
 		VideoURL:           input.VideoURL,
 		EmbedURL:           input.EmbedURL,
 		SourceType:         input.SourceType,
@@ -621,6 +633,12 @@ func (s *MovieService) UpdateMovie(id string, input *models.MovieInput) (*models
 	// Normalize genres: trim, lowercase, dedupe before saving
 	existing.Genre = normalizeMovieGenres(input.Genre)
 	existing.Country = input.Country
+	if input.Cast != nil {
+		existing.Cast = cleanCredits(input.Cast)
+	}
+	if input.Director != nil {
+		existing.Director = derefTrim(input.Director)
+	}
 	if input.VideoURL != "" {
 		existing.VideoURL = input.VideoURL
 	}
@@ -1181,11 +1199,6 @@ func calculateWebsiteURL(slug string, baseURL string) string {
 	return fmt.Sprintf("%s/movies/%s", baseURL, slug)
 }
 
-// ListAllMoviesAdmin returns all movies regardless of approval status for admin dashboard.
-func (s *MovieService) ListAllMoviesAdmin(page, limit int) ([]models.Movie, int64, error) {
-	return s.repo.ListAdmin(page, limit)
-}
-
 // SetMovieApprovalStatus approves or rejects a movie.
 func (s *MovieService) SetMovieApprovalStatus(id, status, byUserID string) error {
 	if status == "approved" {
@@ -1339,4 +1352,33 @@ func (s *MovieService) GetRecommendationsAdvanced(movieID string, userID string,
 		limit = 12
 	}
 	return s.repo.GetRecommendations(movieID, userID, limit)
+}
+
+// cleanCredits trims, drops empties and de-duplicates a cast list.
+func cleanCredits(in *[]string) []string {
+	if in == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(*in))
+	for _, name := range *in {
+		name = strings.Join(strings.Fields(name), " ")
+		key := strings.ToLower(name)
+		if name == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, name)
+		if len(out) == 30 {
+			break
+		}
+	}
+	return out
+}
+
+func derefTrim(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return strings.TrimSpace(*s)
 }

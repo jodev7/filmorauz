@@ -1,20 +1,18 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { Search, Menu, X, Film, User, LogIn, Crown, Lightbulb } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { useAuth } from "@/lib/auth-context";
-import { searchMovies, Movie } from "@/lib/api";
+import { openSearch } from "@/lib/search-overlay";
 import TelegramLoginModal from "./TelegramLoginModal";
 import SuggestionModal from "./SuggestionModal";
 import NotificationBell from "./NotificationBell";
 import ActiveRoomBadge from "./ActiveRoomBadge";
 import { resolveIsPremium } from "./PremiumComponents";
 import Logo from "./Logo";
-import { getLocalizedTitle, getLocalizedGenres } from "@/lib/localization";
-import { DEFAULT_AVATAR_PLACEHOLDER, DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
+import { DEFAULT_AVATAR_PLACEHOLDER } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
 
 const GENRE_NAV_LINKS = [
@@ -25,13 +23,7 @@ const GENRE_NAV_LINKS = [
 
 export default function Navbar() {
   const { t } = useI18n();
-  const [searchOpen, setSearchOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<Movie[]>([]);
-  const [searching, setSearching] = useState(false);
-  const searchRef = useRef<HTMLDivElement>(null);
-  const router = useRouter();
   const { isAuthenticated, user, isLoading, checkAuthStatus } = useAuth();
   const [loginModalOpen, setLoginModalOpen] = useState(false);
   const [suggestionModalOpen, setSuggestionModalOpen] = useState(false);
@@ -57,38 +49,6 @@ export default function Navbar() {
     }
   }, [checkAuthStatus]);
 
-  // Debounced search
-  useEffect(() => {
-    if (!query.trim()) {
-      setResults([]);
-      return;
-    }
-    const timer = setTimeout(async () => {
-      setSearching(true);
-      try {
-        const data = await searchMovies(query);
-        setResults(data || []);
-      } catch {
-        setResults([]);
-      } finally {
-        setSearching(false);
-      }
-    }, 350);
-    return () => clearTimeout(timer);
-  }, [query]);
-
-  // Close dropdown on outside click
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
-        setResults([]);
-        setSearchOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
-
   // Close mobile menu on resize to desktop. Tied to the same breakpoint as the
   // desktop nav (lg = 1024px) so iPad widths (768–1023) stay on the tablet
   // header where the nav links live in the menu, not the bar.
@@ -101,28 +61,6 @@ export default function Navbar() {
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
-
-  const handleMovieClick = (slug: string, targetType?: string) => {
-    setResults([]);
-    setSearchOpen(false);
-    setQuery("");
-    setMenuOpen(false);
-    if (targetType === "series") {
-      router.push(`/series/${slug}`);
-    } else {
-      router.push(`/movies/${slug}`);
-    }
-  };
-
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (query.trim()) {
-      setResults([]);
-      setSearchOpen(false);
-      setMenuOpen(false);
-      router.push(`/movies?search=${encodeURIComponent(query)}`);
-    }
-  };
 
   return (
     <header className="fixed top-[var(--site-alert-h)] left-0 right-0 z-[70] px-2 sm:px-4 pt-[env(safe-area-inset-top)]">
@@ -184,89 +122,15 @@ export default function Navbar() {
 
         {/* Right side: Search + mobile menu */}
         <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
-          {/* Search */}
-          <div ref={searchRef} className="relative">
-            {searchOpen ? (
-              <form onSubmit={handleSearchSubmit} className="flex items-center">
-                <input
-                  autoFocus
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder={t("common.searchPlaceholder")}
-                  className="bg-black/60 border border-white/15 rounded-full px-4 py-2 text-sm text-white placeholder-zinc-400 focus:outline-none focus:border-orange-500 w-44 sm:w-64 transition-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchOpen(false);
-                    setQuery("");
-                    setResults([]);
-                  }}
-                  className="ml-2 text-zinc-300 hover:text-white"
-                  aria-label="Qidiruvni yopish"
-                >
-                  <X size={18} aria-hidden="true" />
-                </button>
-              </form>
-            ) : (
-              <button
-                onClick={() => setSearchOpen(true)}
-                className="text-zinc-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5"
-                aria-label={t("common.search")}
-              >
-                <Search size={20} />
-              </button>
-            )}
-
-            {/* Search dropdown */}
-            {results.length > 0 && (
-              <div className="absolute top-full right-0 mt-2 w-[calc(100vw-2rem)] max-w-[18rem] sm:w-72 glass-strong rounded-2xl overflow-hidden shadow-2xl">
-                {searching && (
-                  <div className="px-4 py-2 text-xs text-zinc-500">
-                    {t("common.loading")}
-                  </div>
-                )}
-                {results.slice(0, 6).map((item: any) => {
-                  const posterSrc = item.poster_url;
-                  return (
-                  <button
-                    key={item.id}
-                    onClick={() => handleMovieClick(item.slug, item.target_type)}
-                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#1e1e2e] transition-colors text-left"
-                  >
-                    <MediaImage
-                      src={posterSrc}
-                      alt={getLocalizedTitle(item)}
-                      fallbackSrc={DEFAULT_POSTER_PLACEHOLDER}
-                      className="w-8 h-12 object-cover rounded shrink-0"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm font-medium text-white truncate">
-                          {item.code && (
-                            <span className="text-zinc-500 font-mono text-[10px] mr-1">
-                              #{item.code}
-                            </span>
-                          )}
-                          {getLocalizedTitle(item)}
-                        </p>
-                        {item.quality && (
-                          <span className="shrink-0 text-[10px] font-bold px-1 rounded bg-brand-red/20 text-brand-red border border-brand-red/30">
-                            {item.quality}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-zinc-500">
-                        {item.year} · {item.target_type === "series" ? "Serial" : "Kino"}
-                      </p>
-                    </div>
-                  </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          {/* Search (opens the full-screen overlay) */}
+          <button
+            onClick={() => openSearch()}
+            className="hidden md:inline-flex text-zinc-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5"
+            aria-label={t("common.search")}
+            title="Qidiruv ( / )"
+          >
+            <Search size={20} />
+          </button>
 
           {/* Auth button or User avatar */}
           {!isLoading && (
@@ -284,7 +148,7 @@ export default function Navbar() {
                 </button>
                 <Link
                   href="/user"
-                  className="flex items-center justify-center w-10 h-10 rounded-full glass-card border border-white/10 hover:border-orange-500/50 transition-colors relative"
+                  className="hidden sm:flex items-center justify-center w-10 h-10 rounded-full glass-card border border-white/10 hover:border-orange-500/50 transition-colors relative"
                   aria-label="Profile"
                 >
                   {(user?.profile_image_url || user?.photo_url) ? (() => {
@@ -335,64 +199,16 @@ export default function Navbar() {
       {menuOpen && (
         <div className="menu-drop lg:hidden border-t border-white/10 px-4 py-4 flex flex-col gap-1">
           {/* Mobile search */}
-          <form
-            onSubmit={handleSearchSubmit}
-            className="flex items-center gap-2 mb-3"
+          <button
+            onClick={() => {
+              setMenuOpen(false);
+              openSearch();
+            }}
+            className="mb-3 flex w-full items-center gap-2 rounded-full border border-white/15 bg-black/60 px-4 py-2.5 text-left text-sm text-zinc-400"
           >
-            <div className="relative flex-1">
-              <Search
-                size={15}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
-              />
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder={t("common.searchPlaceholder")}
-                className="w-full bg-black/60 border border-white/15 rounded-full pl-9 pr-4 py-2.5 text-sm text-white placeholder-zinc-400 focus:outline-none focus:border-orange-500 transition-colors"
-              />
-            </div>
-            <button
-              type="submit"
-              className="bg-orange-500 text-white px-3 py-2.5 rounded-lg text-sm font-medium"
-            >
-              {t("common.search")}
-            </button>
-          </form>
-
-          {/* Mobile search results */}
-          {results.length > 0 && (
-            <div className="glass-strong rounded-2xl overflow-hidden mb-3">
-              {results.slice(0, 4).map((item: any) => {
-                const posterSrc = item.poster_url;
-                return (
-                <button
-                  key={item.id}
-                  onClick={() => handleMovieClick(item.slug, item.target_type)}
-                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#1e1e2e] transition-colors text-left border-b border-white/5 last:border-0"
-                >
-                  <MediaImage
-                    src={posterSrc}
-                    alt={getLocalizedTitle(item)}
-                    fallbackSrc={DEFAULT_POSTER_PLACEHOLDER}
-                    className="w-8 h-12 object-cover rounded shrink-0"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-sm font-medium text-white truncate">{getLocalizedTitle(item)}</p>
-                      {item.quality && (
-                        <span className="shrink-0 text-[10px] font-bold px-1 rounded bg-brand-red/20 text-brand-red border border-brand-red/30">
-                          {item.quality}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-zinc-500">{item.year} · {item.target_type === "series" ? "Serial" : "Kino"}</p>
-                  </div>
-                </button>
-                );
-              })}
-            </div>
-          )}
+            <Search size={15} className="text-zinc-500" />
+            {t("common.searchPlaceholder")}
+          </button>
 
           {/* Nav links */}
           {[

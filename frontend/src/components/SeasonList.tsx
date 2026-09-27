@@ -1,13 +1,15 @@
 "use client";
 
-import { SyntheticEvent, useState } from "react";
+import { MouseEvent, SyntheticEvent, useMemo, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronUp, Play, Clock } from "lucide-react";
+import { ChevronDown, ChevronUp, Play, Clock, Check, CheckCheck } from "lucide-react";
 import { SeasonWithEpisodes, Episode } from "@/lib/series-api";
 import { formatDuration } from "@/lib/movie-utils";
 import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 import { buildBestEpisodePath } from "@/lib/content-routes";
 import MediaImage from "@/components/ui/MediaImage";
+import { useSeriesProgress } from "@/lib/use-series-progress";
+import { deleteHistoryEntry, EpisodeProgress, markAsWatched } from "@/lib/api";
 
 interface SeasonListProps {
   seasons: SeasonWithEpisodes[];
@@ -15,6 +17,8 @@ interface SeasonListProps {
   seriesBackdropUrl?: string;
   seriesPosterUrl?: string;
   seriesSlug?: string;
+  /** Enables per-user watched state (checkmarks, progress, mark-watched). */
+  seriesId?: string;
 }
 
 function isKnownBrokenEpisodeThumbnail(url?: string | null): boolean {
@@ -63,7 +67,32 @@ export default function SeasonList({
   seriesBackdropUrl,
   seriesPosterUrl,
   seriesSlug,
+  seriesId,
 }: SeasonListProps) {
+  const { progress, refresh, token } = useSeriesProgress(seriesId);
+  const progressById = useMemo(() => {
+    const m = new Map<string, EpisodeProgress>();
+    progress?.episodes.forEach((e) => m.set(e.episode_id, e));
+    return m;
+  }, [progress]);
+  const [busyEpisode, setBusyEpisode] = useState<string | null>(null);
+
+  const toggleWatched = async (e: MouseEvent, episodeId: string, completed: boolean) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!token || busyEpisode) return;
+    setBusyEpisode(episodeId);
+    try {
+      if (completed) await deleteHistoryEntry(token, "episode", episodeId);
+      else await markAsWatched(token, "episode", episodeId);
+      refresh();
+    } catch {
+      // leave state as is; the next refresh shows the truth
+    } finally {
+      setBusyEpisode(null);
+    }
+  };
+
   // Defensive: ensure seasons is always an array
   const safeSeasons = Array.isArray(seasons) ? seasons : [];
 
@@ -98,6 +127,11 @@ export default function SeasonList({
         <span className="glass-card px-3 py-1 rounded-full border border-white/10">
           {totalEpisodes} {totalEpisodes === 1 ? "epizod" : "epizod"}
         </span>
+        {progress && progress.watched > 0 && (
+          <span className="glass-card px-3 py-1 rounded-full border border-emerald-500/30 text-emerald-300 flex items-center gap-1">
+            <CheckCheck size={14} /> {progress.watched}/{progress.total} ko&apos;rildi
+          </span>
+        )}
       </div>
 
       {/* Season list */}
@@ -131,6 +165,12 @@ export default function SeasonList({
                   </h3>
                   <div className="text-sm text-gray-400">
                     {episodes.length} epizod
+                    {(() => {
+                      const done = episodes.filter((ep) => progressById.get(ep.id)?.completed).length;
+                      return done > 0 ? (
+                        <span className="text-emerald-400"> · {done === episodes.length ? "hammasi ko'rildi" : `${done} ta ko'rildi`}</span>
+                      ) : null;
+                    })()}
                   </div>
                 </div>
               </div>
@@ -158,6 +198,9 @@ export default function SeasonList({
                       seriesPosterUrl
                     );
                     const hasThumbnail = Boolean(thumbnailUrl);
+                    const ep = progressById.get(episode.id);
+                    const watched = !!ep?.completed;
+                    const partial = !watched && (ep?.progress_percent ?? 0) > 0;
 
                     return (
                       <Link
@@ -205,6 +248,33 @@ export default function SeasonList({
                             </span>
                           </div>
 
+                          {/* Watched state */}
+                          {watched && (
+                            <div className="absolute inset-0 bg-black/45 pointer-events-none" aria-hidden="true" />
+                          )}
+                          {token && seriesId && (
+                            <button
+                              type="button"
+                              onClick={(e) => toggleWatched(e, episode.id, watched)}
+                              disabled={busyEpisode === episode.id}
+                              title={watched ? "Ko'rilmagan deb belgilash" : "Ko'rildi deb belgilash"}
+                              aria-label={watched ? "Ko'rilmagan deb belgilash" : "Ko'rildi deb belgilash"}
+                              aria-pressed={watched}
+                              className={`absolute top-2 right-2 z-10 flex h-7 w-7 items-center justify-center rounded-full border transition-all ${
+                                watched
+                                  ? "border-emerald-400 bg-emerald-500 text-white"
+                                  : "border-white/30 bg-black/60 text-white/80 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:border-emerald-400 hover:text-emerald-300"
+                              } ${busyEpisode === episode.id ? "animate-pulse" : ""}`}
+                            >
+                              <Check size={14} strokeWidth={3} />
+                            </button>
+                          )}
+                          {partial && (
+                            <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/60" aria-label={`${Math.round(ep!.progress_percent)}% ko'rilgan`}>
+                              <div className="h-full bg-brand-red" style={{ width: `${Math.min(100, Math.max(3, ep!.progress_percent))}%` }} />
+                            </div>
+                          )}
+
                           {/* Duration */}
                           {episode.duration > 0 && (
                             <div className="absolute bottom-2 right-2">
@@ -219,10 +289,15 @@ export default function SeasonList({
                         {/* Info */}
                         <div className="p-2">
                           <div className={`text-sm font-medium truncate ${
-                            isActive ? "text-brand-red" : "text-white group-hover:text-brand-red"
+                            isActive ? "text-brand-red" : watched ? "text-gray-400 group-hover:text-brand-red" : "text-white group-hover:text-brand-red"
                           }`}>
                             {episode.title}
                           </div>
+                          {(watched || partial) && (
+                            <div className={`mt-0.5 text-[11px] ${watched ? "text-emerald-400" : "text-gray-400"}`}>
+                              {watched ? "Ko'rildi" : `${Math.round(ep!.progress_percent)}% ko'rildi`}
+                            </div>
+                          )}
                         </div>
                       </Link>
                     );

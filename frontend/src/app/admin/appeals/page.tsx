@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+import { isStaffRole } from "@/lib/roles";
 import { getAppeals, getAppealStats, reviewAppeal, BanAppeal } from "@/lib/api";
 import { 
   MessageSquare, Search, Filter, CheckCircle, XCircle, Clock, 
@@ -43,7 +44,7 @@ export default function AdminAppealsPage() {
       return;
     }
     
-    if (user.role !== "admin" && user.role !== "superadmin") {
+    if (!isStaffRole(user.role)) {
       router.push("/");
       return;
     }

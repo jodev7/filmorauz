@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Users, Search, Ban, Unlock, X, Clock, Shield, User, AlertTriangle, ExternalLink } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { isStaffRole } from "@/lib/roles";
 import { getBannedUsers, unbanUser, BannedUser } from "@/lib/api";
 
 export default function AdminBannedUsersPage() {
@@ -21,7 +22,7 @@ export default function AdminBannedUsersPage() {
 
   // Redirect if not admin
   useEffect(() => {
-    if (!authLoading && (!token || (user?.role !== "admin" && user?.role !== "superadmin"))) {
+    if (!authLoading && (!token || !isStaffRole(user?.role))) {
       router.push("/");
     }
   }, [authLoading, token, user, router]);
@@ -100,7 +101,7 @@ export default function AdminBannedUsersPage() {
     );
   }
 
-  if (!token || (user?.role !== "admin" && user?.role !== "superadmin")) {
+  if (!token || !isStaffRole(user?.role)) {
     return null;
   }
 

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Film, Send, Loader2, CheckCircle, XCircle } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { isFullAdminRole, isModeratorRole, MODERATOR_HOME } from "@/lib/roles";
 
 export default function AdminLoginPage() {
   const { isAuthenticated, user, startTelegramAuth, checkAuthStatus, logout } = useAuth();
@@ -18,8 +19,9 @@ export default function AdminLoginPage() {
   // Redirect if already authenticated as admin
   useEffect(() => {
     if (isAuthenticated && user) {
-      const isAdmin = user.role === "admin" || user.role === "superadmin";
-      if (isAdmin) {
+      if (isModeratorRole(user.role)) {
+        router.replace(MODERATOR_HOME);
+      } else if (isFullAdminRole(user.role)) {
         router.replace("/admin/dashboard");
       } else {
         logout().then(() => setStatus("denied"));

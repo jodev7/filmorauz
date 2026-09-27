@@ -94,6 +94,8 @@ func (r *WatchHistoryRepository) upsertHistory(
 		"watched_at":        now,
 		"last_watched_at":   now,
 		"updated_at":        now,
+		// Watching again brings a title back into "continue watching".
+		"hidden_from_continue": false,
 	}
 	if targetType == "movie" {
 		setFields["movie_id"] = targetID
@@ -197,9 +199,10 @@ func (r *WatchHistoryRepository) GetContinueWatching(userID primitive.ObjectID, 
 
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{
-			"user_id":          userID,
-			"completed":        false,
-			"progress_percent": bson.M{"$gt": 0, "$lt": 90},
+			"user_id":              userID,
+			"completed":            false,
+			"progress_percent":     bson.M{"$gt": 0, "$lt": 90},
+			"hidden_from_continue": bson.M{"$ne": true},
 		}}},
 		{{Key: "$addFields", Value: bson.M{
 			"effective_target_type": bson.M{

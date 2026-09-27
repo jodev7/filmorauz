@@ -90,6 +90,18 @@ func (h *AnalyticsHandler) AdminPremiumFunnel(c *gin.Context) {
 	c.JSON(http.StatusOK, data)
 }
 
+// AdminDashboardTimeseries GET /api/admin/analytics/timeseries?days=30
+// Per-day new users, views, distinct viewers and premium sales, plus totals
+// for the previous equally long period.
+func (h *AnalyticsHandler) AdminDashboardTimeseries(c *gin.Context) {
+	data, err := h.repo.DashboardTimeseries(c.Request.Context(), analyticsDays(c, 30))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get timeseries"})
+		return
+	}
+	c.JSON(http.StatusOK, data)
+}
+
 func (h *AnalyticsHandler) AdminPlaybackReports(c *gin.Context) {
 	reports, err := h.repo.ListPlaybackReports(c.Request.Context(), c.DefaultQuery("status", "new"), analyticsLimit(c, 20))
 	if err != nil {

@@ -104,6 +104,24 @@ func main() {
 	// Initialize notification repository for in-app notifications
 	notificationRepo := repositories.NewNotificationRepository(db)
 	notificationService.SetRepositories(notificationRepo, userRepo)
+	notificationService.SetSiteURL(cfg.BaseSiteURL)
+	// Per-user notification settings + web push (VAPID keys from env).
+	notifyPrefsRepo := repositories.NewNotifyPrefsRepository(db)
+	if err := notifyPrefsRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure notification prefs indexes: %v", err)
+	}
+	var webPusher *services.WebPusher
+	if cfg.WebPushVAPIDPrivateKey != "" {
+		if keys, err := services.ParseVAPIDPrivateKey(cfg.WebPushVAPIDPrivateKey, cfg.WebPushSubject); err != nil {
+			log.Printf("Warning: web push disabled: %v", err)
+		} else {
+			webPusher = services.NewWebPusher(keys)
+			log.Printf("[PUSH] web push enabled")
+		}
+	} else {
+		log.Printf("[PUSH] web push disabled (set WEB_PUSH_VAPID_PRIVATE_KEY; generate with: go run ./cmd/vapid-keys)")
+	}
+	notificationService.SetDelivery(notifyPrefsRepo, webPusher)
 
 	authService := services.NewAuthService(userRepo, authSessionRepo, cfg.JWTSecret)
 
@@ -127,6 +145,13 @@ func main() {
 
 	// Setup Gin
 	r := gin.Default()
+	// Record panics and 5xx responses for /admin/errors (re-panics, so
+	// gin's Recovery still produces the 500 response as before).
+	errorRepo := repositories.NewErrorRepository(db)
+	if err := errorRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure error_groups indexes: %v", err)
+	}
+	r.Use(middleware.ErrorTracking(errorRepo))
 	r.Use(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/uploads/") || strings.HasPrefix(c.Request.URL.Path, "/stream/") {
 			c.Header("Cache-Control", "public, max-age=31536000, immutable")
@@ -201,6 +226,17 @@ func main() {
 		log.Printf("Warning: Failed to ensure analytics indexes: %v", err)
 	}
 	analyticsHandler := handlers.NewAnalyticsHandler(analyticsRepo)
+	adminOverviewHandler := handlers.NewAdminOverviewHandler(db, jobRepo)
+	auditLogRepo := repositories.NewAuditLogRepository(db)
+	if err := auditLogRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure admin_audit_logs indexes: %v", err)
+	}
+	auditLogHandler := handlers.NewAuditLogHandler(auditLogRepo)
+	libraryRepo := repositories.NewLibraryRepository(db)
+	if err := libraryRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure watchlist/subscription indexes: %v", err)
+	}
+	libraryHandler := handlers.NewLibraryHandler(db, libraryRepo, notificationService)
 	movieHandler.SetAnalyticsRepository(analyticsRepo)
 	
 	userHandler := handlers.NewUserHandler(watchHistoryRepo, favoriteRepo, movieRepo, seriesRepo, userRepo, analyticsRepo)
@@ -371,7 +407,44 @@ func main() {
 	// Register routes
 	deleteJobHandler := handlers.NewDeleteJobHandler(repositories.NewDeleteJobRepository(db))
 
-	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler, deleteJobHandler, expenseHandler, announcementHandler, gifHandler, analyticsHandler)
+	routes.Setup(r, sitemapHandler, authHandler, movieHandler, homepageHandler, ingestionHandler, uploadHandler, adminUserHandler, userHandler, collectionHandler, authService, ratingHandler, commentHandler, shareHandler, seriesHandler, mediaHandler, banAppealHandler, notificationHandler, telegramHandler, clipHandler, adHandler, telegramPostHandler, igScheduleHandler, publishJobHandler, suggestionHandler, premiumHandler, watchRoomHandler, presenceHandler, contentHandler, systemHandler, deleteJobHandler, expenseHandler, announcementHandler, gifHandler, analyticsHandler, adminOverviewHandler, auditLogHandler, auditLogRepo)
+	communityRepo := repositories.NewCommunityRepository(db)
+	if err := communityRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure comment report/review indexes: %v", err)
+	}
+	communityHandler := handlers.NewCommunityHandler(db, communityRepo, commentService, ratingService)
+	referralRepo := repositories.NewReferralRepository(db)
+	if err := referralRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure referral indexes: %v", err)
+	}
+	referralHandler := handlers.NewReferralHandler(referralRepo, cfg.BaseSiteURL)
+	// Reward referrals once the invited friend starts watching.
+	go services.StartReferralRewardJob(context.Background(), referralRepo, userRepo, notificationService)
+	userListRepo := repositories.NewUserListRepository(db, libraryRepo)
+	if err := userListRepo.EnsureIndexes(); err != nil {
+		log.Printf("Warning: Failed to ensure user list indexes: %v", err)
+	}
+	// Morning report to superadmins' Telegram (see services/daily_report.go).
+	dailyReporter := &services.DailyReporter{
+		DB:              db,
+		Analytics:       analyticsRepo,
+		Notify:          notificationService,
+		AdminTelegramID: cfg.AdminTelegramID,
+	}
+	dailyReporter.Start()
+	routes.SetupExtras(r, routes.ExtraDeps{
+		AuthService:  authService,
+		AuditLogRepo: auditLogRepo,
+		Library:      libraryHandler,
+		Movies:       movieHandler,
+		Community:    communityHandler,
+		Referral:     referralHandler,
+		Errors:       handlers.NewErrorHandler(errorRepo),
+		DailyReport:  handlers.NewDailyReportHandler(dailyReporter),
+		History:      handlers.NewHistoryHandler(watchHistoryRepo),
+		Lists:        handlers.NewUserListHandler(userListRepo),
+		NotifyPrefs:  handlers.NewNotifySettingsHandler(notificationService, userRepo),
+	})
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)
 	seoNotifier := buildSEONotifier(cfg, db)
@@ -400,6 +473,20 @@ func main() {
 
 	// Start premium cleanup background job (runs every 10 minutes)
 	go startPremiumCleanupJob(userRepo, notificationService)
+
+	// Tell series subscribers about newly playable episodes (site + Telegram).
+	go services.NewEpisodeNotifier(db, libraryRepo, notificationService).Start(context.Background())
+
+	// Publish movies whose scheduled time has come (approve + Telegram post).
+	// Started after the SEO notifier is wired so scheduled approvals ping it too.
+	(&services.ScheduledPublisher{
+		Movies:   movieService,
+		Repo:     movieRepo,
+		Telegram: telegramService,
+		Notify:   notificationService,
+		Users:    userRepo,
+		Audit:    auditLogRepo,
+	}).Start()
 
 	// Start content-deletion worker (runs every 10s). Executes queued
 	// DeleteJobs in-process — full B2 + Mongo cascade with progress written

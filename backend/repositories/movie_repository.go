@@ -69,6 +69,26 @@ func (r *MovieRepository) Collection() *mongo.Collection {
 	return r.col
 }
 
+// CountAdminStats returns the total number of movies (any approval status)
+// and how many were created since the start of the current UTC month.
+func (r *MovieRepository) CountAdminStats() (total int64, thisMonth int64, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	total, err = r.col.CountDocuments(ctx, bson.M{})
+	if err != nil {
+		return 0, 0, fmt.Errorf("count movies: %w", err)
+	}
+
+	now := time.Now().UTC()
+	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	thisMonth, err = r.col.CountDocuments(ctx, bson.M{"created_at": bson.M{"$gte": startOfMonth}})
+	if err != nil {
+		return 0, 0, fmt.Errorf("count movies this month: %w", err)
+	}
+	return total, thisMonth, nil
+}
+
 // CountTotalViews returns total views across all movies
 func (r *MovieRepository) CountTotalViews() (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -420,6 +440,18 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 		movie.Country = country
 	}
 
+	// Credits
+	if cast, ok := doc["cast"].(bson.A); ok {
+		for _, c := range cast {
+			if s, ok := c.(string); ok && strings.TrimSpace(s) != "" {
+				movie.Cast = append(movie.Cast, s)
+			}
+		}
+	}
+	if director, ok := doc["director"].(string); ok {
+		movie.Director = director
+	}
+
 	// Handle video_url
 	if videoURL, ok := doc["video_url"].(string); ok {
 		movie.VideoURL = videoURL
@@ -598,6 +630,21 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 	}
 	if by, ok := doc["approved_by"].(string); ok {
 		movie.ApprovedBy = by
+	}
+	if raw, ok := doc["scheduled_publish_at"]; ok && raw != nil {
+		switch v := raw.(type) {
+		case primitive.DateTime:
+			t := v.Time()
+			movie.ScheduledPublishAt = &t
+		case time.Time:
+			movie.ScheduledPublishAt = &v
+		}
+	}
+	if by, ok := doc["scheduled_by"].(string); ok {
+		movie.ScheduledBy = by
+	}
+	if msg, ok := doc["schedule_error"].(string); ok {
+		movie.ScheduleError = msg
 	}
 
 	return movie, nil
@@ -1075,38 +1122,42 @@ func (r *MovieRepository) Search(query string) ([]models.Movie, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Case-insensitive regex search on title; only published content
-	filter := bson.M{
-		"$and": []bson.M{
-			{
-				"$or": []bson.M{
-					{"is_published": true},
-					{"is_published": bson.M{"$exists": false}},
-				},
-			},
-			{
-				"$or": []bson.M{
-					{"title": bson.M{"$regex": query, "$options": "i"}},
-					{"description": bson.M{"$regex": query, "$options": "i"}},
-				},
-			},
-		},
+	// Typo/script-tolerant search over titles, cast and director (see
+	// search_query.go); only published content. Falls back to any-word
+	// matching when the whole phrase finds nothing.
+	published := bson.M{"$or": []bson.M{
+		{"is_published": true},
+		{"is_published": bson.M{"$exists": false}},
+	}}
+	fields := []string{"title", "title_uz", "original_title", "cast", "director"}
+	run := func(match bson.M) ([]bson.M, error) {
+		opts := options.Find().
+			SetSort(bson.D{{Key: "views", Value: -1}, {Key: "created_at", Value: -1}}).
+			SetLimit(40)
+		cursor, err := r.col.Find(ctx, bson.M{"$and": []bson.M{published, match}}, opts)
+		if err != nil {
+			return nil, fmt.Errorf("search movies: %w", err)
+		}
+		defer cursor.Close(ctx)
+		var docs []bson.M
+		if err := cursor.All(ctx, &docs); err != nil {
+			return nil, fmt.Errorf("decode search results: %w", err)
+		}
+		return docs, nil
 	}
 
-	opts := options.Find().
-		SetSort(bson.D{{Key: "created_at", Value: -1}}).
-		SetLimit(20)
-
-	cursor, err := r.col.Find(ctx, filter, opts)
+	rawDocs, err := run(BuildTitleSearchFilter(query, fields, true))
 	if err != nil {
-		return nil, fmt.Errorf("search movies: %w", err)
+		return nil, err
 	}
-	defer cursor.Close(ctx)
-
-	// Decode into bson.M first
-	var rawDocs []bson.M
-	if err := cursor.All(ctx, &rawDocs); err != nil {
-		return nil, fmt.Errorf("decode search results: %w", err)
+	if words := SearchWords(query); len(rawDocs) == 0 && len(words) > 1 {
+		any := bson.A{}
+		for _, w := range words {
+			any = append(any, BuildTitleSearchFilter(w, fields, false))
+		}
+		if rawDocs, err = run(bson.M{"$or": any}); err != nil {
+			return nil, err
+		}
 	}
 
 	// Normalize each document
@@ -1276,6 +1327,8 @@ func (r *MovieRepository) Update(id primitive.ObjectID, movie *models.Movie) err
 				"year":                        movie.Year,
 				"genre":                       movie.Genre,
 				"country":                     movie.Country,
+				"cast":                        movie.Cast,
+				"director":                    movie.Director,
 				"video_url":                   movie.VideoURL,
 				"embed_url":                   movie.EmbedURL,
 				"source_type":                 movie.SourceType,
@@ -1428,53 +1481,6 @@ func (r *MovieRepository) FindMoviesWithoutCode() ([]models.Movie, error) {
 	return movies, nil
 }
 
-// ListAdmin returns ALL movies (regardless of approval status) for the admin dashboard.
-func (r *MovieRepository) ListAdmin(page, limit int) ([]models.Movie, int64, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 {
-		limit = 100
-	}
-
-	filter := bson.M{}
-
-	total, err := r.col.CountDocuments(ctx, filter)
-	if err != nil {
-		return nil, 0, fmt.Errorf("count admin movies: %w", err)
-	}
-
-	opts := options.Find().
-		SetSort(bson.D{{Key: "created_at", Value: -1}}).
-		SetSkip(int64((page - 1) * limit)).
-		SetLimit(int64(limit))
-
-	cursor, err := r.col.Find(ctx, filter, opts)
-	if err != nil {
-		return nil, 0, fmt.Errorf("find admin movies: %w", err)
-	}
-	defer cursor.Close(ctx)
-
-	var rawDocs []bson.M
-	if err := cursor.All(ctx, &rawDocs); err != nil {
-		return nil, 0, fmt.Errorf("decode admin movies: %w", err)
-	}
-
-	movies := make([]models.Movie, 0, len(rawDocs))
-	for _, doc := range rawDocs {
-		movie, err := normalizeMovieFromBSON(doc)
-		if err != nil {
-			continue
-		}
-		movies = append(movies, *movie)
-	}
-
-	return movies, total, nil
-}
-
 // MarkTelegramPostedOnApproval sets telegram_posted_on_approval=true so a
 // subsequent approval click doesn't re-post to Telegram.
 func (r *MovieRepository) MarkTelegramPostedOnApproval(idHex string) error {
@@ -1507,13 +1513,17 @@ func (r *MovieRepository) SetApprovalStatus(idHex, status, byUserID string) erro
 	result, err := r.col.UpdateOne(
 		ctx,
 		bson.M{"_id": id},
-		bson.M{"$set": bson.M{
-			"approval_status": status,
-			"is_published":    status == "approved",
-			"approved_at":     now,
-			"approved_by":     byUserID,
-			"updated_at":      now,
-		}},
+		bson.M{
+			"$set": bson.M{
+				"approval_status": status,
+				"is_published":    status == "approved",
+				"approved_at":     now,
+				"approved_by":     byUserID,
+				"updated_at":      now,
+			},
+			// A manual approve/reject supersedes any pending schedule.
+			"$unset": bson.M{"scheduled_publish_at": "", "scheduled_by": "", "schedule_error": ""},
+		},
 	)
 	if err != nil {
 		return err
@@ -1595,6 +1605,30 @@ func (r *MovieRepository) GetRecommendations(currentMovieID string, userID strin
 		return nil, err
 	}
 
+	// The popular pool alone rarely contains the genuinely similar titles,
+	// so also pull candidates that share a genre, an actor or the director.
+	if related := similarCandidateFilter(currentMovie); related != nil {
+		relatedFilter := bson.M{"$and": []bson.M{filter, related}}
+		relCur, err := r.col.Find(ctx, relatedFilter, options.Find().
+			SetSort(bson.D{{Key: "views", Value: -1}}).
+			SetLimit(150))
+		if err == nil {
+			var extra []models.Movie
+			if relCur.All(ctx, &extra) == nil {
+				seen := make(map[primitive.ObjectID]bool, len(candidates))
+				for _, m := range candidates {
+					seen[m.ID] = true
+				}
+				for _, m := range extra {
+					if !seen[m.ID] {
+						seen[m.ID] = true
+						candidates = append(candidates, m)
+					}
+				}
+			}
+		}
+	}
+
 	// Collect user preferences if userID provided (simplified: could be extended to query watch history)
 	var userPreferredGenres []string
 	if userID != "" {
@@ -1622,6 +1656,9 @@ func (r *MovieRepository) GetRecommendations(currentMovieID string, userID strin
 				}
 			}
 		}
+
+		// Shared people: cast overlap (+4 each, max +12) and director (+6)
+		score += creditsScore(currentMovie, m)
 
 		// Country match (+2)
 		if m.Country != "" && currentMovie.Country != "" && strings.EqualFold(m.Country, currentMovie.Country) {

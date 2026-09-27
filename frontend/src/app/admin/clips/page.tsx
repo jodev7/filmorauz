@@ -25,6 +25,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { useToast } from "@/components/admin/Toast";
+import { readUrlBool, readUrlList, readUrlNumber, readUrlParam, useSyncUrlParams } from "@/lib/url-state";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -532,31 +534,55 @@ function scopeKey(scope: Scope): string {
 
 // ─── Clip table (shared by movie groups and episode groups) ──────────────────
 
+function movieGroupScope(m: ServerMovieGroup): Scope {
+  return {
+    kind: "movie",
+    groupKey: m.group_key,
+    movieId: m.movie_id || undefined,
+    movieIds: m.match_movie_ids,
+    movieCodes: m.match_movie_codes,
+    movieSlugs: m.match_movie_slugs,
+    movieTitles: m.match_movie_titles,
+  };
+}
+
+function episodeGroupScope(ep: ServerEpisodeGroup): Scope {
+  return {
+    kind: "episode",
+    groupKey: ep.group_key,
+    episodeId: ep.episode_id || undefined,
+    episodeIds: ep.match_episode_ids,
+  };
+}
+
+const EMPTY_JOBS: PublishJob[] = [];
+
 function ClipTableBase({
   page,
-  publishJobs,
+  scope,
+  jobsByClip,
   downloading,
   uploading,
   token,
   onDownload,
   onPublish,
-  onPrev,
-  onNext,
-  pageNum,
-  totalPages,
+  onPageChange,
 }: {
   page: ScopeClipPage;
-  publishJobs: PublishJob[];
+  // Stable identity (built once per groups response) so React.memo holds.
+  scope: Scope;
+  jobsByClip: Map<string, PublishJob[]>;
   downloading: Record<string, boolean>;
   uploading: Record<string, boolean>;
   token: string | null;
   onDownload: (clip: Clip) => void;
   onPublish: (clip: Clip) => void;
-  onPrev: () => void;
-  onNext: () => void;
-  pageNum: number;
-  totalPages: number;
+  onPageChange: (scope: Scope, offset: number) => void;
 }) {
+  const totalPages = Math.max(1, Math.ceil(page.total / CLIPS_PAGE_LIMIT));
+  const pageNum = Math.floor(page.offset / CLIPS_PAGE_LIMIT) + 1;
+  const onPrev = () => onPageChange(scope, Math.max(0, page.offset - CLIPS_PAGE_LIMIT));
+  const onNext = () => onPageChange(scope, page.offset + CLIPS_PAGE_LIMIT);
   if (page.loading && page.clips.length === 0) {
     return (
       <div className="flex items-center gap-2 text-gray-500 py-8 px-4 justify-center">
@@ -586,7 +612,7 @@ function ClipTableBase({
         </thead>
         <tbody>
           {page.clips.map((clip) => {
-            const clipJobs = publishJobs.filter((j) => j.clip_id === clip.id);
+            const clipJobs = jobsByClip.get(clip.id) ?? EMPTY_JOBS;
             return (
               <tr
                 key={clip.id}
@@ -684,8 +710,9 @@ function ClipTableBase({
 
 // Memoized so that unrelated parent re-renders (e.g. the publish modal, which
 // now owns its own editable state) don't re-reconcile every expanded clip
-// table. Props are stable: publishJobs/downloading/uploading come from memoized
-// or rarely-changing parent state, and the handlers are useCallback-wrapped.
+// table. Props are stable: jobsByClip/downloading/uploading come from memoized
+// or rarely-changing parent state, scope objects are memoized per groups
+// response, and the handlers are useCallback-wrapped.
 const ClipTable = React.memo(ClipTableBase);
 
 // ─── Publish modal ────────────────────────────────────────────────────────────
@@ -747,11 +774,19 @@ function PublishModal({
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ jobs: selectedJobs, caption }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `status ${res.status}`);
       setResults(data.results || []);
       await onPublished(clip);
-    } catch {
-      // silently ignore
+    } catch (err) {
+      setResults([
+        {
+          platform: "instagram",
+          account_name: "system",
+          status: "failed",
+          error: err instanceof Error ? err.message : "Yuklash muvaffaqiyatsiz",
+        },
+      ]);
     } finally {
       setBusyBoth(false);
     }
@@ -784,8 +819,15 @@ function PublishModal({
           },
         ]);
       }
-    } catch {
-      // silently ignore
+    } catch (err) {
+      setResults([
+        {
+          platform: "instagram",
+          account_name: "system",
+          status: "failed",
+          error: err instanceof Error ? err.message : "Rejalash muvaffaqiyatsiz",
+        },
+      ]);
     } finally {
       setBusyBoth(false);
     }
@@ -1149,7 +1191,7 @@ interface ClipFilterBarProps {
   totalFiltered: number;
 }
 
-function ClipFilterBar(props: ClipFilterBarProps) {
+function ClipFilterBarBase(props: ClipFilterBarProps) {
   const {
     kind, onKindChange,
     query, onQueryChange,
@@ -1294,7 +1336,9 @@ function ClipFilterBar(props: ClipFilterBarProps) {
   );
 }
 
-// ─── Main page ────────────────────────────────────────────────────────────────
+// Memoized: all callbacks passed in are stable setters, so the bar only
+// re-renders when a filter value or a count actually changes.
+const ClipFilterBar = React.memo(ClipFilterBarBase);
 
 // ─── AI (Gemini) cost panel ───────────────────────────────────────────────────
 // Shows total Gemini clip-generation spend plus a per-content breakdown
@@ -1324,7 +1368,7 @@ function fmtUSD(n: number): string {
   return "$" + (n || 0).toFixed(n < 1 ? 4 : 2);
 }
 
-function ClipAICostPanel({ token }: { token: string | null }) {
+function ClipAICostPanelBase({ token }: { token: string | null }) {
   const [totals, setTotals] = useState<AICostTotals | null>(null);
   const [items, setItems] = useState<AICostItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1434,6 +1478,11 @@ function ClipAICostPanel({ token }: { token: string | null }) {
   );
 }
 
+// Only depends on the token — never re-render it on page/filter changes.
+const ClipAICostPanel = React.memo(ClipAICostPanelBase);
+
+// ─── Main page ────────────────────────────────────────────────────────────────
+
 export default function AdminClipsPage() {
   const { token } = useAuth();
   const groupsPageLimit = 10;
@@ -1441,31 +1490,64 @@ export default function AdminClipsPage() {
 
   const [groups, setGroups] = useState<ServerGroups | null>(null);
   const [groupsLoading, setGroupsLoading] = useState(true);
-  const [groupsPage, setGroupsPage] = useState(1);
+  const [groupsPage, setGroupsPage] = useState(() => readUrlNumber("page", 1));
 
   // Filter state — controls what GET /api/admin/clips/groups returns.
   // Each change re-runs the server query (debounced for the search box).
-  const [filterKind, setFilterKind] = useState<ClipKind>("all");
-  const [filterQuery, setFilterQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [filterGenres, setFilterGenres] = useState<string[]>([]);
-  const [filterAccount, setFilterAccount] = useState<string>(""); // "" ⇒ all accounts
-  const [filterOnlyUnposted, setFilterOnlyUnposted] = useState(false);
-  const [filterSort, setFilterSort] = useState<ClipSort>("title");
+  // Initial values come from the URL so refresh/back/shared links keep the
+  // same view; useSyncUrlParams below writes changes back.
+  const [filterKind, setFilterKind] = useState<ClipKind>(() => {
+    const v = readUrlParam("kind", "all");
+    return v === "movie" || v === "series" ? v : "all";
+  });
+  const [filterQuery, setFilterQuery] = useState(() => readUrlParam("q", ""));
+  const [debouncedQuery, setDebouncedQuery] = useState(() => readUrlParam("q", "").trim());
+  const [filterGenres, setFilterGenres] = useState<string[]>(() => readUrlList("genres"));
+  const [filterAccount, setFilterAccount] = useState<string>(() => readUrlParam("account", "")); // "" ⇒ all accounts
+  const [filterOnlyUnposted, setFilterOnlyUnposted] = useState(() => readUrlBool("unposted"));
+  const [filterSort, setFilterSort] = useState<ClipSort>(() => {
+    const v = readUrlParam("sort", "title");
+    return (["title", "newest", "most_clips", "least_posted"] as const).includes(v as ClipSort) ? (v as ClipSort) : "title";
+  });
+  const toast = useToast();
+
+  useSyncUrlParams(
+    {
+      kind: filterKind,
+      q: debouncedQuery,
+      genres: filterGenres,
+      account: filterAccount,
+      unposted: filterOnlyUnposted,
+      sort: filterSort,
+      page: groupsPage,
+    },
+    { kind: "all", q: "", genres: [], account: "", unposted: false, sort: "title", page: 1 }
+  );
   const [allGenres, setAllGenres] = useState<string[]>([]);
   const [igAccountsMeta, setIgAccountsMeta] = useState<InstagramAccountWithFilter[]>([]);
 
   // Debounce the search input so we don't spam the backend on every
   // keystroke. 300ms is enough to feel instant without firing per key.
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedQuery(filterQuery.trim()), 300);
+    const next = filterQuery.trim();
+    // Skip when nothing changed — otherwise the mount run would reset a
+    // ?page= restored from the URL.
+    if (next === debouncedQuery) return;
+    const t = setTimeout(() => {
+      setDebouncedQuery(next);
+      setGroupsPage(1);
+    }, 300);
     return () => clearTimeout(t);
-  }, [filterQuery]);
+  }, [filterQuery, debouncedQuery]);
 
-  // Reset to the first page whenever the filter changes.
-  useEffect(() => {
-    setGroupsPage(1);
-  }, [filterKind, debouncedQuery, filterGenres, filterAccount, filterOnlyUnposted, filterSort]);
+  // Filter setters reset to page 1 in the same batched update. Doing the
+  // reset in a separate effect caused a second render + a wasted request
+  // (first with the old page, then again with page 1) on every change.
+  const handleKindChange = useCallback((v: ClipKind) => { setFilterKind(v); setGroupsPage(1); }, []);
+  const handleGenresChange = useCallback((v: string[]) => { setFilterGenres(v); setGroupsPage(1); }, []);
+  const handleAccountChange = useCallback((v: string) => { setFilterAccount(v); setGroupsPage(1); }, []);
+  const handleOnlyUnpostedChange = useCallback((v: boolean) => { setFilterOnlyUnposted(v); setGroupsPage(1); }, []);
+  const handleSortChange = useCallback((v: ClipSort) => { setFilterSort(v); setGroupsPage(1); }, []);
 
   const [allAccounts, setAllAccounts] = useState<AllAccounts>({ instagram: [], youtube: [], tiktok: [] });
   const [publishJobs, setPublishJobs] = useState<PublishJob[]>([]);
@@ -1490,7 +1572,7 @@ export default function AdminClipsPage() {
 
   // ── Data fetching ───────────────────────────────────────────────────
 
-  const fetchGroups = useCallback(async () => {
+  const fetchGroups = useCallback(async (signal?: AbortSignal) => {
     if (!token) return;
     setGroupsLoading(true);
     try {
@@ -1506,30 +1588,33 @@ export default function AdminClipsPage() {
 
       const res = await fetch(`${API}/admin/clips/groups?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal,
       });
-      if (res.ok) {
-        const data: ServerGroups = await res.json();
-        setGroups({
-          movies: data.movies || [],
-          series: data.series || [],
-          total_clips: data.total_clips || 0,
-          total_contents: data.total_contents || 0,
-          total_filtered: data.total_filtered,
-          total_movies: data.total_movies,
-          total_series: data.total_series,
-          movie_group_count: data.movie_group_count,
-          series_group_count: data.series_group_count,
-        });
-        if (data.all_genres && data.all_genres.length > 0 && allGenres.length === 0) {
-          setAllGenres(data.all_genres);
-        }
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const data: ServerGroups = await res.json();
+      if (signal?.aborted) return;
+      setGroups({
+        movies: data.movies || [],
+        series: data.series || [],
+        total_clips: data.total_clips || 0,
+        total_contents: data.total_contents || 0,
+        total_filtered: data.total_filtered,
+        total_movies: data.total_movies,
+        total_series: data.total_series,
+        movie_group_count: data.movie_group_count,
+        series_group_count: data.series_group_count,
+      });
+      if (data.all_genres && data.all_genres.length > 0) {
+        const fromServer = data.all_genres;
+        setAllGenres((prev) => (prev.length === 0 ? fromServer : prev));
       }
-    } catch {
-      // silently ignore
+    } catch (err) {
+      // A superseded request is aborted on purpose — not an error.
+      if (!signal?.aborted) toast.error(`Kliplar ro'yxatini yuklab bo'lmadi${err instanceof Error ? `: ${err.message}` : ""}`);
     } finally {
-      setGroupsLoading(false);
+      if (!signal?.aborted) setGroupsLoading(false);
     }
-  }, [token, filterKind, debouncedQuery, filterGenres, filterAccount, filterOnlyUnposted, filterSort, groupsPage, groupsPageLimit, allGenres.length]);
+  }, [token, filterKind, debouncedQuery, filterGenres, filterAccount, filterOnlyUnposted, filterSort, groupsPage, groupsPageLimit, toast]);
 
   // Load the full genre list once — separate endpoint so the chip
   // selector shows every option even when the current filter excludes
@@ -1627,11 +1712,13 @@ export default function AdminClipsPage() {
           youtube: data.youtube || [],
           tiktok: data.tiktok || [],
         });
+      } else {
+        toast.error("Publish akkauntlarini yuklab bo'lmadi");
       }
     } catch {
-      // silently ignore
+      toast.error("Publish akkauntlarini yuklab bo'lmadi");
     }
-  }, [token]);
+  }, [token, toast]);
 
   const fetchJobs = useCallback(async () => {
     if (!token) return;
@@ -1644,11 +1731,13 @@ export default function AdminClipsPage() {
         const data = await res.json();
         setPublishJobs(data.items || data.data || []);
         setJobsTotal(data.total || 0);
+      } else {
+        toast.error("Rejalashtirilgan yuklamalarni yuklab bo'lmadi");
       }
     } catch {
-      // silently ignore
+      toast.error("Rejalashtirilgan yuklamalarni yuklab bo'lmadi");
     }
-  }, [token, jobsPage]);
+  }, [token, jobsPage, toast]);
 
   const fetchAllPendingJobs = useCallback(async () => {
     if (!token) return;
@@ -1680,16 +1769,38 @@ export default function AdminClipsPage() {
 
       setAllPendingJobs(jobs);
     } catch {
-      // silently ignore
+      // Badges only — the jobs list above reports its own failure.
     }
   }, [token]);
 
+  // Separate effects: previously one effect ran ALL four fetches whenever any
+  // of them changed, so every page/filter change also re-downloaded accounts,
+  // the jobs page and the full pending-jobs list (paged loop) — the main
+  // cause of the page freezing.
   useEffect(() => {
-    fetchGroups();
+    const ctrl = new AbortController();
+    fetchGroups(ctrl.signal);
+    return () => ctrl.abort();
+  }, [fetchGroups]);
+
+  useEffect(() => {
     fetchAccounts();
+  }, [fetchAccounts]);
+
+  useEffect(() => {
     fetchJobs();
+  }, [fetchJobs]);
+
+  useEffect(() => {
     fetchAllPendingJobs();
-  }, [fetchGroups, fetchAccounts, fetchJobs, fetchAllPendingJobs]);
+  }, [fetchAllPendingJobs]);
+
+  const handleScopePageChange = useCallback(
+    (scope: Scope, offset: number) => {
+      fetchScopedClips(scope, offset);
+    },
+    [fetchScopedClips]
+  );
 
   // ── Group / episode expand/collapse + lazy load ─────────────────────
 
@@ -1847,12 +1958,19 @@ export default function AdminClipsPage() {
     if (!token) return;
     setCancellingId(id);
     try {
-      await fetch(`${API}/admin/publish/jobs/${id}`, {
+      const res = await fetch(`${API}/admin/publish/jobs/${id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `status ${res.status}`);
+      }
+      toast.success("Yuklama bekor qilindi");
       await fetchJobs();
       await fetchAllPendingJobs();
+    } catch (err) {
+      toast.error(`Bekor qilib bo'lmadi${err instanceof Error ? `: ${err.message}` : ""}`);
     } finally {
       setCancellingId(null);
     }
@@ -1866,13 +1984,16 @@ export default function AdminClipsPage() {
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ scheduled_for: tashkentLocalToISO(newLocalTime) }),
       });
-      if (res.ok) {
-        setEditingJob(null);
-        await fetchJobs();
-        await fetchAllPendingJobs();
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `status ${res.status}`);
       }
-    } catch {
-      // silently ignore
+      setEditingJob(null);
+      toast.success("Vaqt yangilandi");
+      await fetchJobs();
+      await fetchAllPendingJobs();
+    } catch (err) {
+      toast.error(`Vaqtni saqlab bo'lmadi${err instanceof Error ? `: ${err.message}` : ""}`);
     }
   };
 
@@ -1895,11 +2016,13 @@ export default function AdminClipsPage() {
         document.body.removeChild(link);
         window.URL.revokeObjectURL(objectUrl);
       })
-      .catch(() => {})
+      .catch((err) => {
+        toast.error(`Klipni yuklab olib bo'lmadi${err instanceof Error ? `: ${err.message}` : ""}`);
+      })
       .finally(() => {
         setDownloading((prev) => ({ ...prev, [clip.id]: false }));
       });
-  }, [token]);
+  }, [token, toast]);
 
   // ── Derived: paged content group list ───────────────────────────────
 
@@ -1920,9 +2043,11 @@ export default function AdminClipsPage() {
   const groupsTotalPages = Math.max(1, Math.ceil(totalFiltered / groupsPageLimit));
   const pagedGroups = flatGroups;
 
+  // Clamp only once real totals are known — before the first response the
+  // total is 0 and this would wipe a ?page= restored from the URL.
   useEffect(() => {
-    if (groupsPage > groupsTotalPages) setGroupsPage(groupsTotalPages);
-  }, [groupsPage, groupsTotalPages]);
+    if (groups && !groupsLoading && groupsPage > groupsTotalPages) setGroupsPage(groupsTotalPages);
+  }, [groups, groupsLoading, groupsPage, groupsTotalPages]);
 
   const pagedPendingJobs = publishJobs.filter(isActivePublishJob);
   const doneJobs = publishJobs.filter((j) => j.status === "success" || j.status === "failed");
@@ -1935,6 +2060,31 @@ export default function AdminClipsPage() {
     allPendingJobs.forEach(j => map.set(j.id, j));
     return Array.from(map.values());
   }, [publishJobs, allPendingJobs]);
+
+  // clip_id → jobs, so each clip row is an O(1) lookup instead of scanning
+  // every job for every row.
+  const jobsByClip = useMemo(() => {
+    const map = new Map<string, PublishJob[]>();
+    allRelevantJobsForBadges.forEach((j) => {
+      const list = map.get(j.clip_id);
+      if (list) list.push(j);
+      else map.set(j.clip_id, [j]);
+    });
+    return map;
+  }, [allRelevantJobsForBadges]);
+
+  // Stable Scope objects per group so memoized <ClipTable/>s keep their props.
+  const groupScopes = useMemo(() => {
+    const map = new Map<string, Scope>();
+    if (!groups) return map;
+    groups.movies.forEach((m) => map.set(`movie:${m.group_key}`, movieGroupScope(m)));
+    groups.series.forEach((s) =>
+      s.seasons.forEach((season) =>
+        season.episodes.forEach((ep) => map.set(`episode:${ep.group_key}`, episodeGroupScope(ep)))
+      )
+    );
+    return map;
+  }, [groups]);
 
   const jobsTotalPages = Math.max(1, Math.ceil(jobsTotal / jobsPageLimit));
 
@@ -1975,25 +2125,25 @@ export default function AdminClipsPage() {
       {/* ── Filter bar: tabs + search + genre + account + sort + only-unposted */}
       <ClipFilterBar
         kind={filterKind}
-        onKindChange={setFilterKind}
+        onKindChange={handleKindChange}
         query={filterQuery}
         onQueryChange={setFilterQuery}
         genres={filterGenres}
-        onGenresChange={setFilterGenres}
+        onGenresChange={handleGenresChange}
         allGenres={allGenres}
         account={filterAccount}
-        onAccountChange={setFilterAccount}
+        onAccountChange={handleAccountChange}
         accounts={igAccountsMeta}
         onlyUnposted={filterOnlyUnposted}
-        onOnlyUnpostedChange={setFilterOnlyUnposted}
+        onOnlyUnpostedChange={handleOnlyUnpostedChange}
         sort={filterSort}
-        onSortChange={setFilterSort}
+        onSortChange={handleSortChange}
         totalMovies={groups?.total_movies ?? 0}
         totalSeries={groups?.total_series ?? 0}
         totalFiltered={totalFiltered}
       />
 
-      {groupsLoading ? (
+      {groupsLoading && !groups ? (
         <div className="flex items-center gap-2 text-gray-500 py-12 justify-center">
           <Loader2 size={18} className="animate-spin" />
           Kliplar yuklanmoqda...
@@ -2007,8 +2157,12 @@ export default function AdminClipsPage() {
           </p>
         </div>
       ) : (
-        <div className="space-y-8">
-          <div className="flex justify-end">
+        <div
+          className={`space-y-8 transition-opacity ${groupsLoading ? "opacity-50 pointer-events-none" : ""}`}
+          aria-busy={groupsLoading}
+        >
+          <div className="flex justify-end items-center gap-3">
+            {groupsLoading && <Loader2 size={16} className="animate-spin text-gray-500" />}
             <PaginationControls
               page={groupsPage}
               totalPages={groupsTotalPages}
@@ -2023,8 +2177,6 @@ export default function AdminClipsPage() {
               const key = `movie:${m.group_key}`;
               const isExpanded = expandedGroups.has(key);
               const page = scopeClips[key];
-              const totalPages = page ? Math.max(1, Math.ceil(page.total / CLIPS_PAGE_LIMIT)) : 1;
-              const pageNum = page ? Math.floor(page.offset / CLIPS_PAGE_LIMIT) + 1 : 1;
               const scheduledCount = allPendingJobs.filter(
                 (j: PublishJob) => (m.code && j.movie_code === m.code) || (m.slug && j.movie_slug === m.slug)
               ).length;
@@ -2098,42 +2250,14 @@ export default function AdminClipsPage() {
                   {isExpanded && (
                     <ClipTable
                       page={page ?? { clips: [], total: m.clip_count, offset: 0, loading: true }}
-                      publishJobs={allRelevantJobsForBadges}
+                      scope={groupScopes.get(key) ?? movieGroupScope(m)}
+                      jobsByClip={jobsByClip}
                       downloading={downloading}
                       uploading={uploading}
                       token={token}
                       onDownload={handleDownloadClip}
                       onPublish={openModal}
-                      onPrev={() =>
-                        fetchScopedClips(
-                          {
-                            kind: "movie",
-                            groupKey: m.group_key,
-                            movieId: m.movie_id || undefined,
-                            movieIds: m.match_movie_ids,
-                            movieCodes: m.match_movie_codes,
-                            movieSlugs: m.match_movie_slugs,
-                            movieTitles: m.match_movie_titles,
-                          },
-                          Math.max(0, (page?.offset ?? 0) - CLIPS_PAGE_LIMIT)
-                        )
-                      }
-                      onNext={() =>
-                        fetchScopedClips(
-                          {
-                            kind: "movie",
-                            groupKey: m.group_key,
-                            movieId: m.movie_id || undefined,
-                            movieIds: m.match_movie_ids,
-                            movieCodes: m.match_movie_codes,
-                            movieSlugs: m.match_movie_slugs,
-                            movieTitles: m.match_movie_titles,
-                          },
-                          (page?.offset ?? 0) + CLIPS_PAGE_LIMIT
-                        )
-                      }
-                      pageNum={pageNum}
-                      totalPages={totalPages}
+                      onPageChange={handleScopePageChange}
                     />
                   )}
                 </div>
@@ -2241,8 +2365,6 @@ export default function AdminClipsPage() {
                             const epLabel = `S${padEpisodeNumber(season.season_number)}E${padEpisodeNumber(ep.episode_number)}`;
                             const scope = `episode:${ep.group_key}`;
                             const page = scopeClips[scope];
-                            const totalPages = page ? Math.max(1, Math.ceil(page.total / CLIPS_PAGE_LIMIT)) : 1;
-                            const pageNum = page ? Math.floor(page.offset / CLIPS_PAGE_LIMIT) + 1 : 1;
                             return (
                               <div key={ep.group_key}>
                                 <button
@@ -2282,36 +2404,14 @@ export default function AdminClipsPage() {
                                 {epExpanded && (
                                   <ClipTable
                                     page={page ?? { clips: [], total: ep.clip_count, offset: 0, loading: true }}
-                                    publishJobs={allRelevantJobsForBadges}
+                                    scope={groupScopes.get(scope) ?? episodeGroupScope(ep)}
+                                    jobsByClip={jobsByClip}
                                     downloading={downloading}
                                     uploading={uploading}
                                     token={token}
                                     onDownload={handleDownloadClip}
                                     onPublish={openModal}
-                                    onPrev={() =>
-                                      fetchScopedClips(
-                                        {
-                                          kind: "episode",
-                                          groupKey: ep.group_key,
-                                          episodeId: ep.episode_id || undefined,
-                                          episodeIds: ep.match_episode_ids,
-                                        },
-                                        Math.max(0, (page?.offset ?? 0) - CLIPS_PAGE_LIMIT)
-                                      )
-                                    }
-                                    onNext={() =>
-                                      fetchScopedClips(
-                                        {
-                                          kind: "episode",
-                                          groupKey: ep.group_key,
-                                          episodeId: ep.episode_id || undefined,
-                                          episodeIds: ep.match_episode_ids,
-                                        },
-                                        (page?.offset ?? 0) + CLIPS_PAGE_LIMIT
-                                      )
-                                    }
-                                    pageNum={pageNum}
-                                    totalPages={totalPages}
+                                    onPageChange={handleScopePageChange}
                                   />
                                 )}
                               </div>
