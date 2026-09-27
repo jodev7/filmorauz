@@ -5652,6 +5652,8 @@ export interface Announcement {
   body: string;
   link_url?: string;
   link_label?: string;
+  variant?: string;
+  image_url?: string;
   starts_at: string;
   ends_at: string;
   dismissible: boolean;
@@ -5689,6 +5691,8 @@ export interface AnnouncementInput {
   body: string;
   link_url: string;
   link_label: string;
+  variant: string;
+  image_url: string;
   starts_at: string;
   ends_at: string;
   dismissible: boolean;
