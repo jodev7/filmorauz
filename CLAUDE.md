@@ -70,6 +70,7 @@ main.go         — Wiring + startup
 | `B2_*` | Backblaze B2 credentials (PROD only) |
 | `AI_ENDPOINT` | AI clip generation endpoint |
 | `PARSER_SERVICE_URL` | Parser service URL (fallback: `PARSER_URL`) |
+| `TMDB_API_KEY` / `TMDB_READ_TOKEN` | TMDB cast + photos (background backfill every 10 min, admin "TMDB'dan olish") |
 
 ### API Routes (all under `/api`)
 
@@ -133,6 +134,7 @@ main.go         — Wiring + startup
 | `ban_history` | `BanHistory` | Admin ban log |
 | `ban_appeals` | `BanAppeal` | User ban appeals |
 | `telegram_posts` | `TelegramPost` | Broadcast post history |
+| `people` | `Person` | Actors/directors from TMDB (photo for person page) |
 
 ### Ad System
 

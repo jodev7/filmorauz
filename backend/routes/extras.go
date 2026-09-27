@@ -24,6 +24,7 @@ type ExtraDeps struct {
 	History      *handlers.HistoryHandler
 	Lists        *handlers.UserListHandler
 	NotifyPrefs  *handlers.NotifySettingsHandler
+	Credits      *handlers.CreditsHandler
 }
 
 // SetupExtras registers user-library, community and growth routes.
@@ -122,6 +123,11 @@ func SetupExtras(r *gin.Engine, d ExtraDeps) {
 		admin.GET("/movies/:id", d.Movies.AdminGetMovie)
 		admin.POST("/movies/:id/schedule", d.Movies.ScheduleMovie)
 		admin.DELETE("/movies/:id/schedule", d.Movies.CancelMovieSchedule)
+
+		// TMDB cast + photos (also filled automatically in the background).
+		admin.POST("/movies/:id/credits", d.Credits.FetchMovie)
+		admin.POST("/series/:id/credits", d.Credits.FetchSeries)
+		admin.POST("/credits/backfill", d.Credits.Backfill)
 
 		// Error tracking (client + server)
 		admin.GET("/errors", d.Errors.ListErrors)

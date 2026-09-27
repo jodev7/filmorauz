@@ -45,6 +45,15 @@ type Series struct {
 
 	// Telegram
 	TelegramPostedOnApproval bool `bson:"telegram_posted_on_approval,omitempty" json:"telegram_posted_on_approval,omitempty"`
+
+	// Credits, filled from TMDB (see services/credits.go).
+	Cast               []string     `bson:"cast,omitempty" json:"cast,omitempty"`
+	Director           string       `bson:"director,omitempty" json:"director,omitempty"`
+	CastDetails        []CastMember `bson:"cast_details,omitempty" json:"cast_details,omitempty"`
+	DirectorProfileURL string       `bson:"director_profile_url,omitempty" json:"director_profile_url,omitempty"`
+	TMDBID             int          `bson:"tmdb_id,omitempty" json:"tmdb_id,omitempty"`
+	CreditsStatus      string       `bson:"credits_status,omitempty" json:"credits_status,omitempty"`
+	CreditsFetchedAt   *time.Time   `bson:"credits_fetched_at,omitempty" json:"credits_fetched_at,omitempty"`
 }
 
 // Season represents a season in a series

@@ -18,20 +18,24 @@ function initials(name: string): string {
     .join("");
 }
 
-/** Round initials avatar + name linking to the person's page. */
-export default function PersonChip({ name, role }: { name: string; role: string }) {
+/** Round photo (or initials) avatar + name linking to the person's page. */
+export default function PersonChip({ name, role, photo }: { name: string; role: string; photo?: string }) {
   let h = 0;
   for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return (
     <Link href={personPath(name)} className="group flex w-24 flex-col items-center text-center">
       <span
-        className={`flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br ${GRADIENTS[h % GRADIENTS.length]} text-lg font-bold text-white ring-2 ring-transparent transition group-hover:ring-orange-400`}
+        className={`relative flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br ${GRADIENTS[h % GRADIENTS.length]} text-lg font-bold text-white ring-2 ring-transparent transition group-hover:ring-orange-400`}
         aria-hidden="true"
       >
         {initials(name)}
+        {photo && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={photo} alt="" loading="lazy" decoding="async" className="absolute inset-0 h-full w-full object-cover" />
+        )}
       </span>
       <span className="mt-2 line-clamp-2 text-xs font-medium leading-tight text-gray-200 group-hover:text-white">{name}</span>
-      <span className="text-[11px] text-gray-500">{role}</span>
+      <span className="line-clamp-1 text-[11px] text-gray-500" title={role}>{role}</span>
     </Link>
   );
 }

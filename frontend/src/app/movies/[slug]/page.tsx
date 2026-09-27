@@ -18,7 +18,7 @@ import { WatchPlayerProvider } from "@/lib/watch-player-context";
 import { isMoviePremium, PremiumBadge } from "@/components/PremiumComponents";
 import { getMovie, getRecommendations, getTopReviewsForSeo, reviewsToJsonLd, personPath } from "@/lib/api";
 import JsonLd from "@/components/JsonLd";
-import PersonChip from "@/components/PersonChip";
+import CastRow from "@/components/CastRow";
 import { getTranslations } from "@/lib/i18n-server";
 import { formatDuration } from "@/lib/movie-utils";
 import { normalizeMediaUrl } from "@/lib/image-utils";
@@ -363,25 +363,12 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
           </div>
 
           {/* Cast & crew */}
-          {(movie.director || (movie.cast && movie.cast.length > 0)) && (
-            <section className="mt-8" aria-labelledby="cast-title">
-              <h2 id="cast-title" className="font-display text-xl sm:text-2xl tracking-wide text-white mb-4">
-                ROLLARDA VA IJODKORLAR
-              </h2>
-              <ul className="scrollbar-hide -mx-4 flex gap-3 overflow-x-auto px-4 pb-2">
-                {movie.director && (
-                  <li className="shrink-0">
-                    <PersonChip name={movie.director} role="Rejissyor" />
-                  </li>
-                )}
-                {(movie.cast || []).slice(0, 15).map((name) => (
-                  <li key={name} className="shrink-0">
-                    <PersonChip name={name} role="Aktyor" />
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
+          <CastRow
+            director={movie.director}
+            directorPhoto={movie.director_profile_url}
+            cast={movie.cast}
+            castDetails={movie.cast_details}
+          />
         </div>
 
         {/* Inline player — opens here when "Tomosha qilish" is clicked */}

@@ -451,6 +451,7 @@ func normalizeMovieFromBSON(doc bson.M) (*models.Movie, error) {
 	if director, ok := doc["director"].(string); ok {
 		movie.Director = director
 	}
+	decodeCredits(doc, movie)
 
 	// Handle video_url
 	if videoURL, ok := doc["video_url"].(string); ok {

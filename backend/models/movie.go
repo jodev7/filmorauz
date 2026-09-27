@@ -47,6 +47,11 @@ type Movie struct {
 	// Optional credits — searchable ("aktyor bo'yicha qidirish").
 	Cast     []string `bson:"cast,omitempty" json:"cast,omitempty"`
 	Director string   `bson:"director,omitempty" json:"director,omitempty"`
+	// Filled from TMDB (photos, character names); see services/credits.go.
+	CastDetails        []CastMember `bson:"cast_details,omitempty" json:"cast_details,omitempty"`
+	DirectorProfileURL string       `bson:"director_profile_url,omitempty" json:"director_profile_url,omitempty"`
+	CreditsStatus      string       `bson:"credits_status,omitempty" json:"credits_status,omitempty"`
+	CreditsFetchedAt   *time.Time   `bson:"credits_fetched_at,omitempty" json:"credits_fetched_at,omitempty"`
 
 	// HLS Streaming Support
 	MasterPlaylistURL  string   `bson:"master_playlist_url,omitempty" json:"master_playlist_url,omitempty"` // CDN URL to master.m3u8

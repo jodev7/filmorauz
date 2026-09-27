@@ -36,6 +36,8 @@ import { normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
 import AdminPageHeader from "@/components/admin/form/PageHeader";
 import SeriesInfoForm from "@/components/admin/SeriesInfoForm";
+import SeriesCastPanel from "@/components/admin/SeriesCastPanel";
+import type { CastMember } from "@/lib/api";
 import { storageQualityList } from "@/components/admin/form/constants";
 import { useToast } from "@/components/admin/Toast";
 import {
@@ -183,6 +185,7 @@ interface SeasonWithEpisodes {
 export default function EditSeriesPage() {
   const { token } = useAuth();
   const toast = useToast();
+  const [seriesCredits, setSeriesCredits] = useState<{ cast: string[]; director: string; directorPhoto: string; details: CastMember[] }>({ cast: [], director: "", directorPhoto: "", details: [] });
   const params = useParams();
   const id = params.id as string;
 
@@ -298,6 +301,7 @@ export default function EditSeriesPage() {
         const series = seriesList.find((s) => s.id === id);
         if (series) {
           setSeriesCode(series.code || "");
+          setSeriesCredits({ cast: series.cast || [], director: series.director || "", directorPhoto: series.director_profile_url || "", details: series.cast_details || [] });
           setForm({
             title: series.title,
             title_uz: series.title_uz || "",
@@ -689,6 +693,16 @@ export default function EditSeriesPage() {
         storageQualities={storageQualityList(
           ...seasons.flatMap((s) => s.episodes.map((e) => (e.generated_qualities?.length ? e.generated_qualities : e.available_qualities)))
         )}
+      />
+
+      <SeriesCastPanel
+        seriesId={id}
+        token={token}
+        initialCast={seriesCredits.cast}
+        initialDirector={seriesCredits.director}
+        initialDetails={seriesCredits.details}
+        initialDirectorPhoto={seriesCredits.directorPhoto}
+        onMessage={(kind, text) => (kind === "success" ? toast.success(text) : toast.error(text))}
       />
 
       <div id="seasons" className="mt-8 scroll-mt-24 rounded-2xl border border-white/10 bg-[#12121a] p-5 sm:p-6">

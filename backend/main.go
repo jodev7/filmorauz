@@ -432,6 +432,14 @@ func main() {
 		AdminTelegramID: cfg.AdminTelegramID,
 	}
 	dailyReporter.Start()
+	// Cast + photos from TMDB (background backfill + admin buttons).
+	creditsService := services.NewCreditsService(db, services.NewTMDBClient(cfg.TMDBAPIKey, cfg.TMDBReadToken))
+	if creditsService.Enabled() {
+		if err := creditsService.EnsureIndexes(); err != nil {
+			log.Printf("Warning: Failed to ensure credits indexes: %v", err)
+		}
+	}
+	creditsService.Start(context.Background())
 	routes.SetupExtras(r, routes.ExtraDeps{
 		AuthService:  authService,
 		AuditLogRepo: auditLogRepo,
@@ -444,6 +452,7 @@ func main() {
 		History:      handlers.NewHistoryHandler(watchHistoryRepo),
 		Lists:        handlers.NewUserListHandler(userListRepo),
 		NotifyPrefs:  handlers.NewNotifySettingsHandler(notificationService, userRepo),
+		Credits:      handlers.NewCreditsHandler(creditsService),
 	})
 
 	// Wire SEO notifier (IndexNow + Google Indexing API + Search Console)

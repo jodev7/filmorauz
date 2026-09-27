@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Clapperboard, Film, CalendarRange, ChevronLeft } from "lucide-react";
+import { Clapperboard, Film, CalendarRange, ChevronLeft, Tv } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MovieCard from "@/components/MovieCard";
+import SeriesCard from "@/components/SeriesCard";
 import JsonLd from "@/components/JsonLd";
 import { getPersonCredits, personPath, Movie } from "@/lib/api";
 import { SITE_URL } from "@/lib/content-routes";
@@ -55,15 +56,23 @@ async function load(raw: string) {
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const credits = await load(params.name);
   if (!credits) return { title: "Topilmadi", robots: { index: false } };
-  const total = credits.acted.length + credits.directed.length;
+  const total = credits.acted.length + credits.directed.length + credits.series.length;
   const title = `${credits.name} — filmlari`;
-  const description = `${credits.name} ishtirok etgan ${total} ta kinoni FilmoraUz'da o'zbek tilida onlayn tomosha qiling.`;
+  const description = `${credits.name} ishtirok etgan ${total} ta ${credits.series.length ? "kino va serialni" : "kinoni"} FilmoraUz'da o'zbek tilida onlayn tomosha qiling.`;
   const canonical = `${SITE_URL}${personPath(credits.name)}`;
   return {
     title,
     description,
     alternates: { canonical },
-    openGraph: { title, description, url: canonical, type: "profile", siteName: "FILMORAUZ", locale: "uz_UZ" },
+    openGraph: {
+      title,
+      description,
+      url: canonical,
+      type: "profile",
+      siteName: "FILMORAUZ",
+      locale: "uz_UZ",
+      ...(credits.photo_url ? { images: [credits.photo_url.replace("/w185/", "/h632/")] } : {}),
+    },
   };
 }
 
@@ -111,6 +120,7 @@ export default async function PersonPage({ params }: Props) {
           "@type": "Person",
           name: credits.name,
           url,
+          ...(credits.photo_url ? { image: credits.photo_url } : {}),
           jobTitle: role,
           performerIn: credits.acted.slice(0, 20).map((m) => ({ "@type": "Movie", name: m.title, url: `${SITE_URL}/movies/${m.slug}` })),
         }}
@@ -123,10 +133,14 @@ export default async function PersonPage({ params }: Props) {
 
           <header className="glass-card mb-10 flex flex-col gap-6 rounded-2xl border border-white/10 p-6 sm:flex-row sm:items-center sm:p-8">
             <div
-              className="flex h-24 w-24 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-orange-500 to-rose-600 font-display text-4xl text-white shadow-lg sm:h-28 sm:w-28"
+              className="relative flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-orange-500 to-rose-600 font-display text-4xl text-white shadow-lg sm:h-28 sm:w-28"
               aria-hidden="true"
             >
               {initials(credits.name)}
+              {credits.photo_url && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={credits.photo_url.replace("/w185/", "/h632/")} alt="" className="absolute inset-0 h-full w-full object-cover" />
+              )}
             </div>
             <div className="min-w-0">
               <p className="mb-1 text-sm text-orange-400">{role}</p>
@@ -135,6 +149,11 @@ export default async function PersonPage({ params }: Props) {
                 <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1">
                   <Film size={14} className="text-orange-400" /> {all.length} ta kino
                 </span>
+                {credits.series.length > 0 && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1">
+                    <Tv size={14} className="text-orange-400" /> {credits.series.length} ta serial
+                  </span>
+                )}
                 {minYear && maxYear && (
                   <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1">
                     <CalendarRange size={14} className="text-orange-400" /> {minYear === maxYear ? minYear : `${minYear}–${maxYear}`}
@@ -155,6 +174,20 @@ export default async function PersonPage({ params }: Props) {
 
           <Section title="ROLLARDA" icon={<Film className="text-orange-500" size={24} />} movies={credits.acted} />
           <Section title="REJISSYORLIK" icon={<Clapperboard className="text-orange-500" size={24} />} movies={credits.directed} />
+          {credits.series.length > 0 && (
+            <section className="mb-12">
+              <h2 className="mb-5 flex items-center gap-2 font-display text-2xl tracking-wide text-white sm:text-3xl">
+                <Tv className="text-orange-500" size={24} />
+                SERIALLAR
+                <span className="ml-1 rounded-full bg-white/5 px-2 py-0.5 font-body text-sm text-gray-400">{credits.series.length}</span>
+              </h2>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-6">
+                {credits.series.map((s) => (
+                  <SeriesCard key={s.id} series={s} />
+                ))}
+              </div>
+            </section>
+          )}
         </div>
       </main>
       <Footer />

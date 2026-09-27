@@ -25,7 +25,7 @@ func (h *MovieHandler) PersonCredits(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load"})
 		return
 	}
-	if len(credits.Acted) == 0 && len(credits.Directed) == 0 {
+	if len(credits.Acted) == 0 && len(credits.Directed) == 0 && len(credits.Series) == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
@@ -36,6 +36,9 @@ func (h *MovieHandler) PersonCredits(c *gin.Context) {
 	for i := range credits.Directed {
 		protectMovieMedia(&credits.Directed[i])
 		stripMoviePlayback(&credits.Directed[i])
+	}
+	for i := range credits.Series {
+		protectSeriesMedia(&credits.Series[i])
 	}
 	c.JSON(http.StatusOK, credits)
 }
