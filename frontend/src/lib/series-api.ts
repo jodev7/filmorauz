@@ -1,4 +1,4 @@
-import type { VideoSourceType } from "@/lib/api";
+import type { CastMember, VideoSourceType } from "@/lib/api";
 
 // Browser requests use the public API URL; server-side rendering reaches the
 // backend directly over localhost (INTERNAL_API_URL) to avoid hairpinning SSR
@@ -26,6 +26,10 @@ export interface Series {
   is_premium: boolean;
   is_completed: boolean;
   quality?: string;
+  cast?: string[];
+  director?: string;
+  cast_details?: CastMember[];
+  director_profile_url?: string;
   created_at: string;
   updated_at: string;
 }

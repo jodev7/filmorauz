@@ -10,6 +10,7 @@ import Footer from "@/components/Footer";
 import MediaImage from "@/components/MediaImage";
 import MovieCode from "@/components/MovieCode";
 import SeasonList from "@/components/SeasonList";
+import CastRow from "@/components/CastRow";
 import WatchTogetherButton from "@/components/WatchTogetherButton";
 import SeriesCarousel from "@/components/SeriesCarousel";
 import { getSeriesBySlug, getSeriesRecommendations } from "@/lib/series-api";
@@ -272,6 +273,14 @@ export default async function SeriesDetailPage({ params }: Props) {
           <div className="mb-6">
             <WebsiteAdSlot placement="series_detail_page_banner" variant="banner" />
           </div>
+
+          <CastRow
+            director={series.director}
+            directorPhoto={series.director_profile_url}
+            directorRole="Yaratuvchi"
+            cast={series.cast}
+            castDetails={series.cast_details}
+          />
 
           {/* Seasons */}
           {seasons && seasons.length > 0 && (

@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Clapperboard, Crown, Film, Image as ImageIcon, Info, Sparkles, Tags, Upload, Video } from "lucide-react";
+import { Clapperboard, Crown, Film, Image as ImageIcon, Info, Loader2, Sparkles, Tags, Upload, Users, Video } from "lucide-react";
+import CastPhotos from "@/components/admin/form/CastPhotos";
 import {
   MovieInput,
   VideoSourceType,
@@ -10,6 +11,8 @@ import {
   createDirectUploadJob,
   DirectUploadInput,
   IngestionJob,
+  CastMember,
+  CreditsResult,
 } from "@/lib/api";
 import { buildSeoTitle, buildSeoDescription } from "@/lib/seo-template";
 import { logger } from "@/lib/logger";
@@ -46,6 +49,10 @@ interface Props {
   previewHref?: string;
   /** Renditions already in storage (B2); the best one is auto-selected. */
   storageQualities?: string[];
+  /** TMDB actor photos already stored on the movie. */
+  castDetails?: CastMember[];
+  /** Pull cast + director from TMDB (edit page); saves them server-side. */
+  onFetchCredits?: () => Promise<CreditsResult>;
 }
 
 const emptyForm: MovieInput = {
@@ -74,7 +81,7 @@ function durationLabel(min: number) {
   return h ? `${h} soat ${m ? `${m} daqiqa` : ""}` : `${m} daqiqa`;
 }
 
-export default function MovieForm({ initialData, onSubmit, submitLabel = "Saqlash", token, onDirectUploadJobCreated, mode = "edit", previewHref, storageQualities = [] }: Props) {
+export default function MovieForm({ initialData, onSubmit, submitLabel = "Saqlash", token, onDirectUploadJobCreated, mode = "edit", previewHref, storageQualities = [], castDetails: initialCastDetails = [], onFetchCredits }: Props) {
   const initial = useMemo<MovieInput>(
     () => ({
       ...emptyForm,
@@ -89,6 +96,29 @@ export default function MovieForm({ initialData, onSubmit, submitLabel = "Saqlas
   );
   const [form, setForm] = useState<MovieInput>(initial);
   const siteCountries = useSiteCountries();
+  const [castDetails, setCastDetails] = useState<CastMember[]>(initialCastDetails);
+  const [credits, setCredits] = useState<{ busy: boolean; msg: string; error: boolean }>({ busy: false, msg: "", error: false });
+
+  const fetchCredits = async () => {
+    if (!onFetchCredits) return;
+    setCredits({ busy: true, msg: "", error: false });
+    try {
+      const res = await onFetchCredits();
+      if (res.status !== "ok") {
+        setCredits({ busy: false, msg: "TMDB'da bu kino topilmadi — nomi yoki yilini tekshiring", error: true });
+        return;
+      }
+      const patch = { cast: res.cast, director: res.director };
+      setForm((prev) => ({ ...prev, ...patch }));
+      // Already saved on the server, so it is not an unsaved change.
+      setSaved((prev) => JSON.stringify({ ...JSON.parse(prev), ...patch }));
+      setCastDetails(res.cast_details);
+      const withPhoto = res.cast_details.filter((c) => c.profile_url).length;
+      setCredits({ busy: false, msg: `${res.cast.length} ta aktyor olindi (${withPhoto} tasi rasm bilan)`, error: false });
+    } catch (err) {
+      setCredits({ busy: false, msg: err instanceof Error ? err.message : "TMDB'dan olib bo'lmadi", error: true });
+    }
+  };
   const [saved, setSaved] = useState(JSON.stringify(initial));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -336,8 +366,31 @@ export default function MovieForm({ initialData, onSubmit, submitLabel = "Saqlas
             </div>
             <QualityField value={form.quality} onChange={(v) => set("quality", v)} storage={storageQualities} />
             <div className="grid gap-4 sm:grid-cols-[1fr_220px]">
-              <Field label="Aktyorlar" hint="Enter yoki vergul bilan; ro'yxatni birdan qo'yish ham mumkin">
+              <Field
+                label="Aktyorlar"
+                hint={
+                  credits.msg ? (
+                    <span className={credits.error ? "text-amber-400" : "text-emerald-400"}>{credits.msg}</span>
+                  ) : (
+                    "Enter yoki vergul bilan; saqlangandan keyin TMDB'dan avtomatik ham olinadi"
+                  )
+                }
+                right={
+                  onFetchCredits ? (
+                    <button
+                      type="button"
+                      onClick={fetchCredits}
+                      disabled={credits.busy}
+                      className="inline-flex items-center gap-1 rounded-lg border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium text-sky-300 hover:bg-sky-500/20 disabled:opacity-60"
+                    >
+                      {credits.busy ? <Loader2 size={11} className="animate-spin" /> : <Users size={11} />}
+                      TMDB&apos;dan olish
+                    </button>
+                  ) : undefined
+                }
+              >
                 <ChipsInput value={form.cast ?? []} onChange={(v) => set("cast", v)} placeholder="Tom Hanks, Emma Watson…" />
+                <CastPhotos names={form.cast ?? []} details={castDetails} />
               </Field>
               <Field label="Rejissyor" htmlFor="m-dir">
                 <input id="m-dir" value={form.director ?? ""} onChange={(e) => set("director", e.target.value)} placeholder="Christopher Nolan" className={inputCls} />

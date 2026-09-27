@@ -8,7 +8,7 @@ import AdminPageHeader from "@/components/admin/form/PageHeader";
 import { storageQualityList } from "@/components/admin/form/constants";
 import { useToast } from "@/components/admin/Toast";
 import { useAuth } from "@/lib/auth-context";
-import { adminUpdateMovie, adminGetMovie, Movie, MovieInput } from "@/lib/api";
+import { adminUpdateMovie, adminGetMovie, adminFetchMovieCredits, Movie, MovieInput } from "@/lib/api";
 
 function normalizeGenreValue(value: string): string {
   const trimmed = value.trim().toLowerCase();
@@ -126,6 +126,8 @@ export default function EditMoviePage() {
         onSubmit={handleSubmit}
         submitLabel="Saqlash"
         token={token ?? undefined}
+        castDetails={movie.cast_details}
+        onFetchCredits={() => adminFetchMovieCredits(token!, movie.id)}
         storageQualities={storageQualityList(movie.generated_qualities?.length ? movie.generated_qualities : movie.available_qualities)}
         previewHref={movie.approval_status === "approved" || !movie.approval_status ? `/movies/${movie.slug}` : undefined}
       />

@@ -1,6 +1,7 @@
 // src/lib/api.ts
 // Central API client for all backend calls
 
+import type { Series } from "@/lib/series-api";
 import { logger } from "./logger";
 
 // Browser requests must go to the public API URL. Server-side rendering (ISR /
@@ -65,6 +66,9 @@ export interface Movie {
   is_premium?: boolean;
   cast?: string[];
   director?: string;
+  cast_details?: CastMember[];
+  director_profile_url?: string;
+  credits_status?: string;
   created_at: string;
   updated_at: string;
   // Approval workflow
@@ -629,10 +633,19 @@ export async function getListBySlug(slug: string, token?: string): Promise<UserL
 
 // ── Discovery: people pages & random movie ──
 
+export interface CastMember {
+  name: string;
+  character?: string;
+  profile_url?: string;
+  tmdb_id?: number;
+}
+
 export interface PersonCredits {
   name: string;
+  photo_url?: string;
   acted: Movie[];
   directed: Movie[];
+  series: Series[];
 }
 
 // Actor / director page data; null when the person has no published titles.
@@ -643,9 +656,38 @@ export async function getPersonCredits(name: string): Promise<PersonCredits | nu
   const json = await res.json();
   return {
     name: json.name,
+    photo_url: json.photo_url || undefined,
     acted: (json.acted || []).map(normalizeMovieResponse),
     directed: (json.directed || []).map(normalizeMovieResponse),
+    series: json.series || [],
   };
+}
+
+// ── TMDB credits (admin) ──
+
+export interface CreditsResult {
+  status: "ok" | "not_found";
+  tmdb_id?: number;
+  cast: string[];
+  director: string;
+  director_profile_url?: string;
+  cast_details: CastMember[];
+}
+
+async function creditsRequest(token: string, path: string): Promise<CreditsResult> {
+  const res = await fetch(`${API_URL}${path}`, { method: "POST", headers: authHeaders(token) });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || "TMDB'dan olib bo'lmadi");
+  return { ...json, cast: json.cast || [], cast_details: json.cast_details || [], director: json.director || "" };
+}
+
+/** Fetch cast + photos from TMDB. `force` replaces the admin-entered cast/director. */
+export function adminFetchMovieCredits(token: string, id: string, force = true) {
+  return creditsRequest(token, `/admin/movies/${encodeURIComponent(id)}/credits${force ? "?force=1" : ""}`);
+}
+
+export function adminFetchSeriesCredits(token: string, id: string, force = true) {
+  return creditsRequest(token, `/admin/series/${encodeURIComponent(id)}/credits${force ? "?force=1" : ""}`);
 }
 
 export function personPath(name: string): string {
@@ -3703,6 +3745,10 @@ export interface AdminSeries {
   is_premium: boolean;
   is_completed: boolean;
   quality?: string;
+  cast?: string[];
+  director?: string;
+  cast_details?: CastMember[];
+  director_profile_url?: string;
   created_at: string;
   updated_at: string;
   // Approval workflow

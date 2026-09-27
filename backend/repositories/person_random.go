@@ -31,9 +31,11 @@ func exactNameRegex(name string) primitive.Regex {
 
 // PersonCredits is everything a person appears in.
 type PersonCredits struct {
-	Name     string         `json:"name"`
-	Acted    []models.Movie `json:"acted"`
-	Directed []models.Movie `json:"directed"`
+	Name     string          `json:"name"`
+	PhotoURL string          `json:"photo_url,omitempty"`
+	Acted    []models.Movie  `json:"acted"`
+	Directed []models.Movie  `json:"directed"`
+	Series   []models.Series `json:"series"`
 }
 
 // FindPersonCredits returns published movies where name is in the cast or is
@@ -78,9 +80,45 @@ func (r *MovieRepository) FindPersonCredits(name string, limit int) (*PersonCred
 	if err != nil {
 		return nil, err
 	}
-	res := &PersonCredits{Name: name, Acted: acted, Directed: directed}
-	// Prefer the spelling stored on the content.
+	res := &PersonCredits{Name: name, Acted: acted, Directed: directed, Series: []models.Series{}}
+
+	// Series the person plays in or created.
+	db := r.col.Database()
+	if cur, err := db.Collection("series").Find(ctx,
+		bson.M{"$and": []bson.M{publishedMovieFilter, {"$or": []bson.M{{"cast": rx}, {"director": rx}}}}},
+		options.Find().SetSort(bson.D{{Key: "year", Value: -1}}).SetLimit(int64(limit))); err == nil {
+		_ = cur.All(ctx, &res.Series)
+		if res.Series == nil {
+			res.Series = []models.Series{}
+		}
+	}
+
+	// Photo: the people collection (TMDB), else any title's cast details.
 	needle := strings.ToLower(name)
+	var p models.Person
+	if db.Collection("people").FindOne(ctx, bson.M{"name_lower": needle, "profile_url": bson.M{"$nin": bson.A{"", nil}}}).Decode(&p) == nil {
+		res.PhotoURL = p.ProfileURL
+	}
+	if res.PhotoURL == "" {
+		for _, m := range acted {
+			for _, c := range m.CastDetails {
+				if c.ProfileURL != "" && strings.ToLower(c.Name) == needle {
+					res.PhotoURL = c.ProfileURL
+					break
+				}
+			}
+		}
+	}
+	if res.PhotoURL == "" {
+		for _, m := range directed {
+			if m.DirectorProfileURL != "" {
+				res.PhotoURL = m.DirectorProfileURL
+				break
+			}
+		}
+	}
+
+	// Prefer the spelling stored on the content.
 	for _, m := range acted {
 		for _, c := range m.Cast {
 			if strings.ToLower(strings.Join(strings.Fields(c), " ")) == needle {
@@ -91,6 +129,13 @@ func (r *MovieRepository) FindPersonCredits(name string, limit int) (*PersonCred
 	}
 	if len(directed) > 0 {
 		res.Name = strings.Join(strings.Fields(directed[0].Director), " ")
+	} else if len(res.Series) > 0 {
+		for _, c := range append(append([]string{}, res.Series[0].Cast...), res.Series[0].Director) {
+			if strings.ToLower(strings.Join(strings.Fields(c), " ")) == needle {
+				res.Name = strings.Join(strings.Fields(c), " ")
+				break
+			}
+		}
 	}
 	return res, nil
 }

@@ -37,6 +37,10 @@ type Config struct {
 	// the key is never exposed to the browser — the frontend hits our
 	// /api/gifs proxy instead of api.giphy.com directly.
 	GiphyAPIKey string
+	// TMDB: cast + photos for movies/series. Either the v3 API key or the
+	// v4 read access token (Bearer) works; the token wins when both are set.
+	TMDBAPIKey    string
+	TMDBReadToken string
 	UploadsDir              string
 	CDNURL                  string
 	B2Bucket                string
@@ -101,6 +105,8 @@ func Load() *Config {
 		WorkerUploadsDir:        getEnv("WORKER_UPLOADS_DIR", "../worker/uploads"),
 		AIEndpoint:              getEnv("AI_ENDPOINT", ""),
 		GiphyAPIKey:             strings.TrimSpace(getEnv("GIPHY_API_KEY", "")),
+		TMDBAPIKey:              strings.TrimSpace(getEnv("TMDB_API_KEY", "")),
+		TMDBReadToken:           strings.TrimSpace(getEnv("TMDB_READ_TOKEN", "")),
 		UploadsDir:              getEnv("UPLOADS_DIR", "./uploads"),
 		CDNURL:                  getEnv("CDN_URL", ""),
 		B2Bucket:                getEnvAny([]string{"B2_BUCKET_NAME", "B2_BUCKET"}, ""),
