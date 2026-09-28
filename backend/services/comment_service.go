@@ -34,6 +34,7 @@ type CommentWithUserDTO struct {
 	Replies             []CommentWithUserDTO `json:"replies,omitempty"`
 	LikesCount          int                  `json:"likes_count"`
 	LikedByMe           bool                 `json:"liked_by_me"`
+	IsSpoiler           bool                 `json:"is_spoiler,omitempty"`
 }
 
 type CommentService struct {

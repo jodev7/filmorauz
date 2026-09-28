@@ -129,6 +129,7 @@ func commentToDTO(c models.CommentWithUser) services.CommentWithUserDTO {
 		RepliesCount:        c.RepliesCount,
 		LikesCount:          c.LikesCount,
 		LikedByMe:           c.LikedByMe,
+		IsSpoiler:           c.IsSpoiler,
 	}
 	if !c.MovieID.IsZero() {
 		dto.MovieID = c.MovieID.Hex()
