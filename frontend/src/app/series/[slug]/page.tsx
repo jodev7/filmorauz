@@ -26,7 +26,7 @@ const StarRating = dynamicImport(() => import("@/components/StarRating"));
 const ShareSheet = dynamicImport(() => import("@/components/share/ShareSheet"));
 const ContentDiscovery = dynamicImport(() => import("@/components/discovery/ContentDiscovery"));
 const LibraryButtons = dynamicImport(() => import("@/components/LibraryButtons"));
-const Reviews = dynamicImport(() => import("@/components/Reviews"));
+const Comments = dynamicImport(() => import("@/components/Comments"));
 const SeriesResumeButton = dynamicImport(() => import("@/components/SeriesResumeButton"));
 
 interface Props {
@@ -305,8 +305,8 @@ export default async function SeriesDetailPage({ params }: Props) {
             </section>
           )}
 
-          {/* Short reviews */}
-          <Reviews targetType="series" targetId={series.id} />
+          {/* Comments (star-rated reviews) */}
+          <Comments commentsEnabled={false} reviewTarget={{ type: "series", id: series.id }} />
 
           {/* Similar series + recommended / random movies */}
           <section className="pb-12">

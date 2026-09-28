@@ -64,7 +64,7 @@ function Bar({ label, percent, used, total, unit, icon }: {
           {used}/{total} {unit} · {safePct.toFixed(1)}%
         </span>
       </div>
-      <div className="h-1.5 rounded-full bg-brand-dark overflow-hidden">
+      <div className="h-1.5 rounded-full bg-black/30 overflow-hidden">
         <div
           className={`h-full ${severityColor(safePct)}`}
           style={{ width: `${safePct}%` }}
@@ -79,7 +79,7 @@ function HostCard({ host }: { host: SystemHostStatus }) {
   return (
     <div
       className={`rounded-xl border p-4 ${
-        healthy ? "bg-brand-card border-brand-border" : "bg-red-500/5 border-red-500/40"
+        healthy ? "bg-[#12121a] border-white/10" : "bg-red-500/5 border-red-500/40"
       }`}
     >
       <div className="flex items-start justify-between gap-3 mb-3">
@@ -151,7 +151,7 @@ function HostCard({ host }: { host: SystemHostStatus }) {
           </div>
 
           {host.services && Object.keys(host.services).length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-brand-border">
+            <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-white/10">
               {Object.entries(host.services).map(([name, state]) => (
                 <span key={name} className="inline-flex items-center gap-1.5 text-[11px] text-gray-400">
                   <span className="text-gray-300">{name}</span>
@@ -208,7 +208,7 @@ export default function SystemStatusBlock() {
       </div>
 
       {loading && !hosts ? (
-        <div className="bg-brand-card border border-brand-border rounded-xl p-6 text-center text-gray-500 text-sm">
+        <div className="bg-[#12121a] border border-white/10 rounded-3xl p-6 text-center text-gray-500 text-sm">
           Yuklanmoqda...
         </div>
       ) : error ? (
@@ -222,7 +222,7 @@ export default function SystemStatusBlock() {
           ))}
         </div>
       ) : (
-        <div className="bg-brand-card border border-brand-border rounded-xl p-6 text-center text-gray-500 text-sm">
+        <div className="bg-[#12121a] border border-white/10 rounded-3xl p-6 text-center text-gray-500 text-sm">
           Hostlar topilmadi.
         </div>
       )}

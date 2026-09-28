@@ -161,18 +161,17 @@ func (h *AdminOverviewHandler) Overview(c *gin.Context) {
 	// ── Pipeline health (ingestion queue) ──────────────────────────────
 	ingestion := gin.H{}
 	for _, key := range []string{"active", "pending", "processing", "stuck"} {
-		f := buildJobStatusFilter(key)
-		f["content_type"] = bson.M{"$ne": "clip_only"}
+		f := jobListFilter(key, "")
 		n, err := h.jobRepo.CountTopLevelGroups(ctx, f)
 		if err != nil {
 			log.Printf("[OVERVIEW] ingestion %s count failed: %v", key, err)
 		}
 		ingestion[key] = n
 	}
-	failed24 := buildJobStatusFilter("failed")
+	failed24 := jobListFilter("failed", "")
 	failed24["updated_at"] = bson.M{"$gte": dayAgo}
 	ingestion["failed_24h"] = h.count(ctx, "ingestion_jobs", failed24)
-	completed24 := buildJobStatusFilter("completed")
+	completed24 := jobListFilter("completed", "")
 	completed24["updated_at"] = bson.M{"$gte": dayAgo}
 	ingestion["completed_24h"] = h.count(ctx, "ingestion_jobs", completed24)
 

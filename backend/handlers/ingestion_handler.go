@@ -1007,6 +1007,11 @@ func (h *IngestionHandler) GetIngestionJob(c *gin.Context) {
 // Empty/"all" returns an empty filter.
 func buildJobStatusFilter(status string) bson.M {
 	filter := bson.M{}
+	terminal := bson.A{
+		models.IngestionStatusCompleted,
+		models.IngestionStatusFailed,
+		models.IngestionStatusDownloadFailed,
+	}
 	switch status {
 	case "", "all":
 	case "active":
@@ -1016,9 +1021,11 @@ func buildJobStatusFilter(status string) bson.M {
 			models.IngestionStatusDownloadFailed,
 		}}
 	case "pending", "queued":
+		// stage can lag behind status, so a finished job must never count
+		// as queued just because its stage still says so.
 		filter["$or"] = bson.A{
 			bson.M{"status": models.IngestionStatusQueued},
-			bson.M{"stage": "queued"},
+			bson.M{"stage": "queued", "status": bson.M{"$nin": terminal}},
 		}
 	case "downloading":
 		filter["status"] = models.IngestionStatusDownloading
@@ -1035,7 +1042,7 @@ func buildJobStatusFilter(status string) bson.M {
 				"processing",
 				"uploading",
 				"hls_processing",
-			}}},
+			}}, "status": bson.M{"$nin": terminal}},
 		}
 	case "failed":
 		filter["status"] = bson.M{"$in": bson.A{
@@ -1054,6 +1061,20 @@ func buildJobStatusFilter(status string) bson.M {
 	default:
 		filter["status"] = status
 	}
+	return filter
+}
+
+// jobListFilter is the filter behind both the admin job list and its
+// status_counts. clip_only jobs are an internal post-finalize enrichment step
+// (serial episode clips) and are hidden from the operator-facing queue; the
+// worker claims them through its own filter. $ne also matches documents with
+// no content_type (movies), so only clip_only rows are excluded.
+func jobListFilter(status, source string) bson.M {
+	filter := buildJobStatusFilter(status)
+	if source != "" {
+		filter["source"] = source
+	}
+	filter["content_type"] = bson.M{"$ne": "clip_only"}
 	return filter
 }
 
@@ -1106,18 +1127,7 @@ func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
 		page = (skip / limit) + 1
 	}
 
-	filter := buildJobStatusFilter(status)
-	if source != "" {
-		filter["source"] = source
-	}
-	// Hide clip_only jobs from the admin ingestion list. They are an internal
-	// post-finalize enrichment step (serial episode clips) and shouldn't
-	// clutter the operator-facing queue — the same way movie clip generation
-	// runs invisibly inside the movie job. The worker still claims them via
-	// ClaimNextProcessingJob, which has its own filter and is unaffected.
-	// $ne also matches documents where content_type is absent (movies), so
-	// only clip_only rows are excluded.
-	filter["content_type"] = bson.M{"$ne": "clip_only"}
+	filter := jobListFilter(status, source)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1151,11 +1161,9 @@ func (h *IngestionHandler) ListIngestionJobs(c *gin.Context) {
 	statusCounts := map[string]int64{}
 	countKeys := []string{"all", "active", "pending", "processing", "failed", "stuck", "completed"}
 	for _, key := range countKeys {
-		f := buildJobStatusFilter(key)
-		if source != "" {
-			f["source"] = source
-		}
-		count, cerr := h.jobRepo.CountTopLevelGroups(ctx, f)
+		// Same scope as the list itself, otherwise hidden clip_only jobs
+		// inflate the tiles ("1 faol, 2 xato" with nothing in the list).
+		count, cerr := h.jobRepo.CountTopLevelGroups(ctx, jobListFilter(key, source))
 		if cerr != nil {
 			log.Printf("[API] ListIngestionJobs status_counts %s error: %v", key, cerr)
 			continue

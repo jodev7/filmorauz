@@ -102,7 +102,7 @@ function ChartTooltip({
   if (!active || !payload || payload.length === 0) return null;
   const value = Number(payload[0].value ?? 0);
   return (
-    <div className="rounded-lg border border-brand-border bg-brand-dark/95 px-3 py-2 shadow-lg">
+    <div className="rounded-lg border border-white/10 bg-black/30/95 px-3 py-2 shadow-lg">
       <p className="text-sm font-semibold text-white">{formatNumber(value)}</p>
       <p className="text-xs text-gray-400">
         {metricLabel} · {typeof label === "string" ? formatDay(label) : label}
@@ -187,9 +187,9 @@ function MetricChart({ data, metric }: { data: DailyPoint[]; metric: (typeof MET
 
 function DataTable({ data }: { data: DailyPoint[] }) {
   return (
-    <div className="max-h-80 overflow-auto rounded-lg border border-brand-border">
+    <div className="max-h-80 overflow-auto rounded-lg border border-white/10">
       <table className="w-full text-sm">
-        <thead className="sticky top-0 bg-brand-dark text-xs uppercase tracking-wider text-gray-500">
+        <thead className="sticky top-0 bg-black/30 text-xs uppercase tracking-wider text-gray-500">
           <tr>
             <th className="px-3 py-2 text-left">Sana</th>
             {METRICS.map((m) => (
@@ -199,7 +199,7 @@ function DataTable({ data }: { data: DailyPoint[] }) {
         </thead>
         <tbody>
           {[...data].reverse().map((d) => (
-            <tr key={d.date} className="border-t border-brand-border/50 text-gray-300">
+            <tr key={d.date} className="border-t border-white/5 text-gray-300">
               <td className="px-3 py-1.5">{d.date}</td>
               {METRICS.map((m) => (
                 <td key={m.key} className="px-3 py-1.5 text-right tabular-nums">{formatNumber(d[m.key])}</td>
@@ -245,7 +245,7 @@ export default function DashboardCharts() {
           Dinamika
         </h2>
         <div className="flex items-center gap-2">
-          <div className="flex rounded-lg border border-brand-border p-0.5" role="group" aria-label="Davr">
+          <div className="flex rounded-lg border border-white/10 p-0.5" role="group" aria-label="Davr">
             {RANGES.map((r) => (
               <button
                 key={r}
@@ -261,7 +261,7 @@ export default function DashboardCharts() {
           </div>
           <button
             onClick={() => setView((v) => (v === "chart" ? "table" : "chart"))}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-brand-border px-2.5 py-1.5 text-xs text-gray-400 hover:text-white"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-gray-400 hover:text-white"
             aria-pressed={view === "table"}
           >
             {view === "chart" ? <Table2 size={13} /> : <LineChartIcon size={13} />}
@@ -271,11 +271,11 @@ export default function DashboardCharts() {
       </div>
 
       {error && !data ? (
-        <div className="rounded-xl border border-brand-border bg-brand-card p-6 text-center text-sm text-gray-500">
+        <div className="rounded-3xl border border-white/10 bg-[#12121a] p-6 text-center text-sm text-gray-500">
           Grafik ma&apos;lumotlarini yuklab bo&apos;lmadi.
         </div>
       ) : !data ? (
-        <div className="rounded-xl border border-brand-border bg-brand-card p-6 text-center text-sm text-gray-500">
+        <div className="rounded-3xl border border-white/10 bg-[#12121a] p-6 text-center text-sm text-gray-500">
           Yuklanmoqda...
         </div>
       ) : view === "table" ? (
@@ -283,7 +283,7 @@ export default function DashboardCharts() {
       ) : (
         <div className={`grid grid-cols-1 gap-4 md:grid-cols-2 ${stale ? "opacity-60" : ""}`}>
           {METRICS.map((m) => (
-            <div key={m.key} className="rounded-xl border border-brand-border bg-brand-card p-4">
+            <div key={m.key} className="rounded-3xl border border-white/10 bg-[#12121a] p-4">
               <div className="mb-2 flex items-start justify-between gap-2">
                 <div>
                   <p className="text-sm text-gray-400">{m.label}</p>

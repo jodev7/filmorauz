@@ -36,7 +36,6 @@ const MovieActions = dynamicImport(() => import("@/components/MovieActions"));
 const LibraryButtons = dynamicImport(() => import("@/components/LibraryButtons"));
 const StarRating = dynamicImport(() => import("@/components/StarRating"));
 const Comments = dynamicImport(() => import("@/components/Comments"));
-const Reviews = dynamicImport(() => import("@/components/Reviews"));
 const ShareSheet = dynamicImport(() => import("@/components/share/ShareSheet"));
 const ContentDiscovery = dynamicImport(() => import("@/components/discovery/ContentDiscovery"));
 const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
@@ -390,10 +389,9 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
           <ContentDiscovery excludeIds={[movie.id]} similarMovies={recommendations} />
         </section>
 
-        {/* Reviews + Comments */}
+        {/* Comments (incl. star-rated reviews) */}
         <section className="max-w-7xl mx-auto px-4 pb-12">
-          <Reviews targetType="movie" targetId={movie.id} />
-          <Comments movieId={movie.id} />
+          <Comments movieId={movie.id} reviewTarget={{ type: "movie", id: movie.id }} />
         </section>
       </main>
       </WatchPlayerProvider>
