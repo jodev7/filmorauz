@@ -21,6 +21,7 @@ from helpers import (
     extract_source_id,
     deduplicate_results,
     canonical_episode_id,
+    sign_fayllar_url,
 )
 from media_extractor import (
     is_valid_media_url,
@@ -1034,6 +1035,9 @@ class AsilmediaParser(BaseParser):
         """
         if not url or not url.lower().startswith(("http://", "https://")):
             return False
+        # fayllar1.ru 403s unsigned URLs; probe the signed form. The caller keeps
+        # the raw URL (tokens expire) and the downloader re-signs at fetch time.
+        url = sign_fayllar_url(url, referer or self.BASE_URL + "/")
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "*/*",
@@ -1736,8 +1740,17 @@ class AsilmediaParser(BaseParser):
         title = ""
         detail_url = ""
 
+        # asilmedia-v2 cards (2026-09): <a class="card__link"> wraps the whole
+        # card (poster, quality badges, meta), so the generic DLE selectors pick
+        # up "480p720p1080p<title>Tarjima Kinolar2023". Read the title node.
+        v2_title = card.select_one(".card__title")
+        v2_link = card.select_one("a.card__link[href]")
+        if v2_title and v2_link:
+            title = clean_text(v2_title.get_text())
+            detail_url = normalize_url(v2_link.get("href", ""), self.BASE_URL)
+
         # Title extraction using DLE selectors
-        for sel in self.DLE_TITLE_SELECTORS:
+        for sel in ([] if title else self.DLE_TITLE_SELECTORS):
             el = card.select_one(sel)
             if el:
                 title = clean_text(el.get_text())
@@ -1806,6 +1819,14 @@ class AsilmediaParser(BaseParser):
                 break
 
         item_type = "serial" if ("/serial/" in detail_url or "/series/" in detail_url) else "movie"
+        # Serial detail URLs are flat /<id>-slug.html like films, so the URL
+        # can't tell them apart. The card meta carries the site category
+        # ("Seriallar", "Multfilmlar / Seriallar", "Tarjima Kinolar"), and
+        # serial cards carry an episode-count badge.
+        meta = card.select_one(".card__meta span")
+        meta_text = (meta.get_text(" ", strip=True) if meta else "").lower()
+        if "serial" in meta_text or card.select_one(".badge--series"):
+            item_type = "serial"
 
         return {
             "source_id": source_id,

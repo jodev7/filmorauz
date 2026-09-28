@@ -1039,7 +1039,7 @@ from seezntv_serial import SeezntvSerialParser
 from downloader_service import DownloaderService, _validate_download_target, report_progress_to_backend
 from uzmovi_browser_downloader import download_uzmovi_video
 from metadata_normalizer import normalize_metadata, validate_metadata, create_worker_payload
-from helpers import sort_video_candidates, normalize_quality_label, quality_height, detect_content_type
+from helpers import sort_video_candidates, normalize_quality_label, quality_height, detect_content_type, sign_fayllar_url
 from source_config import get_source_config
 import recovery
 from telemetry import (
@@ -2314,6 +2314,7 @@ def _run_claimed_download(job: dict, parser_base_url: str):
     # by driving Chromium directly, so don't pre-validate the URL — the
     # cached video_url is already expired by the time we get here.
     if source != "uzmovi":
+        video_url = sign_fayllar_url(video_url, referer or "")
         ok, validation_error = _validate_download_target(video_url, referer=referer or None)
         if not ok:
             raise RuntimeError(f"selected_url={video_url} validation_failed={validation_error}")
@@ -4091,6 +4092,14 @@ class ParserHandler(BaseHTTPRequestHandler):
                 # Check if parser has list_catalog method
                 if hasattr(parser, 'list_catalog'):
                     catalog_result = parser.list_catalog(page=page, limit=limit, type_filter=type_filter, category_url=category_url)
+                    # Not every parser honours type_filter (kinolar, kinochilar,
+                    # uzmedia ignore it), so enforce it here. "unknown" items stay
+                    # visible — the UI resolves them via /details.
+                    if type_filter in ("movie", "serial") and isinstance(catalog_result.get("items"), list):
+                        catalog_result["items"] = [
+                            i for i in catalog_result["items"]
+                            if (i.get("type") or "unknown") in (type_filter, "unknown")
+                        ]
                     logger.info(f"[SERVER] Catalog: source={source}, type={type_filter!r}, returned {len(catalog_result.get('items', []))} items")
                     self._send_json(catalog_result)
                 else:

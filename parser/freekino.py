@@ -158,6 +158,10 @@ class FreekinoParser:
     
     # Card selectors (strict first)
     CARD_SELECTORS = [
+        # 2026-09 redesign: listing rows are <a class="fkrow"> inside the main
+        # feed. Must come first — the generic selectors below miss them and the
+        # link-based fallback then scrapes nav/sidebar links as items.
+        ".fkfeed__list a.fkrow",
         ".swiper-slide",
         "article[itemtype]",
         "article",
@@ -1558,8 +1562,39 @@ class FreekinoParser:
             "has_more": has_more,
         }
     
+    def _extract_fkrow_card(self, card):
+        """Extract a 2026-09 redesign listing row (<a class="fkrow">).
+
+        The section is in the URL (/movie/<id>-slug vs /serial/<id>-slug), which
+        is authoritative — the row text ("Turk Kinosi", "Tez kunda") is not.
+        """
+        detail_url = normalize_url(self.BASE_URL, card.get("href", ""))
+        title_el = card.select_one(".fkrow__title")
+        title = clean_text(title_el.get_text()) if title_el else ""
+        if not title or not detail_url:
+            return None
+        path = urlparse(detail_url).path.lower()
+        if path.startswith("/serial/"):
+            item_type = "serial"
+        elif path.startswith("/movie/"):
+            item_type = "movie"
+        else:
+            return None
+        img = card.select_one("img:not(.fkrow__flag)")
+        poster = (img.get("data-src") or img.get("src", "")) if img else ""
+        facts = card.select_one(".fkrow__facts")
+        year = extract_year(facts.get_text(" ")) if facts else None
+        payload = self._build_result_payload(title=title, detail_url=detail_url, poster_url=poster, year=year or "", card=card)
+        if not payload:
+            return None
+        payload.update({"type": item_type, "content_type": item_type, "description": "", "genres": []})
+        return payload
+
     def _extract_catalog_card(self, card):
         """Extract a catalog item from a movie card element."""
+        if card.name == "a" and "fkrow" in (card.get("class") or []):
+            return self._extract_fkrow_card(card)
+
         title = ""
         detail_url = ""
         

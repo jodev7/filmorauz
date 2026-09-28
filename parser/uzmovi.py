@@ -2484,7 +2484,11 @@ class UzmoviParser(BaseParser):
         # Find movie cards using known selectors
         cards = []
         for selector in self.CARD_SELECTORS:
-            cards = soup.select(selector)
+            # Skip the hidden search-suggestion modal: it renders the same
+            # .shortstory cards (a fixed set of films) on every page, which then
+            # leaked into every listing — and got force-typed "serial" on the
+            # serial category.
+            cards = [c for c in soup.select(selector) if not c.find_parent(class_="search-suggest")]
             if cards:
                 logger.info(f"[UZMOVI] list_catalog: found {len(cards)} cards with '{selector}'")
                 break
@@ -2572,7 +2576,10 @@ class UzmoviParser(BaseParser):
         for sel in self.TITLE_SELECTORS:
             el = card.select_one(sel)
             if el:
-                title = clean_text(el.get_text())
+                # Visible text is CSS-truncated ("… barcha…"); the title attribute
+                # carries the full string, including serial markers like
+                # "anime serial" that type detection needs.
+                title = clean_text(el.get("title") or el.get_text())
                 href = el.get("href", "")
                 if href:
                     detail_url = normalize_url(href, self.BASE_URL)

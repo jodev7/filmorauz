@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 # Import validation function for URL validation
-from helpers import isValidStreamUrl, is_youtube_url
+from helpers import isValidStreamUrl, is_youtube_url, sign_fayllar_url
 
 logger = logging.getLogger(__name__)
 
@@ -2067,6 +2067,9 @@ class DownloaderService:
             raise DownloadError(error_msg)
         
         logger.info(f"[DOWNLOADER] URL validation passed: {url[:80]}...")
+
+        # asilmedia's fayllar1.ru CDN needs a fresh IP/UA-bound token.
+        url = sign_fayllar_url(url, referer or "")
 
         ok, validation_error = _validate_download_target(url, referer=referer)
         if not ok:

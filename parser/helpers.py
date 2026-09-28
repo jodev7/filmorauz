@@ -807,3 +807,60 @@ def select_best_stream_url(urls: List[Dict[str, str]]) -> Optional[Dict[str, str
     logger.info(f"[URL_VALIDATION] Selected media URL: {best_url.get('url', '')[:80]}... (type: {best_url.get('type', 'unknown')}, priority: {url_priority(best_url)})")
     
     return best_url
+
+
+FAYLLAR_SIGN_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+_FAYLLAR_RE = re.compile(r"^https?://(?:[a-z0-9-]+\.)?fayllar1\.ru/", re.I)
+
+
+def sign_fayllar_url(url: str, referer: str = "") -> str:
+    """Return a hotlink-signed fayllar1.ru URL, or ``url`` unchanged.
+
+    Since 2026-09 asilmedia's CDN (fayllar1.ru) answers 403 to raw file URLs.
+    The site's player.js exchanges each raw URL at ``/fayllar-sign.php`` for
+    ``...?token=..&expires=..`` — the token is bound to the caller's IP (and
+    IP family) and the endpoint itself requires an asilmedia Referer. The
+    signed URL must then be fetched with an asilmedia Referer too.
+
+    The token is also bound to the User-Agent, so this signs with
+    ``FAYLLAR_SIGN_USER_AGENT``, which must match the UA of whatever fetches the
+    file (downloader_service / aria2c use the same Chrome 120 string).
+
+    Tokens expire (~24h), so any stored token is stripped and re-signed —
+    call this right before validating/downloading. Fail-open: on any error
+    the input URL is returned.
+    """
+    if not url or not _FAYLLAR_RE.match(url):
+        return url
+    import requests
+    from urllib.parse import unquote, urlsplit, urlunsplit
+
+    ref = (referer or "").strip()
+    ref_host = urlparse(ref).netloc if ref else ""
+    if "asilmedia" not in ref_host.lower():
+        ref = "https://asilmedia.org/"
+        ref_host = "asilmedia.org"
+
+    parts = urlsplit(url)
+    # Strip a previous token; the sign endpoint keys on the raw fayllar1.ru URL
+    # (bare host, unencoded path), exactly as it appears on the detail page.
+    raw = urlunsplit((parts.scheme or "https", "fayllar1.ru", unquote(parts.path), "", ""))
+    try:
+        resp = requests.get(
+            f"https://{ref_host}/fayllar-sign.php",
+            params={"u[]": raw},
+            headers={
+                "User-Agent": FAYLLAR_SIGN_USER_AGENT,
+                "Referer": ref,
+                "X-Requested-With": "XMLHttpRequest",
+            },
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return url
+        signed = (resp.json() or {}).get(raw)
+        if signed and "token=" in signed:
+            return signed
+    except Exception:
+        pass
+    return url
