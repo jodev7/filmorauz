@@ -474,41 +474,62 @@ func (h *SitemapHandler) GetSitemap(c *gin.Context) {
 }
 
 // GetRobotsTxt serves the canonical robots.txt with sitemap pointer.
+// robotsPrivatePaths are never useful to crawlers (accounts, admin, API).
+var robotsPrivatePaths = []string{
+	"/admin", "/api", "/user", "/profile", "/login", "/uploads",
+	"/notifications", "/banned", "/watch-room", "/rooms",
+}
+
+// robotsAIAgents are AI assistants / answer engines we explicitly welcome, so
+// the catalogue (and llms.txt) can be cited in ChatGPT, Claude, Perplexity,
+// Gemini, Copilot etc. Listing them avoids any doubt about blanket rules.
+var robotsAIAgents = []string{
+	"GPTBot", "OAI-SearchBot", "ChatGPT-User",
+	"ClaudeBot", "Claude-User", "Claude-SearchBot", "anthropic-ai",
+	"PerplexityBot", "Perplexity-User",
+	"Google-Extended", "Applebot-Extended", "Applebot",
+	"meta-externalagent", "Amazonbot", "DuckAssistBot", "MistralAI-User",
+	"cohere-ai", "YouBot", "CCBot",
+}
+
+func robotsGroup(agents []string, extra ...string) []string {
+	var lines []string
+	for _, a := range agents {
+		lines = append(lines, "User-agent: "+a)
+	}
+	lines = append(lines, "Allow: /")
+	lines = append(lines, extra...)
+	// A crawler obeys only its most specific group, so every group repeats
+	// the private paths — otherwise "Googlebot: Allow /" would open /admin.
+	for _, p := range robotsPrivatePaths {
+		lines = append(lines, "Disallow: "+p)
+	}
+	return append(lines, "")
+}
+
 func (h *SitemapHandler) GetRobotsTxt(c *gin.Context) {
-	body := strings.Join([]string{
-		"User-agent: *",
-		"Allow: /",
-		"Disallow: /admin",
-		"Disallow: /api",
-		"Disallow: /user",
-		"Disallow: /profile",
-		"Disallow: /login",
-		"Disallow: /uploads",
-		"Disallow: /notifications",
-		"Disallow: /banned",
-		"Disallow: /watch-room",
-		"Disallow: /rooms",
-		"",
-		"User-agent: Googlebot",
-		"Allow: /",
-		"",
-		"User-agent: Yandex",
-		"Allow: /",
-		fmt.Sprintf("Host: %s", strings.TrimPrefix(strings.TrimPrefix(h.baseSiteURL, "https://"), "http://")),
-		"",
-		"User-agent: Bingbot",
-		"Allow: /",
+	host := strings.TrimPrefix(strings.TrimPrefix(h.baseSiteURL, "https://"), "http://")
+	var lines []string
+	lines = append(lines, robotsGroup([]string{"*"})...)
+	lines = append(lines, robotsGroup([]string{"Googlebot"})...)
+	lines = append(lines, robotsGroup([]string{"Yandex"})...)
+	lines = append(lines, robotsGroup([]string{"Bingbot"})...)
+	lines = append(lines, "# AI assistants and answer engines are welcome; llms.txt is the")
+	lines = append(lines, "# Markdown index of the whole catalogue made for them.")
+	lines = append(lines, robotsGroup(robotsAIAgents, "Allow: /llms.txt", "Allow: /llms-full.txt", "Allow: /llms/")...)
+	lines = append(lines,
+		fmt.Sprintf("Host: %s", host),
 		"",
 		fmt.Sprintf("Sitemap: %s/sitemap.xml", h.baseSiteURL),
 		"",
-		"# AI assistants: site summary and every title in Markdown",
+		"# llms.txt (https://llmstxt.org) — site summary and every title in Markdown",
 		fmt.Sprintf("# llms.txt: %s/llms.txt", h.baseSiteURL),
 		fmt.Sprintf("# llms-full.txt: %s/llms-full.txt", h.baseSiteURL),
 		"",
-	}, "\n")
+	)
 	c.Header("Content-Type", "text/plain; charset=utf-8")
 	c.Header("Cache-Control", "public, max-age=600")
-	c.String(http.StatusOK, body)
+	c.String(http.StatusOK, strings.Join(lines, "\n"))
 }
 
 // Helpers ---------------------------------------------------------------
