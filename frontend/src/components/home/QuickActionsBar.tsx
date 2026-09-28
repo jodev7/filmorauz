@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { Sparkles, Film, Layers, LayoutGrid } from "lucide-react";
-import RandomMovieButton from "@/components/RandomMovie";
 
 // Section-level entry points shown directly under the hero. Distinct from the
 // genre chips (which filter by genre) — these jump to whole sections of the
@@ -15,7 +14,7 @@ const ACTIONS = [
 export default function QuickActionsBar() {
   return (
     <section className="max-w-7xl mx-auto px-4 mt-8">
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
         {ACTIONS.map(({ href, label, icon: Icon, accent }) => (
           <Link
             key={href}
@@ -28,7 +27,6 @@ export default function QuickActionsBar() {
             <span className="tracking-tight">{label}</span>
           </Link>
         ))}
-        <RandomMovieButton variant="tile" className="col-span-2 sm:col-span-1" />
       </div>
     </section>
   );

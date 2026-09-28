@@ -56,7 +56,7 @@ function NeedsAttention({ data }: { data: AdminOverview["attention"] }) {
   const open = rows.filter((r) => r.value > 0);
 
   return (
-    <div className="bg-brand-card border border-brand-border rounded-xl p-4 sm:p-5">
+    <div className="bg-[#12121a] border border-white/10 rounded-3xl p-4 sm:p-5">
       <div className="flex items-center gap-2 mb-3">
         <Bell size={16} className="text-amber-400" />
         <h2 className="text-base font-semibold text-white">E&apos;tibor talab qiladi</h2>
@@ -69,7 +69,7 @@ function NeedsAttention({ data }: { data: AdminOverview["attention"] }) {
           <CheckCircle2 size={15} /> Hammasi joyida — kutilayotgan ish yo&apos;q.
         </p>
       ) : (
-        <ul className="divide-y divide-brand-border/60">
+        <ul className="divide-y divide-white/5">
           {open.map((r) => {
             const Icon = r.icon;
             return (
@@ -119,7 +119,7 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: "ba
 function PipelineHealth({ ingestion, publish }: { ingestion: AdminOverview["ingestion"]; publish: AdminOverview["publish_queue"] }) {
   const healthy = ingestion.stuck === 0 && ingestion.failed_24h === 0 && publish.failed_24h === 0;
   return (
-    <div className="bg-brand-card border border-brand-border rounded-xl p-4 sm:p-5">
+    <div className="bg-[#12121a] border border-white/10 rounded-3xl p-4 sm:p-5">
       <div className="flex items-center gap-2 mb-3">
         <Server size={16} className="text-blue-400" />
         <h2 className="text-base font-semibold text-white">Pipeline holati</h2>
@@ -167,7 +167,7 @@ function ContentQuality({ data }: { data: AdminOverview["quality"] }) {
   const items: OverviewQualityItem[] = data.samples[tab] ?? [];
 
   return (
-    <div className="bg-brand-card border border-brand-border rounded-xl p-4 sm:p-5">
+    <div className="bg-[#12121a] border border-white/10 rounded-3xl p-4 sm:p-5">
       <div className="flex items-center gap-2 mb-3">
         <FileText size={16} className="text-purple-400" />
         <h2 className="text-base font-semibold text-white">Kontent sifati</h2>
@@ -184,7 +184,7 @@ function ContentQuality({ data }: { data: AdminOverview["quality"] }) {
               aria-selected={active}
               onClick={() => setTab(t.id)}
               className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs transition-colors ${
-                active ? "bg-white text-black" : "text-gray-400 hover:text-white border border-brand-border"
+                active ? "bg-white text-black" : "text-gray-400 hover:text-white border border-white/10"
               }`}
             >
               <Icon size={12} aria-hidden />
@@ -199,7 +199,7 @@ function ContentQuality({ data }: { data: AdminOverview["quality"] }) {
           <CheckCircle2 size={15} /> Bu toifada kino yo&apos;q.
         </p>
       ) : (
-        <ul className="divide-y divide-brand-border/60">
+        <ul className="divide-y divide-white/5">
           {items.map((m) => (
             <li key={m.id}>
               <Link
@@ -225,7 +225,7 @@ function ContentQuality({ data }: { data: AdminOverview["quality"] }) {
 function FinanceSummary({ data }: { data: NonNullable<AdminOverview["finance"]> }) {
   const positive = data.net_usd >= 0;
   return (
-    <div className="bg-brand-card border border-brand-border rounded-xl p-4 sm:p-5">
+    <div className="bg-[#12121a] border border-white/10 rounded-3xl p-4 sm:p-5">
       <div className="flex items-center gap-2 mb-3">
         <Wallet size={16} className="text-emerald-400" />
         <h2 className="text-base font-semibold text-white">Moliya · {data.month}</h2>
@@ -254,7 +254,7 @@ function FinanceSummary({ data }: { data: NonNullable<AdminOverview["finance"]> 
           </p>
         </div>
       </div>
-      <dl className="grid grid-cols-3 gap-3 text-xs border-t border-brand-border/60 pt-3">
+      <dl className="grid grid-cols-3 gap-3 text-xs border-t border-white/5 pt-3">
         <div>
           <dt className="text-gray-500">Doimiy (oylik)</dt>
           <dd className="text-gray-300 tabular-nums">{usd(data.recurring_expenses)}</dd>
@@ -304,7 +304,7 @@ export default function AdminOverviewBlocks() {
 
   if (!data) {
     return (
-      <div className="mb-8 sm:mb-10 bg-brand-card border border-brand-border rounded-xl p-6 text-center text-sm text-gray-500">
+      <div className="mb-8 sm:mb-10 bg-[#12121a] border border-white/10 rounded-3xl p-6 text-center text-sm text-gray-500">
         {failed ? "Umumiy ko'rinishni yuklab bo'lmadi." : "Yuklanmoqda..."}
       </div>
     );

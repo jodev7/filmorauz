@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -43,17 +44,44 @@ func (h *MovieHandler) PersonCredits(c *gin.Context) {
 	c.JSON(http.StatusOK, credits)
 }
 
-// RandomMovie GET /api/movies/random?genre=&exclude=id1,id2
-func (h *MovieHandler) RandomMovie(c *gin.Context) {
+func parseExcludeIDs(raw string) []primitive.ObjectID {
 	var exclude []primitive.ObjectID
-	for _, raw := range strings.Split(c.Query("exclude"), ",") {
-		if id, err := primitive.ObjectIDFromHex(strings.TrimSpace(raw)); err == nil {
+	for _, part := range strings.Split(raw, ",") {
+		if id, err := primitive.ObjectIDFromHex(strings.TrimSpace(part)); err == nil {
 			exclude = append(exclude, id)
 		}
 		if len(exclude) >= 50 {
 			break
 		}
 	}
+	return exclude
+}
+
+// RandomMovies GET /api/movies/random-list?limit=12&genre=&exclude=id1,id2
+func (h *MovieHandler) RandomMovies(c *gin.Context) {
+	limit := 12
+	if n, err := strconv.Atoi(c.Query("limit")); err == nil && n > 0 {
+		limit = n
+	}
+	if limit > 30 {
+		limit = 30
+	}
+	movies, err := h.movieService.RandomMovies(c.Query("genre"), parseExcludeIDs(c.Query("exclude")), limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to pick movies"})
+		return
+	}
+	for i := range movies {
+		protectMovieMedia(&movies[i])
+		stripMoviePlayback(&movies[i])
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"data": movies})
+}
+
+// RandomMovie GET /api/movies/random?genre=&exclude=id1,id2
+func (h *MovieHandler) RandomMovie(c *gin.Context) {
+	exclude := parseExcludeIDs(c.Query("exclude"))
 	movie, err := h.movieService.RandomMovie(c.Query("genre"), exclude)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to pick a movie"})

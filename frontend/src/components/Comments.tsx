@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight, MessageCircle, Trash2, Heart, Flag, EyeOff } from "lucide-react";
+import { ChevronDown, ChevronRight, MessageCircle, Trash2, Heart, Flag, EyeOff, ScrollText, MessagesSquare, User as UserIcon, Loader2, Send, LogIn } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
   getMovieComments,
@@ -18,23 +18,56 @@ import {
   ReportReason,
   Comment,
   CommentWithReplies,
+  getReviews,
+  saveReview,
+  deleteMyReview,
+  toggleReviewHelpful,
+  adminDeleteReview,
+  Review,
 } from "@/lib/comments-api";
+import { isStaffRole } from "@/lib/roles";
 import { Locale, DEFAULT_LOCALE } from "@/lib/i18n";
 import { formatRelativeAddedTime } from "@/lib/movie-utils";
 import { PremiumBadge, resolveIsPremium } from "./PremiumComponents";
 import { DEFAULT_AVATAR_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
+import CommentRulesModal from "@/components/comments/CommentRules";
+import ReviewItem from "@/components/comments/ReviewItem";
+import Stars from "@/components/comments/Stars";
+
+type CommentSort = "newest" | "oldest" | "popular" | "discussed";
+
+const SORTS: { key: CommentSort; label: string }[] = [
+  { key: "newest", label: "Eng yangi" },
+  { key: "popular", label: "Mashhur" },
+  { key: "discussed", label: "Ko'p muhokama" },
+  { key: "oldest", label: "Eng eski" },
+];
+
+const COMMENTS_LIMIT = 100;
+const REVIEW_MIN = 10;
+const REVIEW_MAX = 500;
+
+type ListItem =
+  | { kind: "comment"; key: string; time: number; likes: number; replies: number; item: CommentWithReplies }
+  | { kind: "review"; key: string; time: number; likes: number; replies: number; review: Review };
 
 interface CommentsSectionProps {
   movieId?: string;
   targetType?: string;
   targetId?: string;
+  /** Star-rated comments ("taqriz") for this title are merged into the list. */
+  reviewTarget?: { type: "movie" | "series"; id: string };
+  /** false when the backend has no plain comments for this target (series). */
+  commentsEnabled?: boolean;
 }
 
 export default function CommentsSection({
   movieId,
   targetType,
   targetId,
+  reviewTarget,
+  commentsEnabled = true,
 }: CommentsSectionProps) {
   const { token, isAuthenticated, user } = useAuth();
   const [comments, setComments] = useState<CommentWithReplies[]>([]);
@@ -49,6 +82,17 @@ export default function CommentsSection({
   const [replyContents, setReplyContents] = useState<Map<string, string>>(new Map());
   // Track expanded threads - using comment ID as key
   const [expandedThreads, setExpandedThreads] = useState<Set<string>>(new Set());
+  // Filters
+  const [sort, setSort] = useState<CommentSort>("newest");
+  const [hideSpoilers, setHideSpoilers] = useState(false);
+  const [onlyMine, setOnlyMine] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [onlyRated, setOnlyRated] = useState(false);
+  // Star-rated comments (reviews)
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [newRating, setNewRating] = useState(0);
+  const isStaff = isStaffRole(user?.role);
+  const myReview = reviews.find((r) => r.mine);
 
   // Determine the actual target to use for comments
   const effectiveTargetId = targetId || movieId;
@@ -56,23 +100,36 @@ export default function CommentsSection({
 
   // Fetch comments
   useEffect(() => {
-    if (effectiveTargetId) {
+    if (effectiveTargetId || reviewTarget) {
       loadComments();
     }
-  }, [effectiveTargetId, targetType]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveTargetId, targetType, reviewTarget?.id, token]);
+
+  const loadReviews = async () => {
+    if (!reviewTarget) return;
+    try {
+      const r = await getReviews(reviewTarget.type, reviewTarget.id, "new", token);
+      setReviews(r.data || []);
+    } catch {
+      // reviews are optional
+    }
+  };
 
   const loadComments = async () => {
     try {
       setLoading(true);
+      void loadReviews();
       const tk = token || undefined;
+      if (!commentsEnabled) return;
       if (targetType === "episode" && targetId) {
-        const data = await getEpisodeComments(targetId, 1, 20, tk);
+        const data = await getEpisodeComments(targetId, 1, COMMENTS_LIMIT, tk);
         setComments(data.data || []);
       } else if (targetType && targetId) {
-        const data = await getTargetComments(targetType, targetId, 1, 20, tk);
+        const data = await getTargetComments(targetType, targetId, 1, COMMENTS_LIMIT, tk);
         setComments(data.data || []);
       } else if (movieId) {
-        const data = await getMovieComments(movieId, 1, 20, tk);
+        const data = await getMovieComments(movieId, 1, COMMENTS_LIMIT, tk);
         setComments(data.data || []);
       }
     } catch (err) {
@@ -85,7 +142,28 @@ export default function CommentsSection({
   const handleSubmitComment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token || !isAuthenticated) return;
-    if (!newComment.trim()) return;
+    const text = newComment.trim();
+    if (!text) return;
+
+    // A star rating turns the comment into a rated one (review).
+    if (reviewTarget && (newRating > 0 || !commentsEnabled)) {
+      if (newRating < 1) return setError("Yulduzcha bilan baho bering");
+      if (text.length < REVIEW_MIN) return setError(`Baholi izoh uchun kamida ${REVIEW_MIN} ta belgi yozing`);
+      if (text.length > REVIEW_MAX) return setError(`Baholi izoh ${REVIEW_MAX} belgidan oshmasin`);
+      setSubmitting(true);
+      setError("");
+      try {
+        await saveReview(token, reviewTarget.type, reviewTarget.id, newRating, text);
+        setNewComment("");
+        setNewRating(0);
+        await loadReviews();
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
     if (!effectiveTargetId) return;
 
     setSubmitting(true);
@@ -159,7 +237,7 @@ export default function CommentsSection({
   };
 
   const handleDeleteComment = async (commentId: string) => {
-    if (!token || !confirm("Are you sure you want to delete this comment?")) {
+    if (!token || !confirm("Izohni o'chirasizmi?")) {
       return;
     }
 
@@ -169,6 +247,28 @@ export default function CommentsSection({
     } catch (err: any) {
       setError(err.message);
     }
+  };
+
+  const handleReviewHelpful = (r: Review) => {
+    if (!token || r.mine) return;
+    setReviews((prev) =>
+      prev.map((x) =>
+        x.id === r.id ? { ...x, helpful_by_me: !x.helpful_by_me, helpful_count: x.helpful_count + (x.helpful_by_me ? -1 : 1) } : x
+      )
+    );
+    toggleReviewHelpful(token, r.id).catch(() => loadReviews());
+  };
+
+  const handleReviewDelete = async (r: Review) => {
+    if (!token || !reviewTarget) return;
+    if (!window.confirm(r.mine ? "Baholi izohingiz o'chirilsinmi?" : `${r.user_name} izohini o'chirasizmi?`)) return;
+    try {
+      if (r.mine) await deleteMyReview(token, reviewTarget.type, reviewTarget.id);
+      else await adminDeleteReview(token, r.id);
+    } catch (err: any) {
+      setError(err.message);
+    }
+    loadReviews();
   };
 
   // Toggle expanded state for a thread
@@ -208,60 +308,220 @@ export default function CommentsSection({
 
   const tt = t.uz;
 
+  const visibleItems = useMemo<ListItem[]>(() => {
+    const ts = (iso: string) => new Date(iso).getTime() || 0;
+    const items: ListItem[] = [];
+    if (!onlyRated) {
+      for (const item of comments) {
+        if (hideSpoilers && item.comment.is_spoiler) continue;
+        if (onlyMine && item.comment.user_id !== user?.id) continue;
+        items.push({
+          kind: "comment",
+          key: `c:${item.comment.id}`,
+          time: ts(item.comment.created_at),
+          likes: item.comment.likes_count || 0,
+          replies: item.comment.replies_count || item.replies?.length || 0,
+          item,
+        });
+      }
+    }
+    for (const review of reviews) {
+      if (onlyMine && !review.mine) continue;
+      items.push({ kind: "review", key: `r:${review.id}`, time: ts(review.created_at), likes: review.helpful_count, replies: 0, review });
+    }
+    return items.sort((a, b) => {
+      switch (sort) {
+        case "oldest":
+          return a.time - b.time;
+        case "popular":
+          return b.likes - a.likes || b.time - a.time;
+        case "discussed":
+          return b.replies - a.replies || b.time - a.time;
+        default:
+          return b.time - a.time;
+      }
+    });
+  }, [comments, reviews, sort, hideSpoilers, onlyMine, onlyRated, user?.id]);
+
+  const totalCount = comments.length + reviews.length;
+  const ratedAvg = reviews.length ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length : 0;
+  const spoilerCount = useMemo(() => comments.filter((c) => c.comment.is_spoiler).length, [comments]);
+
   return (
-    <div className="mt-8 pt-8 border-t border-white/10">
-      <h2 className="text-2xl font-display text-white mb-6">{tt.title}</h2>
+    <div className="mt-8 border-t border-white/10 pt-8">
+      {/* Header */}
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-orange-500 to-rose-600 shadow-lg shadow-orange-500/20">
+            <MessagesSquare size={19} className="text-white" />
+          </span>
+          <div>
+            <h2 className="font-display text-2xl leading-none text-white">{tt.title}</h2>
+            <p className="mt-1 text-xs text-gray-500">{loading ? "Yuklanmoqda..." : `${totalCount} ta izoh`}
+              {!loading && reviews.length > 0 && (
+                <span className="ml-2 inline-flex items-center gap-1 text-yellow-300">
+                  ★ {ratedAvg.toFixed(1)} <span className="text-gray-500">({reviews.length} baho)</span>
+                </span>
+              )}</p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setRulesOpen(true)}
+          className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-gray-200 transition hover:border-orange-500/50 hover:text-white sm:text-sm"
+        >
+          <ScrollText size={15} className="text-orange-400" />
+          Izoh qoidalari
+        </button>
+      </div>
 
       {/* Comment form */}
       {isAuthenticated && token ? (
-        <form onSubmit={handleSubmitComment} className="mb-8">
+        <form onSubmit={handleSubmitComment} className="mb-6 rounded-2xl border border-white/10 bg-white/[0.02] p-3 transition focus-within:border-orange-500/50 sm:p-4">
+          {reviewTarget && (
+            <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-white/5 pb-2">
+              <span className="text-xs text-gray-400">{commentsEnabled ? "Baho bering (ixtiyoriy):" : "Bahoyingiz:"}</span>
+              <Stars value={newRating} onChange={setNewRating} size={20} />
+              {newRating > 0 && myReview && <span className="text-[11px] text-amber-300/80">Oldingi baholi izohingiz yangilanadi</span>}
+            </div>
+          )}
           <textarea
             value={newComment}
             onChange={(e) => setNewComment(e.target.value)}
             placeholder={tt.writeComment}
-            className="w-full bg-black/50 border border-white/15 rounded-2xl p-3 text-white placeholder-gray-500 focus:border-brand-red focus:outline-none resize-none"
+            className="w-full resize-none bg-transparent text-white placeholder-gray-500 focus:outline-none"
             rows={3}
-            maxLength={2000}
+            maxLength={newRating > 0 || !commentsEnabled ? REVIEW_MAX : 2000}
           />
-          {error && <p className="text-red-500 text-sm mt-2">{error}</p>}
-          <div className="mt-2 flex flex-wrap items-center gap-4">
-            <button
-              type="submit"
-              disabled={submitting || !newComment.trim()}
-              className="bg-brand-red hover:bg-orange-700 text-white font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {submitting ? "..." : tt.submit}
-            </button>
-            <label className="inline-flex items-center gap-2 text-sm text-gray-400 cursor-pointer select-none">
+          {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
+          <div className="mt-2 flex flex-wrap items-center gap-3 border-t border-white/5 pt-3">
+            <label className={`${newRating > 0 || !commentsEnabled ? "hidden" : "inline-flex"} cursor-pointer select-none items-center gap-2 text-sm text-gray-400`}>
               <input
                 type="checkbox"
                 checked={newIsSpoiler}
                 onChange={(e) => setNewIsSpoiler(e.target.checked)}
-                className="h-4 w-4 accent-brand-red"
+                className="h-4 w-4 accent-orange-500"
               />
               Spoyler bor
             </label>
+            <span className="text-[11px] tabular-nums text-gray-600">{newComment.length}/{newRating > 0 || !commentsEnabled ? REVIEW_MAX : 2000}</span>
+            <p className="hidden text-[11px] text-gray-500 sm:block">
+              Yuborish orqali{" "}
+              <button type="button" onClick={() => setRulesOpen(true)} className="text-orange-300 underline-offset-2 hover:underline">
+                izoh qoidalariga
+              </button>{" "}
+              rozilik bildirasiz
+            </p>
+            <button
+              type="submit"
+              disabled={submitting || !newComment.trim()}
+              className="ml-auto inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-orange-500/20 transition hover:bg-orange-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {submitting ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+              {tt.submit}
+            </button>
           </div>
         </form>
       ) : (
-        <div className="mb-8 p-4 glass-card border border-white/10 rounded-2xl">
-          <p className="text-gray-400">{tt.loginToComment}</p>
+        <div className="mb-6 flex items-center gap-3 rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4">
+          <LogIn size={18} className="shrink-0 text-gray-500" />
+          <p className="text-sm text-gray-400">{tt.loginToComment}</p>
+        </div>
+      )}
+
+      {/* Filters */}
+      {totalCount > 0 && (
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="scrollbar-hide flex gap-1 overflow-x-auto rounded-xl border border-white/10 bg-black/20 p-1" role="tablist" aria-label="Izohlarni saralash">
+            {SORTS.map((o) => (
+              <button
+                key={o.key}
+                type="button"
+                role="tab"
+                aria-selected={sort === o.key}
+                onClick={() => setSort(o.key)}
+                className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                  sort === o.key ? "bg-white/10 text-white" : "text-gray-400 hover:text-white"
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {reviews.length > 0 && commentsEnabled && (
+              <button
+                type="button"
+                aria-pressed={onlyRated}
+                onClick={() => setOnlyRated((v) => !v)}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition ${
+                  onlyRated ? "border-yellow-400/50 bg-yellow-400/10 text-yellow-200" : "border-white/10 text-gray-400 hover:text-white"
+                }`}
+              >
+                ★ Baholilar
+              </button>
+            )}
+            {spoilerCount > 0 && (
+              <button
+                type="button"
+                aria-pressed={hideSpoilers}
+                onClick={() => setHideSpoilers((v) => !v)}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition ${
+                  hideSpoilers ? "border-amber-500/50 bg-amber-500/10 text-amber-200" : "border-white/10 text-gray-400 hover:text-white"
+                }`}
+              >
+                <EyeOff size={13} /> Spoylersiz
+              </button>
+            )}
+            {isAuthenticated && (
+              <button
+                type="button"
+                aria-pressed={onlyMine}
+                onClick={() => setOnlyMine((v) => !v)}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition ${
+                  onlyMine ? "border-orange-500/50 bg-orange-500/10 text-orange-200" : "border-white/10 text-gray-400 hover:text-white"
+                }`}
+              >
+                <UserIcon size={13} /> Mening izohlarim
+              </button>
+            )}
+          </div>
         </div>
       )}
 
       {/* Comments list */}
       {loading ? (
-        <div className="text-gray-400">Yuklanmoqda...</div>
-      ) : comments.length === 0 ? (
-        <div className="text-gray-400">{tt.noComments}</div>
+        <div className="space-y-3">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="h-24 animate-pulse rounded-2xl bg-white/[0.04]" />
+          ))}
+        </div>
+      ) : totalCount === 0 ? (
+        <div className="rounded-2xl border border-dashed border-white/10 py-10 text-center">
+          <MessageCircle size={28} className="mx-auto mb-2 text-gray-600" />
+          <p className="text-sm text-gray-400">{tt.noComments}</p>
+        </div>
+      ) : visibleItems.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-white/10 py-8 text-center text-sm text-gray-500">
+          Bu filtr bo&apos;yicha izoh topilmadi.
+        </div>
       ) : (
         <div className="space-y-4">
-          {comments.map((item) => (
+          {visibleItems.map((entry) => entry.kind === "review" ? (
+            <ReviewItem
+              key={entry.key}
+              review={entry.review}
+              canVote={!!token}
+              canStaffDelete={isStaff}
+              onHelpful={() => handleReviewHelpful(entry.review)}
+              onDelete={() => void handleReviewDelete(entry.review)}
+            />
+          ) : (
             <CommentThread
-              key={item.comment.id}
-              comment={item.comment}
-              replies={item.replies}
-              repliesCount={item.comment.replies_count || 0}
+              key={entry.key}
+              comment={entry.item.comment}
+              replies={entry.item.replies}
+              repliesCount={entry.item.comment.replies_count || 0}
               isAuthenticated={isAuthenticated}
               currentUserId={user?.id}
               token={token || undefined}
@@ -285,6 +545,8 @@ export default function CommentsSection({
           ))}
         </div>
       )}
+
+      <CommentRulesModal open={rulesOpen} onClose={() => setRulesOpen(false)} />
     </div>
   );
 }

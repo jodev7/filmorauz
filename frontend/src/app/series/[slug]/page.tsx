@@ -12,7 +12,6 @@ import MovieCode from "@/components/MovieCode";
 import SeasonList from "@/components/SeasonList";
 import CastRow from "@/components/CastRow";
 import WatchTogetherButton from "@/components/WatchTogetherButton";
-import SeriesCarousel from "@/components/SeriesCarousel";
 import { getSeriesBySlug, getSeriesRecommendations } from "@/lib/series-api";
 import { localizeSingleGenre } from "@/lib/localization";
 import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
@@ -24,9 +23,10 @@ import { getTopReviewsForSeo, reviewsToJsonLd } from "@/lib/api";
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://filmorauz.net";
 const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot"));
 const StarRating = dynamicImport(() => import("@/components/StarRating"));
-const SeriesShareButton = dynamicImport(() => import("@/components/SeriesShareButton"));
+const ShareSheet = dynamicImport(() => import("@/components/share/ShareSheet"));
+const ContentDiscovery = dynamicImport(() => import("@/components/discovery/ContentDiscovery"));
 const LibraryButtons = dynamicImport(() => import("@/components/LibraryButtons"));
-const Reviews = dynamicImport(() => import("@/components/Reviews"));
+const Comments = dynamicImport(() => import("@/components/Comments"));
 const SeriesResumeButton = dynamicImport(() => import("@/components/SeriesResumeButton"));
 
 interface Props {
@@ -257,7 +257,14 @@ export default async function SeriesDetailPage({ params }: Props) {
 
               <div className="mb-4 flex flex-wrap items-start gap-2">
                 <WatchTogetherButton contentType="series" contentID={series.id} />
-                <SeriesShareButton seriesId={series.id} seriesTitle={series.title} />
+                <ShareSheet
+                  kind="series"
+                  id={series.id}
+                  title={series.title}
+                  path={`/series/${series.slug}`}
+                  posterUrl={series.poster_url}
+                  subtitle={seasons?.length ? `${seasons.length} fasl` : undefined}
+                />
               </div>
 
               <div className="mb-4">
@@ -298,18 +305,13 @@ export default async function SeriesDetailPage({ params }: Props) {
             </section>
           )}
 
-          {/* Short reviews */}
-          <Reviews targetType="series" targetId={series.id} />
+          {/* Comments (star-rated reviews) */}
+          <Comments commentsEnabled={false} reviewTarget={{ type: "series", id: series.id }} />
 
-          {/* Content-similar series — "Sizga yoqishi mumkin" */}
-          {relatedSeries.length > 0 && (
-            <section className="pb-12">
-              <h2 className="font-display text-2xl sm:text-3xl tracking-wide text-white mb-6">
-                SIZGA YOQISHI MUMKIN
-              </h2>
-              <SeriesCarousel series={relatedSeries} />
-            </section>
-          )}
+          {/* Similar series + recommended / random movies */}
+          <section className="pb-12">
+            <ContentDiscovery similarSeries={relatedSeries} similarTitle="O'xshash seriallar" />
+          </section>
         </div>
       </main>
       <Footer />

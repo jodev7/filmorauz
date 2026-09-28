@@ -208,6 +208,10 @@ Ads have two generations of fields:
 - `HeroCarousel` — full-width hero banner (latest movies)
 - `Comments` — comment thread with replies
 - `BanGuard` / `BanGuardWrapper` — redirects banned users
+- `discovery/ContentDiscovery` — under movie/series/episode pages: similar titles (SSR, passed in), "Siz uchun tavsiya" (`/user/for-you`, falls back to trending) and "Tasodifiy kinolar" (`GET /api/movies/random-list`)
+- `share/ShareSheet` — share modal (Telegram, Instagram, TikTok, X, Facebook, WhatsApp, copy link); tracked share link for movies/series + `?ref=` referral code for signed-in users
+- `Comments` — the single comment section on movie/series/episode pages. Star-rated "taqriz" reviews (`/reviews/:type/:id`) are merged into the same list and composer: picking stars saves a review (10–500 chars, also sets the rating), otherwise a plain comment. Series have no plain comments backend, so the series page uses `commentsEnabled={false}` (rated only). Sorting/filters are client-side over up to 100 loaded comments.
+- `comments/CommentRules` — "Izoh qoidalari" modal opened from `Comments`
 
 ### Key Libraries (`lib/`)
 
@@ -297,4 +301,6 @@ Backend calls parser at `PARSER_SERVICE_URL` (default: `http://127.0.0.1:8082`).
 
 7. **Route ordering in Gin** — more specific routes must be registered before wildcard routes (e.g. `/movies/slug/:slug` before `/movies/:id`).
 
-8. **Series route conflict** — season/episode routes use separate prefixes (`/seasons/`, `/series-by-id/`) to avoid wildcard conflicts with `/series/:slug`.
+8. **Ingestion job counts** — the admin job list and its `status_counts` (and the dashboard pipeline block) must use `jobListFilter()` so hidden `clip_only` jobs are never counted.
+
+9. **Series route conflict** — season/episode routes use separate prefixes (`/seasons/`, `/series-by-id/`) to avoid wildcard conflicts with `/series/:slug`.
