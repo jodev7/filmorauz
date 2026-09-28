@@ -592,7 +592,11 @@ func (h *MovieHandler) GetTrendingMovies(c *gin.Context) {
 
 // GetRecommendations GET /api/v1/movies/:id/recommendations?limit=12
 func (h *MovieHandler) GetRecommendations(c *gin.Context) {
+	// /movies/:id/recommendations or /movies/recommendations?movie_id=
 	movieID := c.Param("id")
+	if movieID == "" {
+		movieID = c.Query("movie_id")
+	}
 	if movieID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "movie id is required"})
 		return
