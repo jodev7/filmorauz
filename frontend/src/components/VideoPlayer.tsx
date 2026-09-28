@@ -19,14 +19,17 @@ import {
   List,
 } from "lucide-react";
 import Hls from "hls.js";
-import { VideoSourceType, Ad, getAdsByPlacement, recordAdImpression } from "@/lib/api";
+import { VideoSourceType, Ad, getAdsByPlacement, getAdsForWebsite, recordAdImpression } from "@/lib/api";
+import { pickWeightedRandomAd } from "@/lib/ads-utils";
+import { AdSchedule } from "@/lib/ad-schedule";
 import { PremiumBadge, isUserPremium } from "@/components/PremiumComponents";
 import { useAuth } from "@/lib/auth-context";
 import { logger } from "@/lib/logger";
 
-const AD_INTERVAL_SECONDS = 600; // 10 minutes
+// Mid-roll break timing lives in lib/ad-schedule.ts (every 10 min of watching,
+// or after repeated timeline scrubbing, at least 3 min apart).
 const AD_DEFAULT_DURATION = 15;
-const AD_MAX_PER_BREAK = 2;
+const AD_MAX_PER_BREAK = 1;
 
 function extractAdVideoUrl(ad: Ad): string | null {
   const candidates: Array<[string | undefined, string | undefined]> = [
@@ -599,8 +602,11 @@ function HLSPlayer({
   const [adRemaining, setAdRemaining] = useState(AD_DEFAULT_DURATION);
   const [adActive, setAdActive] = useState(false);
   const [adFetching, setAdFetching] = useState(false);
-  const nextAdAtRef = useRef<number | null>(null);
-  const adInitializedRef = useRef(false);
+  // Mid-roll scheduling (lib/ad-schedule.ts).
+  const adScheduleRef = useRef<AdSchedule | null>(null);
+  if (!adScheduleRef.current) adScheduleRef.current = new AdSchedule();
+  const programmaticSeekRef = useRef(false);
+  const adPoolRef = useRef<Ad[] | null>(null);
   const resumeTimeRef = useRef(0);
   const hasAppliedInitialSeek = useRef(false);
   const isDev = process.env.NODE_ENV !== "production";
@@ -664,6 +670,7 @@ function HLSPlayer({
       }
       return;
     }
+    programmaticSeekRef.current = true;
     video.currentTime = initialSeekTime;
     hasAppliedInitialSeek.current = true;
     onInitialSeekResolved?.(true);
@@ -700,23 +707,47 @@ function HLSPlayer({
     }
   }, []);
 
+  const resetAdSchedule = useCallback(() => {
+    adScheduleRef.current?.reset(Date.now(), videoRef.current?.currentTime ?? 0);
+  }, []);
+
+  // Video ads for the player come from the admin "Player ichida (video)" slot
+  // (website placement); the legacy "player" placement is still honoured.
+  const loadAdPool = useCallback(async (): Promise<Ad[]> => {
+    if (adPoolRef.current) return adPoolRef.current;
+    const [site, legacy] = await Promise.all([
+      getAdsForWebsite("watch_player_overlay").catch(() => [] as Ad[]),
+      getAdsByPlacement("player").catch(() => [] as Ad[]),
+    ]);
+    const seen = new Set<string>();
+    const pool = [...site, ...legacy].filter((ad) => {
+      if (seen.has(ad.id) || !extractAdVideoUrl(ad)) return false;
+      seen.add(ad.id);
+      return true;
+    });
+    adPoolRef.current = pool;
+    return pool;
+  }, []);
+
   const triggerAdBreak = useCallback(async () => {
     if (isPremiumUser || adActive || adFetching) return;
     const video = videoRef.current;
     if (!video) return;
     setAdFetching(true);
     try {
-      const ads = await getAdsByPlacement("player");
-      const queue = ads
-        .map((ad) => {
-          const url = extractAdVideoUrl(ad);
-          return url ? { ad, url } : null;
-        })
-        .filter((x): x is { ad: Ad; url: string } => x !== null)
-        .slice(0, AD_MAX_PER_BREAK);
+      const pool = await loadAdPool();
+      const queue: Array<{ ad: Ad; url: string }> = [];
+      let lastId: string | undefined;
+      for (let i = 0; i < Math.min(AD_MAX_PER_BREAK, pool.length); i++) {
+        const ad = pickWeightedRandomAd(pool.filter((x) => !queue.some((q) => q.ad.id === x.id)), lastId);
+        const url = extractAdVideoUrl(ad);
+        if (!url) continue;
+        queue.push({ ad, url });
+        lastId = ad.id;
+      }
       if (queue.length === 0) {
-        // no ads — push next window forward so we don't spam refetch
-        nextAdAtRef.current = video.currentTime + AD_INTERVAL_SECONDS;
+        // No video ads: restart the schedule so we don't refetch every tick.
+        resetAdSchedule();
         return;
       }
       resumeTimeRef.current = video.currentTime;
@@ -729,18 +760,15 @@ function HLSPlayer({
     } finally {
       setAdFetching(false);
     }
-  }, [isPremiumUser, adActive, adFetching]);
+  }, [isPremiumUser, adActive, adFetching, loadAdPool, resetAdSchedule]);
 
   const finishAdBreak = useCallback(() => {
     setAdActive(false);
     setAdQueue([]);
     setAdIndex(0);
-    const video = videoRef.current;
-    if (video) {
-      nextAdAtRef.current = video.currentTime + AD_INTERVAL_SECONDS;
-      video.play().catch(() => {});
-    }
-  }, []);
+    resetAdSchedule();
+    videoRef.current?.play().catch(() => {});
+  }, [resetAdSchedule]);
 
   const resetControlsTimer = useCallback(() => {
     setShowControls(true);
@@ -762,8 +790,7 @@ function HLSPlayer({
     setAdActive(false);
     setAdQueue([]);
     setAdIndex(0);
-    nextAdAtRef.current = null;
-    adInitializedRef.current = false;
+    adScheduleRef.current?.reset();
     hasAppliedInitialSeek.current = false;
 
     logger.debug("[HLSPlayer] initializing");
@@ -932,6 +959,7 @@ function HLSPlayer({
     // Seek to current position to flush buffered old-quality data and reload at new level
     if (video) {
       const t = video.currentTime;
+      programmaticSeekRef.current = true;
       video.currentTime = t;
     }
   }, [syncSelectedQualityFromHls]);
@@ -1052,26 +1080,36 @@ function HLSPlayer({
       if (video.buffered.length > 0) {
         setBuffered(video.buffered.end(video.buffered.length - 1));
       }
+      const schedule = adScheduleRef.current;
+      const nearEnd = !(video.duration > 0) || video.currentTime >= video.duration - 5;
       if (
+        schedule?.onTimeUpdate(video.currentTime, !video.paused, video.playbackRate, nearEnd) &&
         !isPremiumUser &&
-        !adActive &&
-        nextAdAtRef.current !== null &&
-        video.currentTime >= nextAdAtRef.current &&
-        video.duration > 0 &&
-        video.currentTime < video.duration - 1
+        !adActive
       ) {
-        nextAdAtRef.current = video.currentTime + AD_INTERVAL_SECONDS;
+        triggerAdBreak();
+      }
+    };
+    const onSeeked = () => {
+      const schedule = adScheduleRef.current;
+      if (!schedule) return;
+      if (programmaticSeekRef.current) {
+        programmaticSeekRef.current = false; // resume / quality switch, not the viewer
+        schedule.syncTime(video.currentTime);
+        return;
+      }
+      if (isPremiumUser || adActive) {
+        schedule.syncTime(video.currentTime);
+        return;
+      }
+      const nearEnd = !(video.duration > 0) || video.currentTime >= video.duration - 5;
+      if (schedule.onSeeked(video.currentTime, nearEnd)) {
         triggerAdBreak();
       }
     };
     const onDurationChange = () => {
       setDuration(video.duration);
       trySeekRef.current("durationchange");
-      if (!adInitializedRef.current && isFinite(video.duration) && video.duration > 0) {
-        adInitializedRef.current = true;
-        nextAdAtRef.current =
-          video.duration < AD_INTERVAL_SECONDS ? video.duration * 0.5 : AD_INTERVAL_SECONDS;
-      }
     };
     const onVolumeChange = () => {
       setVolume(video.volume);
@@ -1086,6 +1124,7 @@ function HLSPlayer({
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", handlePause);
     video.addEventListener("timeupdate", onVideoTimeUpdate);
+    video.addEventListener("seeked", onSeeked);
     video.addEventListener("durationchange", onDurationChange);
     video.addEventListener("loadedmetadata", onLoadedMeta);
     video.addEventListener("volumechange", onVolumeChange);
@@ -1094,6 +1133,7 @@ function HLSPlayer({
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", handlePause);
       video.removeEventListener("timeupdate", onVideoTimeUpdate);
+      video.removeEventListener("seeked", onSeeked);
       video.removeEventListener("durationchange", onDurationChange);
       video.removeEventListener("loadedmetadata", onLoadedMeta);
       video.removeEventListener("volumechange", onVolumeChange);
