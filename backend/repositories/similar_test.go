@@ -15,7 +15,7 @@ func TestCreditsScore(t *testing.T) {
 	if got := creditsScore(models.Movie{}, b); got != 0 {
 		t.Fatalf("empty current should score 0, got %d", got)
 	}
-	if similarCandidateFilter(models.Movie{}) != nil {
+	if similarCandidateQuery(models.Movie{}) != nil {
 		t.Fatal("no genre/cast/director → nil filter")
 	}
 }

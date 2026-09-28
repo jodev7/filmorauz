@@ -4,31 +4,7 @@ import (
 	"strings"
 
 	"github.com/filmorauz/backend/models"
-	"go.mongodb.org/mongo-driver/bson"
 )
-
-// similarCandidateFilter matches movies sharing a genre, an actor or the
-// director with m; nil when m has none of those.
-func similarCandidateFilter(m models.Movie) bson.M {
-	or := []bson.M{}
-	if len(m.Genre) > 0 {
-		or = append(or, bson.M{"genre": bson.M{"$in": m.Genre}})
-	}
-	if len(m.Cast) > 0 {
-		cast := m.Cast
-		if len(cast) > 8 {
-			cast = cast[:8] // leads matter most
-		}
-		or = append(or, bson.M{"cast": bson.M{"$in": cast}})
-	}
-	if d := strings.TrimSpace(m.Director); d != "" {
-		or = append(or, bson.M{"director": d})
-	}
-	if len(or) == 0 {
-		return nil
-	}
-	return bson.M{"$or": or}
-}
 
 // creditsScore rewards shared people: +4 per shared actor (max +12) and +6
 // for the same director.

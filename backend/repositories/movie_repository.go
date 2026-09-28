@@ -1558,238 +1558,71 @@ type RecommendationScore struct {
 	Reason string
 }
 
-// GetRecommendations returns recommended movies based on content similarity, popularity, and optionally user history
-// It uses a hybrid scoring strategy with genre matching, popularity, recency, and optional personalization
+// GetRecommendations returns "O'xshash kinolar" for a movie: titles that share
+// its genres (in any stored spelling/language), actors or director, ranked by
+// similarity (see similarity.go). Unrelated popular titles are only used to
+// fill the row when too few related ones exist. userID is reserved for
+// personalisation and currently unused.
 func (r *MovieRepository) GetRecommendations(currentMovieID string, userID string, limit int) ([]models.Movie, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	_ = userID
 
-	// Get current movie for comparison
-	var currentMovie models.Movie
-	var currentObjID primitive.ObjectID
-	if currentMovieID != "" {
-		objID, err := primitive.ObjectIDFromHex(currentMovieID)
-		if err == nil {
-			currentObjID = objID
-			r.col.FindOne(ctx, bson.M{"_id": objID}).Decode(&currentMovie)
-		}
-	}
-
-	// Build filter: only published approved movies
-	filter := bson.M{
-		"$or": []bson.M{
-			{"is_published": true},
-			{"is_published": bson.M{"$exists": false}},
-		},
-	}
-	if currentMovieID != "" && currentObjID.IsZero() == false {
-		filter["_id"] = bson.M{"$ne": currentObjID}
-	}
-
-	// Fetch candidates (more than needed for scoring)
-	candidatesLimit := limit * 5
-	if candidatesLimit < 50 {
-		candidatesLimit = 50
-	}
-	opts := options.Find().
-		SetSort(bson.D{{Key: "views", Value: -1}, {Key: "updated_at", Value: -1}}).
-		SetLimit(int64(candidatesLimit))
-
-	cursor, err := r.col.Find(ctx, filter, opts)
+	objID, err := primitive.ObjectIDFromHex(strings.TrimSpace(currentMovieID))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid movie id")
 	}
-	defer cursor.Close(ctx)
+	// FindByID uses the lenient decoder: genre may be stored as a string, in
+	// "genres"/"movie_genre", etc. A strict Decode here used to fail silently
+	// and leave the genre empty, so nothing was actually compared.
+	current, err := r.FindByID(objID)
+	if err != nil || current == nil {
+		return nil, fmt.Errorf("movie not found")
+	}
 
+	base := bson.M{"$and": []bson.M{publishedMovieFilter, {"_id": bson.M{"$ne": objID}}}}
 	var candidates []models.Movie
-	if err := cursor.All(ctx, &candidates); err != nil {
-		return nil, err
+	if related := similarCandidateQuery(*current); related != nil {
+		filter := bson.M{"$and": []bson.M{base, related}}
+		candidates = append(candidates, r.findLenient(ctx, filter, 400, bson.D{{Key: "views", Value: -1}})...)
 	}
 
-	// The popular pool alone rarely contains the genuinely similar titles,
-	// so also pull candidates that share a genre, an actor or the director.
-	if related := similarCandidateFilter(currentMovie); related != nil {
-		relatedFilter := bson.M{"$and": []bson.M{filter, related}}
-		relCur, err := r.col.Find(ctx, relatedFilter, options.Find().
-			SetSort(bson.D{{Key: "views", Value: -1}}).
-			SetLimit(150))
-		if err == nil {
-			var extra []models.Movie
-			if relCur.All(ctx, &extra) == nil {
-				seen := make(map[primitive.ObjectID]bool, len(candidates))
-				for _, m := range candidates {
-					seen[m.ID] = true
-				}
-				for _, m := range extra {
-					if !seen[m.ID] {
-						seen[m.ID] = true
-						candidates = append(candidates, m)
-					}
-				}
-			}
-		}
+	result := rankSimilar(*current, candidates, limit)
+	if len(result) >= limit {
+		return result, nil
 	}
 
-	// Collect user preferences if userID provided (simplified: could be extended to query watch history)
-	var userPreferredGenres []string
-	if userID != "" {
-		// TODO: Extend to query watch_history collection for personalized recommendations
-		// For now, falls back to content+popularity only
+	// Too few related titles: top up with popular ones (same country first,
+	// thanks to the ranking), never repeating what we already have.
+	exclude := []primitive.ObjectID{objID}
+	for _, m := range result {
+		exclude = append(exclude, m.ID)
 	}
-
-	// Score each candidate
-	type scoredMovie struct {
-		movie models.Movie
-		score int
-	}
-	var scoredMovies []scoredMovie
-
-	for _, m := range candidates {
-		score := 0
-		reason := ""
-
-		// Content similarity: genre match (+5 per matched genre)
-		for _, cg := range m.Genre {
-			for _, mg := range currentMovie.Genre {
-				if strings.EqualFold(cg, mg) {
-					score += 5
-					reason += "genre+"
-				}
-			}
-		}
-
-		// Shared people: cast overlap (+4 each, max +12) and director (+6)
-		score += creditsScore(currentMovie, m)
-
-		// Country match (+2)
-		if m.Country != "" && currentMovie.Country != "" && strings.EqualFold(m.Country, currentMovie.Country) {
-			score += 2
-			reason += "country+"
-		}
-
-		// Year proximity
-		yearDiff := m.Year - currentMovie.Year
-		if yearDiff < 0 {
-			yearDiff = -yearDiff
-		}
-		if yearDiff <= 1 {
-			score += 2
-			reason += "year+"
-		} else if yearDiff <= 3 {
-			score += 1
-			reason += "year~"
-		}
-
-		// Quality match (+1)
-		if m.Quality != "" && currentMovie.Quality != "" && m.Quality == currentMovie.Quality {
-			score += 1
-			reason += "quality+"
-		}
-
-		// Premium status match (+1)
-		if m.IsPremium == currentMovie.IsPremium {
-			score += 1
-			reason += "premium+"
-		}
-
-		// User personalization boost (+3 per user-preferred genre, only if we have preferences)
-		for _, upg := range userPreferredGenres {
-			for _, mg := range m.Genre {
-				if strings.EqualFold(upg, mg) {
-					score += 3
-					reason += "user+"
-				}
-			}
-		}
-
-		// Popularity boost (views as tiebreaker) - normalized to 0-2 range
-		if m.Views > 10000 {
-			score += 2
-		} else if m.Views > 1000 {
-			score += 1
-		}
-		if m.Views > 1000 {
-			reason += "popular+"
-		}
-
-		// Recency: movies added/updated recently get a small boost
-		if m.UpdatedAt.After(time.Now().AddDate(0, -1, 0)) { // within last month
-			score += 1
-			reason += "recent+"
-		}
-
-		scoredMovies = append(scoredMovies, scoredMovie{movie: m, score: score})
-	}
-
-	// Sort by score descending, then by views
-	for i := 0; i < len(scoredMovies)-1; i++ {
-		for j := i + 1; j < len(scoredMovies); j++ {
-			if scoredMovies[j].score > scoredMovies[i].score ||
-				(scoredMovies[j].score == scoredMovies[i].score && scoredMovies[j].movie.Views > scoredMovies[i].movie.Views) {
-				scoredMovies[i], scoredMovies[j] = scoredMovies[j], scoredMovies[i]
-			}
-		}
-	}
-
-	// Build diverse result (avoid clustering same genre at top)
-	var result []models.Movie
-	var seenGenres = make(map[string]int)
-	maxPerGenre := 3
-
-	for _, sm := range scoredMovies {
-		if len(result) >= limit {
-			break
-		}
-		// Limit same genre appearances for diversity
-		for _, g := range sm.movie.Genre {
-			if seenGenres[strings.ToLower(g)] >= maxPerGenre {
-				continue
-			}
-		}
-		result = append(result, sm.movie)
-		// Increment genre counts
-		for _, g := range sm.movie.Genre {
-			seenGenres[strings.ToLower(g)]++
-		}
-	}
-
-	// If we still don't have enough results, fill with fallback (latest approved movies)
-	if len(result) < limit {
-		opts := options.Find().
-			SetSort(bson.D{{Key: "approved_at", Value: -1}}).
-			SetSkip(0).
-			SetLimit(int64(limit - len(result)))
-		fallbackFilter := bson.M{
-			"$or": []bson.M{
-				{"is_published": true},
-				{"is_published": bson.M{"$exists": false}},
-			},
-		}
-		if currentMovieID != "" && currentObjID.IsZero() == false {
-			fallbackFilter["_id"] = bson.M{"$ne": currentObjID}
-		}
-		// Exclude already included
-		if len(result) > 0 {
-			var includedIDs []primitive.ObjectID
-			for _, m := range result {
-				includedIDs = append(includedIDs, m.ID)
-			}
-			fallbackFilter["_id"] = bson.M{"$nin": includedIDs}
-		}
-		fallbackCursor, err := r.col.Find(ctx, fallbackFilter, opts)
-		if err == nil {
-			defer fallbackCursor.Close(ctx)
-			var fallbackMovies []models.Movie
-			if fallbackCursor.All(ctx, &fallbackMovies) == nil {
-				for _, m := range fallbackMovies {
-					if len(result) >= limit {
-						break
-					}
-					result = append(result, m)
-				}
-			}
-		}
-	}
-
+	fillFilter := bson.M{"$and": []bson.M{publishedMovieFilter, {"_id": bson.M{"$nin": exclude}}}}
+	pool := r.findLenient(ctx, fillFilter, 80, bson.D{{Key: "views", Value: -1}, {Key: "updated_at", Value: -1}})
+	result = append(result, rankSimilar(*current, pool, limit-len(result))...)
 	return result, nil
+}
+
+// findLenient runs a find and decodes each document with the tolerant movie
+// decoder, skipping documents that cannot be normalised.
+func (r *MovieRepository) findLenient(ctx context.Context, filter bson.M, limit int64, sortBy bson.D) []models.Movie {
+	cur, err := r.col.Find(ctx, filter, options.Find().SetSort(sortBy).SetLimit(limit))
+	if err != nil {
+		log.Printf("[Recommendations] find failed: %v", err)
+		return nil
+	}
+	defer cur.Close(ctx)
+	var docs []bson.M
+	if err := cur.All(ctx, &docs); err != nil {
+		log.Printf("[Recommendations] decode failed: %v", err)
+		return nil
+	}
+	out := make([]models.Movie, 0, len(docs))
+	for _, d := range docs {
+		if m, err := normalizeMovieFromBSON(d); err == nil && m != nil {
+			out = append(out, *m)
+		}
+	}
+	return out
 }
