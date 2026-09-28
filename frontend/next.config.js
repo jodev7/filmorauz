@@ -34,7 +34,11 @@ const nextConfig = {
       process.env.NEXT_PUBLIC_SEO_BACKEND_URL ||
       process.env.NEXT_PUBLIC_API_URL ||
       "http://localhost:8080";
-    const trimmed = apiOrigin.replace(/\/$/, "");
+    // NEXT_PUBLIC_API_URL usually ends in "/api" (https://api.filmorauz.net/api),
+    // but these files are served from the backend root (/sitemap.xml,
+    // /llms.txt …), so strip that suffix — otherwise the proxy hits
+    // /api/llms.txt and returns 404.
+    const trimmed = apiOrigin.replace(/\/+$/, "").replace(/\/api$/, "");
     return [
       { source: "/sitemap.xml", destination: `${trimmed}/sitemap.xml` },
       { source: "/sitemap-static.xml", destination: `${trimmed}/sitemap-static.xml` },

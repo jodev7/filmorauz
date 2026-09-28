@@ -123,7 +123,7 @@ func (r *LLMSRepository) find(ctx context.Context, kind string, filter bson.M, l
 	if kind == "series" {
 		col = "series"
 	}
-	opts := options.Find().SetProjection(llmsProjection).SetSort(bson.D{{Key: "created_at", Value: -1}, {Key: "_id", Value: -1}})
+	opts := options.Find().SetProjection(llmsProjection).SetSort(bson.D{{Key: "_id", Value: -1}}) // newest first; _id is always indexed
 	if limit > 0 {
 		opts.SetLimit(limit)
 	}

@@ -34,10 +34,14 @@ type ExtraDeps struct {
 // ones in Setup.
 func SetupExtras(r *gin.Engine, d ExtraDeps) {
 	// llms.txt for AI assistants (proxied to the apex domain by Next).
-	r.GET("/llms.txt", d.LLMS.GetIndex)
-	r.GET("/llms-full.txt", d.LLMS.GetFull)
-	r.GET("/llms/movies/:file", d.LLMS.GetMovie)
-	r.GET("/llms/series/:file", d.LLMS.GetSeries)
+	// Also served under /api so a proxy pointed at the API base URL
+	// (…/api/llms.txt) works too.
+	for _, g := range []*gin.RouterGroup{&r.RouterGroup, r.Group("/api")} {
+		g.GET("/llms.txt", d.LLMS.GetIndex)
+		g.GET("/llms-full.txt", d.LLMS.GetFull)
+		g.GET("/llms/movies/:file", d.LLMS.GetMovie)
+		g.GET("/llms/series/:file", d.LLMS.GetSeries)
+	}
 
 	api := r.Group("/api")
 
