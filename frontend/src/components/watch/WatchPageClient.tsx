@@ -34,7 +34,6 @@ import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils
 import MediaImage from "@/components/ui/MediaImage";
 
 const PLAYER_AD_MANDATORY_SECS = 15;
-const PLAYER_AD_REPEAT_MS = 10 * 60 * 1000; // 10 minutes
 const MEDIA_ACCESS_MODE =
   (process.env.NEXT_PUBLIC_MEDIA_ACCESS_MODE || "").trim().toLowerCase() || "protected";
 const CDN_BASE_URL =
@@ -58,8 +57,10 @@ function resolvePublicPlaybackUrl(movie: Movie): string {
   return normalizeMediaUrl(value, "");
 }
 
-// Player ad — full-overlay interrupt, 15s mandatory countdown
-// starts only after user clicks play (started=true), calls onFirstComplete when first dismissed
+// Pre-roll player ad — full overlay with a 15s mandatory countdown, shown once
+// after the user clicks play (started=true); calls onFirstComplete when
+// dismissed. Mid-roll breaks during playback (every 10 min of watching, or
+// after repeated timeline scrubbing) are handled inside VideoPlayer.
 function PlayerOverlayAd({
   started,
   onFirstComplete,
@@ -76,7 +77,6 @@ function PlayerOverlayAd({
   const adsRef = useRef<Ad[]>([]);
   const currentAdIdRef = useRef<string | undefined>(undefined);
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const repeatTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstCompleteRef = useRef(false);
   const onFirstCompleteRef = useRef(onFirstComplete);
   onFirstCompleteRef.current = onFirstComplete;
@@ -119,9 +119,7 @@ function PlayerOverlayAd({
       firstCompleteRef.current = true;
       onFirstCompleteRef.current();
     }
-    if (repeatTimerRef.current) clearTimeout(repeatTimerRef.current);
-    repeatTimerRef.current = setTimeout(showAd, PLAYER_AD_REPEAT_MS);
-  }, [showAd]);
+  }, []);
 
   // Load ads on mount; set adsLoaded when ready so showAd can fire regardless of fetch vs play order
   useEffect(() => {
@@ -149,7 +147,6 @@ function PlayerOverlayAd({
     return () => {
       cancelled = true;
       if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
-      if (repeatTimerRef.current) clearTimeout(repeatTimerRef.current);
     };
   }, []);
 
