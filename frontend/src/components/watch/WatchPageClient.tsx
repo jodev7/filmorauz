@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
@@ -145,7 +145,7 @@ function PlayerOverlayAd({
   // Show first ad once both conditions are true: user started playback AND ads are fetched.
   // Using adsLoaded as state (not just a ref) ensures this effect re-runs whichever condition
   // becomes true second — fixing the race where user clicks play before fetch completes.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (started && adsLoaded && !firstCompleteRef.current) {
       if (adsRef.current.length) showAd();
       else {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Ad, recordAdClick } from "@/lib/api";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 
@@ -22,13 +22,21 @@ export default function PlayerVideoAd({ ad, url, onComplete, volume = 1 }: {
     completeRef.current();
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     video.volume = volume > 0 ? Math.min(1, volume) : 1;
     video.muted = false;
-    // Do not silently fall back to muted autoplay: let the viewer enable sound.
-    void video.play().catch(() => setBlocked(true));
+    // A pre-roll mounted by the Play click can start with audio while that
+    // gesture is still active. If the ad arrives later, ask for a new click.
+    void video.play().catch((error: DOMException) => {
+      if (error.name !== "AbortError") setBlocked(true);
+    });
+  }, [url]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) video.volume = volume > 0 ? Math.min(1, volume) : 1;
   }, [volume]);
 
   useEffect(() => {
@@ -57,7 +65,9 @@ export default function PlayerVideoAd({ ad, url, onComplete, volume = 1 }: {
           setElapsed(e.currentTarget.currentTime);
           if (e.currentTarget.currentTime >= 65) finish();
         }}
-        onPlaying={() => setBlocked(false)} onEnded={finish} onError={finish}
+        onPlaying={() => setBlocked(false)}
+        onVolumeChange={(e) => setMuted(e.currentTarget.muted || e.currentTarget.volume === 0)}
+        onEnded={finish} onError={finish}
       />
       <span className="absolute left-3 top-3 rounded bg-black/70 px-2 py-1 text-xs text-white">Reklama</span>
       <button type="button" disabled={elapsed < 15} onClick={finish}
@@ -69,15 +79,15 @@ export default function PlayerVideoAd({ ad, url, onComplete, volume = 1 }: {
           const video = videoRef.current;
           if (!video) return;
           video.muted = false;
-          setMuted(false);
-          void video.play().catch(() => setBlocked(true));
+          video.volume = volume > 0 ? Math.min(1, volume) : 1;
+          // Called directly in the click handler to retain user activation.
+          void video.play().then(() => setBlocked(false)).catch(() => setBlocked(true));
         }}>▶ Reklamani ovoz bilan boshlash</button>}
       <button type="button" className="absolute bottom-3 left-3 rounded bg-black/80 px-3 py-2 text-xs text-white"
         onClick={() => {
           const video = videoRef.current;
           if (!video) return;
           video.muted = !video.muted;
-          setMuted(video.muted);
         }}>{muted ? "Ovozni yoqish" : "Ovozni o'chirish"}</button>
       <a href={ad.target_url} target="_blank" rel="noopener noreferrer"
         onClick={() => { void recordAdClick(ad.id).catch(() => {}); }}
