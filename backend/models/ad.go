@@ -74,6 +74,11 @@ type Ad struct {
 	// Phase 2: Player targeting
 	PlayerEnabled bool `bson:"player_enabled" json:"player_enabled"`
 
+	// Mid-roll controls; zero interval means 10 minutes, zero repeats means unlimited.
+	// Repeat limits apply per movie/episode session, excluding the pre-roll.
+	PlayerAdIntervalMinutes int `bson:"player_ad_interval_minutes" json:"player_ad_interval_minutes"`
+	PlayerAdMaxRepeats      int `bson:"player_ad_max_repeats" json:"player_ad_max_repeats"`
+
 	// Metadata
 	CreatedBy primitive.ObjectID `bson:"created_by" json:"created_by"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`

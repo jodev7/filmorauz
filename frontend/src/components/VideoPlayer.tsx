@@ -21,16 +21,11 @@ import {
 import Hls from "hls.js";
 import { VideoSourceType, Ad, getAdsByPlacement, getAdsForWebsite, recordAdImpression } from "@/lib/api";
 import { pickWeightedRandomAd } from "@/lib/ads-utils";
-import { AdSchedule } from "@/lib/ad-schedule";
+import { PlayerAdSchedule } from "@/lib/player-ad-schedule";
+import PlayerVideoAd from "@/components/ads/PlayerVideoAd";
 import { PremiumBadge, isUserPremium } from "@/components/PremiumComponents";
 import { useAuth } from "@/lib/auth-context";
 import { logger } from "@/lib/logger";
-
-// Mid-roll break timing lives in lib/ad-schedule.ts (every 10 min of watching,
-// or after repeated timeline scrubbing, at least 3 min apart).
-// Longest in-player video ad we play (admin upload allows up to 65 s).
-const AD_DEFAULT_DURATION = 65;
-const AD_MAX_PER_BREAK = 1;
 
 function extractAdVideoUrl(ad: Ad): string | null {
   const candidates: Array<[string | undefined, string | undefined]> = [
@@ -38,6 +33,7 @@ function extractAdVideoUrl(ad: Ad): string | null {
     [ad.banner_media_url, ad.banner_media_type],
     [ad.inline_media_url, ad.inline_media_type],
     [ad.telegram_media_url, ad.telegram_media_type],
+    [ad.video_url, "video"],
   ];
   for (const [url, type] of candidates) {
     if (url && type === "video") return url;
@@ -414,6 +410,7 @@ function parseThumbnailVtt(
 }
 
 function HLSPlayer({
+  nativeMp4 = false,
   src,
   poster,
   autoPlay: shouldAutoPlay,
@@ -433,6 +430,7 @@ function HLSPlayer({
   thumbnailsBaseUrl,
   thumbnailInterval,
 }: {
+  nativeMp4?: boolean;
   src: string;
   poster?: string;
   autoPlay?: boolean;
@@ -597,17 +595,17 @@ function HLSPlayer({
   })();
 
   // In-player ad state
-  const adVideoRef = useRef<HTMLVideoElement>(null);
   const [adQueue, setAdQueue] = useState<Array<{ ad: Ad; url: string }>>([]);
   const [adIndex, setAdIndex] = useState(0);
-  const [adRemaining, setAdRemaining] = useState(AD_DEFAULT_DURATION);
   const [adActive, setAdActive] = useState(false);
-  const [adFetching, setAdFetching] = useState(false);
-  // Mid-roll scheduling (lib/ad-schedule.ts).
-  const adScheduleRef = useRef<AdSchedule | null>(null);
-  if (!adScheduleRef.current) adScheduleRef.current = new AdSchedule();
+  const adBusyRef = useRef(false);
+  const adGenerationRef = useRef(0);
+  // Per-content, admin-configured mid-roll scheduling.
+  const adScheduleRef = useRef(new PlayerAdSchedule());
   const programmaticSeekRef = useRef(false);
   const adPoolRef = useRef<Ad[] | null>(null);
+  const adPoolLoadedAtRef = useRef(0);
+  useEffect(() => () => { adGenerationRef.current += 1; }, []);
   const resumeTimeRef = useRef(0);
   const hasAppliedInitialSeek = useRef(false);
   const isDev = process.env.NODE_ENV !== "production";
@@ -709,61 +707,62 @@ function HLSPlayer({
   }, []);
 
   const resetAdSchedule = useCallback(() => {
-    adScheduleRef.current?.reset(Date.now(), videoRef.current?.currentTime ?? 0);
+    adScheduleRef.current.syncTime(videoRef.current?.currentTime ?? 0);
   }, []);
 
   // Video ads for the player come from the admin "Player ichida (video)" slot
   // (website placement); the legacy "player" placement is still honoured.
   const loadAdPool = useCallback(async (): Promise<Ad[]> => {
-    if (adPoolRef.current) return adPoolRef.current;
+    if (adPoolRef.current && Date.now() - adPoolLoadedAtRef.current < 60_000) return adPoolRef.current;
+    const generation = adGenerationRef.current;
     const [site, legacy] = await Promise.all([
       getAdsForWebsite("watch_player_overlay").catch(() => [] as Ad[]),
       getAdsByPlacement("player").catch(() => [] as Ad[]),
     ]);
     const seen = new Set<string>();
-    const pool = [...site, ...legacy].filter((ad) => {
+    const pool = [...site.filter((ad) => ad.player_enabled), ...legacy].filter((ad) => {
       if (seen.has(ad.id) || !extractAdVideoUrl(ad)) return false;
       seen.add(ad.id);
       return true;
     });
-    adPoolRef.current = pool;
+    if (generation === adGenerationRef.current) {
+      adPoolRef.current = pool;
+      adPoolLoadedAtRef.current = Date.now();
+    }
     return pool;
   }, []);
 
   const triggerAdBreak = useCallback(async () => {
-    if (isPremiumUser || adActive || adFetching) return;
+    if (isPremiumUser || adBusyRef.current) return;
     const video = videoRef.current;
-    if (!video) return;
-    setAdFetching(true);
+    if (!video || video.paused || video.seeking) return;
+    adBusyRef.current = true;
+    const generation = adGenerationRef.current;
+    let opened = false;
     try {
       const pool = await loadAdPool();
-      const queue: Array<{ ad: Ad; url: string }> = [];
-      let lastId: string | undefined;
-      for (let i = 0; i < Math.min(AD_MAX_PER_BREAK, pool.length); i++) {
-        const ad = pickWeightedRandomAd(pool.filter((x) => !queue.some((q) => q.ad.id === x.id)), lastId);
-        const url = extractAdVideoUrl(ad);
-        if (!url) continue;
-        queue.push({ ad, url });
-        lastId = ad.id;
-      }
-      if (queue.length === 0) {
-        // No video ads: restart the schedule so we don't refetch every tick.
-        resetAdSchedule();
-        return;
-      }
+      if (generation !== adGenerationRef.current || video.paused || video.seeking) return;
+      const due = adScheduleRef.current.due(pool);
+      if (!due.length) return;
+      const ad = pickWeightedRandomAd(due);
+      const url = extractAdVideoUrl(ad);
+      if (!url) return;
       resumeTimeRef.current = video.currentTime;
       video.pause();
-      setAdQueue(queue);
+      adScheduleRef.current.shown(ad.id);
+      setAdQueue([{ ad, url }]);
       setAdIndex(0);
-      setAdRemaining(AD_DEFAULT_DURATION);
+      opened = true;
       setAdActive(true);
-      queue.forEach((item) => recordAdImpression(item.ad.id).catch(() => {}));
+      void recordAdImpression(ad.id).catch(() => {});
     } finally {
-      setAdFetching(false);
+      // The active overlay keeps the lock until it finishes.
+      if (generation === adGenerationRef.current && !opened) adBusyRef.current = false;
     }
-  }, [isPremiumUser, adActive, adFetching, loadAdPool, resetAdSchedule]);
+  }, [isPremiumUser, loadAdPool]);
 
   const finishAdBreak = useCallback(() => {
+    adBusyRef.current = false;
     setAdActive(false);
     setAdQueue([]);
     setAdIndex(0);
@@ -791,7 +790,10 @@ function HLSPlayer({
     setAdActive(false);
     setAdQueue([]);
     setAdIndex(0);
-    adScheduleRef.current?.reset();
+    adScheduleRef.current = new PlayerAdSchedule();
+    adGenerationRef.current += 1;
+    adBusyRef.current = false;
+    adPoolRef.current = null;
     hasAppliedInitialSeek.current = false;
 
     logger.debug("[HLSPlayer] initializing");
@@ -801,7 +803,7 @@ function HLSPlayer({
       return;
     }
 
-    if (Hls.isSupported()) {
+    if (!nativeMp4 && Hls.isSupported()) {
       const hls = new Hls({
         startLevel: -1,
         preserveManualLevelOnError: true,
@@ -918,10 +920,13 @@ function HLSPlayer({
         hls.destroy();
         hlsRef.current = null;
       };
-    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    } else if (nativeMp4 || video.canPlayType("application/vnd.apple.mpegurl")) {
       // Native HLS (Safari)
       video.src = src;
-      const onNativeLoadedMeta = () => trySeekRef.current("loadedmetadata_native");
+      const onNativeLoadedMeta = () => {
+        trySeekRef.current("loadedmetadata_native");
+        if (shouldAutoPlay) void video.play().catch(() => {});
+      };
       video.addEventListener("loadedmetadata", onNativeLoadedMeta);
       const onVideoError = () => {
         const code = video.error?.code;
@@ -942,7 +947,7 @@ function HLSPlayer({
     } else {
       setError("Brauzeringiz HLS formatini qo'llab-quvvatlamaydi.");
     }
-  }, [src, isPremiumUser, shouldAutoPlay, syncSelectedQualityFromHls]);
+  }, [src, nativeMp4, isPremiumUser, shouldAutoPlay, syncSelectedQualityFromHls]);
 
   const handleQualityChange = useCallback((quality: QualityLevel) => {
     setSettingsPane("root");
@@ -1083,31 +1088,14 @@ function HLSPlayer({
       }
       const schedule = adScheduleRef.current;
       const nearEnd = !(video.duration > 0) || video.currentTime >= video.duration - 5;
-      if (
-        schedule?.onTimeUpdate(video.currentTime, !video.paused, video.playbackRate, nearEnd) &&
-        !isPremiumUser &&
-        !adActive
-      ) {
-        triggerAdBreak();
-      }
+      schedule.tick(video.currentTime, !video.paused && !adBusyRef.current, video.seeking, video.playbackRate);
+      if (!nearEnd && !isPremiumUser && !adActive) void triggerAdBreak();
     };
     const onSeeked = () => {
-      const schedule = adScheduleRef.current;
-      if (!schedule) return;
-      if (programmaticSeekRef.current) {
-        programmaticSeekRef.current = false; // resume / quality switch, not the viewer
-        schedule.syncTime(video.currentTime);
-        return;
-      }
-      if (isPremiumUser || adActive) {
-        schedule.syncTime(video.currentTime);
-        return;
-      }
-      const nearEnd = !(video.duration > 0) || video.currentTime >= video.duration - 5;
-      if (schedule.onSeeked(video.currentTime, nearEnd)) {
-        triggerAdBreak();
-      }
+      programmaticSeekRef.current = false;
+      adScheduleRef.current.syncTime(video.currentTime);
     };
+
     const onDurationChange = () => {
       setDuration(video.duration);
       trySeekRef.current("durationchange");
@@ -1395,57 +1383,8 @@ function HLSPlayer({
       />
 
       {adActive && adQueue[adIndex] && (
-        <div className="absolute inset-0 z-30 bg-black animate-in fade-in duration-200">
-          <video
-            ref={adVideoRef}
-            key={`${adQueue[adIndex].ad.id}-${adIndex}`}
-            src={adQueue[adIndex].url}
-            className="w-full h-full"
-            autoPlay
-            playsInline
-            onLoadedMetadata={(e) => {
-              const d = e.currentTarget.duration;
-              setAdRemaining(
-                isFinite(d) && d > 0 ? Math.ceil(Math.min(d, AD_DEFAULT_DURATION)) : AD_DEFAULT_DURATION
-              );
-            }}
-            onTimeUpdate={(e) => {
-              const v = e.currentTarget;
-              const cap = Math.min(v.duration || AD_DEFAULT_DURATION, AD_DEFAULT_DURATION);
-              const remaining = Math.max(0, Math.ceil(cap - v.currentTime));
-              setAdRemaining(remaining);
-              if (v.currentTime >= AD_DEFAULT_DURATION) {
-                v.pause();
-                if (adIndex + 1 < adQueue.length) {
-                  setAdIndex(adIndex + 1);
-                  setAdRemaining(AD_DEFAULT_DURATION);
-                } else {
-                  finishAdBreak();
-                }
-              }
-            }}
-            onEnded={() => {
-              if (adIndex + 1 < adQueue.length) {
-                setAdIndex(adIndex + 1);
-                setAdRemaining(AD_DEFAULT_DURATION);
-              } else {
-                finishAdBreak();
-              }
-            }}
-          />
-          <div className="pointer-events-none absolute left-3 top-3 rounded bg-black/70 px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-white">
-            Reklama
-          </div>
-          <div className="pointer-events-none absolute left-3 bottom-3 rounded bg-black/70 px-2 py-1 text-xs text-white tabular-nums">
-            Reklama tugashiga: {adRemaining}s
-          </div>
-          <Link
-            href={premiumHref()}
-            className="absolute right-3 bottom-3 rounded-full bg-white/95 px-4 py-2 text-xs font-semibold text-black transition hover:bg-white"
-          >
-            Reklamani o&apos;chirish
-          </Link>
-        </div>
+        <PlayerVideoAd key={adQueue[adIndex].ad.id} ad={adQueue[adIndex].ad}
+          url={adQueue[adIndex].url} volume={volume} onComplete={finishAdBreak} />
       )}
 
       <div className="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-2">
@@ -2062,25 +2001,13 @@ export default function VideoPlayer({
       return <IframePlayer src={effectiveUrl} title={title} />;
 
     case "direct_mp4":
-      return (
-        <DirectVideoPlayer
-          src={effectiveUrl}
-          title={title}
-          poster={posterUrl}
-          initialSeekTime={initialSeekTime}
-          onTimeUpdate={onTimeUpdate}
-          onPause={onPause}
-          onInitialSeekResolved={onInitialSeekResolved}
-          onEnded={onEnded}
-        />
-      );
-
     case "direct_hls":
       return (
         <HLSPlayer
+          nativeMp4={effectiveSourceType === "direct_mp4"}
           src={effectiveUrl}
           poster={posterUrl}
-          autoPlay={forceStart}
+          autoPlay={forceStart ?? true}
           isPremiumUser={isPremiumViewer}
           initialSeekTime={initialSeekTime}
           onTimeUpdate={onTimeUpdate}

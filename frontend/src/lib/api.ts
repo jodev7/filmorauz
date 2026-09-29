@@ -4536,6 +4536,8 @@ export interface Ad {
   telegram_bot_chat_ids?: number[];
   telegram_channel_enabled?: boolean;
   player_enabled?: boolean;
+  player_ad_max_repeats?: number;
+  player_ad_interval_minutes?: number;
   telegram_deliveries?: number;
   telegram_last_sent_at?: string;
 }
@@ -4594,6 +4596,8 @@ export interface AdInput {
   telegram_bot_chat_ids?: number[];
   telegram_channel_enabled?: boolean;
   player_enabled?: boolean;
+  player_ad_max_repeats?: number;
+  player_ad_interval_minutes?: number;
 }
 
 // ── Expenses (superadmin) ──────────────────────────────────────────────────
