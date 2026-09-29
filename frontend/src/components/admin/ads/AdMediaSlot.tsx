@@ -23,8 +23,11 @@ export function isVideoUrl(url: string, type?: string): boolean {
   return /\.(mp4|webm|mov)(\?|$)/i.test(url);
 }
 
-/** Player overlay creatives must be ~15 s (10–20 s accepted). */
-export function validateFifteenSecondVideo(file: File): Promise<string | null> {
+/** Longest allowed in-player video ad, in seconds (kept in sync with VideoPlayer / WatchPageClient). */
+export const PLAYER_AD_MAX_SECONDS = 65;
+
+/** Player video ads may be up to PLAYER_AD_MAX_SECONDS long. */
+export function validatePlayerAdVideo(file: File): Promise<string | null> {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file);
     const video = document.createElement("video");
@@ -32,7 +35,7 @@ export function validateFifteenSecondVideo(file: File): Promise<string | null> {
     video.onloadedmetadata = () => {
       URL.revokeObjectURL(url);
       const dur = Math.round(video.duration);
-      resolve(dur < 10 || dur > 20 ? `Faqat ~15 soniyalik video (joriy: ${dur}s)` : null);
+      resolve(dur < 1 || dur > PLAYER_AD_MAX_SECONDS ? `Video ${PLAYER_AD_MAX_SECONDS} soniyadan oshmasin (joriy: ${dur}s)` : null);
     };
     video.onerror = () => {
       URL.revokeObjectURL(url);

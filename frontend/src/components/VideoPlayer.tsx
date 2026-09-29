@@ -28,7 +28,8 @@ import { logger } from "@/lib/logger";
 
 // Mid-roll break timing lives in lib/ad-schedule.ts (every 10 min of watching,
 // or after repeated timeline scrubbing, at least 3 min apart).
-const AD_DEFAULT_DURATION = 15;
+// Longest in-player video ad we play (admin upload allows up to 65 s).
+const AD_DEFAULT_DURATION = 65;
 const AD_MAX_PER_BREAK = 1;
 
 function extractAdVideoUrl(ad: Ad): string | null {

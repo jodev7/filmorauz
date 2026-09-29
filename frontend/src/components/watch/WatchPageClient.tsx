@@ -33,7 +33,10 @@ import { X } from "lucide-react";
 import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
 
+// Image ads: 15 s before "Yopish". Video ads: the whole video, up to 65 s
+// (the admin upload limit), then it can be closed.
 const PLAYER_AD_MANDATORY_SECS = 15;
+const PLAYER_AD_VIDEO_MAX_SECS = 65;
 const MEDIA_ACCESS_MODE =
   (process.env.NEXT_PUBLIC_MEDIA_ACCESS_MODE || "").trim().toLowerCase() || "protected";
 const CDN_BASE_URL =
@@ -57,7 +60,8 @@ function resolvePublicPlaybackUrl(movie: Movie): string {
   return normalizeMediaUrl(value, "");
 }
 
-// Pre-roll player ad — full overlay with a 15s mandatory countdown, shown once
+// Pre-roll player ad — full overlay (image: 15 s, video: its length up to 65 s
+// before it can be closed), shown once
 // after the user clicks play (started=true); calls onFirstComplete when
 // dismissed. Mid-roll breaks during playback (every 10 min of watching, or
 // after repeated timeline scrubbing) are handled inside VideoPlayer.
@@ -81,8 +85,8 @@ function PlayerOverlayAd({
   const onFirstCompleteRef = useRef(onFirstComplete);
   onFirstCompleteRef.current = onFirstComplete;
 
-  const startCountdown = useCallback(() => {
-    setCountdown(PLAYER_AD_MANDATORY_SECS);
+  const startCountdown = useCallback((seconds: number = PLAYER_AD_MANDATORY_SECS) => {
+    setCountdown(seconds);
     setCanClose(false);
     if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
     countdownTimerRef.current = setInterval(() => {
@@ -182,8 +186,15 @@ function PlayerOverlayAd({
             className="absolute inset-0 w-full h-full object-contain"
             autoPlay
             muted
-            loop
             playsInline
+            onLoadedMetadata={(e) => {
+              // Count down the real length of the video (max 65 s).
+              const d = e.currentTarget.duration;
+              if (isFinite(d) && d > 0) startCountdown(Math.max(1, Math.ceil(Math.min(d, PLAYER_AD_VIDEO_MAX_SECS))));
+            }}
+            onTimeUpdate={(e) => {
+              if (e.currentTarget.currentTime >= PLAYER_AD_VIDEO_MAX_SECS) e.currentTarget.pause();
+            }}
           />
         ) : (
           <img src={normalizeMediaUrl(url)} alt="Ad" className="absolute inset-0 w-full h-full object-contain" />
