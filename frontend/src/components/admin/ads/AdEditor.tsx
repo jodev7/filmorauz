@@ -35,6 +35,8 @@ export const emptyAdInput = (): AdInput => ({
   telegram_bot_enabled: false,
   telegram_channel_enabled: false,
   player_enabled: false,
+  player_ad_interval_minutes: 10,
+  player_ad_max_repeats: 0,
 });
 
 export function adToInput(ad: Ad): AdInput {
@@ -66,6 +68,8 @@ export function adToInput(ad: Ad): AdInput {
     telegram_bot_enabled: ad.telegram_bot_enabled || false,
     telegram_channel_enabled: ad.telegram_channel_enabled || false,
     player_enabled: ad.player_enabled || false,
+    player_ad_interval_minutes: ad.player_ad_interval_minutes || 10,
+    player_ad_max_repeats: ad.player_ad_max_repeats || 0,
   };
 }
 
@@ -292,6 +296,15 @@ export default function AdEditor({
               description="Video pleyer ustida overlay reklama"
               icon={<Tv2 size={18} className={form.player_enabled ? "text-yellow-400" : "text-gray-500"} />}
             />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Har necha daqiqada" hint="Kino yoki qismning tomosha qilingan vaqti. Pauza va oldinga o'tkazish hisoblanmaydi.">
+                <input type="number" min={1} max={1440} value={form.player_ad_interval_minutes} onChange={(e) => set("player_ad_interval_minutes", Math.min(1440, Math.max(1, Math.floor(Number(e.target.value) || 1))))} className={inputCls} />
+              </Field>
+              <Field label="Takroriy ko'rsatishlar soni" hint="Har bir kino/qism uchun. Boshlang'ich reklama bundan tashqari. 0 = cheklanmagan.">
+                <input type="number" min={0} max={1440} value={form.player_ad_max_repeats} onChange={(e) => set("player_ad_max_repeats", Math.min(1440, Math.max(0, Math.floor(Number(e.target.value) || 0))))} className={inputCls} />
+              </Field>
+            </div>
+            <p className="text-xs text-gray-500">Video reklamada 15 soniyadan keyin yopish tugmasi chiqadi. Takroriy reklamalar saytning HLS/MP4 playerida ishlaydi.</p>
           </Section>
         )}
 

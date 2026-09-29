@@ -18,6 +18,7 @@ import TelegramLoginModal from "@/components/TelegramLoginModal";
 import PremiumUnlockCard from "@/components/PremiumUnlockCard";
 import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveUnifiedWatchProgress, getWatchProgress, resetWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, getProtectedMediaAccess, buildVideoDownloadUrl, Ad, Movie } from "@/lib/api";
 import { pickWeightedRandomAd } from "@/lib/ads-utils";
+import PlayerVideoAd from "@/components/ads/PlayerVideoAd";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n";
@@ -33,10 +34,8 @@ import { X } from "lucide-react";
 import { DEFAULT_POSTER_PLACEHOLDER, normalizeMediaUrl } from "@/lib/image-utils";
 import MediaImage from "@/components/ui/MediaImage";
 
-// Image ads: 15 s before "Yopish". Video ads: the whole video, up to 65 s
-// (the admin upload limit), then it can be closed.
+// Image ads can be closed after 15 seconds. Video timing is shared with mid-rolls.
 const PLAYER_AD_MANDATORY_SECS = 15;
-const PLAYER_AD_VIDEO_MAX_SECS = 65;
 const MEDIA_ACCESS_MODE =
   (process.env.NEXT_PUBLIC_MEDIA_ACCESS_MODE || "").trim().toLowerCase() || "protected";
 const CDN_BASE_URL =
@@ -60,11 +59,7 @@ function resolvePublicPlaybackUrl(movie: Movie): string {
   return normalizeMediaUrl(value, "");
 }
 
-// Pre-roll player ad — full overlay (image: 15 s, video: its length up to 65 s
-// before it can be closed), shown once
-// after the user clicks play (started=true); calls onFirstComplete when
-// dismissed. Mid-roll breaks during playback (every 10 min of watching, or
-// after repeated timeline scrubbing) are handled inside VideoPlayer.
+// Pre-roll gates movie playback; native mid-rolls run inside VideoPlayer.
 function PlayerOverlayAd({
   started,
   onFirstComplete,
@@ -132,21 +127,14 @@ function PlayerOverlayAd({
       .then((data) => {
         if (cancelled) return;
         const valid = data.filter(
-          (a) => a.player_overlay_media_url || a.banner_media_url || a.image_url
+          (a) => a.player_enabled && (a.player_overlay_media_url || a.banner_media_url || a.image_url || a.video_url)
         );
         adsRef.current = valid;
-        if (valid.length > 0) {
-          setAdsLoaded(true);
-        } else if (!firstCompleteRef.current) {
-          firstCompleteRef.current = true;
-          onFirstCompleteRef.current();
-        }
+        setAdsLoaded(true);
       })
       .catch(() => {
-        if (!firstCompleteRef.current) {
-          firstCompleteRef.current = true;
-          onFirstCompleteRef.current();
-        }
+        if (cancelled) return;
+        setAdsLoaded(true);
       });
     return () => {
       cancelled = true;
@@ -159,18 +147,21 @@ function PlayerOverlayAd({
   // becomes true second — fixing the race where user clicks play before fetch completes.
   useEffect(() => {
     if (started && adsLoaded && !firstCompleteRef.current) {
-      showAd();
+      if (adsRef.current.length) showAd();
+      else {
+        firstCompleteRef.current = true;
+        onFirstCompleteRef.current();
+      }
     }
   }, [started, adsLoaded, showAd]);
 
   if (!visible || !currentAd) return null;
 
-  const url = currentAd.player_overlay_media_url || currentAd.banner_media_url || currentAd.image_url || "";
-  const isVideo =
-    currentAd.player_overlay_media_type === "video" ||
-    currentAd.banner_media_type === "video" ||
-    url.endsWith(".mp4") ||
-    url.endsWith(".webm");
+  const url = currentAd.player_overlay_media_url || currentAd.banner_media_url || currentAd.image_url || currentAd.video_url || "";
+  const mediaType = currentAd.player_overlay_media_url
+    ? currentAd.player_overlay_media_type
+    : currentAd.banner_media_url ? currentAd.banner_media_type : undefined;
+  const isVideo = mediaType === "video" || /\.(mp4|webm)(?:$|[?#])/i.test(url);
 
   const handleClick = () => {
     recordAdClick(currentAd.id).catch(() => {});
@@ -181,25 +172,11 @@ function PlayerOverlayAd({
     <div className="absolute inset-0 z-20 bg-black overflow-hidden">
       <div className="relative w-full h-full cursor-pointer" onClick={handleClick}>
         {isVideo ? (
-          <video
-            src={normalizeMediaUrl(url, "")}
-            className="absolute inset-0 w-full h-full object-contain"
-            autoPlay
-            muted
-            playsInline
-            onLoadedMetadata={(e) => {
-              // Count down the real length of the video (max 65 s).
-              const d = e.currentTarget.duration;
-              if (isFinite(d) && d > 0) startCountdown(Math.max(1, Math.ceil(Math.min(d, PLAYER_AD_VIDEO_MAX_SECS))));
-            }}
-            onTimeUpdate={(e) => {
-              if (e.currentTarget.currentTime >= PLAYER_AD_VIDEO_MAX_SECS) e.currentTarget.pause();
-            }}
-          />
+          <PlayerVideoAd ad={currentAd} url={url} onComplete={dismiss} />
         ) : (
           <img src={normalizeMediaUrl(url)} alt="Ad" className="absolute inset-0 w-full h-full object-contain" />
         )}
-        <div className="absolute top-3 right-3">
+        {!isVideo && <div className="absolute top-3 right-3">
           {canClose ? (
             <button
               onClick={(e) => { e.stopPropagation(); dismiss(); }}
@@ -213,7 +190,7 @@ function PlayerOverlayAd({
               Reklamani yopish uchun {countdown} soniya qoldi
             </span>
           )}
-        </div>
+        </div>}
         <span className="absolute top-3 left-3 text-[10px] text-gray-300 bg-black/60 px-2 py-1 rounded uppercase tracking-wide pointer-events-none">Reklama</span>
       </div>
     </div>
@@ -299,22 +276,19 @@ function getEpisodeHref(episode?: (EpisodeLink & { href?: string }) | null): str
   return episode.href || `/episode/${episode.id}`;
 }
 
-export default function WatchPageClient({
+export default function WatchPageClient(props: WatchPageClientProps) {
+  if (!props.movie) return <div className="flex min-h-[50vh] items-center justify-center"><p className="text-gray-400">Film topilmadi</p></div>;
+  return <WatchPageContent key={props.progressTargetId || props.movie.id} {...props} movie={props.movie} />;
+}
+
+function WatchPageContent({
   movie,
   progressTargetId: progressTargetIdProp,
   episodeNavigation,
   embedded = false,
   seriesSeasons,
   seriesSlugForModal,
-}: WatchPageClientProps) {
-  if (!movie) {
-    return (
-      <div className="flex items-center justify-center min-h-[50vh]">
-        <p className="text-gray-400">Film topilmadi</p>
-      </div>
-    );
-  }
-
+}: WatchPageClientProps & { movie: Movie }) {
   const { t } = useI18n();
   const { user, token, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [loginModalOpen, setLoginModalOpen] = useState(false);
@@ -873,6 +847,7 @@ export default function WatchPageClient({
                   </div>
                 )}
                 <VideoPlayer
+                  key={progressTargetId}
                   videoUrl={resolvedPlaybackUrl}
                   premiumStreamUrl={resolvedPlaybackUrl}
                   embedUrl={resolvedEmbedUrl || movie.embed_url}
@@ -923,6 +898,7 @@ export default function WatchPageClient({
             )}
             {!isUserPremium(user) && (
               <PlayerOverlayAd
+                key={progressTargetId}
                 started={playIntended}
                 onFirstComplete={handleAdFirstComplete}
               />
