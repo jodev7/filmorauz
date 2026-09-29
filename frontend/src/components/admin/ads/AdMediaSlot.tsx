@@ -24,26 +24,7 @@ export function isVideoUrl(url: string, type?: string): boolean {
 }
 
 /** Longest allowed in-player video ad, in seconds (kept in sync with VideoPlayer / WatchPageClient). */
-export const PLAYER_AD_MAX_SECONDS = 65;
-
-/** Player video ads may be up to PLAYER_AD_MAX_SECONDS long. */
-export function validatePlayerAdVideo(file: File): Promise<string | null> {
-  return new Promise((resolve) => {
-    const url = URL.createObjectURL(file);
-    const video = document.createElement("video");
-    video.preload = "metadata";
-    video.onloadedmetadata = () => {
-      URL.revokeObjectURL(url);
-      const dur = Math.round(video.duration);
-      resolve(dur < 1 || dur > PLAYER_AD_MAX_SECONDS ? `Video ${PLAYER_AD_MAX_SECONDS} soniyadan oshmasin (joriy: ${dur}s)` : null);
-    };
-    video.onerror = () => {
-      URL.revokeObjectURL(url);
-      resolve(null);
-    };
-    video.src = url;
-  });
-}
+export { PLAYER_AD_MAX_SECONDS, validatePlayerAdVideo } from "@/lib/player-ad-media-validation";
 
 /**
  * One creative slot: drop zone + preview at the slot's real aspect ratio.
