@@ -5,7 +5,7 @@ import { Bot, Globe, Link2, Loader2, Megaphone, MousePointerClick, Send, Setting
 import { Ad, AdInput, AdStatus } from "@/lib/api";
 import { Modal } from "@/components/admin/kit";
 import { Field, Segmented, SwitchRow, inputCls } from "@/components/admin/form/ui";
-import AdMediaSlot, { validateFifteenSecondVideo } from "./AdMediaSlot";
+import AdMediaSlot, { validatePlayerAdVideo } from "./AdMediaSlot";
 
 export const emptyAdInput = (): AdInput => ({
   title: "",
@@ -80,7 +80,7 @@ const WEBSITE_SLOTS: { slot: keyof AdInput; typeKey: keyof AdInput; label: strin
   { slot: "inline_media_url", typeKey: "inline_media_type", label: "Kontent orasida", size: "1200×400 · 3:1", aspect: "aspect-[3/1]" },
   { slot: "fixed_bottom_media_url", typeKey: "fixed_bottom_media_type", label: "Pastki qotirilgan", size: "1200×180", aspect: "aspect-[20/3]" },
   { slot: "popup_media_url", typeKey: "popup_media_type", label: "Popup oyna", size: "900×600 · 3:2", aspect: "aspect-[3/2]" },
-  { slot: "player_overlay_media_url", typeKey: "player_overlay_media_type", label: "Player ichida (video)", size: "~15 soniya", aspect: "aspect-video", video: true },
+  { slot: "player_overlay_media_url", typeKey: "player_overlay_media_type", label: "Player ichida (video)", size: "65 soniyagacha", aspect: "aspect-video", video: true },
 ];
 
 const CTA_SUGGESTIONS = ["Batafsil", "Ko'rish", "Sotib olish", "Obuna bo'lish", "Yuklab olish"];
@@ -278,7 +278,7 @@ export default function AdEditor({
                   mediaType={form[s.typeKey] as "image" | "video" | undefined}
                   image={!s.video}
                   video={!!s.video}
-                  validate={s.video ? validateFifteenSecondVideo : undefined}
+                  validate={s.video ? validatePlayerAdVideo : undefined}
                   token={token}
                   onChange={onSlotChange}
                   onBusy={onSlotBusy}
