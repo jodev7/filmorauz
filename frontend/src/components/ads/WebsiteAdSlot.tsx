@@ -3,12 +3,13 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { X } from "lucide-react";
-import { Ad, recordAdImpression, recordAdClick } from "@/lib/api";
+import { recordAdImpression, recordAdClick } from "@/lib/api";
 import { isUserPremium } from "@/lib/ads-utils";
 import { useAuth } from "@/lib/auth-context";
 import { useAdSlot } from "@/components/ads/AdSlotContext";
 import MediaImage from "@/components/MediaImage";
 import { normalizeMediaUrl } from "@/lib/image-utils";
+import { getWebsiteAdMedia } from "@/lib/website-ad-media";
 
 interface WebsiteAdSlotProps {
   placement: string;
@@ -47,7 +48,10 @@ export default function WebsiteAdSlot({
 
   // Ads always derive from the shared context — no local state, no stale
   // empty-array bug, no duplicate fetch loops.
-  const ads = useMemo(() => getMergedAds(placements), [getMergedAds, placements]);
+  const ads = useMemo(
+    () => getMergedAds(placements).filter((ad) => getWebsiteAdMedia(ad, popup ? "popup" : variant)),
+    [getMergedAds, placements, popup, variant],
+  );
   const isReady = ads.length > 0;
 
   // Viewport lazy-load trigger
@@ -100,7 +104,7 @@ export default function WebsiteAdSlot({
 
   // ── Popup ──────────────────────────────────────────────────────────────────
   if (popup) {
-    const media = resolveMedia(ad, "popup");
+    const media = getWebsiteAdMedia(ad, "popup")!;
     return (
       <div
         className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
@@ -130,7 +134,7 @@ export default function WebsiteAdSlot({
 
   // ── Banner / Inline ────────────────────────────────────────────────────────
   const mediaHeight = SLOT_HEIGHT[variant] ?? "h-[300px]";
-  const media = resolveMedia(ad, variant);
+  const media = getWebsiteAdMedia(ad, variant)!;
 
   return (
     <div ref={containerRef} className={`w-full ${className}`}>
@@ -171,30 +175,6 @@ function getSlotPlacements(
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-
-function resolveMedia(
-  ad: Ad,
-  variant: "banner" | "inline" | "card" | "popup",
-): { url: string; type: "image" | "video" } {
-  let url: string | undefined;
-  let type: "image" | "video" | undefined;
-
-  if (variant === "banner") {
-    url  = ad.banner_media_url;
-    type = ad.banner_media_type;
-  } else if (variant === "inline" || variant === "card") {
-    url  = ad.inline_media_url  || ad.banner_media_url;
-    type = ad.inline_media_type || ad.banner_media_type;
-  } else if (variant === "popup") {
-    url  = ad.popup_media_url   || ad.banner_media_url || ad.inline_media_url;
-    type = ad.popup_media_type  || ad.banner_media_type || ad.inline_media_type;
-  }
-
-  return {
-    url:  url  || ad.image_url || "",
-    type: type || "image",
-  };
-}
 
 function AdMedia({ url, type }: { url: string; type: "image" | "video" }) {
   if (!url) return null;

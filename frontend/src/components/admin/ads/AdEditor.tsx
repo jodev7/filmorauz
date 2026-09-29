@@ -269,7 +269,7 @@ export default function AdEditor({
         </Section>
 
         {has("website") && (
-          <Section icon={Globe} title="Sayt uchun rasmlar" desc="Bo'sh qolgan joyga banner rasmi ishlatiladi">
+          <Section icon={Globe} title="Sayt uchun rasmlar" desc="Har bir joyda faqat shu joyga yuklangan rasm ko'rsatiladi">
             <div className="grid gap-4 sm:grid-cols-2">
               {WEBSITE_SLOTS.map((s) => (
                 <AdMediaSlot

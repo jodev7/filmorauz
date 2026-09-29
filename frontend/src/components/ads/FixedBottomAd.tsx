@@ -34,7 +34,7 @@ export default function FixedBottomAd({
 
   const allAds = useMemo(() => getMergedAds(placements), [getMergedAds, placements]);
   const ads = useMemo(
-    () => allAds.filter((a) => a.fixed_bottom_media_url || a.banner_media_url || a.image_url),
+    () => allAds.filter((a) => a.fixed_bottom_media_url),
     [allAds],
   );
   const isReady = ads.length > 0;
@@ -69,10 +69,9 @@ export default function FixedBottomAd({
 
   const ad = ads[current % ads.length];
 
-  const mediaUrl = ad.fixed_bottom_media_url || ad.banner_media_url || ad.image_url || "";
+  const mediaUrl = ad.fixed_bottom_media_url || "";
   const isVideo =
     ad.fixed_bottom_media_type === "video" ||
-    ad.banner_media_type === "video" ||
     mediaUrl.endsWith(".mp4") ||
     mediaUrl.endsWith(".webm");
 

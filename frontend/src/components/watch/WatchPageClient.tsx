@@ -1034,10 +1034,12 @@ function WatchPageContent({
         </div>
         )}
 
-        {/* Watch page inline block ad */}
-        <div className="max-w-7xl mx-auto px-4 mt-6 mb-4">
-          <WebsiteAdSlot placement="watch_page_inline_block" variant="inline" />
-        </div>
+        {/* Movie detail embeds its own banner immediately below this player. */}
+        {!embedded && (
+          <div className="max-w-7xl mx-auto px-4 mt-6 mb-4">
+            <WebsiteAdSlot placement="watch_page_inline_block" variant="inline" />
+          </div>
+        )}
 
         {/* Recommendations — standalone page only (movie page has its own) */}
         {!embedded && !isLoadingRecommendations && recommendations.length > 0 && (
