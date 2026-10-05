@@ -44,6 +44,7 @@ export default function Footer() {
               <span className="text-white font-medium mb-1">Ma&apos;lumot</span>
               <Link href="/dmca" className="hover:text-white transition-colors">DMCA</Link>
               <Link href="/copyright" className="hover:text-white transition-colors">Mualliflik huquqi</Link>
+              <Link href="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link>
               <Link href="/contact" className="hover:text-white transition-colors">Aloqa</Link>
             </div>
           </div>
