@@ -973,7 +973,17 @@ function PublishModal({
                           />
                           <Icon size={14} className={meta.color} />
                           <span className={`text-sm font-semibold ${meta.color}`}>{meta.label}</span>
-                          <span className="ml-auto text-xs text-gray-500">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              toggleAll();
+                            }}
+                            className="ml-auto rounded-md border border-white/15 bg-white/5 px-2 py-1 text-xs text-gray-200 hover:bg-white/15 transition-colors"
+                          >
+                            {allChecked ? "Hammasini bekor qilish" : "Hammasini tanlash"}
+                          </button>
+                          <span className="text-xs text-gray-500">
                             {accounts.filter((name) =>
                               selectedJobs.some((j) => j.platform === platform && j.account_name === name)
                             ).length}/{accounts.length}

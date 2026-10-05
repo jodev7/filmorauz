@@ -2609,7 +2609,6 @@ export default function IngestionPage() {
   // user to re-pick the source and re-query, which was the whole reason
   // they paginated through search in the first place.
   const toast = useToast();
-  const [hasInitialized, setHasInitialized] = useState<boolean>(false);
   const isMounted = useRef(true);
   // Declared before the fetch effects so the flag is set when they run.
   useEffect(() => {
@@ -2702,9 +2701,6 @@ export default function IngestionPage() {
     const saved = localStorage.getItem("ingestion-sync-enabled");
     if (saved !== null) {
       setSyncEnabled(saved === "true");
-      setHasInitialized(true);
-    } else {
-      setHasInitialized(false);
     }
   }, []);
 
@@ -2725,7 +2721,7 @@ export default function IngestionPage() {
   useVisibleInterval(
     pollJobs,
     3000,
-    hasInitialized && !!token && activeTab === "jobs" && syncEnabled
+    !!token && activeTab === "jobs" && syncEnabled
   );
 
 
