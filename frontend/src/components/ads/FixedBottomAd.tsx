@@ -83,7 +83,7 @@ export default function FixedBottomAd({
   return (
     <div
       className="fixed left-0 right-0 z-50 overflow-hidden cursor-pointer relative"
-      style={{ bottom: bottomOffset, aspectRatio: "20 / 3", maxHeight: "180px" }}
+      style={{ bottom: bottomOffset, width: "100%", aspectRatio: "20 / 3", maxHeight: "180px" }}
       onClick={handleAdClick}
       role="link"
       aria-label="Reklama"
