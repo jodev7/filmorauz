@@ -2098,6 +2098,13 @@ def clear_active_download(job_id):
         except Exception as exc:
             logger.warning(f"[CLEAR] kill pid={pid} for job_id={job_id} failed: {exc}")
 
+def _download_file_present(local_path):
+    """True if a completed download's file is still on disk and non-empty."""
+    try:
+        return os.path.getsize(local_path) > 0
+    except OSError:
+        return False
+
 def is_download_active(job_id):
     """Check if download is active for job_id"""
     with _downloads_lock:
@@ -3724,6 +3731,12 @@ class ParserHandler(BaseHTTPRequestHandler):
                         "message": "Download already in progress",
                     })
                     return
+                elif existing.status == "completed" and existing.local_path and not _download_file_present(existing.local_path):
+                    # The worker's janitor deletes the media of failed jobs, but
+                    # this registry lives on. Answering "already_done" for a file
+                    # that is gone made every retry fail the same way forever.
+                    logger.info(f"[PARSER] completed download is gone from disk, starting new — job_id={job_id}, local_path={existing.local_path}")
+                    clear_active_download(job_id)
                 elif existing.status == "completed" and existing.local_path:
                     logger.info(f"[PARSER] duplicate /download request returning existing result — job_id={job_id}, local_path={existing.local_path}")
                     self._send_json({
@@ -5636,6 +5649,11 @@ def _cleanup_stale_state():
                         removed += 1
                 except OSError:
                     pass
+
+            elif entry.startswith(".parts-") and os.path.isdir(os.path.join(DOWNLOAD_DIR, entry)):
+                # Part folders of the parallel fallback; nothing survives a restart.
+                shutil.rmtree(os.path.join(DOWNLOAD_DIR, entry), ignore_errors=True)
+                removed += 1
 
     # Stale progress checkpoints (older than 1h)
     progress_dir = parser_root / "progress"

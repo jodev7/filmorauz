@@ -53,6 +53,14 @@ M3U8_STUCK_TIMEOUT_SECONDS = int(os.environ.get("M3U8_STUCK_TIMEOUT_SECONDS", st
 ARIA2C_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 
+def _encode_cmd_url(url: str) -> str:
+    """Escape a URL for a downloader command line (spaces, non-ASCII) without
+    touching its structure. '?', '&' and '=' must survive: escaping them folds
+    the query into the path, so signed URLs (?token=..&expires=..) get 403/404
+    from aria2c, ffmpeg and curl alike."""
+    return quote(url, safe=":/%?&=#+@!$,;~*'()[]")
+
+
 def _origin_for_referer(referer: Optional[str]) -> str:
     referer = (referer or "").strip()
     if not referer:
@@ -515,7 +523,7 @@ class DDownloaderIntegration:
         save_dir = output_dir if output_dir else self.download_dir
         
         # Build N_m3u8DL-RE command
-        encoded_url = quote(url, safe=':/%')
+        encoded_url = _encode_cmd_url(url)
         cmd = [
             self._n_m3u8dl_path,
             encoded_url,
@@ -805,7 +813,7 @@ class DDownloaderIntegration:
         
         # Build ffmpeg command for HLS download
         # URL-encode the URL to handle spaces and special characters
-        encoded_url = quote(url, safe=':/%')
+        encoded_url = _encode_cmd_url(url)
         cmd = [
             self._ffmpeg_path,
             "-y",  # Overwrite output
@@ -1026,7 +1034,7 @@ class DDownloaderIntegration:
             os.makedirs(output_dir, exist_ok=True)
         
         # Build aria2c command
-        encoded_url = quote(url, safe=':/%')
+        encoded_url = _encode_cmd_url(url)
         cmd = [
             self._aria2c_path,
             encoded_url,
@@ -1299,8 +1307,7 @@ class DDownloaderIntegration:
             except OSError:
                 pass
 
-        # safe="/%" preserves slash separators and existing escapes.
-        encoded_url = quote(url, safe=':/%')
+        encoded_url = _encode_cmd_url(url)
         cmd = [
             "curl",
             "-L",                        # follow redirects
@@ -1501,8 +1508,7 @@ class DDownloaderIntegration:
             if origin:
                 headers_str += f"Origin: {origin}\r\n"
 
-        # safe="/%" preserves slash separators and existing escapes.
-        encoded_url = quote(url, safe=':/%')
+        encoded_url = _encode_cmd_url(url)
         cmd = [
             self._ffmpeg_path,
             "-y",

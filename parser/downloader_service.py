@@ -370,20 +370,32 @@ def _check_range_support(url: str, headers: dict) -> tuple[bool, int]:
 def _download_part(url: str, headers: dict, start_byte: int, end_byte: int, part_path: str, thread_id: int) -> bool:
     """
     Download a part of the file using HTTP Range header.
-    Returns True if successful.
+    Returns True only if the exact requested byte range landed on disk.
     """
     range_headers = headers.copy()
     range_headers['Range'] = f'bytes={start_byte}-{end_byte}'
+    expected = end_byte - start_byte + 1
     
     try:
         logger.info(f"[THREAD-{thread_id}] Downloading range {start_byte}-{end_byte}")
         response = http_session.get(url, headers=range_headers, stream=True, timeout=60, allow_redirects=True)
         response.raise_for_status()
+        # A 200 means the server ignored Range and is sending the whole file;
+        # merging that as one "part" would produce a corrupt output.
+        if response.status_code != 206:
+            logger.error(f"[THREAD-{thread_id}] Range not honoured (HTTP {response.status_code})")
+            return False
         
+        written = 0
         with open(part_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
                 if chunk:
                     f.write(chunk)
+                    written += len(chunk)
+        
+        if written != expected:
+            logger.error(f"[THREAD-{thread_id}] Short part: got {written} of {expected} bytes")
+            return False
         
         logger.info(f"[THREAD-{thread_id}] Completed: {part_path}")
         return True
@@ -399,21 +411,25 @@ def _parallel_download_worker(url: str, headers: dict, part_ranges: list, temp_d
     """
     Worker function that downloads file parts in parallel threads.
     Returns True if all parts downloaded successfully.
+
+    temp_dir must be private to this download: several downloads run at once
+    and the part files are named only by index.
     """
-    global g_downloaded_bytes, g_total_bytes, g_start_time
-    
     threads = []
     part_files = []
+    results = [False] * len(part_ranges)
+    total_bytes = sum(end - start + 1 for start, end in part_ranges)
+    start_time = time.time()
+
+    def _run(i, start, end, part_path):
+        results[i] = _download_part(url, headers, start, end, part_path, i)
     
     # Create part files and start threads
     for i, (start, end) in enumerate(part_ranges):
         part_path = os.path.join(temp_dir, f'part_{i}.tmp')
         part_files.append(part_path)
         
-        t = threading.Thread(
-            target=_download_part,
-            args=(url, headers, start, end, part_path, i)
-        )
+        t = threading.Thread(target=_run, args=(i, start, end, part_path))
         threads.append(t)
     
     # Start all threads
@@ -431,20 +447,17 @@ def _parallel_download_worker(url: str, headers: dict, part_ranges: list, temp_d
             if os.path.exists(part_file):
                 total_downloaded += os.path.getsize(part_file)
 
-        with progress_lock:
-            g_downloaded_bytes = total_downloaded
-
         # Report when +1% gained OR 2s elapsed (avoid per-chunk DB writes)
         current_time = time.time()
-        elapsed = current_time - g_start_time
-        if elapsed > 0 and g_total_bytes > 0:
-            speed = g_downloaded_bytes / elapsed
-            eta = int((g_total_bytes - g_downloaded_bytes) / speed) if speed > 0 else 0
-            progress = int((g_downloaded_bytes / g_total_bytes) * 100)
+        elapsed = current_time - start_time
+        if elapsed > 0 and total_bytes > 0:
+            speed = total_downloaded / elapsed
+            eta = int((total_bytes - total_downloaded) / speed) if speed > 0 else 0
+            progress = int((total_downloaded / total_bytes) * 100)
 
             if progress > last_reported_progress or current_time - last_update_time >= 2.0:
                 if progress_callback:
-                    progress_callback(progress, g_downloaded_bytes, g_total_bytes, speed, eta)
+                    progress_callback(progress, total_downloaded, total_bytes, speed, eta)
                 last_reported_progress = progress
                 last_update_time = current_time
         
@@ -454,32 +467,29 @@ def _parallel_download_worker(url: str, headers: dict, part_ranges: list, temp_d
     for t in threads:
         t.join()
     
-    # Verify all parts exist
-    for part_file in part_files:
-        if not os.path.exists(part_file):
-            logger.error(f"[DOWNLOAD] Missing part file: {part_file}")
+    # Every part must have delivered its full range
+    for i, ok in enumerate(results):
+        if not ok:
+            logger.error(f"[DOWNLOAD] Part {i} failed: {part_files[i]}")
             return False
     
     return True
 
 
 def _merge_parts(part_files: list, output_path: str) -> bool:
-    """Merge all part files into final output file."""
+    """Merge all part files into final output file.
+
+    The merge is written next to the parts and renamed into place, so the
+    output path only ever holds a complete file — the worker treats any
+    non-empty file at that path as a finished download.
+    """
+    merged_path = os.path.join(os.path.dirname(part_files[0]), 'merged.tmp')
     try:
-        with open(output_path, 'wb') as outfile:
+        with open(merged_path, 'wb') as outfile:
             for part_file in part_files:
                 with open(part_file, 'rb') as infile:
-                    outfile.write(infile.read())
-        
-        # Clean up part files after successful merge
-        logger.info(f"[DOWNLOAD] Cleaning up {len(part_files)} temporary part files")
-        for part_file in part_files:
-            try:
-                os.remove(part_file)
-                logger.info(f"[DOWNLOAD] Removed temp file: {part_file}")
-            except Exception as e:
-                logger.warning(f"[DOWNLOAD] Failed to remove temp file {part_file}: {e}")
-        
+                    shutil.copyfileobj(infile, outfile, CHUNK_SIZE)
+        os.replace(merged_path, output_path)
         return True
     except Exception as e:
         logger.error(f"[DOWNLOAD] Failed to merge parts: {e}")
@@ -861,12 +871,6 @@ class DownloaderService:
     def _parallel_download_mp4(self, url: str, output_path: str, total_size: int, headers: dict, 
                                  job_id: str | None, backend_job_id: str | None, progress_callback=None) -> str:
         """Download using parallel threads with HTTP Range requests."""
-        global g_downloaded_bytes, g_total_bytes, g_start_time
-        
-        g_total_bytes = total_size
-        g_downloaded_bytes = 0
-        g_start_time = time.time()
-        
         # Initialize progress
         if job_id:
             self.progress.update(job_id, {
@@ -906,8 +910,15 @@ class DownloaderService:
         
         logger.info(f"[DOWNLOAD] Part ranges: {part_ranges}")
         
-        # Create temp directory for parts
-        temp_dir = os.path.dirname(output_path)
+        # Private temp directory for this download's parts. Sharing the
+        # downloads folder made concurrent downloads overwrite each other's
+        # part_N.tmp files and produced full-size but corrupt videos.
+        temp_dir = os.path.join(
+            os.path.dirname(output_path),
+            f".parts-{os.path.basename(output_path)}",
+        )
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        os.makedirs(temp_dir, exist_ok=True)
         
         # Progress callback
         def on_progress(progress: int, downloaded: int, total: int, speed: float, eta: int):
@@ -939,30 +950,28 @@ class DownloaderService:
                 })
         
         # Run parallel download
-        success = _parallel_download_worker(
-            url, headers, part_ranges, temp_dir, num_threads,
-            job_id, backend_job_id, on_progress
-        )
+        try:
+            success = _parallel_download_worker(
+                url, headers, part_ranges, temp_dir, num_threads,
+                job_id, backend_job_id, on_progress
+            )
+            
+            if not success:
+                raise Exception("Parallel download failed - falling back to single-thread")
+            
+            # Merge parts
+            logger.info("[DOWNLOAD] Merging parts...")
+            part_files = [os.path.join(temp_dir, f'part_{i}.tmp') for i in range(num_threads)]
+            
+            if not _merge_parts(part_files, output_path):
+                raise Exception("Failed to merge downloaded parts")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
         
-        if not success:
-            raise Exception("Parallel download failed - falling back to single-thread")
-        
-        # Merge parts
-        logger.info("[DOWNLOAD] Merging parts...")
-        part_files = [os.path.join(temp_dir, f'part_{i}.tmp') for i in range(num_threads)]
-        
-        if not _merge_parts(part_files, output_path):
-            raise Exception("Failed to merge downloaded parts")
-        
-        # Clean up temporary part files after successful merge
-        logger.info("[DOWNLOAD] Cleaning up temporary part files...")
-        for part_file in part_files:
-            try:
-                if os.path.exists(part_file):
-                    os.remove(part_file)
-                    logger.info(f"[DOWNLOAD] Removed: {part_file}")
-            except Exception as e:
-                logger.warning(f"[DOWNLOAD] Failed to remove part file {part_file}: {e}")
+        merged_size = os.path.getsize(output_path)
+        if merged_size != total_size:
+            os.remove(output_path)
+            raise Exception(f"Merged file is {merged_size} bytes, expected {total_size}")
         
         output_path = _ensure_absolute_file_path(output_path)
         # Final progress update
