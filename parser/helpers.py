@@ -810,11 +810,13 @@ def select_best_stream_url(urls: List[Dict[str, str]]) -> Optional[Dict[str, str
 
 
 FAYLLAR_SIGN_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-_FAYLLAR_RE = re.compile(r"^https?://(?:[a-z0-9-]+\.)?fayllar1\.ru/", re.I)
+# asilmedia's file CDN. It moved from fayllar1.ru to fayllar.com on 2026-10-07;
+# the sign endpoint accepts either, so match the family rather than one domain.
+_FAYLLAR_RE = re.compile(r"^https?://(?:[a-z0-9-]+\.)?(fayllar\d*\.[a-z]{2,})/", re.I)
 
 
 def sign_fayllar_url(url: str, referer: str = "") -> str:
-    """Return a hotlink-signed fayllar1.ru URL, or ``url`` unchanged.
+    """Return a hotlink-signed fayllar CDN URL, or ``url`` unchanged.
 
     Since 2026-09 asilmedia's CDN (fayllar1.ru) answers 403 to raw file URLs.
     The site's player.js exchanges each raw URL at ``/fayllar-sign.php`` for
@@ -830,7 +832,8 @@ def sign_fayllar_url(url: str, referer: str = "") -> str:
     call this right before validating/downloading. Fail-open: on any error
     the input URL is returned.
     """
-    if not url or not _FAYLLAR_RE.match(url):
+    host_match = _FAYLLAR_RE.match(url or "")
+    if not host_match:
         return url
     import requests
     from urllib.parse import unquote, urlsplit, urlunsplit
@@ -842,9 +845,10 @@ def sign_fayllar_url(url: str, referer: str = "") -> str:
         ref_host = "asilmedia.org"
 
     parts = urlsplit(url)
-    # Strip a previous token; the sign endpoint keys on the raw fayllar1.ru URL
-    # (bare host, unencoded path), exactly as it appears on the detail page.
-    raw = urlunsplit((parts.scheme or "https", "fayllar1.ru", unquote(parts.path), "", ""))
+    # Strip a previous token; the sign endpoint keys on the raw URL (bare host
+    # without the NN. node prefix, unencoded path), exactly as it appears on
+    # the detail page.
+    raw = urlunsplit((parts.scheme or "https", host_match.group(1).lower(), unquote(parts.path), "", ""))
     try:
         resp = requests.get(
             f"https://{ref_host}/fayllar-sign.php",
