@@ -83,7 +83,7 @@ export default function FixedBottomAd({
   return (
     <div
       className="fixed left-0 right-0 z-50 overflow-hidden cursor-pointer relative"
-      style={{ bottom: bottomOffset, height: "180px" }}
+      style={{ bottom: bottomOffset, aspectRatio: "20 / 3", maxHeight: "180px" }}
       onClick={handleAdClick}
       role="link"
       aria-label="Reklama"
@@ -91,7 +91,7 @@ export default function FixedBottomAd({
       {isVideo ? (
         <video
           src={normalizeMediaUrl(mediaUrl, "")}
-          className="w-full h-full object-cover"
+          className="absolute inset-0 w-full h-full object-cover"
           autoPlay
           muted
           loop

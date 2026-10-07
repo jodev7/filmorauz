@@ -19,9 +19,12 @@ interface WebsiteAdSlotProps {
   lazy?: boolean;
 }
 
+// Slots keep the creative's own ratio (the sizes the admin editor asks for) so
+// the whole banner stays visible on narrow screens; the height cap keeps the
+// previous desktop size on containers wider than the creative.
 const SLOT_HEIGHT: Record<string, string> = {
-  banner: "h-[300px]",
-  inline: "h-[400px]",
+  banner: "aspect-[4/1] max-h-[300px]",
+  inline: "aspect-[3/1] max-h-[400px]",
   card:   "h-[200px]",
 };
 export default function WebsiteAdSlot({
@@ -133,7 +136,7 @@ export default function WebsiteAdSlot({
   }
 
   // ── Banner / Inline ────────────────────────────────────────────────────────
-  const mediaHeight = SLOT_HEIGHT[variant] ?? "h-[300px]";
+  const mediaHeight = SLOT_HEIGHT[variant] ?? SLOT_HEIGHT.banner;
   const media = getWebsiteAdMedia(ad, variant)!;
 
   return (
