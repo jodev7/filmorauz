@@ -117,7 +117,7 @@ export default function WebsiteAdSlot({
         aria-label="Reklama"
       >
         <div
-          className="relative w-full max-w-sm rounded-xl overflow-hidden shadow-2xl border border-brand-border"
+          className="relative w-full max-w-[600px] rounded-xl overflow-hidden shadow-2xl border border-brand-border"
           onClick={(e) => e.stopPropagation()}
         >
           <button
@@ -127,7 +127,7 @@ export default function WebsiteAdSlot({
           >
             <X size={14} aria-hidden="true" />
           </button>
-          <div className="relative w-full h-[500px] overflow-hidden cursor-pointer" onClick={handleClick}>
+          <div className="relative w-full aspect-[3/2] max-h-[80vh] overflow-hidden cursor-pointer" onClick={handleClick}>
             <AdMedia url={media.url} type={media.type} />
           </div>
         </div>
