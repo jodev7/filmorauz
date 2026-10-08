@@ -4525,6 +4525,8 @@ export interface Ad {
   fixed_bottom_media_type?: "image" | "video";
   popup_media_url?: string;
   popup_media_type?: "image" | "video";
+  background_media_url?: string;
+  background_media_type?: "image" | "video";
   player_overlay_media_url?: string;
   player_overlay_media_type?: "image" | "video";
   // Telegram shared media
@@ -4585,6 +4587,8 @@ export interface AdInput {
   fixed_bottom_media_type?: "image" | "video";
   popup_media_url?: string;
   popup_media_type?: "image" | "video";
+  background_media_url?: string;
+  background_media_type?: "image" | "video";
   player_overlay_media_url?: string;
   player_overlay_media_type?: "image" | "video";
   // Telegram shared media

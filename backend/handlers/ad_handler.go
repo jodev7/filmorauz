@@ -104,6 +104,8 @@ func (h *AdHandler) AdminCreateAd(c *gin.Context) {
 		FixedBottomMediaType    string   `json:"fixed_bottom_media_type"`
 		PopupMediaURL           string   `json:"popup_media_url"`
 		PopupMediaType          string   `json:"popup_media_type"`
+		BackgroundMediaURL      string   `json:"background_media_url"`
+		BackgroundMediaType     string   `json:"background_media_type"`
 		PlayerOverlayMediaURL   string   `json:"player_overlay_media_url"`
 		PlayerOverlayMediaType  string   `json:"player_overlay_media_type"`
 		TelegramMediaURL        string   `json:"telegram_media_url"`
@@ -167,6 +169,8 @@ func (h *AdHandler) AdminCreateAd(c *gin.Context) {
 		FixedBottomMediaType:    req.FixedBottomMediaType,
 		PopupMediaURL:           sanitizeAdMediaURL(req.PopupMediaURL),
 		PopupMediaType:          req.PopupMediaType,
+		BackgroundMediaURL:      sanitizeAdMediaURL(req.BackgroundMediaURL),
+		BackgroundMediaType:     req.BackgroundMediaType,
 		PlayerOverlayMediaURL:   sanitizeAdMediaURL(req.PlayerOverlayMediaURL),
 		PlayerOverlayMediaType:  req.PlayerOverlayMediaType,
 		TelegramMediaURL:        sanitizeAdMediaURL(req.TelegramMediaURL),
@@ -216,6 +220,8 @@ func (h *AdHandler) AdminUpdateAd(c *gin.Context) {
 		FixedBottomMediaType    string   `json:"fixed_bottom_media_type"`
 		PopupMediaURL           string   `json:"popup_media_url"`
 		PopupMediaType          string   `json:"popup_media_type"`
+		BackgroundMediaURL      string   `json:"background_media_url"`
+		BackgroundMediaType     string   `json:"background_media_type"`
 		PlayerOverlayMediaURL   string   `json:"player_overlay_media_url"`
 		PlayerOverlayMediaType  string   `json:"player_overlay_media_type"`
 		TelegramMediaURL        string   `json:"telegram_media_url"`
@@ -270,6 +276,8 @@ func (h *AdHandler) AdminUpdateAd(c *gin.Context) {
 	update["fixed_bottom_media_type"] = req.FixedBottomMediaType
 	update["popup_media_url"] = sanitizeAdMediaURL(req.PopupMediaURL)
 	update["popup_media_type"] = req.PopupMediaType
+	update["background_media_url"] = sanitizeAdMediaURL(req.BackgroundMediaURL)
+	update["background_media_type"] = req.BackgroundMediaType
 	update["player_overlay_media_url"] = sanitizeAdMediaURL(req.PlayerOverlayMediaURL)
 	update["player_overlay_media_type"] = req.PlayerOverlayMediaType
 	update["telegram_media_url"] = sanitizeAdMediaURL(req.TelegramMediaURL)

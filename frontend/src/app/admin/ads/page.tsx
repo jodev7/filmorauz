@@ -64,6 +64,7 @@ function thumbOf(ad: Ad): { url: string; video: boolean } | null {
     [ad.banner_media_url, ad.banner_media_type],
     [ad.inline_media_url, ad.inline_media_type],
     [ad.popup_media_url, ad.popup_media_type],
+    [ad.background_media_url, ad.background_media_type],
     [ad.telegram_media_url, ad.telegram_media_type],
     [ad.image_url, "image"],
     [ad.player_overlay_media_url, ad.player_overlay_media_type],

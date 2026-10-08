@@ -10,6 +10,7 @@ import { I18nProvider } from "@/lib/i18n";
 import { AdSlotProvider } from "@/components/ads/AdSlotContext";
 import BanGuardWrapper from "@/components/BanGuardWrapper";
 import FixedBottomAd from "@/components/ads/FixedBottomAd";
+import BackgroundAd from "@/components/ads/BackgroundAd";
 import InAppBrowserBanner from "@/components/InAppBrowserBanner";
 import PresencePinger from "@/components/PresencePinger";
 import AnnouncementGate from "@/components/AnnouncementGate";
@@ -192,6 +193,7 @@ export default function RootLayout({
                 <PwaSupport />
                 <InAppBrowserBanner />
                 {children}
+                <BackgroundAd />
                 <FixedBottomAd placement="website_fixed_bottom" />
                 <AnnouncementGate />
                 <SearchOverlay />

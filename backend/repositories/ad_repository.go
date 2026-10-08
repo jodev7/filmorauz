@@ -314,7 +314,7 @@ func (r *AdRepository) StripLegacyMediaPrefix() (int, error) {
 	fields := []string{
 		"image_url", "video_url",
 		"banner_media_url", "inline_media_url",
-		"fixed_bottom_media_url", "popup_media_url",
+		"fixed_bottom_media_url", "popup_media_url", "background_media_url",
 		"player_overlay_media_url", "telegram_media_url",
 	}
 

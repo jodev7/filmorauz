@@ -27,6 +27,8 @@ export const emptyAdInput = (): AdInput => ({
   fixed_bottom_media_type: "image",
   popup_media_url: "",
   popup_media_type: "image",
+  background_media_url: "",
+  background_media_type: "image",
   player_overlay_media_url: "",
   player_overlay_media_type: "video",
   telegram_media_url: "",
@@ -60,6 +62,8 @@ export function adToInput(ad: Ad): AdInput {
     fixed_bottom_media_type: ad.fixed_bottom_media_type || "image",
     popup_media_url: ad.popup_media_url || "",
     popup_media_type: ad.popup_media_type || "image",
+    background_media_url: ad.background_media_url || "",
+    background_media_type: ad.background_media_type || "image",
     player_overlay_media_url: ad.player_overlay_media_url || "",
     player_overlay_media_type: ad.player_overlay_media_type || "image",
     telegram_media_url: ad.telegram_media_url || "",
@@ -74,7 +78,7 @@ export function adToInput(ad: Ad): AdInput {
 }
 
 const PLACEMENTS = [
-  { value: "website", label: "Sayt", desc: "Banner, popup, player", icon: Globe },
+  { value: "website", label: "Sayt", desc: "Banner, popup, fon, player", icon: Globe },
   { value: "telegram_channel", label: "Telegram kanal", desc: "Kanallarga post", icon: Send },
   { value: "telegram_bot", label: "Telegram bot", desc: "Bot foydalanuvchilariga", icon: Bot },
 ];
@@ -84,6 +88,7 @@ const WEBSITE_SLOTS: { slot: keyof AdInput; typeKey: keyof AdInput; label: strin
   { slot: "inline_media_url", typeKey: "inline_media_type", label: "Kontent orasida", size: "1200×400 · 3:1", aspect: "aspect-[3/1]" },
   { slot: "fixed_bottom_media_url", typeKey: "fixed_bottom_media_type", label: "Pastki qotirilgan", size: "1200×180", aspect: "aspect-[20/3]" },
   { slot: "popup_media_url", typeKey: "popup_media_type", label: "Popup oyna", size: "900×600 · 3:2", aspect: "aspect-[3/2]" },
+  { slot: "background_media_url", typeKey: "background_media_type", label: "Sayt foni (ikki yon)", size: "1920×1080 · o'rtasi yopiladi", aspect: "aspect-video" },
   { slot: "player_overlay_media_url", typeKey: "player_overlay_media_type", label: "Player ichida (video)", size: "65 soniyagacha", aspect: "aspect-video", video: true },
 ];
 

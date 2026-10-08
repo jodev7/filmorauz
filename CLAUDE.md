@@ -293,6 +293,8 @@ Backend calls parser at `PARSER_SERVICE_URL` (default: `http://127.0.0.1:8082`).
 
 3. **Popup ad** is mounted in `app/page.tsx` (home page only). The player **pre-roll** (once after play; image 15 s, video its length up to 65 s) is `PlayerOverlayAd` in `WatchPageClient`; **mid-rolls** are inside `VideoPlayer` (HLS player) and use the same `watch_player_overlay` video ads (played to the end, max 65 s; admin upload allows up to 65 s). Timing lives in `lib/ad-schedule.ts`: every 10 min of actually watched time, or after 3 timeline scrubs within 1 min, never sooner than 3 min after the previous break.
 
+3a. **Background (branding) ad** — `components/ads/BackgroundAd.tsx`, mounted in `app/layout.tsx`. Uses `background_media_url` (image, 1920×1080) and shows it through the two gutters beside the 1440px content; only on viewports ≥ 1600px, never on `/admin` or `/premium`, never for premium users. No fallback to other slots.
+
 4. **Ad media field priority** — new-style ads use slot-specific fields (`banner_media_url` etc.), not the old `image_url`/`video_url`. Always use the fallback chain.
 
 5. **Telegram media in DEV** — use `resolveTelegramMediaSource()` which detects localhost paths and sends as local file. Never pass localhost URLs directly to Telegram API.

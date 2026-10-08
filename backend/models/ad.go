@@ -37,6 +37,8 @@ type Ad struct {
 	FixedBottomMediaType   string `bson:"fixed_bottom_media_type,omitempty" json:"fixed_bottom_media_type,omitempty"`
 	PopupMediaURL          string `bson:"popup_media_url,omitempty" json:"popup_media_url,omitempty"`
 	PopupMediaType         string `bson:"popup_media_type,omitempty" json:"popup_media_type,omitempty"`
+	BackgroundMediaURL     string `bson:"background_media_url,omitempty" json:"background_media_url,omitempty"`
+	BackgroundMediaType    string `bson:"background_media_type,omitempty" json:"background_media_type,omitempty"`
 	PlayerOverlayMediaURL  string `bson:"player_overlay_media_url,omitempty" json:"player_overlay_media_url,omitempty"`
 	PlayerOverlayMediaType string `bson:"player_overlay_media_type,omitempty" json:"player_overlay_media_type,omitempty"`
 
