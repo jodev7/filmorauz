@@ -148,8 +148,10 @@ func parseInt64(raw string) int64 {
 func loadRequiredChannels() []models.RequiredChannel {
 	var channels []models.RequiredChannel
 
-	// Known channel keys - can be extended
-	channelKeys := []string{"anime", "serials", "drama", "main", "fantasy"}
+	// Only the official channel gates login. The genre channels (anime, serials,
+	// drama, fantasy) used to be required too; they may stay in .env, but are
+	// no longer checked. Add a key back here to require that channel again.
+	channelKeys := []string{"main"}
 
 	for _, key := range channelKeys {
 		idEnv := channelEnvPrefix + strings.ToUpper(key) + "_ID"

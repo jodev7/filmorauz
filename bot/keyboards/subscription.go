@@ -52,9 +52,9 @@ func BuildDynamicSubscriptionKeyboard(channels []models.RequiredChannel) tgbotap
 func BuildSubscriptionMessage() string {
 	return `❌ <b>Kanalga a'zo bo'lmagansiz!</b>
 
-Botdan foydalanish uchun quyidagi kanallarga a'zo bo'ling:
+Botdan foydalanish uchun rasmiy kanalimizga a'zo bo'ling:
 
-Kanallarga a'zo bo'lgach, "✅ Tekshirish" tugmasini bosing.`
+Kanalga a'zo bo'lgach, "✅ Tekshirish" tugmasini bosing.`
 }
 
 // BuildSubscriptionSuccessMessage returns the success message after verification
@@ -291,7 +291,7 @@ Qayta urinib ko'ring yoki saytdan qaytadan kirishga harakat qiling.`
 func BuildAuthPendingMessage(missingChannels []string) string {
 	var msg string
 	if len(missingChannels) > 0 {
-		msg = `❌ <b>Avval quyidagi kanallarga obuna bo'ling:</b>
+		msg = `❌ <b>Avval rasmiy kanalimizga obuna bo'ling:</b>
 
 `
 		for _, ch := range missingChannels {
@@ -301,7 +301,7 @@ func BuildAuthPendingMessage(missingChannels []string) string {
 	} else {
 		msg = `❌ <b>Obuna tekshirilmadi.</b>
 
-/start buyrug'ini yuboring va kanallarga obuna bo'ling.`
+/start buyrug'ini yuboring va rasmiy kanalimizga obuna bo'ling.`
 	}
 	return msg
 }

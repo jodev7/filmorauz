@@ -373,13 +373,13 @@ func (b *Bot) handleStart(chatID int64, userID int64, from *tgbotapi.User) {
 			userID, len(status.MissingChans))
 
 		// Send subscription required message FIRST (before welcome)
-		subscriptionText := "🎬 FilmoraUz Rasmiy Botiga xush kelibsiz!\n\n❌ Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:"
+		subscriptionText := "🎬 FilmoraUz Rasmiy Botiga xush kelibsiz!\n\n❌ Botdan foydalanish uchun rasmiy kanalimizga obuna bo'ling:"
 		b.sendMessage(chatID, subscriptionText)
 
 		// Send inline keyboard with ONLY missing channel links and check button
 		if len(status.MissingChans) > 0 {
 			keyboard := keyboards.BuildDynamicSubscriptionKeyboard(status.MissingChans)
-			msg := tgbotapi.NewMessage(chatID, "Quyida siz hali a'zo bo'lmagan kanallar ko'rsatilgan.\nObuna bo'lgach, '✅ Tekshirish' tugmasini bosing:")
+			msg := tgbotapi.NewMessage(chatID, "Rasmiy kanalimizga obuna bo'lgach, '✅ Tekshirish' tugmasini bosing:")
 			msg.ReplyMarkup = keyboard
 			b.api.Send(msg)
 		}
@@ -770,7 +770,7 @@ func (b *Bot) sendSubscriptionRequest(chatID int64) {
 	channels := b.subscriptionService.GetRequiredChannels()
 	if len(channels) > 0 {
 		keyboard := keyboards.BuildDynamicSubscriptionKeyboard(channels)
-		msg := tgbotapi.NewMessage(chatID, "Kanallarga a'zo bo'ling va tekshiring:")
+		msg := tgbotapi.NewMessage(chatID, "Kanalga a'zo bo'ling va tekshiring:")
 		msg.ReplyMarkup = keyboard
 		b.api.Send(msg)
 	}
@@ -783,7 +783,7 @@ func (b *Bot) sendSubscriptionRequestWithMissing(chatID int64, missingChannels [
 	// Send inline keyboard with ONLY missing channel links
 	if len(missingChannels) > 0 {
 		keyboard := keyboards.BuildDynamicSubscriptionKeyboard(missingChannels)
-		msg := tgbotapi.NewMessage(chatID, "Quyida siz hali a'zo bo'lmagan kanallar ko'rsatilgan.\nObuna bo'lgach, '✅ Tekshirish' tugmasini bosing:")
+		msg := tgbotapi.NewMessage(chatID, "Rasmiy kanalimizga obuna bo'lgach, '✅ Tekshirish' tugmasini bosing:")
 		msg.ReplyMarkup = keyboard
 		b.api.Send(msg)
 	}
@@ -997,7 +997,7 @@ func (b *Bot) handleLogin(chatID int64, userID int64, user *tgbotapi.User, authC
 
 		if len(status.MissingChans) > 0 {
 			keyboard := keyboards.BuildDynamicSubscriptionKeyboard(status.MissingChans)
-			msg := tgbotapi.NewMessage(chatID, "Quyida siz hali a'zo bo'lmagan kanallar ko'rsatilgan.\nObuna bo'lgach, qayta /start buyrug'ini yuboring:")
+			msg := tgbotapi.NewMessage(chatID, "Rasmiy kanalimizga obuna bo'lgach, qayta /start buyrug'ini yuboring:")
 			msg.ReplyMarkup = keyboard
 			b.api.Send(msg)
 		}
