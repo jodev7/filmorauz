@@ -23,6 +23,7 @@ import { VideoSourceType, Ad, getAdsByPlacement, getAdsForWebsite, recordAdImpre
 import { pickWeightedRandomAd } from "@/lib/ads-utils";
 import { PlayerAdSchedule } from "@/lib/player-ad-schedule";
 import PlayerVideoAd from "@/components/ads/PlayerVideoAd";
+import PlayerPauseAd from "@/components/ads/PlayerPauseAd";
 import { PremiumBadge, isUserPremium } from "@/components/PremiumComponents";
 import { useAuth } from "@/lib/auth-context";
 import { logger } from "@/lib/logger";
@@ -754,7 +755,7 @@ function HLSPlayer({
       setAdIndex(0);
       opened = true;
       setAdActive(true);
-      void recordAdImpression(ad.id).catch(() => {});
+      void recordAdImpression(ad.id, "player").catch(() => {});
     } finally {
       // The active overlay keeps the lock until it finishes.
       if (generation === adGenerationRef.current && !opened) adBusyRef.current = false;
@@ -1385,6 +1386,12 @@ function HLSPlayer({
       {adActive && adQueue[adIndex] && (
         <PlayerVideoAd key={adQueue[adIndex].ad.id} ad={adQueue[adIndex].ad}
           url={adQueue[adIndex].url} volume={volume} onComplete={finishAdBreak} />
+      )}
+
+      {!isPremiumUser && (
+        <PlayerPauseAd
+          paused={!playing && !adActive && !scrubbing && !error && currentTime > 1 && duration > 0 && currentTime < duration - 1}
+        />
       )}
 
       <div className="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-2">

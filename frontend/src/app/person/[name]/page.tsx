@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { Clapperboard, Film, CalendarRange, ChevronLeft, Tv } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import MovieCard from "@/components/MovieCard";
 import SeriesCard from "@/components/SeriesCard";
 import JsonLd from "@/components/JsonLd";
@@ -171,6 +172,8 @@ export default async function PersonPage({ params }: Props) {
               </div>
             </div>
           </header>
+
+          <WebsiteAdSlot placement="person_page_banner" variant="banner" className="mb-10" />
 
           <Section title="ROLLARDA" icon={<Film className="text-orange-500" size={24} />} movies={credits.acted} />
           <Section title="REJISSYORLIK" icon={<Clapperboard className="text-orange-500" size={24} />} movies={credits.directed} />

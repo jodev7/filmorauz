@@ -9,7 +9,8 @@ import { openSearch } from "@/lib/search-overlay";
 // Pages where a bottom bar would get in the way (players, admin, rooms).
 const HIDDEN_PREFIXES = ["/admin", "/watch/", "/watch-room/", "/episode/", "/banned"];
 
-function hidden(pathname: string | null): boolean {
+/** True on routes where the phone tab bar is not rendered. */
+export function isBottomNavHidden(pathname: string | null): boolean {
   if (!pathname) return true;
   if (/^\/series\/[^/]+\/season\/\d+\/episode\//.test(pathname)) return true;
   return HIDDEN_PREFIXES.some((p) => pathname.startsWith(p));
@@ -19,7 +20,7 @@ function hidden(pathname: string | null): boolean {
 export default function BottomNav() {
   const pathname = usePathname();
   const { isAuthenticated, user } = useAuth();
-  if (hidden(pathname)) return null;
+  if (isBottomNavHidden(pathname)) return null;
 
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname?.startsWith(href.split("?")[0]) ?? false);
 

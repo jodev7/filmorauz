@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { recordAdImpression, recordAdClick } from "@/lib/api";
+import { recordAdClick } from "@/lib/api";
 import { isAdsAllowedForRoute, isUserPremium } from "@/lib/ads-utils";
 import { useAuth } from "@/lib/auth-context";
 import { useAdSlot } from "@/components/ads/AdSlotContext";
+import { useRotatedAd, useViewableImpression } from "@/components/ads/ad-hooks";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 
 const PLACEMENTS = ["website_background", "website"];
@@ -27,7 +28,7 @@ export default function BackgroundAd() {
   const { user, isLoading: authLoading } = useAuth();
   const { ensurePlacements, getMergedAds } = useAdSlot();
   const [wide, setWide] = useState(false);
-  const impressedRef = useRef<Set<string>>(new Set());
+  const leftRef = useRef<HTMLAnchorElement>(null);
 
   useEffect(() => {
     const mq = window.matchMedia(WIDE_QUERY);
@@ -45,17 +46,13 @@ export default function BackgroundAd() {
     ensurePlacements(PLACEMENTS).catch(() => {});
   }, [ensurePlacements, shouldShow]);
 
-  // Backend returns ads ordered by priority DESC, so the first one wins.
-  const ad = useMemo(
-    () => getMergedAds(PLACEMENTS).find((a) => a.background_media_url),
+  const ads = useMemo(
+    () => getMergedAds(PLACEMENTS).filter((a) => a.background_media_url),
     [getMergedAds],
   );
+  const ad = useRotatedAd(ads);
 
-  useEffect(() => {
-    if (!shouldShow || !ad || impressedRef.current.has(ad.id)) return;
-    impressedRef.current.add(ad.id);
-    recordAdImpression(ad.id).catch(() => {});
-  }, [ad, shouldShow]);
+  useViewableImpression(leftRef, shouldShow ? ad?.id : undefined, "background");
 
   if (!shouldShow || !ad) return null;
 
@@ -78,7 +75,8 @@ export default function BackgroundAd() {
       href={ad.target_url}
       target="_blank"
       rel="noopener noreferrer nofollow sponsored"
-      onClick={() => recordAdClick(ad.id).catch(() => {})}
+      ref={side === "left" ? leftRef : undefined}
+      onClick={() => recordAdClick(ad.id, "background").catch(() => {})}
       aria-label={`Reklama: ${ad.title}`}
       tabIndex={side === "left" ? 0 : -1}
       className={`pointer-events-auto absolute inset-y-0 block ${side === "left" ? "left-0" : "right-0"}`}

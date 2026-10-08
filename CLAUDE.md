@@ -142,14 +142,11 @@ Ads have two generations of fields:
 - **Old (Telegram-only):** `image_url`, `video_url` — used for initial Telegram delivery
 - **New (website slots):** `telegram_media_url`, `banner_media_url`, `inline_media_url`, `fixed_bottom_media_url`, `popup_media_url`, `player_overlay_media_url` — slot-specific
 
-**Website placements:** `homepage_top_banner`, `homepage_inline_block_1`, `homepage_popup`, `watch_page_inline_block`, `watch_player_overlay`, `website_fixed_bottom`
+**Website placements:** the admin editor only sets `website`, and every slot also queries `website`, so per-page names (`homepage_top_banner`, `list_page_banner`, `grid_inline_block`, `website_popup`, `watch_player_overlay`, `watch_player_pause`, `website_fixed_bottom`, …) only matter for ads targeted by hand.
 
-**Media fallback chain** (frontend resolves in order):
-- Banner → `banner_media_url || image_url`
-- Inline → `inline_media_url || banner_media_url || image_url`
-- Popup → `popup_media_url || banner_media_url || inline_media_url || image_url`
-- Fixed bottom → `fixed_bottom_media_url || banner_media_url || image_url`
-- Player overlay → `player_overlay_media_url || banner_media_url || image_url`
+**Slot media** (`lib/website-ad-media.ts`, covered by `npm run test:ads`): each slot shows only its own creative — banner → `banner_media_url || image_url`, inline → `inline_media_url`, popup → `popup_media_url`, fixed bottom → `fixed_bottom_media_url`, background → `background_media_url`. On phones (< 640px) the optional `*_mobile_media_url` image of the same slot wins (banner 2:1, inline 4:3, fixed bottom 4:1, popup 3:4). Player pre-roll → `player_overlay_media_url || banner_media_url || image_url`; pause card → popup, else inline, else banner image.
+
+**Stats:** `POST /ads/:id/impression|click?slot=` (`banner`, `inline`, `popup`, `fixed_bottom`, `background`, `player`, `player_pause` — `models.AdSlots`) bumps the totals and `slot_stats.<slot>`. Website impressions are "viewable": `useViewableImpression` (`components/ads/ad-hooks.ts`) fires once ≥ 50% of the creative was on screen for 1 s. Several eligible ads share a slot by priority-weighted random pick per page view (`useRotatedAd`), which is how the admin "Nusxa olish" copy is used for A/B tests.
 
 **MIME validation** (`upload_handler.go`): 3-stage cascade — part Content-Type header → file extension → `http.DetectContentType` (byte sniff). Allowed: `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `video/mp4`, `video/webm`, `video/quicktime`.
 
@@ -289,9 +286,9 @@ Backend calls parser at `PARSER_SERVICE_URL` (default: `http://127.0.0.1:8082`).
 
 1. **`FindByTelegramID` returns `(nil, nil)` for missing users** — always check `existingUser == nil`, never `err != nil` alone.
 
-2. **Ad components do NOT use `shouldShowAds()`** — `WebsiteAdSlot`, `FixedBottomAd`, `PlayerOverlayAd` always fetch and render regardless of user premium status or route.
+2. **Ads never render for premium users or on `/admin` and `/premium`** — every ad component checks `isUserPremium` + `isAdsAllowedForRoute` (`lib/ads-utils.ts`) itself; keep that when adding a slot.
 
-3. **Popup ad** is mounted in `app/page.tsx` (home page only). The player **pre-roll** (once after play; image 15 s, video its length up to 65 s) is `PlayerOverlayAd` in `WatchPageClient`; **mid-rolls** are inside `VideoPlayer` (HLS player) and use the same `watch_player_overlay` video ads (played to the end, max 65 s; admin upload allows up to 65 s). Timing lives in `lib/ad-schedule.ts`: every 10 min of actually watched time, or after 3 timeline scrubs within 1 min, never sooner than 3 min after the previous break.
+3. **Global ads** live in `app/layout.tsx`: `FixedBottomAd` (anchor bar, 600×90 desktop / full width above the phone tab bar, closable per page), `PopupAd` (any non-player page, at most once per 3 min per tab via `sessionStorage`) and `BackgroundAd`. In-page slots are `WebsiteAdSlot` (banner/inline) and `AdGridBreak` (inline row every 12 posters; `isAdGridBreak` is in `lib/ad-grid.ts` because server pages call it). `PlayerPauseAd` (inside `VideoPlayer`) shows an image card while the film is paused. The player **pre-roll** (once after play; image 15 s, video its length up to 65 s) is `PlayerOverlayAd` in `WatchPageClient`; **mid-rolls** are inside `VideoPlayer` (HLS player) and use the same `watch_player_overlay` video ads (played to the end, max 65 s; admin upload allows up to 65 s). Timing lives in `lib/ad-schedule.ts`: every 10 min of actually watched time, or after 3 timeline scrubs within 1 min, never sooner than 3 min after the previous break.
 
 3a. **Background (branding) ad** — `components/ads/BackgroundAd.tsx`, mounted in `app/layout.tsx`. Uses `background_media_url` (image, 1920×1080) and shows it through the two gutters beside the 1440px content; only on viewports ≥ 1600px, never on `/admin` or `/premium`, never for premium users. No fallback to other slots.
 

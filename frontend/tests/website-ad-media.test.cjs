@@ -36,3 +36,19 @@ test('old image-only ads remain visible as banners alone', () => {
   assert.equal(getWebsiteAdMedia(ad, 'inline'), null);
   assert.equal(getWebsiteAdMedia(ad, 'popup'), null);
 });
+
+test('phones get the mobile creative only when the slot has a desktop one', () => {
+  const ad = {
+    banner_media_url: '/banner.webp', banner_mobile_media_url: '/banner-m.webp',
+    inline_mobile_media_url: '/inline-m.webp',
+    fixed_bottom_media_url: '/bottom.mp4', fixed_bottom_media_type: 'video',
+  };
+  assert.equal(getWebsiteAdMedia(ad, 'banner', true).url, '/banner-m.webp');
+  assert.equal(getWebsiteAdMedia(ad, 'banner', true).mobile, true);
+  assert.equal(getWebsiteAdMedia(ad, 'banner', false).url, '/banner.webp');
+  // A mobile image alone does not switch a slot on.
+  assert.equal(getWebsiteAdMedia(ad, 'inline', true), null);
+  // No mobile image: the desktop creative (and its type) is used on phones.
+  assert.equal(getWebsiteAdMedia(ad, 'fixed_bottom', true).type, 'video');
+  assert.equal(getWebsiteAdMedia(ad, 'fixed_bottom', true).mobile, false);
+});

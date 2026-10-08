@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Send, Megaphone, AlertCircle, Handshake, LifeBuoy } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 
 export const metadata: Metadata = {
   title: "Aloqa — FILMORAUZ",
@@ -88,6 +89,9 @@ export default function ContactPage() {
               );
             })}
           </div>
+        </div>
+        <div className="max-w-3xl mx-auto px-4 pb-12">
+          <WebsiteAdSlot placement="info_page_banner" variant="banner" lazy />
         </div>
       </main>
       <Footer />

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 export const dynamic = "force-dynamic";
-import { Suspense } from "react";
+import { Fragment, Suspense } from "react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import MovieCard from "@/components/MovieCard";
@@ -10,6 +10,8 @@ import MovieFilterBar from "@/components/MovieFilterBar";
 import RandomMovieButton from "@/components/RandomMovie";
 import SuggestButton from "@/components/SuggestButton";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
+import AdGridBreak from "@/components/ads/AdGridBreak";
+import { isAdGridBreak } from "@/lib/ad-grid";
 import { getMovies, searchMovies, Movie, MovieFilterParams } from "@/lib/api";
 import { getSeries, type Series } from "@/lib/series-api";
 import { getTranslations } from "@/lib/i18n-server";
@@ -217,10 +219,13 @@ export default async function MoviesPage({ searchParams }: Props) {
                 </h2>
               )}
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4 isolate">
-                {movies.map((movie) => (
-                  <div key={movie.id} className="isolate">
-                    <MovieCard movie={movie} />
-                  </div>
+                {movies.map((movie, i) => (
+                  <Fragment key={movie.id}>
+                    <div className="isolate">
+                      <MovieCard movie={movie} />
+                    </div>
+                    {isAdGridBreak(i, movies.length) && <AdGridBreak />}
+                  </Fragment>
                 ))}
               </div>
             </section>

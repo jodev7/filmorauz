@@ -4513,6 +4513,7 @@ export interface Ad {
   priority: number;
   impressions: number;
   clicks: number;
+  slot_stats?: Partial<Record<AdSlot, { impressions: number; clicks: number }>>;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -4527,6 +4528,11 @@ export interface Ad {
   popup_media_type?: "image" | "video";
   background_media_url?: string;
   background_media_type?: "image" | "video";
+  // Optional phone-sized images; the desktop creative is used when empty.
+  banner_mobile_media_url?: string;
+  inline_mobile_media_url?: string;
+  fixed_bottom_mobile_media_url?: string;
+  popup_mobile_media_url?: string;
   player_overlay_media_url?: string;
   player_overlay_media_type?: "image" | "video";
   // Telegram shared media
@@ -4589,6 +4595,11 @@ export interface AdInput {
   popup_media_type?: "image" | "video";
   background_media_url?: string;
   background_media_type?: "image" | "video";
+  // Optional phone-sized images; the desktop creative is used when empty.
+  banner_mobile_media_url?: string;
+  inline_mobile_media_url?: string;
+  fixed_bottom_mobile_media_url?: string;
+  popup_mobile_media_url?: string;
   player_overlay_media_url?: string;
   player_overlay_media_type?: "image" | "video";
   // Telegram shared media
@@ -4774,12 +4785,16 @@ export async function getAdsForWebsite(placement: string): Promise<Ad[]> {
   return merged;
 }
 
-export async function recordAdImpression(id: string): Promise<void> {
-  await fetch(`${API_URL}/ads/${id}/impression`, { method: "POST" });
+/** Website slot an impression/click is attributed to (backend models.AdSlots). */
+export type AdSlot = "banner" | "inline" | "popup" | "fixed_bottom" | "background" | "player" | "player_pause";
+
+export async function recordAdImpression(id: string, slot: AdSlot): Promise<void> {
+  await fetch(`${API_URL}/ads/${id}/impression?slot=${slot}`, { method: "POST" });
 }
 
-export async function recordAdClick(id: string): Promise<void> {
-  await fetch(`${API_URL}/ads/${id}/click`, { method: "POST" });
+export async function recordAdClick(id: string, slot: AdSlot): Promise<void> {
+  // keepalive: the click usually opens the advertiser's page right away.
+  await fetch(`${API_URL}/ads/${id}/click?slot=${slot}`, { method: "POST", keepalive: true });
 }
 
 export async function adminSendTelegramAd(token: string, id: string): Promise<{ results: { target: string; placement: string; status: string; error?: string }[] }> {

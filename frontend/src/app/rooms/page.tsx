@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Navbar from "@/components/Navbar";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import MediaImage from "@/components/ui/MediaImage";
 import { listPublicRooms, listFeaturedRooms, PublicRoomListItem } from "@/lib/api";
 import { Users, Loader2, Crown, RefreshCw, Globe2, Play, Sparkles, Clock } from "lucide-react";
@@ -88,6 +89,8 @@ export default function PublicRoomsPage() {
             <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} /> Yangilash
           </button>
         </div>
+
+        <WebsiteAdSlot placement="rooms_page_banner" variant="banner" className="mb-6" />
 
         {loading && (
           <div className="flex justify-center py-12">

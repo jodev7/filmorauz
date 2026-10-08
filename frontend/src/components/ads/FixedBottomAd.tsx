@@ -1,115 +1,104 @@
 "use client";
 
-import { useEffect, useState, useRef, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Ad, recordAdImpression, recordAdClick } from "@/lib/api";
-import { isUserPremium } from "@/lib/ads-utils";
+import { X } from "lucide-react";
+import { recordAdClick } from "@/lib/api";
+import { isAdsAllowedForRoute, isUserPremium } from "@/lib/ads-utils";
 import { useAuth } from "@/lib/auth-context";
 import { useAdSlot } from "@/components/ads/AdSlotContext";
-import MediaImage from "@/components/MediaImage";
-import { normalizeMediaUrl } from "@/lib/image-utils";
+import { AdCta, AdLabel, AdMedia } from "@/components/ads/AdCreative";
+import { useIsPhone, useRotatedAd, useViewableImpression } from "@/components/ads/ad-hooks";
+import { isBottomNavHidden } from "@/components/BottomNav";
+import { getWebsiteAdMedia } from "@/lib/website-ad-media";
 
 interface FixedBottomAdProps {
   placement?: string;
-  bottomOffset?: string;
 }
 
 const DEFAULT_PLACEMENT = "website_fixed_bottom";
-export default function FixedBottomAd({
-  placement = DEFAULT_PLACEMENT,
-  bottomOffset = "0px",
-}: FixedBottomAdProps) {
+
+/**
+ * Anchor ad pinned to the bottom of the viewport on every public page. Kept
+ * to standard anchor sizes (600×90 on desktop, full width on phones) so it
+ * never covers a meaningful part of the page, and it sits above the phone tab
+ * bar. Closing it hides it until the next page.
+ */
+export default function FixedBottomAd({ placement = DEFAULT_PLACEMENT }: FixedBottomAdProps) {
   const pathname = usePathname();
   const { user, isLoading: authLoading } = useAuth();
   const { ensurePlacements, getMergedAds } = useAdSlot();
-  const [current, setCurrent] = useState(0);
-  const [dismissed, setDismissed] = useState(false);
-  const impressedRef = useRef<Set<string>>(new Set());
-  const lastImpressionRef = useRef<string>("");
+  const phone = useIsPhone();
+  const [dismissedOn, setDismissedOn] = useState<string | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
 
   const placements = useMemo(
     () => [placement, "website", "global_fixed_bottom"],
     [placement],
   );
 
-  const allAds = useMemo(() => getMergedAds(placements), [getMergedAds, placements]);
   const ads = useMemo(
-    () => allAds.filter((a) => a.fixed_bottom_media_url),
-    [allAds],
+    () => getMergedAds(placements).filter((a) => getWebsiteAdMedia(a, "fixed_bottom")),
+    [getMergedAds, placements],
   );
-  const isReady = ads.length > 0;
+  const ad = useRotatedAd(ads);
 
   // Skip fetching entirely on routes where this ad is never rendered. Also
   // skip for premium users; fetch only when we actually need data.
-  const shouldFetch =
-    !authLoading &&
-    !isUserPremium(user) &&
-    !pathname.startsWith("/admin") &&
-    !pathname.startsWith("/premium");
+  const shouldFetch = !authLoading && !isUserPremium(user) && isAdsAllowedForRoute(pathname);
 
   useEffect(() => {
     if (!shouldFetch) return;
     ensurePlacements(placements).catch(() => {});
   }, [ensurePlacements, placements, shouldFetch]);
 
-  // Record impression per unique ad shown
-  useEffect(() => {
-    if (ads.length === 0 || !isReady) return;
-    const ad = ads[current % ads.length];
-    if (!ad) return;
-    const impressionKey = `${placement}:${ad.id}:${current}`;
-    if (impressedRef.current.has(ad.id) || lastImpressionRef.current === impressionKey) return;
-    lastImpressionRef.current = impressionKey;
-    impressedRef.current.add(ad.id);
-    recordAdImpression(ad.id).catch(() => {});
-  }, [ads, current, isReady, placement]);
+  const visible = shouldFetch && !!ad && dismissedOn !== pathname;
+  useViewableImpression(boxRef, visible ? ad?.id : undefined, "fixed_bottom");
 
-  if (!shouldFetch) return null;
-  if (!isReady || ads.length === 0 || dismissed) return null;
+  if (!visible || !ad) return null;
 
-  const ad = ads[current % ads.length];
-
-  const mediaUrl = ad.fixed_bottom_media_url || "";
-  const isVideo =
-    ad.fixed_bottom_media_type === "video" ||
-    mediaUrl.endsWith(".mp4") ||
-    mediaUrl.endsWith(".webm");
+  const media = getWebsiteAdMedia(ad, "fixed_bottom", phone)!;
+  // 20:3 is the desktop creative (600×90 here); the phone creative is 4:1.
+  const ratio = media.mobile ? "aspect-[4/1]" : "aspect-[20/3]";
+  // The phone tab bar (h-16 + safe area, below `md`) owns the very bottom.
+  const bottom = isBottomNavHidden(pathname)
+    ? "bottom-0"
+    : "bottom-[calc(4rem+env(safe-area-inset-bottom))] md:bottom-0";
 
   const handleAdClick = () => {
-    recordAdClick(ad.id).catch(() => {});
+    recordAdClick(ad.id, "fixed_bottom").catch(() => {});
     window.open(ad.target_url, "_blank", "noopener,noreferrer");
   };
 
   return (
-    <div
-      className="fixed left-0 right-0 z-50 overflow-hidden cursor-pointer relative"
-      style={{ bottom: bottomOffset, width: "100%", aspectRatio: "20 / 3", maxHeight: "180px" }}
-      onClick={handleAdClick}
-      role="link"
-      aria-label="Reklama"
-    >
-      {isVideo ? (
-        <video
-          src={normalizeMediaUrl(mediaUrl, "")}
-          className="absolute inset-0 w-full h-full object-cover"
-          autoPlay
-          muted
-          loop
-          playsInline
-          preload="metadata"
-        />
-      ) : (
-        (() => {
-          const normalizedMediaUrl = normalizeMediaUrl(mediaUrl, "/og-image.jpg");
-          return (
-            <MediaImage
-              src={normalizedMediaUrl}
-              alt=""
-              className="absolute inset-0 h-full w-full object-cover"
-            />
-          );
-        })()
-      )}
-    </div>
+    <>
+      {/* Reserves the bar's height at the end of the page so it never hides
+          the footer. */}
+      <div className={`mx-auto w-full max-w-[600px] ${ratio}`} aria-hidden="true" />
+      <div className={`pointer-events-none fixed inset-x-0 z-[55] flex justify-center ${bottom}`}>
+        <div
+          ref={boxRef}
+          className={`pointer-events-auto relative w-full max-w-[600px] cursor-pointer overflow-hidden border-t border-white/10 bg-brand-dark shadow-[0_-8px_30px_rgba(0,0,0,0.5)] sm:rounded-t-xl sm:border-x ${ratio}`}
+          onClick={handleAdClick}
+          role="link"
+          aria-label={`Reklama: ${ad.title}`}
+        >
+          <AdMedia url={media.url} type={media.type} />
+          <AdLabel className="bottom-1 left-1" />
+          <AdCta text={ad.call_to_action} size="sm" className="bottom-1.5 right-1.5" />
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setDismissedOn(pathname);
+            }}
+            className="absolute right-1 top-1 z-[2] flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-white transition hover:bg-black"
+            aria-label="Reklamani yopish"
+          >
+            <X size={13} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+    </>
   );
 }

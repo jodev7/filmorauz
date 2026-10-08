@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 export const dynamic = "force-dynamic";
-import { Suspense } from "react";
+import { Fragment, Suspense } from "react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import SeriesCard from "@/components/SeriesCard";
 import GenreFilter from "@/components/GenreFilter";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
+import AdGridBreak from "@/components/ads/AdGridBreak";
+import { isAdGridBreak } from "@/lib/ad-grid";
 import { getSeries } from "@/lib/series-api";
 import { localizeSingleGenre } from "@/lib/localization";
 import Link from "next/link";
@@ -90,10 +92,13 @@ export default async function SeriesPage({ searchParams }: SeriesPageProps) {
 
           {seriesData.length > 0 ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4 isolate">
-              {seriesData.map((s) => (
-                <div key={s.id} className="isolate">
-                  <SeriesCard series={s} />
-                </div>
+              {seriesData.map((s, i) => (
+                <Fragment key={s.id}>
+                  <div className="isolate">
+                    <SeriesCard series={s} />
+                  </div>
+                  {isAdGridBreak(i, seriesData.length) && <AdGridBreak />}
+                </Fragment>
               ))}
             </div>
           ) : (

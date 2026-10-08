@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bot,
   CalendarClock,
+  Copy,
   DollarSign,
   Eye,
   Globe,
@@ -24,6 +25,7 @@ import { useAuth } from "@/lib/auth-context";
 import {
   Ad,
   AdDelivery,
+  AdSlot,
   AdInput,
   AdStats,
   AdStatus,
@@ -53,6 +55,17 @@ const PLACEMENT: Record<string, { label: string; icon: typeof Globe }> = {
   telegram_channel: { label: "Kanal", icon: Send },
   telegram_bot: { label: "Bot", icon: Bot },
 };
+
+// Order and labels of the per-slot breakdown under each ad.
+const SLOT_LABELS: [AdSlot, string][] = [
+  ["banner", "Banner"],
+  ["inline", "Kontent orasida"],
+  ["fixed_bottom", "Pastki"],
+  ["popup", "Popup"],
+  ["background", "Fon"],
+  ["player", "Player"],
+  ["player_pause", "Pauza"],
+];
 
 function effectiveStatus(ad: Ad): AdStatus {
   if (ad.status === "active" && ad.ends_at && new Date(ad.ends_at) < new Date()) return "expired";
@@ -171,6 +184,22 @@ export default function AdminAdsPage() {
     }
   };
 
+  // A copy is the way to A/B test creatives: both ads rotate in the same
+  // slots and each keeps its own counters.
+  const duplicate = async (ad: Ad) => {
+    if (!token) return;
+    setBusyId(ad.id);
+    try {
+      await adminCreateAd(token, { ...adToInput(ad), title: `${ad.title} (nusxa)`, status: "draft" });
+      toast.success("Nusxa qoralama sifatida yaratildi");
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Nusxa olib bo'lmadi");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const remove = async (ad: Ad) => {
     if (!token || !confirm(`"${ad.title}" reklamasini o'chirasizmi?`)) return;
     setBusyId(ad.id);
@@ -269,6 +298,13 @@ export default function AdminAdsPage() {
             const rem = remaining(ad);
             const adCtr = ad.impressions > 0 ? ((ad.clicks / ad.impressions) * 100).toFixed(1) : "0";
             const busy = busyId === ad.id;
+            const slots = SLOT_LABELS.flatMap(([key, label]) => {
+              const s = ad.slot_stats?.[key];
+              if (!s || (!s.impressions && !s.clicks)) return [];
+              const impressions = s.impressions || 0;
+              const clicks = s.clicks || 0;
+              return [{ key, label, impressions, clicks, ctr: impressions > 0 ? ((clicks / impressions) * 100).toFixed(1) : "0" }];
+            });
             return (
               <li key={ad.id} className={`rounded-2xl border border-white/10 bg-[#12121a] p-3.5 transition hover:border-white/20 sm:p-4 ${st === "expired" || st === "draft" ? "opacity-80" : ""}`}>
                 <div className="flex flex-col gap-4 md:flex-row md:items-center">
@@ -355,12 +391,27 @@ export default function AdminAdsPage() {
                       <IconBtn label="Tahrirlash" onClick={() => setEditor({ ad })}>
                         <Pencil size={15} />
                       </IconBtn>
+                      <IconBtn label="Nusxa olish" disabled={busy} onClick={() => duplicate(ad)}>
+                        <Copy size={15} />
+                      </IconBtn>
                       <IconBtn label="O'chirish" tone="red" disabled={busy} onClick={() => remove(ad)}>
                         <Trash2 size={15} />
                       </IconBtn>
                     </div>
                   </div>
                 </div>
+                {slots.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-1.5 border-t border-white/5 pt-3">
+                    {slots.map((s) => (
+                      <span key={s.key} className="rounded-lg bg-black/20 px-2 py-1 text-[11px] text-gray-400">
+                        <span className="text-gray-300">{s.label}:</span>{" "}
+                        <span className="tabular-nums text-white">{s.impressions.toLocaleString()}</span> ko&apos;rish ·{" "}
+                        <span className="tabular-nums text-white">{s.clicks.toLocaleString()}</span> bosish ·{" "}
+                        <span className="tabular-nums text-orange-300">{s.ctr}%</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </li>
             );
           })}

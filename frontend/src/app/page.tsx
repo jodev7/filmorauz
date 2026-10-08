@@ -198,8 +198,6 @@ export default async function HomePage() {
         )}
       </main>
       <Footer />
-      {/* Popup ad — renders as modal overlay when an active ad is available */}
-      <WebsiteAdSlot placement="homepage_popup" popup />
     </>
   );
 }

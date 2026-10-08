@@ -19,6 +19,7 @@ import PremiumUnlockCard from "@/components/PremiumUnlockCard";
 import { recordView, recordWatchHistory, addFavorite, removeFavorite, checkIsFavorite, getRecommendations, saveUnifiedWatchProgress, getWatchProgress, resetWatchProgress, markWatchComplete, getAdsForWebsite, recordAdImpression, recordAdClick, getProtectedMediaAccess, buildVideoDownloadUrl, Ad, Movie } from "@/lib/api";
 import { pickWeightedRandomAd } from "@/lib/ads-utils";
 import PlayerVideoAd from "@/components/ads/PlayerVideoAd";
+import { AdCta } from "@/components/ads/AdCreative";
 import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n";
@@ -104,7 +105,7 @@ function PlayerOverlayAd({
     currentAdIdRef.current = picked.id;
     setCurrentAd(picked);
     setVisible(true);
-    recordAdImpression(picked.id).catch(() => {});
+    recordAdImpression(picked.id, "player").catch(() => {});
     startCountdown();
   }, [startCountdown]);
 
@@ -164,7 +165,7 @@ function PlayerOverlayAd({
   const isVideo = mediaType === "video" || /\.(mp4|webm)(?:$|[?#])/i.test(url);
 
   const handleClick = () => {
-    recordAdClick(currentAd.id).catch(() => {});
+    recordAdClick(currentAd.id, "player").catch(() => {});
     window.open(currentAd.target_url, "_blank", "noopener,noreferrer");
   };
 
@@ -192,6 +193,7 @@ function PlayerOverlayAd({
           )}
         </div>}
         <span className="absolute top-3 left-3 text-[10px] text-gray-300 bg-black/60 px-2 py-1 rounded uppercase tracking-wide pointer-events-none">Reklama</span>
+        {!isVideo && <AdCta text={currentAd.call_to_action || "Saytga o'tish"} className="bottom-3 right-3" />}
       </div>
     </div>
   );

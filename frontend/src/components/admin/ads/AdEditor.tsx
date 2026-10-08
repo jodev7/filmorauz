@@ -29,6 +29,10 @@ export const emptyAdInput = (): AdInput => ({
   popup_media_type: "image",
   background_media_url: "",
   background_media_type: "image",
+  banner_mobile_media_url: "",
+  inline_mobile_media_url: "",
+  fixed_bottom_mobile_media_url: "",
+  popup_mobile_media_url: "",
   player_overlay_media_url: "",
   player_overlay_media_type: "video",
   telegram_media_url: "",
@@ -64,6 +68,10 @@ export function adToInput(ad: Ad): AdInput {
     popup_media_type: ad.popup_media_type || "image",
     background_media_url: ad.background_media_url || "",
     background_media_type: ad.background_media_type || "image",
+    banner_mobile_media_url: ad.banner_mobile_media_url || "",
+    inline_mobile_media_url: ad.inline_mobile_media_url || "",
+    fixed_bottom_mobile_media_url: ad.fixed_bottom_mobile_media_url || "",
+    popup_mobile_media_url: ad.popup_mobile_media_url || "",
     player_overlay_media_url: ad.player_overlay_media_url || "",
     player_overlay_media_type: ad.player_overlay_media_type || "image",
     telegram_media_url: ad.telegram_media_url || "",
@@ -83,11 +91,17 @@ const PLACEMENTS = [
   { value: "telegram_bot", label: "Telegram bot", desc: "Bot foydalanuvchilariga", icon: Bot },
 ];
 
-const WEBSITE_SLOTS: { slot: keyof AdInput; typeKey: keyof AdInput; label: string; size: string; aspect: string; video?: boolean }[] = [
+// Slots without a typeKey are the optional phone images: image-only, and when
+// left empty the slot's desktop creative is shown on phones as well.
+const WEBSITE_SLOTS: { slot: keyof AdInput; typeKey?: keyof AdInput; label: string; size: string; aspect: string; video?: boolean }[] = [
   { slot: "banner_media_url", typeKey: "banner_media_type", label: "Banner (sahifa tepasi)", size: "1200×300 · 4:1", aspect: "aspect-[4/1]" },
+  { slot: "banner_mobile_media_url", label: "Banner — telefon uchun", size: "800×400 · 2:1 · ixtiyoriy", aspect: "aspect-[2/1]" },
   { slot: "inline_media_url", typeKey: "inline_media_type", label: "Kontent orasida", size: "1200×400 · 3:1", aspect: "aspect-[3/1]" },
-  { slot: "fixed_bottom_media_url", typeKey: "fixed_bottom_media_type", label: "Pastki qotirilgan", size: "1200×180", aspect: "aspect-[20/3]" },
+  { slot: "inline_mobile_media_url", label: "Kontent orasida — telefon uchun", size: "800×600 · 4:3 · ixtiyoriy", aspect: "aspect-[4/3]" },
+  { slot: "fixed_bottom_media_url", typeKey: "fixed_bottom_media_type", label: "Pastki qotirilgan", size: "1200×180 · 20:3", aspect: "aspect-[20/3]" },
+  { slot: "fixed_bottom_mobile_media_url", label: "Pastki qotirilgan — telefon uchun", size: "800×200 · 4:1 · ixtiyoriy", aspect: "aspect-[4/1]" },
   { slot: "popup_media_url", typeKey: "popup_media_type", label: "Popup oyna", size: "900×600 · 3:2", aspect: "aspect-[3/2]" },
+  { slot: "popup_mobile_media_url", label: "Popup oyna — telefon uchun", size: "600×800 · 3:4 · ixtiyoriy", aspect: "aspect-[3/4]" },
   { slot: "background_media_url", typeKey: "background_media_type", label: "Sayt foni (ikki yon)", size: "1920×1080 · o'rtasi yopiladi", aspect: "aspect-video" },
   { slot: "player_overlay_media_url", typeKey: "player_overlay_media_type", label: "Player ichida (video)", size: "65 soniyagacha", aspect: "aspect-video", video: true },
 ];
@@ -136,8 +150,11 @@ export default function AdEditor({
   const onSlotChange = useCallback((slot: string, url: string, type: "image" | "video") => {
     setForm((f) => {
       const next: AdInput = { ...f, [slot]: url };
-      const typeKey = slot.replace(/_url$/, "_type") as keyof AdInput;
-      (next as unknown as Record<string, unknown>)[typeKey] = type;
+      // Phone images have no type field: they are always images.
+      if (!slot.includes("_mobile_")) {
+        const typeKey = slot.replace(/_url$/, "_type") as keyof AdInput;
+        (next as unknown as Record<string, unknown>)[typeKey] = type;
+      }
       return next;
     });
   }, []);
@@ -274,7 +291,7 @@ export default function AdEditor({
         </Section>
 
         {has("website") && (
-          <Section icon={Globe} title="Sayt uchun rasmlar" desc="Har bir joyda faqat shu joyga yuklangan rasm ko'rsatiladi">
+          <Section icon={Globe} title="Sayt uchun rasmlar" desc="Har bir joyda faqat shu joyga yuklangan rasm ko'rsatiladi. Telefon rasmi yuklanmasa, telefonda ham asosiy rasm chiqadi.">
             <div className="grid gap-4 sm:grid-cols-2">
               {WEBSITE_SLOTS.map((s) => (
                 <AdMediaSlot
@@ -284,7 +301,7 @@ export default function AdEditor({
                   size={s.size}
                   aspect={s.aspect}
                   value={(form[s.slot] as string) || ""}
-                  mediaType={form[s.typeKey] as "image" | "video" | undefined}
+                  mediaType={s.typeKey ? (form[s.typeKey] as "image" | "video" | undefined) : "image"}
                   image={!s.video}
                   video={!!s.video}
                   validate={s.video ? validatePlayerAdVideo : undefined}
@@ -385,7 +402,7 @@ export default function AdEditor({
                 <input type="number" min={0} step="0.01" value={form.price} onChange={(e) => set("price", parseFloat(e.target.value) || 0)} className={`${inputCls} pl-9`} />
               </div>
             </Field>
-            <Field label="Navbat (priority)" hint="Katta raqam oldin chiqadi">
+            <Field label="Navbat (priority)" hint="Katta raqam ko'proq chiqadi">
               <input type="number" min={0} value={form.priority} onChange={(e) => set("priority", parseInt(e.target.value) || 0)} className={inputCls} />
             </Field>
           </div>

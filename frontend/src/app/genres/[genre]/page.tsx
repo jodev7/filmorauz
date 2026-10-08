@@ -1,7 +1,11 @@
+import { Fragment } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
+import AdGridBreak from "@/components/ads/AdGridBreak";
+import { isAdGridBreak } from "@/lib/ad-grid";
 import MovieCard from "@/components/MovieCard";
 import SeriesCarousel from "@/components/SeriesCarousel";
 import { getMovies } from "@/lib/api";
@@ -72,14 +76,19 @@ export default async function GenreDetailPage({ params }: Props) {
             </p>
           </div>
 
+          <WebsiteAdSlot placement="genre_page_banner" variant="banner" className="mb-8" />
+
           {movies.length > 0 && (
             <section className="mb-12">
               <h2 className="font-display text-2xl text-white tracking-wide mb-4">KINOLAR</h2>
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4 isolate">
-                {movies.map((movie) => (
-                  <div key={movie.id} className="isolate">
-                    <MovieCard movie={movie} />
-                  </div>
+                {movies.map((movie, i) => (
+                  <Fragment key={movie.id}>
+                    <div className="isolate">
+                      <MovieCard movie={movie} />
+                    </div>
+                    {isAdGridBreak(i, movies.length) && <AdGridBreak />}
+                  </Fragment>
                 ))}
               </div>
             </section>

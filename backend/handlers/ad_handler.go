@@ -85,38 +85,42 @@ func (h *AdHandler) AdminGetStats(c *gin.Context) {
 // AdminCreateAd POST /api/admin/ads
 func (h *AdHandler) AdminCreateAd(c *gin.Context) {
 	var req struct {
-		Title                   string   `json:"title" binding:"required"`
-		Description             string   `json:"description"`
-		ImageURL                string   `json:"image_url"`
-		VideoURL                string   `json:"video_url"`
-		TargetURL               string   `json:"target_url" binding:"required"`
-		CallToAction            string   `json:"call_to_action"`
-		Placements              []string `json:"placements" binding:"required"`
-		Status                  string   `json:"status"`
-		DurationDays            int      `json:"duration_days"`
-		Price                   float64  `json:"price"`
-		Priority                int      `json:"priority"`
-		BannerMediaURL          string   `json:"banner_media_url"`
-		BannerMediaType         string   `json:"banner_media_type"`
-		InlineMediaURL          string   `json:"inline_media_url"`
-		InlineMediaType         string   `json:"inline_media_type"`
-		FixedBottomMediaURL     string   `json:"fixed_bottom_media_url"`
-		FixedBottomMediaType    string   `json:"fixed_bottom_media_type"`
-		PopupMediaURL           string   `json:"popup_media_url"`
-		PopupMediaType          string   `json:"popup_media_type"`
-		BackgroundMediaURL      string   `json:"background_media_url"`
-		BackgroundMediaType     string   `json:"background_media_type"`
-		PlayerOverlayMediaURL   string   `json:"player_overlay_media_url"`
-		PlayerOverlayMediaType  string   `json:"player_overlay_media_type"`
-		TelegramMediaURL        string   `json:"telegram_media_url"`
-		TelegramMediaType       string   `json:"telegram_media_type"`
-		TelegramChannels        []string `json:"telegram_channels"`
-		TelegramBotEnabled      bool     `json:"telegram_bot_enabled"`
-		TelegramBotChatIDs      []int64  `json:"telegram_bot_chat_ids"`
-		TelegramChannelEnabled  bool     `json:"telegram_channel_enabled"`
-		PlayerAdIntervalMinutes int      `json:"player_ad_interval_minutes" binding:"min=0,max=1440"`
-		PlayerAdMaxRepeats      int      `json:"player_ad_max_repeats" binding:"min=0,max=1440"`
-		PlayerEnabled           bool     `json:"player_enabled"`
+		Title                     string   `json:"title" binding:"required"`
+		Description               string   `json:"description"`
+		ImageURL                  string   `json:"image_url"`
+		VideoURL                  string   `json:"video_url"`
+		TargetURL                 string   `json:"target_url" binding:"required"`
+		CallToAction              string   `json:"call_to_action"`
+		Placements                []string `json:"placements" binding:"required"`
+		Status                    string   `json:"status"`
+		DurationDays              int      `json:"duration_days"`
+		Price                     float64  `json:"price"`
+		Priority                  int      `json:"priority"`
+		BannerMediaURL            string   `json:"banner_media_url"`
+		BannerMediaType           string   `json:"banner_media_type"`
+		InlineMediaURL            string   `json:"inline_media_url"`
+		InlineMediaType           string   `json:"inline_media_type"`
+		FixedBottomMediaURL       string   `json:"fixed_bottom_media_url"`
+		FixedBottomMediaType      string   `json:"fixed_bottom_media_type"`
+		PopupMediaURL             string   `json:"popup_media_url"`
+		PopupMediaType            string   `json:"popup_media_type"`
+		BackgroundMediaURL        string   `json:"background_media_url"`
+		BackgroundMediaType       string   `json:"background_media_type"`
+		BannerMobileMediaURL      string   `json:"banner_mobile_media_url"`
+		InlineMobileMediaURL      string   `json:"inline_mobile_media_url"`
+		FixedBottomMobileMediaURL string   `json:"fixed_bottom_mobile_media_url"`
+		PopupMobileMediaURL       string   `json:"popup_mobile_media_url"`
+		PlayerOverlayMediaURL     string   `json:"player_overlay_media_url"`
+		PlayerOverlayMediaType    string   `json:"player_overlay_media_type"`
+		TelegramMediaURL          string   `json:"telegram_media_url"`
+		TelegramMediaType         string   `json:"telegram_media_type"`
+		TelegramChannels          []string `json:"telegram_channels"`
+		TelegramBotEnabled        bool     `json:"telegram_bot_enabled"`
+		TelegramBotChatIDs        []int64  `json:"telegram_bot_chat_ids"`
+		TelegramChannelEnabled    bool     `json:"telegram_channel_enabled"`
+		PlayerAdIntervalMinutes   int      `json:"player_ad_interval_minutes" binding:"min=0,max=1440"`
+		PlayerAdMaxRepeats        int      `json:"player_ad_max_repeats" binding:"min=0,max=1440"`
+		PlayerEnabled             bool     `json:"player_enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -148,41 +152,45 @@ func (h *AdHandler) AdminCreateAd(c *gin.Context) {
 	}
 
 	ad := &models.Ad{
-		Title:                   req.Title,
-		Description:             req.Description,
-		ImageURL:                sanitizeAdMediaURL(req.ImageURL),
-		VideoURL:                sanitizeAdMediaURL(req.VideoURL),
-		TargetURL:               req.TargetURL,
-		CallToAction:            req.CallToAction,
-		Placements:              req.Placements,
-		Status:                  status,
-		StartsAt:                startsAt,
-		EndsAt:                  endsAt,
-		DurationDays:            req.DurationDays,
-		Price:                   req.Price,
-		Priority:                req.Priority,
-		BannerMediaURL:          sanitizeAdMediaURL(req.BannerMediaURL),
-		BannerMediaType:         req.BannerMediaType,
-		InlineMediaURL:          sanitizeAdMediaURL(req.InlineMediaURL),
-		InlineMediaType:         req.InlineMediaType,
-		FixedBottomMediaURL:     sanitizeAdMediaURL(req.FixedBottomMediaURL),
-		FixedBottomMediaType:    req.FixedBottomMediaType,
-		PopupMediaURL:           sanitizeAdMediaURL(req.PopupMediaURL),
-		PopupMediaType:          req.PopupMediaType,
-		BackgroundMediaURL:      sanitizeAdMediaURL(req.BackgroundMediaURL),
-		BackgroundMediaType:     req.BackgroundMediaType,
-		PlayerOverlayMediaURL:   sanitizeAdMediaURL(req.PlayerOverlayMediaURL),
-		PlayerOverlayMediaType:  req.PlayerOverlayMediaType,
-		TelegramMediaURL:        sanitizeAdMediaURL(req.TelegramMediaURL),
-		TelegramMediaType:       req.TelegramMediaType,
-		TelegramChannels:        req.TelegramChannels,
-		TelegramBotEnabled:      req.TelegramBotEnabled,
-		TelegramBotChatIDs:      req.TelegramBotChatIDs,
-		TelegramChannelEnabled:  req.TelegramChannelEnabled,
-		PlayerEnabled:           req.PlayerEnabled,
-		PlayerAdMaxRepeats:      req.PlayerAdMaxRepeats,
-		PlayerAdIntervalMinutes: req.PlayerAdIntervalMinutes,
-		CreatedBy:               createdBy,
+		Title:                     req.Title,
+		Description:               req.Description,
+		ImageURL:                  sanitizeAdMediaURL(req.ImageURL),
+		VideoURL:                  sanitizeAdMediaURL(req.VideoURL),
+		TargetURL:                 req.TargetURL,
+		CallToAction:              req.CallToAction,
+		Placements:                req.Placements,
+		Status:                    status,
+		StartsAt:                  startsAt,
+		EndsAt:                    endsAt,
+		DurationDays:              req.DurationDays,
+		Price:                     req.Price,
+		Priority:                  req.Priority,
+		BannerMediaURL:            sanitizeAdMediaURL(req.BannerMediaURL),
+		BannerMediaType:           req.BannerMediaType,
+		InlineMediaURL:            sanitizeAdMediaURL(req.InlineMediaURL),
+		InlineMediaType:           req.InlineMediaType,
+		FixedBottomMediaURL:       sanitizeAdMediaURL(req.FixedBottomMediaURL),
+		FixedBottomMediaType:      req.FixedBottomMediaType,
+		PopupMediaURL:             sanitizeAdMediaURL(req.PopupMediaURL),
+		PopupMediaType:            req.PopupMediaType,
+		BackgroundMediaURL:        sanitizeAdMediaURL(req.BackgroundMediaURL),
+		BackgroundMediaType:       req.BackgroundMediaType,
+		BannerMobileMediaURL:      sanitizeAdMediaURL(req.BannerMobileMediaURL),
+		InlineMobileMediaURL:      sanitizeAdMediaURL(req.InlineMobileMediaURL),
+		FixedBottomMobileMediaURL: sanitizeAdMediaURL(req.FixedBottomMobileMediaURL),
+		PopupMobileMediaURL:       sanitizeAdMediaURL(req.PopupMobileMediaURL),
+		PlayerOverlayMediaURL:     sanitizeAdMediaURL(req.PlayerOverlayMediaURL),
+		PlayerOverlayMediaType:    req.PlayerOverlayMediaType,
+		TelegramMediaURL:          sanitizeAdMediaURL(req.TelegramMediaURL),
+		TelegramMediaType:         req.TelegramMediaType,
+		TelegramChannels:          req.TelegramChannels,
+		TelegramBotEnabled:        req.TelegramBotEnabled,
+		TelegramBotChatIDs:        req.TelegramBotChatIDs,
+		TelegramChannelEnabled:    req.TelegramChannelEnabled,
+		PlayerEnabled:             req.PlayerEnabled,
+		PlayerAdMaxRepeats:        req.PlayerAdMaxRepeats,
+		PlayerAdIntervalMinutes:   req.PlayerAdIntervalMinutes,
+		CreatedBy:                 createdBy,
 	}
 
 	if err := h.adRepo.Create(ad); err != nil {
@@ -201,38 +209,42 @@ func (h *AdHandler) AdminUpdateAd(c *gin.Context) {
 	}
 
 	var req struct {
-		Title                   string   `json:"title"`
-		Description             string   `json:"description"`
-		ImageURL                string   `json:"image_url"`
-		VideoURL                string   `json:"video_url"`
-		TargetURL               string   `json:"target_url"`
-		CallToAction            string   `json:"call_to_action"`
-		Placements              []string `json:"placements"`
-		Status                  string   `json:"status"`
-		DurationDays            int      `json:"duration_days"`
-		Price                   float64  `json:"price"`
-		Priority                *int     `json:"priority"`
-		BannerMediaURL          string   `json:"banner_media_url"`
-		BannerMediaType         string   `json:"banner_media_type"`
-		InlineMediaURL          string   `json:"inline_media_url"`
-		InlineMediaType         string   `json:"inline_media_type"`
-		FixedBottomMediaURL     string   `json:"fixed_bottom_media_url"`
-		FixedBottomMediaType    string   `json:"fixed_bottom_media_type"`
-		PopupMediaURL           string   `json:"popup_media_url"`
-		PopupMediaType          string   `json:"popup_media_type"`
-		BackgroundMediaURL      string   `json:"background_media_url"`
-		BackgroundMediaType     string   `json:"background_media_type"`
-		PlayerOverlayMediaURL   string   `json:"player_overlay_media_url"`
-		PlayerOverlayMediaType  string   `json:"player_overlay_media_type"`
-		TelegramMediaURL        string   `json:"telegram_media_url"`
-		TelegramMediaType       string   `json:"telegram_media_type"`
-		TelegramChannels        []string `json:"telegram_channels"`
-		TelegramBotEnabled      *bool    `json:"telegram_bot_enabled"`
-		TelegramBotChatIDs      []int64  `json:"telegram_bot_chat_ids"`
-		TelegramChannelEnabled  *bool    `json:"telegram_channel_enabled"`
-		PlayerAdIntervalMinutes *int     `json:"player_ad_interval_minutes" binding:"omitempty,min=0,max=1440"`
-		PlayerAdMaxRepeats      *int     `json:"player_ad_max_repeats" binding:"omitempty,min=0,max=1440"`
-		PlayerEnabled           *bool    `json:"player_enabled"`
+		Title                     string   `json:"title"`
+		Description               string   `json:"description"`
+		ImageURL                  string   `json:"image_url"`
+		VideoURL                  string   `json:"video_url"`
+		TargetURL                 string   `json:"target_url"`
+		CallToAction              string   `json:"call_to_action"`
+		Placements                []string `json:"placements"`
+		Status                    string   `json:"status"`
+		DurationDays              int      `json:"duration_days"`
+		Price                     float64  `json:"price"`
+		Priority                  *int     `json:"priority"`
+		BannerMediaURL            string   `json:"banner_media_url"`
+		BannerMediaType           string   `json:"banner_media_type"`
+		InlineMediaURL            string   `json:"inline_media_url"`
+		InlineMediaType           string   `json:"inline_media_type"`
+		FixedBottomMediaURL       string   `json:"fixed_bottom_media_url"`
+		FixedBottomMediaType      string   `json:"fixed_bottom_media_type"`
+		PopupMediaURL             string   `json:"popup_media_url"`
+		PopupMediaType            string   `json:"popup_media_type"`
+		BackgroundMediaURL        string   `json:"background_media_url"`
+		BackgroundMediaType       string   `json:"background_media_type"`
+		BannerMobileMediaURL      string   `json:"banner_mobile_media_url"`
+		InlineMobileMediaURL      string   `json:"inline_mobile_media_url"`
+		FixedBottomMobileMediaURL string   `json:"fixed_bottom_mobile_media_url"`
+		PopupMobileMediaURL       string   `json:"popup_mobile_media_url"`
+		PlayerOverlayMediaURL     string   `json:"player_overlay_media_url"`
+		PlayerOverlayMediaType    string   `json:"player_overlay_media_type"`
+		TelegramMediaURL          string   `json:"telegram_media_url"`
+		TelegramMediaType         string   `json:"telegram_media_type"`
+		TelegramChannels          []string `json:"telegram_channels"`
+		TelegramBotEnabled        *bool    `json:"telegram_bot_enabled"`
+		TelegramBotChatIDs        []int64  `json:"telegram_bot_chat_ids"`
+		TelegramChannelEnabled    *bool    `json:"telegram_channel_enabled"`
+		PlayerAdIntervalMinutes   *int     `json:"player_ad_interval_minutes" binding:"omitempty,min=0,max=1440"`
+		PlayerAdMaxRepeats        *int     `json:"player_ad_max_repeats" binding:"omitempty,min=0,max=1440"`
+		PlayerEnabled             *bool    `json:"player_enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -278,6 +290,10 @@ func (h *AdHandler) AdminUpdateAd(c *gin.Context) {
 	update["popup_media_type"] = req.PopupMediaType
 	update["background_media_url"] = sanitizeAdMediaURL(req.BackgroundMediaURL)
 	update["background_media_type"] = req.BackgroundMediaType
+	update["banner_mobile_media_url"] = sanitizeAdMediaURL(req.BannerMobileMediaURL)
+	update["inline_mobile_media_url"] = sanitizeAdMediaURL(req.InlineMobileMediaURL)
+	update["fixed_bottom_mobile_media_url"] = sanitizeAdMediaURL(req.FixedBottomMobileMediaURL)
+	update["popup_mobile_media_url"] = sanitizeAdMediaURL(req.PopupMobileMediaURL)
 	update["player_overlay_media_url"] = sanitizeAdMediaURL(req.PlayerOverlayMediaURL)
 	update["player_overlay_media_type"] = req.PlayerOverlayMediaType
 	update["telegram_media_url"] = sanitizeAdMediaURL(req.TelegramMediaURL)
@@ -389,28 +405,38 @@ func (h *AdHandler) GetAdsBatch(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"placements": adsByPlacement})
 }
 
-// RecordImpression POST /api/ads/:id/impression
+// adSlotParam returns the ?slot= value when it names a known website slot.
+// Unknown or missing values still count towards the ad's totals.
+func adSlotParam(c *gin.Context) string {
+	slot := strings.TrimSpace(c.Query("slot"))
+	if models.AdSlots[slot] {
+		return slot
+	}
+	return ""
+}
+
+// RecordImpression POST /api/ads/:id/impression?slot=banner
 func (h *AdHandler) RecordImpression(c *gin.Context) {
 	id, err := primitive.ObjectIDFromHex(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid ad id"})
 		return
 	}
-	if err := h.adRepo.IncrementImpression(id); err != nil {
+	if err := h.adRepo.IncrementImpression(id, adSlotParam(c)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
-// RecordClick POST /api/ads/:id/click
+// RecordClick POST /api/ads/:id/click?slot=banner
 func (h *AdHandler) RecordClick(c *gin.Context) {
 	id, err := primitive.ObjectIDFromHex(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid ad id"})
 		return
 	}
-	if err := h.adRepo.IncrementClick(id); err != nil {
+	if err := h.adRepo.IncrementClick(id, adSlotParam(c)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

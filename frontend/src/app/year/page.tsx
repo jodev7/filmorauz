@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import YearReviewView from "@/components/YearReviewView";
 
 export const metadata: Metadata = {
@@ -16,6 +17,9 @@ export default function YearPage({ searchParams }: { searchParams: { y?: string 
       <Navbar />
       <main className="min-h-screen pt-28 sm:pt-32">
         <YearReviewView initialYear={Number.isFinite(y) ? y : undefined} />
+        <div className="mx-auto max-w-7xl px-4 py-8">
+          <WebsiteAdSlot placement="year_page_banner" variant="banner" lazy />
+        </div>
       </main>
       <Footer />
     </>

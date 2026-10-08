@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import SeasonList from "@/components/SeasonList";
 import { getSeriesBySlug } from "@/lib/series-api";
 import { buildSeasonUrl, buildSeriesPath, buildSeriesUrl, SITE_URL } from "@/lib/content-routes";
@@ -113,6 +114,8 @@ export default async function SeasonPage({ params }: Props) {
           <p className="text-gray-400 mb-8">
             {season.episodes.length} ta epizod
           </p>
+
+          <WebsiteAdSlot placement="season_page_banner" variant="banner" className="mb-8" />
 
           <SeasonList
             seasons={[season]}

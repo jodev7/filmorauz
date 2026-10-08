@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import { getPublicGenres } from "@/lib/genres";
 import { SITE_URL } from "@/lib/content-routes";
 import { localizeSingleGenre } from "@/lib/localization";
@@ -27,6 +28,7 @@ export default async function GenresPage() {
             JANRLAR
           </h1>
           <p className="text-gray-400 mb-8">Filmlar va seriallarni janr bo'yicha ko'ring.</p>
+          <WebsiteAdSlot placement="genres_page_banner" variant="banner" className="mb-8" />
           <div className="flex flex-wrap gap-3">
             {genres.map((genre) => (
               <Link

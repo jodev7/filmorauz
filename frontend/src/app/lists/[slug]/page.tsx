@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { ListVideo, Lock, User as UserIcon } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import WebsiteAdSlot from "@/components/ads/WebsiteAdSlot";
 import ListItemsGrid from "@/components/ListItemsGrid";
 import ListShareButton from "@/components/ListShareButton";
 import { getListBySlug } from "@/lib/api";
@@ -66,6 +67,7 @@ export default async function ListPage({ params }: Props) {
             </div>
             {list.is_public && <ListShareButton title={list.title} slug={list.share_slug} />}
           </header>
+          <WebsiteAdSlot placement="list_detail_page_banner" variant="banner" className="mb-8" />
           <ListItemsGrid list={list} />
         </div>
       </main>

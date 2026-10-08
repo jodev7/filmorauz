@@ -286,22 +286,28 @@ func (r *AdRepository) GetDeliveryHistory(adID primitive.ObjectID, limit int) ([
 	return records, nil
 }
 
-// IncrementImpression atomically increments the impression counter
-func (r *AdRepository) IncrementImpression(id primitive.ObjectID) error {
+// incrementCounter bumps an ad's total counter and, when slot is set, the
+// matching slot_stats.<slot> counter. slot must already be validated.
+func (r *AdRepository) incrementCounter(id primitive.ObjectID, counter, slot string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := r.col.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$inc": bson.M{"impressions": 1}})
+	inc := bson.M{counter: 1}
+	if slot != "" {
+		inc["slot_stats."+slot+"."+counter] = 1
+	}
+	_, err := r.col.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$inc": inc})
 	return err
 }
 
-// IncrementClick atomically increments the click counter
-func (r *AdRepository) IncrementClick(id primitive.ObjectID) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+// IncrementImpression atomically increments the impression counter
+func (r *AdRepository) IncrementImpression(id primitive.ObjectID, slot string) error {
+	return r.incrementCounter(id, "impressions", slot)
+}
 
-	_, err := r.col.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$inc": bson.M{"clicks": 1}})
-	return err
+// IncrementClick atomically increments the click counter
+func (r *AdRepository) IncrementClick(id primitive.ObjectID, slot string) error {
+	return r.incrementCounter(id, "clicks", slot)
 }
 
 // StripLegacyMediaPrefix rewrites every "/media/<rest>" value in the ads collection
@@ -315,6 +321,8 @@ func (r *AdRepository) StripLegacyMediaPrefix() (int, error) {
 		"image_url", "video_url",
 		"banner_media_url", "inline_media_url",
 		"fixed_bottom_media_url", "popup_media_url", "background_media_url",
+		"banner_mobile_media_url", "inline_mobile_media_url",
+		"fixed_bottom_mobile_media_url", "popup_mobile_media_url",
 		"player_overlay_media_url", "telegram_media_url",
 	}
 

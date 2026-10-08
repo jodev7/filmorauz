@@ -90,8 +90,8 @@ export default function PlayerVideoAd({ ad, url, onComplete, volume = 1 }: {
           video.muted = !video.muted;
         }}>{muted ? "Ovozni yoqish" : "Ovozni o'chirish"}</button>
       <a href={ad.target_url} target="_blank" rel="noopener noreferrer"
-        onClick={() => { void recordAdClick(ad.id).catch(() => {}); }}
-        className="absolute bottom-3 right-3 rounded bg-white px-3 py-2 text-xs font-semibold text-black">{ad.call_to_action || "Batafsil"}</a>
+        onClick={() => { void recordAdClick(ad.id, "player").catch(() => {}); }}
+        className="absolute bottom-3 right-3 inline-flex items-center gap-1 rounded-full bg-orange-500 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-black/40 hover:bg-orange-400">{ad.call_to_action || "Saytga o'tish"} <span aria-hidden="true">→</span></a>
     </div>
   );
 }

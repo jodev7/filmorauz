@@ -11,6 +11,7 @@ import { AdSlotProvider } from "@/components/ads/AdSlotContext";
 import BanGuardWrapper from "@/components/BanGuardWrapper";
 import FixedBottomAd from "@/components/ads/FixedBottomAd";
 import BackgroundAd from "@/components/ads/BackgroundAd";
+import PopupAd from "@/components/ads/PopupAd";
 import InAppBrowserBanner from "@/components/InAppBrowserBanner";
 import PresencePinger from "@/components/PresencePinger";
 import AnnouncementGate from "@/components/AnnouncementGate";
@@ -195,6 +196,7 @@ export default function RootLayout({
                 {children}
                 <BackgroundAd />
                 <FixedBottomAd placement="website_fixed_bottom" />
+                <PopupAd />
                 <AnnouncementGate />
                 <SearchOverlay />
                 <SuggestionModalHost />

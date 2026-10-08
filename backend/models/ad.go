@@ -42,6 +42,13 @@ type Ad struct {
 	PlayerOverlayMediaURL  string `bson:"player_overlay_media_url,omitempty" json:"player_overlay_media_url,omitempty"`
 	PlayerOverlayMediaType string `bson:"player_overlay_media_type,omitempty" json:"player_overlay_media_type,omitempty"`
 
+	// Optional phone-sized creatives (images). When empty the desktop creative
+	// of the same slot is shown on phones too.
+	BannerMobileMediaURL      string `bson:"banner_mobile_media_url,omitempty" json:"banner_mobile_media_url,omitempty"`
+	InlineMobileMediaURL      string `bson:"inline_mobile_media_url,omitempty" json:"inline_mobile_media_url,omitempty"`
+	FixedBottomMobileMediaURL string `bson:"fixed_bottom_mobile_media_url,omitempty" json:"fixed_bottom_mobile_media_url,omitempty"`
+	PopupMobileMediaURL       string `bson:"popup_mobile_media_url,omitempty" json:"popup_mobile_media_url,omitempty"`
+
 	// Telegram shared media
 	TelegramMediaURL  string `bson:"telegram_media_url,omitempty" json:"telegram_media_url,omitempty"`
 	TelegramMediaType string `bson:"telegram_media_type,omitempty" json:"telegram_media_type,omitempty"`
@@ -64,6 +71,8 @@ type Ad struct {
 	// Stats (atomic increments)
 	Impressions int64 `bson:"impressions" json:"impressions"`
 	Clicks      int64 `bson:"clicks" json:"clicks"`
+	// Per-slot breakdown of the two counters above, keyed by AdSlots entries.
+	SlotStats map[string]AdSlotStat `bson:"slot_stats,omitempty" json:"slot_stats,omitempty"`
 
 	// Phase 2: Telegram targeting
 	TelegramChannels       []string   `bson:"telegram_channels,omitempty" json:"telegram_channels,omitempty"`
@@ -85,6 +94,23 @@ type Ad struct {
 	CreatedBy primitive.ObjectID `bson:"created_by" json:"created_by"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 	UpdatedAt time.Time          `bson:"updated_at" json:"updated_at"`
+}
+
+// AdSlotStat holds the counters of one website slot of an ad.
+type AdSlotStat struct {
+	Impressions int64 `bson:"impressions" json:"impressions"`
+	Clicks      int64 `bson:"clicks" json:"clicks"`
+}
+
+// AdSlots lists the website slots that impressions/clicks can be attributed to.
+var AdSlots = map[string]bool{
+	"banner":       true,
+	"inline":       true,
+	"popup":        true,
+	"fixed_bottom": true,
+	"background":   true,
+	"player":       true,
+	"player_pause": true,
 }
 
 // AdDelivery is a lightweight delivery log record (stored in ad_deliveries collection)
