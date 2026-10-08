@@ -110,6 +110,8 @@ func (h *AdHandler) AdminCreateAd(c *gin.Context) {
 		InlineMobileMediaURL      string   `json:"inline_mobile_media_url"`
 		FixedBottomMobileMediaURL string   `json:"fixed_bottom_mobile_media_url"`
 		PopupMobileMediaURL       string   `json:"popup_mobile_media_url"`
+		BannerPlaces              []string `json:"banner_places"`
+		BannerOrder               int      `json:"banner_order"`
 		PlayerOverlayMediaURL     string   `json:"player_overlay_media_url"`
 		PlayerOverlayMediaType    string   `json:"player_overlay_media_type"`
 		TelegramMediaURL          string   `json:"telegram_media_url"`
@@ -179,6 +181,8 @@ func (h *AdHandler) AdminCreateAd(c *gin.Context) {
 		InlineMobileMediaURL:      sanitizeAdMediaURL(req.InlineMobileMediaURL),
 		FixedBottomMobileMediaURL: sanitizeAdMediaURL(req.FixedBottomMobileMediaURL),
 		PopupMobileMediaURL:       sanitizeAdMediaURL(req.PopupMobileMediaURL),
+		BannerPlaces:              sanitizeBannerPlaces(req.BannerPlaces),
+		BannerOrder:               req.BannerOrder,
 		PlayerOverlayMediaURL:     sanitizeAdMediaURL(req.PlayerOverlayMediaURL),
 		PlayerOverlayMediaType:    req.PlayerOverlayMediaType,
 		TelegramMediaURL:          sanitizeAdMediaURL(req.TelegramMediaURL),
@@ -234,6 +238,8 @@ func (h *AdHandler) AdminUpdateAd(c *gin.Context) {
 		InlineMobileMediaURL      string   `json:"inline_mobile_media_url"`
 		FixedBottomMobileMediaURL string   `json:"fixed_bottom_mobile_media_url"`
 		PopupMobileMediaURL       string   `json:"popup_mobile_media_url"`
+		BannerPlaces              []string `json:"banner_places"`
+		BannerOrder               *int     `json:"banner_order"`
 		PlayerOverlayMediaURL     string   `json:"player_overlay_media_url"`
 		PlayerOverlayMediaType    string   `json:"player_overlay_media_type"`
 		TelegramMediaURL          string   `json:"telegram_media_url"`
@@ -294,6 +300,13 @@ func (h *AdHandler) AdminUpdateAd(c *gin.Context) {
 	update["inline_mobile_media_url"] = sanitizeAdMediaURL(req.InlineMobileMediaURL)
 	update["fixed_bottom_mobile_media_url"] = sanitizeAdMediaURL(req.FixedBottomMobileMediaURL)
 	update["popup_mobile_media_url"] = sanitizeAdMediaURL(req.PopupMobileMediaURL)
+	// nil means "not sent" (older clients); an empty list means every carousel.
+	if req.BannerPlaces != nil {
+		update["banner_places"] = sanitizeBannerPlaces(req.BannerPlaces)
+	}
+	if req.BannerOrder != nil {
+		update["banner_order"] = *req.BannerOrder
+	}
 	update["player_overlay_media_url"] = sanitizeAdMediaURL(req.PlayerOverlayMediaURL)
 	update["player_overlay_media_type"] = req.PlayerOverlayMediaType
 	update["telegram_media_url"] = sanitizeAdMediaURL(req.TelegramMediaURL)
@@ -329,6 +342,67 @@ func (h *AdHandler) AdminUpdateAd(c *gin.Context) {
 
 	ad, _ := h.adRepo.FindByID(id)
 	c.JSON(http.StatusOK, ad)
+}
+
+// sanitizeBannerPlaces keeps the known carousel keys, without duplicates.
+func sanitizeBannerPlaces(places []string) []string {
+	out := make([]string, 0, len(places))
+	seen := make(map[string]bool, len(places))
+	for _, p := range places {
+		p = strings.TrimSpace(p)
+		if models.BannerPlaces[p] && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// AdminPatchBanner PATCH /api/superadmin/ads/:id/banner
+// Changes only the banner-carousel settings of an ad (places, order, status),
+// so reordering or toggling a banner never touches its schedule or creatives.
+func (h *AdHandler) AdminPatchBanner(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid ad id"})
+		return
+	}
+
+	var req struct {
+		BannerPlaces []string `json:"banner_places"`
+		BannerOrder  *int     `json:"banner_order"`
+		Status       string   `json:"status"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	update := bson.M{}
+	if req.BannerPlaces != nil {
+		update["banner_places"] = sanitizeBannerPlaces(req.BannerPlaces)
+	}
+	if req.BannerOrder != nil {
+		update["banner_order"] = *req.BannerOrder
+	}
+	switch models.AdStatus(req.Status) {
+	case "":
+	case models.AdStatusActive, models.AdStatusPaused:
+		update["status"] = req.Status
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "status must be active or paused"})
+		return
+	}
+	if len(update) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "nothing to update"})
+		return
+	}
+
+	if err := h.adRepo.Update(id, update); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 // AdminDeleteAd DELETE /api/admin/ads/:id

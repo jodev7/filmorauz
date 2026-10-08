@@ -583,6 +583,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 		superadmin.GET("/ads/stats", adHandler.AdminGetStats)
 		superadmin.POST("/ads", adHandler.AdminCreateAd)
 		superadmin.PUT("/ads/:id", adHandler.AdminUpdateAd)
+		superadmin.PATCH("/ads/:id/banner", adHandler.AdminPatchBanner)
 		superadmin.DELETE("/ads/:id", adHandler.AdminDeleteAd)
 		superadmin.POST("/ads/upload", uploadHandler.UploadAdMedia)
 		superadmin.POST("/ads/:id/send-telegram", adHandler.SendTelegramAd)

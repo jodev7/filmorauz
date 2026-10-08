@@ -49,6 +49,12 @@ type Ad struct {
 	FixedBottomMobileMediaURL string `bson:"fixed_bottom_mobile_media_url,omitempty" json:"fixed_bottom_mobile_media_url,omitempty"`
 	PopupMobileMediaURL       string `bson:"popup_mobile_media_url,omitempty" json:"popup_mobile_media_url,omitempty"`
 
+	// Banner carousel: which carousels the banner creative is a slide of
+	// (BannerPlaces keys; empty = every carousel) and its position in them
+	// (lower first).
+	BannerPlaces []string `bson:"banner_places,omitempty" json:"banner_places,omitempty"`
+	BannerOrder  int      `bson:"banner_order" json:"banner_order"`
+
 	// Telegram shared media
 	TelegramMediaURL  string `bson:"telegram_media_url,omitempty" json:"telegram_media_url,omitempty"`
 	TelegramMediaType string `bson:"telegram_media_type,omitempty" json:"telegram_media_type,omitempty"`
@@ -111,6 +117,14 @@ var AdSlots = map[string]bool{
 	"background":   true,
 	"player":       true,
 	"player_pause": true,
+}
+
+// BannerPlaces lists the banner carousels an ad's banner can be assigned to:
+// "top" is the banner at the top of the home and listing pages, "movie" the
+// one on movie/series pages.
+var BannerPlaces = map[string]bool{
+	"top":   true,
+	"movie": true,
 }
 
 // AdDelivery is a lightweight delivery log record (stored in ad_deliveries collection)

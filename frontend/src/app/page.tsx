@@ -78,6 +78,8 @@ export default async function HomePage() {
             Inset rounded card that sits *below* the floating navbar island
             so the backdrop is fully visible (nothing overlaps its top). */}
         <div className="max-w-7xl mx-auto px-2 sm:px-4 pt-[calc(env(safe-area-inset-top)_+_92px)] sm:pt-[calc(env(safe-area-inset-top)_+_104px)]">
+          {/* Ad banner carousel at the very top; renders nothing without ads. */}
+          <WebsiteAdSlot placement="homepage_top_banner" variant="banner" className="mb-3 sm:mb-4" hideEmpty />
           <HeroCarousel movies={latestMovies} />
         </div>
 
@@ -104,11 +106,6 @@ export default async function HomePage() {
 
         {/* ── Continue Watching (logged-in users; self-hides when empty) ── */}
         <ContinueWatchingRow />
-
-        {/* ── Homepage Top Banner Ad — lazy; shared prefetch serves it ─ */}
-        <div className="max-w-7xl mx-auto px-4 mt-8 mb-6">
-          <WebsiteAdSlot placement="homepage_top_banner" variant="banner" lazy />
-        </div>
 
         {/* ── New Movies — only carousel with priority posters (above-fold) ── */}
         {recent.length > 0 && (

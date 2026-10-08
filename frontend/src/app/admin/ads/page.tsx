@@ -41,6 +41,7 @@ import { normalizeMediaUrl } from "@/lib/image-utils";
 import { useToast } from "@/components/admin/Toast";
 import { Chip, EmptyState, IconBtn, Modal, PageHead, PrimaryButton, SearchBox, SkeletonList, StatTile, Tabs, Tone, fmtDate } from "@/components/admin/kit";
 import AdEditor, { adToInput } from "@/components/admin/ads/AdEditor";
+import BannerManager from "@/components/admin/ads/BannerManager";
 import { isVideoUrl } from "@/components/admin/ads/AdMediaSlot";
 
 const STATUS: Record<AdStatus, { label: string; tone: Tone }> = {
@@ -259,6 +260,8 @@ export default function AdminAdsPage() {
           </Chip>
         )}
       </div>
+
+      {!loading && <BannerManager ads={ads} token={token} onChanged={load} />}
 
       <div className="mb-4 flex flex-col gap-3 lg:flex-row">
         <SearchBox value={query} onChange={setQuery} placeholder="Reklama nomi bo'yicha qidirish..." />

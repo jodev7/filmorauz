@@ -4,8 +4,18 @@ import MediaImage from "@/components/MediaImage";
 import { normalizeMediaUrl } from "@/lib/image-utils";
 
 /** Fills its (relative, sized) parent with the ad image or muted video. */
-export function AdMedia({ url, type }: { url: string; type: "image" | "video" }) {
+export function AdMedia({
+  url,
+  type,
+  fit = "cover",
+}: {
+  url: string;
+  type: "image" | "video";
+  /** "contain" shows the whole creative when the box has another ratio. */
+  fit?: "cover" | "contain";
+}) {
   if (!url) return null;
+  const objectFit = fit === "contain" ? "object-contain" : "object-cover";
 
   if (type === "video") {
     return (
@@ -16,7 +26,7 @@ export function AdMedia({ url, type }: { url: string; type: "image" | "video" })
         playsInline
         autoPlay
         preload="metadata"
-        className="absolute inset-0 w-full h-full object-cover object-center"
+        className={`absolute inset-0 w-full h-full ${objectFit} object-center`}
       />
     );
   }
@@ -25,7 +35,7 @@ export function AdMedia({ url, type }: { url: string; type: "image" | "video" })
     <MediaImage
       src={normalizeMediaUrl(url, "/og-image.jpg")}
       alt=""
-      className="absolute inset-0 h-full w-full object-cover object-center"
+      className={`absolute inset-0 h-full w-full ${objectFit} object-center`}
     />
   );
 }

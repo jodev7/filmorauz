@@ -33,6 +33,8 @@ export const emptyAdInput = (): AdInput => ({
   inline_mobile_media_url: "",
   fixed_bottom_mobile_media_url: "",
   popup_mobile_media_url: "",
+  banner_places: [],
+  banner_order: 0,
   player_overlay_media_url: "",
   player_overlay_media_type: "video",
   telegram_media_url: "",
@@ -72,6 +74,8 @@ export function adToInput(ad: Ad): AdInput {
     inline_mobile_media_url: ad.inline_mobile_media_url || "",
     fixed_bottom_mobile_media_url: ad.fixed_bottom_mobile_media_url || "",
     popup_mobile_media_url: ad.popup_mobile_media_url || "",
+    banner_places: ad.banner_places || [],
+    banner_order: ad.banner_order || 0,
     player_overlay_media_url: ad.player_overlay_media_url || "",
     player_overlay_media_type: ad.player_overlay_media_type || "image",
     telegram_media_url: ad.telegram_media_url || "",
@@ -94,7 +98,7 @@ const PLACEMENTS = [
 // Slots without a typeKey are the optional phone images: image-only, and when
 // left empty the slot's desktop creative is shown on phones as well.
 const WEBSITE_SLOTS: { slot: keyof AdInput; typeKey?: keyof AdInput; label: string; size: string; aspect: string; video?: boolean }[] = [
-  { slot: "banner_media_url", typeKey: "banner_media_type", label: "Banner (sahifa tepasi)", size: "1200×300 · 4:1", aspect: "aspect-[4/1]" },
+  { slot: "banner_media_url", typeKey: "banner_media_type", label: "Banner (karusel)", size: "1200×300 · 4:1", aspect: "aspect-[4/1]" },
   { slot: "banner_mobile_media_url", label: "Banner — telefon uchun", size: "800×400 · 2:1 · ixtiyoriy", aspect: "aspect-[2/1]" },
   { slot: "inline_media_url", typeKey: "inline_media_type", label: "Kontent orasida", size: "1200×400 · 3:1", aspect: "aspect-[3/1]" },
   { slot: "inline_mobile_media_url", label: "Kontent orasida — telefon uchun", size: "800×600 · 4:3 · ixtiyoriy", aspect: "aspect-[4/3]" },
@@ -291,7 +295,7 @@ export default function AdEditor({
         </Section>
 
         {has("website") && (
-          <Section icon={Globe} title="Sayt uchun rasmlar" desc="Har bir joyda faqat shu joyga yuklangan rasm ko'rsatiladi. Telefon rasmi yuklanmasa, telefonda ham asosiy rasm chiqadi.">
+          <Section icon={Globe} title="Sayt uchun rasmlar" desc="Har bir joyda faqat shu joyga yuklangan rasm ko'rsatiladi. Telefon rasmi yuklanmasa, telefonda ham asosiy rasm chiqadi. Banner karuselida har bir faol reklamaning banneri alohida slayd bo'ladi — o'z havolasi va o'z statistikasi bilan.">
             <div className="grid gap-4 sm:grid-cols-2">
               {WEBSITE_SLOTS.map((s) => (
                 <AdMediaSlot

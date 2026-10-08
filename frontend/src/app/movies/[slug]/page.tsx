@@ -381,7 +381,7 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
         </div>
 
         <div className="max-w-7xl mx-auto px-4 mt-8 mb-6">
-          <WebsiteAdSlot placement="movie_detail_banner" variant="banner" />
+          <WebsiteAdSlot placement="movie_detail_banner" variant="banner" bannerPlace="movie" />
         </div>
 
         {/* Similar / recommended / random titles */}

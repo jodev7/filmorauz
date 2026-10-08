@@ -1,4 +1,4 @@
-import type { Ad } from "@/lib/api";
+import type { Ad, BannerPlace } from "@/lib/api";
 
 export type WebsiteAdVariant = "banner" | "inline" | "card" | "popup" | "fixed_bottom";
 
@@ -61,4 +61,22 @@ export function getWebsiteAdMedia(
       mobile: false,
     }
   );
+}
+
+/** True when the ad's banner belongs to this carousel (no places = all of them). */
+export function isBannerInPlace(ad: Ad, place: BannerPlace): boolean {
+  const places = ad.banner_places || [];
+  return places.length === 0 || places.includes(place);
+}
+
+/**
+ * Slides of one banner carousel: ads with a banner creative assigned to the
+ * place, ordered by banner_order (ties keep the incoming priority order).
+ */
+export function bannersForPlace(ads: Ad[], place: BannerPlace): Ad[] {
+  return ads
+    .filter((ad) => getWebsiteAdMedia(ad, "banner") && isBannerInPlace(ad, place))
+    .map((ad, i) => ({ ad, i }))
+    .sort((a, b) => (a.ad.banner_order || 0) - (b.ad.banner_order || 0) || a.i - b.i)
+    .map(({ ad }) => ad);
 }

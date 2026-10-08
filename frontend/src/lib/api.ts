@@ -4533,6 +4533,9 @@ export interface Ad {
   inline_mobile_media_url?: string;
   fixed_bottom_mobile_media_url?: string;
   popup_mobile_media_url?: string;
+  // Banner carousel: carousels this banner is a slide of (empty = all) and its position.
+  banner_places?: BannerPlace[];
+  banner_order?: number;
   player_overlay_media_url?: string;
   player_overlay_media_type?: "image" | "video";
   // Telegram shared media
@@ -4600,6 +4603,9 @@ export interface AdInput {
   inline_mobile_media_url?: string;
   fixed_bottom_mobile_media_url?: string;
   popup_mobile_media_url?: string;
+  // Banner carousel: carousels this banner is a slide of (empty = all) and its position.
+  banner_places?: BannerPlace[];
+  banner_order?: number;
   player_overlay_media_url?: string;
   player_overlay_media_type?: "image" | "video";
   // Telegram shared media
@@ -4783,6 +4789,26 @@ export async function getAdsForWebsite(placement: string): Promise<Ad[]> {
     });
   });
   return merged;
+}
+
+/** Banner carousels (backend models.BannerPlaces): site top / movie & series pages. */
+export type BannerPlace = "top" | "movie";
+
+/** Changes only an ad's banner-carousel settings; schedule and creatives stay as they are. */
+export async function adminPatchAdBanner(
+  token: string,
+  id: string,
+  patch: { banner_places?: BannerPlace[]; banner_order?: number; status?: "active" | "paused" },
+): Promise<void> {
+  const res = await fetch(`${API_URL}/superadmin/ads/${id}/banner`, {
+    method: "PATCH",
+    headers: { ...authHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Failed to update banner");
+  }
 }
 
 /** Website slot an impression/click is attributed to (backend models.AdSlots). */

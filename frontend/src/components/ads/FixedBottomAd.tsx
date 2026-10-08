@@ -18,8 +18,9 @@ interface FixedBottomAdProps {
 const DEFAULT_PLACEMENT = "website_fixed_bottom";
 
 /**
- * Full-width ad bar pinned to the bottom of the viewport on every public
- * page. It sits above the phone tab bar and has no close button.
+ * Ad bar pinned to the bottom of the viewport on every public page. It is as
+ * wide as the page content (max-w-7xl), so the gutters stay free for the
+ * background ad. It sits above the phone tab bar and has no close button.
  */
 export default function FixedBottomAd({ placement = DEFAULT_PLACEMENT }: FixedBottomAdProps) {
   const pathname = usePathname();
@@ -71,10 +72,10 @@ export default function FixedBottomAd({ placement = DEFAULT_PLACEMENT }: FixedBo
     <>
       {/* Reserves the bar's height at the end of the page so it never hides
           the footer. */}
-      <div className={`w-full ${ratio}`} aria-hidden="true" />
+      <div className={`mx-auto w-full max-w-7xl ${ratio}`} aria-hidden="true" />
       <div
         ref={boxRef}
-        className={`fixed inset-x-0 z-[55] w-full cursor-pointer overflow-hidden border-t border-white/10 bg-brand-dark ${ratio} ${bottom}`}
+        className={`fixed inset-x-0 z-[55] mx-auto w-full max-w-7xl cursor-pointer overflow-hidden border-t border-white/10 bg-brand-dark ${ratio} ${bottom}`}
         onClick={handleAdClick}
         role="link"
         aria-label={`Reklama: ${ad.title}`}

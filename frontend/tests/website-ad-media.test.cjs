@@ -10,7 +10,7 @@ const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '../src/lib
 }).outputText;
 const context = { exports: {} };
 vm.runInNewContext(code, context);
-const { getWebsiteAdMedia } = context.exports;
+const { getWebsiteAdMedia, bannersForPlace } = context.exports;
 
 test('one banner creative does not fill adjacent inline or popup slots', () => {
   const ad = { banner_media_url: '/banner.webp', banner_media_type: 'image' };
@@ -51,4 +51,17 @@ test('phones get the mobile creative only when the slot has a desktop one', () =
   // No mobile image: the desktop creative (and its type) is used on phones.
   assert.equal(getWebsiteAdMedia(ad, 'fixed_bottom', true).type, 'video');
   assert.equal(getWebsiteAdMedia(ad, 'fixed_bottom', true).mobile, false);
+});
+
+test('a banner carousel shows only its own banners, in banner_order', () => {
+  const ads = [
+    { id: 'a', banner_media_url: '/a.webp', banner_order: 20 },
+    { id: 'b', banner_media_url: '/b.webp', banner_order: 10, banner_places: ['movie'] },
+    { id: 'c', banner_media_url: '/c.webp', banner_order: 10, banner_places: ['top', 'movie'] },
+    { id: 'd', inline_media_url: '/d.webp', banner_places: ['top'] },
+    { id: 'e', banner_media_url: '/e.webp' },
+  ];
+  // No places = every carousel; ties keep the incoming order; no banner = no slide.
+  assert.deepEqual(Array.from(bannersForPlace(ads, 'top'), (a) => a.id), ['e', 'c', 'a']);
+  assert.deepEqual(Array.from(bannersForPlace(ads, 'movie'), (a) => a.id), ['e', 'b', 'c', 'a']);
 });

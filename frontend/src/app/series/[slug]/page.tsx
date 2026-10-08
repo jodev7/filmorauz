@@ -278,7 +278,7 @@ export default async function SeriesDetailPage({ params }: Props) {
           </div>
 
           <div className="mb-6">
-            <WebsiteAdSlot placement="series_detail_page_banner" variant="banner" />
+            <WebsiteAdSlot placement="series_detail_page_banner" variant="banner" bannerPlace="movie" />
           </div>
 
           <CastRow

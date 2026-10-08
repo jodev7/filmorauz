@@ -115,7 +115,7 @@ export default async function SeasonPage({ params }: Props) {
             {season.episodes.length} ta epizod
           </p>
 
-          <WebsiteAdSlot placement="season_page_banner" variant="banner" className="mb-8" />
+          <WebsiteAdSlot placement="season_page_banner" variant="banner" bannerPlace="movie" className="mb-8" />
 
           <SeasonList
             seasons={[season]}

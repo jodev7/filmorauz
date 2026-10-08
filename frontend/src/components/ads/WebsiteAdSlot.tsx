@@ -7,13 +7,17 @@ import { isAdsAllowedForRoute, isUserPremium } from "@/lib/ads-utils";
 import { useAuth } from "@/lib/auth-context";
 import { useAdSlot } from "@/components/ads/AdSlotContext";
 import { AdCta, AdLabel, AdMedia } from "@/components/ads/AdCreative";
+import AdBannerCarousel from "@/components/ads/AdBannerCarousel";
 import { useIsPhone, useRotatedAd, useViewableImpression } from "@/components/ads/ad-hooks";
-import { getWebsiteAdMedia } from "@/lib/website-ad-media";
+import type { BannerPlace } from "@/lib/api";
+import { bannersForPlace, getWebsiteAdMedia } from "@/lib/website-ad-media";
 
 interface WebsiteAdSlotProps {
   placement: string;
   className?: string;
   variant?: "banner" | "inline" | "card";
+  /** Which banner carousel this is (admin "Banner karusel"). Banner variant only. */
+  bannerPlace?: BannerPlace;
   lazy?: boolean;
   /** Render nothing (not even the empty wrapper) while there is no ad. Not for `lazy` slots. */
   hideEmpty?: boolean;
@@ -34,11 +38,15 @@ const MOBILE_SLOT_HEIGHT: Record<string, string> = {
   card:   "aspect-[4/3]",
 };
 
-/** In-page banner / inline ad. Renders an empty box when there is no ad. */
+/**
+ * In-page ad. `banner` slots are a carousel of every eligible ad; `inline`
+ * slots show one ad picked per page view. Renders an empty box without ads.
+ */
 export default function WebsiteAdSlot({
   placement,
   className = "",
   variant = "inline",
+  bannerPlace = "top",
   lazy = false,
   hideEmpty = false,
 }: WebsiteAdSlotProps) {
@@ -57,10 +65,12 @@ export default function WebsiteAdSlot({
 
   // Ads always derive from the shared context — no local state, no stale
   // empty-array bug, no duplicate fetch loops.
-  const ads = useMemo(
-    () => getMergedAds(placements).filter((ad) => getWebsiteAdMedia(ad, variant)),
-    [getMergedAds, placements, variant],
-  );
+  const ads = useMemo(() => {
+    const merged = getMergedAds(placements);
+    return variant === "banner"
+      ? bannersForPlace(merged, bannerPlace)
+      : merged.filter((ad) => getWebsiteAdMedia(ad, variant));
+  }, [getMergedAds, placements, variant, bannerPlace]);
   const ad = useRotatedAd(ads);
 
   const allowed = !authLoading && !isUserPremium(user) && isAdsAllowedForRoute(pathname);
@@ -90,20 +100,29 @@ export default function WebsiteAdSlot({
   }, [ensurePlacements, placements, shouldLoad, allowed]);
 
   const shown = allowed && shouldLoad ? ad : null;
-  const slot = variant === "banner" ? "banner" : "inline";
-  useViewableImpression(creativeRef, shown?.id, slot);
+  const carousel = variant === "banner";
+  // The carousel counts impressions per slide itself.
+  useViewableImpression(creativeRef, carousel ? undefined : shown?.id, "inline");
 
   // The wrapper stays mounted (it carries the caller's spacing and is the
   // lazy-load sentinel) but collapses while there is nothing to show.
   if (!shown && hideEmpty) return null;
   if (!shown) return <div ref={containerRef} className={allowed ? `w-full ${className}` : undefined} />;
 
+  if (carousel) {
+    return (
+      <div ref={containerRef} className={`w-full ${className}`}>
+        <AdBannerCarousel ads={ads} phone={phone} />
+      </div>
+    );
+  }
+
   const media = getWebsiteAdMedia(shown, variant, phone)!;
   const mediaHeight = (media.mobile ? MOBILE_SLOT_HEIGHT : SLOT_HEIGHT)[variant] ?? SLOT_HEIGHT.banner;
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    recordAdClick(shown.id, slot).catch(() => {});
+    recordAdClick(shown.id, "inline").catch(() => {});
     window.open(shown.target_url, "_blank", "noopener,noreferrer");
   };
 
