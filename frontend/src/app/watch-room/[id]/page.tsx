@@ -13,6 +13,7 @@ const RoomPlayer = dynamic(() => import("@/components/watch-room/RoomPlayer"), {
 });
 import MemberList from "@/components/watch-room/MemberList";
 import GifPicker from "@/components/watch-room/GifPicker";
+import EmojiPicker from "@/components/comments/EmojiPicker";
 import {
   getWatchRoom,
   createRoomInvite,
@@ -98,6 +99,9 @@ export default function WatchRoomPage() {
   const [kicked, setKicked] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [emojiOpen, setEmojiOpen] = useState(false);
+  // Emoji panel that types into the message (the reaction palette above floats over the video instead).
+  const [chatEmojiOpen, setChatEmojiOpen] = useState(false);
+  const chatInputRef = useRef<HTMLInputElement>(null);
   const [gifOpen, setGifOpen] = useState(false);
   const [showMembers, setShowMembers] = useState(false); // mobile drawer
   const [typingUsers, setTypingUsers] = useState<Record<string, string>>({}); // userID → name
@@ -624,6 +628,18 @@ export default function WatchRoomPage() {
     setEmojiOpen(false);
   };
 
+  const handleInsertChatEmoji = (emoji: string) => {
+    const el = chatInputRef.current;
+    const start = el?.selectionStart ?? chatInput.length;
+    const end = el?.selectionEnd ?? chatInput.length;
+    onChatInputChange(chatInput.slice(0, start) + emoji + chatInput.slice(end));
+    const pos = start + emoji.length;
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(pos, pos);
+    });
+  };
+
   const handleSendGif = (gifUrl: string) => {
     sendChat("gif", gifUrl);
     setGifOpen(false);
@@ -1050,10 +1066,19 @@ export default function WatchRoomPage() {
               {gifOpen && (
                 <GifPicker onSelect={handleSendGif} onClose={() => setGifOpen(false)} />
               )}
+              {chatEmojiOpen && (
+                <EmojiPicker
+                  onPick={handleInsertChatEmoji}
+                  onClose={() => setChatEmojiOpen(false)}
+                  className="absolute bottom-12 left-2 right-2 z-30"
+                  cols={6}
+                />
+              )}
               <div className="flex items-center gap-1 min-w-0">
                 <button
                   onClick={() => {
                     setGifOpen(false);
+                    setChatEmojiOpen(false);
                     setEmojiOpen((v) => !v);
                   }}
                   className="p-2 text-gray-400 hover:text-white shrink-0"
@@ -1063,8 +1088,22 @@ export default function WatchRoomPage() {
                   {emojiOpen ? <X className="w-4 h-4" /> : <PartyPopper className="w-4 h-4" />}
                 </button>
                 <button
+                  data-picker-toggle
                   onClick={() => {
                     setEmojiOpen(false);
+                    setGifOpen(false);
+                    setChatEmojiOpen((v) => !v);
+                  }}
+                  className={`p-2 shrink-0 ${chatEmojiOpen ? "text-white" : "text-gray-400 hover:text-white"}`}
+                  aria-label="Emoji"
+                  title="Xabarga emoji qo'shish"
+                >
+                  <Smile className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => {
+                    setEmojiOpen(false);
+                    setChatEmojiOpen(false);
                     setGifOpen((v) => !v);
                   }}
                   className={`px-1.5 py-1 text-[11px] font-bold rounded shrink-0 border ${
@@ -1081,6 +1120,7 @@ export default function WatchRoomPage() {
                     it the input's intrinsic content width (from a long typed
                     string) keeps growing and pushes the send button off-screen. */}
                 <input
+                  ref={chatInputRef}
                   value={chatInput}
                   onChange={(e) => onChatInputChange(e.target.value)}
                   onKeyDown={(e) => {

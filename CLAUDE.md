@@ -210,7 +210,7 @@ Ads have two generations of fields:
 - `share/ShareSheet` — share modal (Telegram, Instagram, TikTok, X, Facebook, WhatsApp, copy link); tracked share link for movies/series + `?ref=` referral code for signed-in users
 - `Comments` — the single comment section on movie/series/episode pages. Star-rated "taqriz" reviews (`/reviews/:type/:id`) are merged into the same list and composer: picking stars saves a review (10–500 chars, also sets the rating), otherwise a plain comment. Series have no plain comments backend, so the series page uses `commentsEnabled={false}` (rated only). Sorting/filters are client-side over up to 100 loaded comments.
 - `comments/CommentRules` — "Izoh qoidalari" modal opened from `Comments`
-- `comments/EmojiPicker` + `watch-room/GifPicker` — emoji panel and GIF button in the comment and reply composers. A plain comment or reply may carry one GIF (`gif_url`, GIPHY hosts only — `services.ValidCommentGifURL`) and then needs no text; rated reviews stay text-only.
+- `comments/EmojiPicker` + `watch-room/GifPicker` — emoji panel and GIF button in the comment and reply composers; the same emoji panel types into the watch-room chat (the party-popper button there still sends floating reactions). Emoji search is a hand-written keyword list in the picker (`KEYWORDS`, Uzbek/Russian/English, prefix match) — add words there when a search finds nothing. A plain comment or reply may carry one GIF (`gif_url`, GIPHY hosts only — `services.ValidCommentGifURL`) and then needs no text; rated reviews stay text-only.
 
 ### Key Libraries (`lib/`)
 

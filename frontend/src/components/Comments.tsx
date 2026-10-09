@@ -99,7 +99,9 @@ function ComposerTools({
           GIF
         </button>
       )}
-      {open === "emoji" && <EmojiPicker onPick={onEmoji} onClose={() => setOpen(null)} className={panelClass} />}
+      {open === "emoji" && (
+        <EmojiPicker onPick={onEmoji} onClose={() => setOpen(null)} className={panelClass ? `${panelClass} w-[min(22rem,calc(100vw-3rem))]` : undefined} />
+      )}
       {open === "gif" && gifAllowed && (
         <GifPicker
           onSelect={(url) => {
