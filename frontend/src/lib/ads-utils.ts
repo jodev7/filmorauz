@@ -104,3 +104,6 @@ export function getRecommendedMediaRules(platform: "website" | "telegram", slotT
   }
   return AD_MEDIA_RULES.website.banner;
 }
+
+/** Tallest rendition a viewer without Premium may watch: 720p is free, 1080p is Premium. */
+export const FREE_MAX_QUALITY_HEIGHT = 720;

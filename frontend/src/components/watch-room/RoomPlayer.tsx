@@ -21,6 +21,7 @@ import {
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
 import { isUserPremium } from "@/components/PremiumComponents";
+import { FREE_MAX_QUALITY_HEIGHT } from "@/lib/ads-utils";
 
 type QualityLevel = { index: number; label: string; height: number };
 
@@ -100,8 +101,8 @@ export default function RoomPlayer({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const { user } = useAuth();
-  // 720p/1080p are Premium-only. Free viewers get a locked entry in the quality
-  // picker and an upsell prompt; their auto/manual quality is capped at 480p.
+  // 1080p is Premium-only. Free viewers get a locked entry in the quality
+  // picker and an upsell prompt; their auto/manual quality is capped at 720p.
   const isPremiumViewer = isUserPremium(user);
   const isPremiumRef = useRef(isPremiumViewer);
   useEffect(() => {
@@ -279,13 +280,13 @@ export default function RoomPlayer({
     };
     hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
       setFromHls(buildLevels(data.levels));
-      // Free viewers: cap auto/manual selection at the highest ≤480p level so
+      // Free viewers: cap auto/manual selection at the highest ≤720p level so
       // Premium-only resolutions are never served, even on Auto.
       if (!isPremiumRef.current) {
         let capIdx = -1;
         let capHeight = -1;
         data.levels.forEach((l, i) => {
-          if (l.height <= 480 && l.height > capHeight) {
+          if (l.height <= FREE_MAX_QUALITY_HEIGHT && l.height > capHeight) {
             capHeight = l.height;
             capIdx = i;
           }
@@ -745,9 +746,9 @@ export default function RoomPlayer({
   };
 
   const setQuality = (idx: number) => {
-    // Gate Premium-only resolutions (>480p) for free viewers.
+    // Gate Premium-only resolutions (>720p) for free viewers.
     const requested = qualities.find((q) => q.index === idx);
-    if (!isPremiumViewer && requested && requested.height > 480) {
+    if (!isPremiumViewer && requested && requested.height > FREE_MAX_QUALITY_HEIGHT) {
       setShowPremiumPrompt(true);
       setShowSettings(false);
       return;
@@ -1151,7 +1152,7 @@ export default function RoomPlayer({
                       ‹ Sifat
                     </button>
                     {qualities.map((q) => {
-                      const locked = !isPremiumViewer && q.height > 480;
+                      const locked = !isPremiumViewer && q.height > FREE_MAX_QUALITY_HEIGHT;
                       return (
                         <button
                           key={q.index}
@@ -1294,7 +1295,7 @@ export default function RoomPlayer({
             </div>
             <h3 className="mb-2 text-lg font-semibold text-white">Premium sifat</h3>
             <p className="mb-4 text-sm text-gray-300">
-              720p va 1080p faqat Premium foydalanuvchilar uchun mavjud.
+              1080p sifat faqat Premium foydalanuvchilar uchun mavjud.
             </p>
             <div className="flex flex-col gap-3 sm:flex-row">
               <button

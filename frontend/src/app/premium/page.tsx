@@ -125,7 +125,7 @@ const pricingPlans: PricingPlan[] = [
 
 const premiumFeatures = [
   "Reklamasiz tomosha",
-  "720p va 1080p sifat",
+  "1080p sifat",
   "Tezroq stream",
   "Serial auto-next",
   "Premium kontent",
@@ -230,7 +230,7 @@ export default function PremiumPage() {
     },
     {
       icon: <Film className="w-8 h-8" />,
-      title: "720p / 1080p sifat",
+      title: "1080p sifat",
       description: "Yuqori sifatdagi tomosha rejimlari va aniq tasvir"
     },
     {

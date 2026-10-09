@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import Hls from "hls.js";
 import { VideoSourceType, Ad, getAdsByPlacement, getAdsForWebsite, recordAdImpression } from "@/lib/api";
-import { pickWeightedRandomAd } from "@/lib/ads-utils";
+import { pickWeightedRandomAd, FREE_MAX_QUALITY_HEIGHT } from "@/lib/ads-utils";
 import { PlayerAdSchedule } from "@/lib/player-ad-schedule";
 import PlayerVideoAd from "@/components/ads/PlayerVideoAd";
 import PlayerPauseAd from "@/components/ads/PlayerPauseAd";
@@ -826,7 +826,7 @@ function HLSPlayer({
           .map((l, i) => ({ index: i, height: l.height }))
           .sort((a, b) => b.height - a.height)
           .forEach(({ index, height }) => {
-            if (!isPremiumUser && height <= 480 && height > maxFreeLevelHeight) {
+            if (!isPremiumUser && height <= FREE_MAX_QUALITY_HEIGHT && height > maxFreeLevelHeight) {
               maxFreeLevelHeight = height;
               maxFreeLevelIndex = index;
             }
@@ -836,7 +836,7 @@ function HLSPlayer({
                 index,
                 label: `${height}p`,
                 height,
-                locked: !isPremiumUser && height > 480,
+                locked: !isPremiumUser && height > FREE_MAX_QUALITY_HEIGHT,
               });
             }
         });
@@ -1492,7 +1492,7 @@ function HLSPlayer({
             </div>
             <h3 className="mb-2 text-lg font-semibold text-white">Premium sifat</h3>
             <p className="mb-4 text-sm text-gray-300">
-              720p va 1080p faqat Premium foydalanuvchilar uchun mavjud.
+              1080p sifat faqat Premium foydalanuvchilar uchun mavjud.
             </p>
             <div className="flex flex-col gap-3 sm:flex-row">
               <button

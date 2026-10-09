@@ -162,6 +162,7 @@ Ads have two generations of fields:
 - `User.IsPremiumActive` + `User.PremiumExpiresAt`
 - Background job (`startPremiumCleanupJob`) runs every 10 min to expire stale subscriptions
 - Premium movies locked behind `PremiumLockOverlay` on watch page
+- Quality: viewers without Premium get up to 720p; taller renditions (1080p) are locked in both players (`FREE_MAX_QUALITY_HEIGHT` in `lib/ads-utils.ts`)
 - Users notified 3 days before expiry and on expiry
 
 ### SEO files (sitemap / robots / llms.txt)
@@ -209,6 +210,7 @@ Ads have two generations of fields:
 - `share/ShareSheet` — share modal (Telegram, Instagram, TikTok, X, Facebook, WhatsApp, copy link); tracked share link for movies/series + `?ref=` referral code for signed-in users
 - `Comments` — the single comment section on movie/series/episode pages. Star-rated "taqriz" reviews (`/reviews/:type/:id`) are merged into the same list and composer: picking stars saves a review (10–500 chars, also sets the rating), otherwise a plain comment. Series have no plain comments backend, so the series page uses `commentsEnabled={false}` (rated only). Sorting/filters are client-side over up to 100 loaded comments.
 - `comments/CommentRules` — "Izoh qoidalari" modal opened from `Comments`
+- `comments/EmojiPicker` + `watch-room/GifPicker` — emoji panel and GIF button in the comment and reply composers. A plain comment or reply may carry one GIF (`gif_url`, GIPHY hosts only — `services.ValidCommentGifURL`) and then needs no text; rated reviews stay text-only.
 
 ### Key Libraries (`lib/`)
 
