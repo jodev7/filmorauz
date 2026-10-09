@@ -1045,6 +1045,11 @@ func (r *JobRepository) IncrementRetry(ctx context.Context, id string) error {
 		setFields["progress"] = 0
 		setFields["message"] = "Waiting for worker"
 		setFields["steps.download"] = false
+		// The retry starts over from the download, so the later steps must be
+		// open again: a job left with steps.process=true comes back as
+		// ready_to_process and is never claimed (the claim needs steps.process != true).
+		setFields["steps.process"] = false
+		setFields["steps.upload"] = false
 		log.Printf("[REPO] IncrementRetry: job %s retry %d/%d — resetting to queued", id, newRetry, maxRetries)
 	}
 
