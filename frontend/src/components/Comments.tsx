@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight, MessageCircle, Trash2, Heart, Flag, EyeOff, ScrollText, MessagesSquare, User as UserIcon, Loader2, Send, LogIn } from "lucide-react";
+import { ChevronDown, ChevronRight, MessageCircle, Trash2, Heart, Flag, EyeOff, ScrollText, MessagesSquare, User as UserIcon, Loader2, Send, LogIn, Smile, X } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
   getMovieComments,
@@ -34,6 +34,8 @@ import MediaImage from "@/components/ui/MediaImage";
 import CommentRulesModal from "@/components/comments/CommentRules";
 import ReviewItem from "@/components/comments/ReviewItem";
 import Stars from "@/components/comments/Stars";
+import EmojiPicker from "@/components/comments/EmojiPicker";
+import GifPicker from "@/components/watch-room/GifPicker";
 
 type CommentSort = "newest" | "oldest" | "popular" | "discussed";
 
@@ -47,6 +49,77 @@ const SORTS: { key: CommentSort; label: string }[] = [
 const COMMENTS_LIMIT = 100;
 const REVIEW_MIN = 10;
 const REVIEW_MAX = 500;
+
+/** Puts `text` where the caret is and returns the new value; the caret ends up after it. */
+function insertAtCaret(el: HTMLTextAreaElement | HTMLInputElement | null, value: string, text: string): string {
+  if (!el) return value + text;
+  const start = el.selectionStart ?? value.length;
+  const end = el.selectionEnd ?? value.length;
+  const pos = start + text.length;
+  requestAnimationFrame(() => {
+    el.focus();
+    el.setSelectionRange(pos, pos);
+  });
+  return value.slice(0, start) + text + value.slice(end);
+}
+
+/** Emoji and GIF buttons of a composer, with their panels. */
+function ComposerTools({
+  onEmoji,
+  onGif,
+  gifAllowed = true,
+  panelClass,
+}: {
+  onEmoji: (emoji: string) => void;
+  onGif: (url: string) => void;
+  gifAllowed?: boolean;
+  panelClass?: string;
+}) {
+  const [open, setOpen] = useState<"emoji" | "gif" | null>(null);
+  return (
+    <div className="relative flex items-center gap-1">
+      <button
+        type="button"
+        data-picker-toggle
+        onClick={() => setOpen((o) => (o === "emoji" ? null : "emoji"))}
+        aria-expanded={open === "emoji"}
+        title="Emoji"
+        className={`rounded-lg p-1.5 transition hover:bg-white/10 hover:text-white ${open === "emoji" ? "bg-white/10 text-white" : "text-gray-400"}`}
+      >
+        <Smile size={18} />
+      </button>
+      {gifAllowed && (
+        <button
+          type="button"
+          onClick={() => setOpen((o) => (o === "gif" ? null : "gif"))}
+          aria-expanded={open === "gif"}
+          title="GIF"
+          className={`rounded-lg border px-1.5 py-0.5 text-[11px] font-bold tracking-wide transition hover:border-white/40 hover:text-white ${open === "gif" ? "border-white/40 text-white" : "border-white/15 text-gray-400"}`}
+        >
+          GIF
+        </button>
+      )}
+      {open === "emoji" && <EmojiPicker onPick={onEmoji} onClose={() => setOpen(null)} className={panelClass} />}
+      {open === "gif" && gifAllowed && (
+        <GifPicker
+          onSelect={(url) => {
+            onGif(url);
+            setOpen(null);
+          }}
+          onClose={() => setOpen(null)}
+          className={`${panelClass || "absolute bottom-full left-0 z-30 mb-2"} w-[min(22rem,calc(100vw-3rem))]`}
+        />
+      )}
+    </div>
+  );
+}
+
+/** The GIF a comment carries; only GIPHY media is ever rendered. */
+function CommentGif({ url, className = "" }: { url?: string; className?: string }) {
+  if (!url || !/^https:\/\/([a-z0-9-]+\.)*giphy\.com\//i.test(url)) return null;
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={url} alt="GIF" loading="lazy" className={`max-h-56 max-w-full rounded-xl ${className}`} />;
+}
 
 type ListItem =
   | { kind: "comment"; key: string; time: number; likes: number; replies: number; item: CommentWithReplies }
@@ -74,6 +147,8 @@ export default function CommentsSection({
   const [loading, setLoading] = useState(true);
   const [newComment, setNewComment] = useState("");
   const [newIsSpoiler, setNewIsSpoiler] = useState(false);
+  const [newGif, setNewGif] = useState("");
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   // Track which comment is being replied to
@@ -143,10 +218,12 @@ export default function CommentsSection({
     e.preventDefault();
     if (!token || !isAuthenticated) return;
     const text = newComment.trim();
-    if (!text) return;
+    // Rated comments (reviews) are text only; a plain comment may be just a GIF.
+    const rated = !!reviewTarget && (newRating > 0 || !commentsEnabled);
+    if (!text && (rated || !newGif)) return;
 
     // A star rating turns the comment into a rated one (review).
-    if (reviewTarget && (newRating > 0 || !commentsEnabled)) {
+    if (rated && reviewTarget) {
       if (newRating < 1) return setError("Yulduzcha bilan baho bering");
       if (text.length < REVIEW_MIN) return setError(`Baholi izoh uchun kamida ${REVIEW_MIN} ta belgi yozing`);
       if (text.length > REVIEW_MAX) return setError(`Baholi izoh ${REVIEW_MAX} belgidan oshmasin`);
@@ -176,13 +253,15 @@ export default function CommentsSection({
         effectiveTargetType,
         effectiveTargetId,
         newComment.trim(),
-        newIsSpoiler
+        newIsSpoiler,
+        newGif
       );
       if (result.status === "pending") {
         setError("");
       }
       setNewComment("");
       setNewIsSpoiler(false);
+      setNewGif("");
       loadComments();
     } catch (err: any) {
       setError(err.message);
@@ -191,15 +270,15 @@ export default function CommentsSection({
     }
   };
 
-  const handleSubmitReply = async (parentId: string) => {
+  const handleSubmitReply = async (parentId: string, gifUrl = "") => {
     const content = replyContents.get(parentId) || "";
-    if (!token || !content.trim()) return;
+    if (!token || (!content.trim() && !gifUrl)) return;
 
     setSubmitting(true);
     setError("");
 
     try {
-      await createReply(token, parentId, content.trim());
+      await createReply(token, parentId, content.trim(), false, gifUrl);
       // Clear only this reply's content
       setReplyContents((prev) => {
         const next = new Map(prev);
@@ -386,6 +465,7 @@ export default function CommentsSection({
             </div>
           )}
           <textarea
+            ref={composerRef}
             value={newComment}
             onChange={(e) => setNewComment(e.target.value)}
             placeholder={tt.writeComment}
@@ -393,8 +473,26 @@ export default function CommentsSection({
             rows={3}
             maxLength={newRating > 0 || !commentsEnabled ? REVIEW_MAX : 2000}
           />
+          {newGif && !(newRating > 0 || !commentsEnabled) && (
+            <div className="relative mt-2 inline-block">
+              <CommentGif url={newGif} className="max-h-40" />
+              <button
+                type="button"
+                onClick={() => setNewGif("")}
+                aria-label="GIF'ni olib tashlash"
+                className="absolute right-1.5 top-1.5 rounded-full bg-black/70 p-1 text-white hover:bg-black"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
           {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
           <div className="mt-2 flex flex-wrap items-center gap-3 border-t border-white/5 pt-3">
+            <ComposerTools
+              onEmoji={(emoji) => setNewComment((v) => insertAtCaret(composerRef.current, v, emoji))}
+              onGif={setNewGif}
+              gifAllowed={!(newRating > 0 || !commentsEnabled)}
+            />
             <label className={`${newRating > 0 || !commentsEnabled ? "hidden" : "inline-flex"} cursor-pointer select-none items-center gap-2 text-sm text-gray-400`}>
               <input
                 type="checkbox"
@@ -414,7 +512,7 @@ export default function CommentsSection({
             </p>
             <button
               type="submit"
-              disabled={submitting || !newComment.trim()}
+              disabled={submitting || (!newComment.trim() && (!newGif || newRating > 0 || !commentsEnabled))}
               className="ml-auto inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-orange-500/20 transition hover:bg-orange-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {submitting ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
@@ -581,7 +679,7 @@ function CommentThread({
   currentUserId?: string;
   token?: string;
   onReply: (id: string) => void;
-  onReplySubmit: (id: string) => void;
+  onReplySubmit: (id: string, gifUrl?: string) => void;
   onReplyCancel: () => void;
   replyContents: Map<string, string>;
   setReplyContents: (v: React.SetStateAction<Map<string, string>>) => void;
@@ -601,6 +699,14 @@ function CommentThread({
   const [spoilerRevealed, setSpoilerRevealed] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportState, setReportState] = useState<"idle" | "sending" | "sent">("idle");
+  const [replyGif, setReplyGif] = useState("");
+  const replyRef = useRef<HTMLInputElement>(null);
+  const setReplyText = (update: (v: string) => string) =>
+    setReplyContents((prev) => {
+      const next = new Map(prev);
+      next.set(comment.id, update(prev.get(comment.id) || ""));
+      return next;
+    });
   const relativeTime = formatRelativeAddedTime(comment.created_at);
   const isReplying = replyingTo === comment.id;
   const isExpanded = expandedThreads.has(comment.id);
@@ -647,7 +753,7 @@ function CommentThread({
             <span>{tt.replyingTo}</span>
             {parentInfo.content && (
               <span className="truncate max-w-[150px] italic ml-1">
-                "{parentInfo.content.length > 40 ? parentInfo.content.slice(0, 40) + '...' : parentInfo.content}"
+                &quot;{parentInfo.content.length > 40 ? parentInfo.content.slice(0, 40) + '...' : parentInfo.content}&quot;
               </span>
             )}
           </div>
@@ -711,7 +817,10 @@ function CommentThread({
             className="group relative mb-2 block w-full text-left"
             aria-label="Spoylerni ko'rsatish"
           >
-            <p className="text-gray-300 blur-sm select-none" aria-hidden>{comment.content}</p>
+            <div className="blur-md select-none" aria-hidden>
+              {comment.content && <p className="text-gray-300">{comment.content}</p>}
+              <CommentGif url={comment.gif_url} className="mt-2" />
+            </div>
             <span className="absolute inset-0 flex items-center justify-center">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-black/70 px-3 py-1 text-xs text-white group-hover:bg-black/85">
                 <EyeOff size={13} /> Spoyler — ko&apos;rish uchun bosing
@@ -719,12 +828,17 @@ function CommentThread({
             </span>
           </button>
         ) : (
-          <p className="text-gray-300 mb-2">
-            {comment.is_spoiler && (
-              <span className="mr-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 align-middle">SPOYLER</span>
+          <div className="mb-2">
+            {(comment.content || comment.is_spoiler) && (
+              <p className="whitespace-pre-wrap break-words text-gray-300">
+                {comment.is_spoiler && (
+                  <span className="mr-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 align-middle">SPOYLER</span>
+                )}
+                {comment.content}
+              </p>
             )}
-            {comment.content}
-          </p>
+            <CommentGif url={comment.gif_url} className={comment.content ? "mt-2" : ""} />
+          </div>
         )}
 
         {/* Action row: Reply button + toggle for replies */}
@@ -817,22 +931,47 @@ function CommentThread({
 
         {/* Reply form */}
         {isReplying && (
-          <div className="mt-3 flex gap-2">
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {replyGif && (
+              <div className="relative w-full">
+                <div className="relative inline-block">
+                  <CommentGif url={replyGif} className="max-h-32" />
+                  <button
+                    type="button"
+                    onClick={() => setReplyGif("")}
+                    aria-label="GIF'ni olib tashlash"
+                    className="absolute right-1.5 top-1.5 rounded-full bg-black/70 p-1 text-white hover:bg-black"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              </div>
+            )}
+            <ComposerTools
+              onEmoji={(emoji) => setReplyText((v) => insertAtCaret(replyRef.current, v, emoji))}
+              onGif={setReplyGif}
+            />
             <input
+              ref={replyRef}
               type="text"
               value={replyContent}
-              onChange={(e) => setReplyContents((prev) => {
-                const next = new Map(prev);
-                next.set(comment.id, e.target.value);
-                return next;
-              })}
+              onChange={(e) => setReplyText(() => e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !submitting && (replyContent.trim() || replyGif)) {
+                  onReplySubmit(comment.id, replyGif);
+                  setReplyGif("");
+                }
+              }}
               placeholder={tt.writeComment}
-              className="flex-1 bg-brand-dark border border-white/10 rounded px-3 py-2 text-white text-sm"
+              className="min-w-0 flex-1 basis-40 bg-brand-dark border border-white/10 rounded px-3 py-2 text-white text-sm"
               autoFocus
             />
             <button
-              onClick={() => onReplySubmit(comment.id)}
-              disabled={submitting || !replyContent.trim()}
+              onClick={() => {
+                onReplySubmit(comment.id, replyGif);
+                setReplyGif("");
+              }}
+              disabled={submitting || (!replyContent.trim() && !replyGif)}
               className="bg-brand-red hover:bg-orange-700 text-white text-sm px-3 py-2 rounded transition-colors disabled:opacity-50"
             >
               {tt.submit}
@@ -875,7 +1014,7 @@ function CommentThread({
               // Pass parent info to replies
               parentInfo={{
                 displayName: comment.user_display_name,
-                content: comment.content,
+                content: comment.content || (comment.gif_url ? "GIF" : ""),
               }}
             />
           ))}

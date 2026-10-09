@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -35,6 +36,7 @@ type CommentWithUserDTO struct {
 	LikesCount          int                  `json:"likes_count"`
 	LikedByMe           bool                 `json:"liked_by_me"`
 	IsSpoiler           bool                 `json:"is_spoiler,omitempty"`
+	GifURL              string               `json:"gif_url,omitempty"`
 }
 
 type CommentService struct {
@@ -52,6 +54,30 @@ func NewCommentService(commentRepo *repositories.CommentRepository, userRepo *re
 // CreateComment creates a new comment with moderation checks
 // For backward compatibility, if targetType is empty, it uses movie_id
 func (s *CommentService) CreateComment(movieID, userID primitive.ObjectID, content string, parentID *primitive.ObjectID, targetType models.CommentTargetType, targetID primitive.ObjectID) (*models.MovieComment, error) {
+	return s.CreateCommentWithGif(movieID, userID, content, "", parentID, targetType, targetID)
+}
+
+// ValidCommentGifURL accepts only GIPHY media links (what /api/gifs/search
+// hands to the picker), so a comment can never embed an arbitrary image.
+func ValidCommentGifURL(raw string) bool {
+	if len(raw) > 500 {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.User != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "giphy.com" || strings.HasSuffix(host, ".giphy.com")
+}
+
+// CreateCommentWithGif creates a comment or reply with an optional GIF. The
+// text may be empty when a GIF is attached.
+func (s *CommentService) CreateCommentWithGif(movieID, userID primitive.ObjectID, content, gifURL string, parentID *primitive.ObjectID, targetType models.CommentTargetType, targetID primitive.ObjectID) (*models.MovieComment, error) {
+	gifURL = strings.TrimSpace(gifURL)
+	if gifURL != "" && !ValidCommentGifURL(gifURL) {
+		return nil, fmt.Errorf("invalid gif")
+	}
 	// Get moderation settings
 	settings, err := s.commentRepo.GetModerationSettings()
 	if err != nil {
@@ -65,7 +91,7 @@ func (s *CommentService) CreateComment(movieID, userID primitive.ObjectID, conte
 
 	// Validate content
 	content = strings.TrimSpace(content)
-	if content == "" {
+	if content == "" && gifURL == "" {
 		return nil, fmt.Errorf("content is required")
 	}
 
@@ -77,10 +103,6 @@ func (s *CommentService) CreateComment(movieID, userID primitive.ObjectID, conte
 	if len(content) > maxLen {
 		return nil, fmt.Errorf("content must not exceed %d characters", maxLen)
 	}
-	if len(content) < 1 {
-		return nil, fmt.Errorf("content is too short")
-	}
-
 	// Check cooldown (rate limiting)
 	if settings.CommentCooldownSeconds > 0 {
 		lastComment, err := s.commentRepo.GetLastCommentByUser(userID)
@@ -147,6 +169,7 @@ func (s *CommentService) CreateComment(movieID, userID primitive.ObjectID, conte
 		UserID:         userID,
 		ParentID:       parentID,
 		Content:        content,
+		GifURL:         gifURL,
 		Status:         status,
 		HasBlockedWord: hasBlockedWord,
 		HasLink:        hasLink,

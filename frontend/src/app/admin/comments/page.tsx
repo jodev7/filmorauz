@@ -228,6 +228,10 @@ export default function AdminCommentsPage() {
                       </p>
                     )}
                     <p className={`mt-1.5 whitespace-pre-line break-words text-sm leading-relaxed text-gray-200 ${long && !open ? "line-clamp-3" : ""}`}>{c.content}</p>
+                    {c.gif_url && /^https:\/\/([a-z0-9-]+\.)*giphy\.com\//i.test(c.gif_url) && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={c.gif_url} alt="GIF" loading="lazy" className="mt-1.5 max-h-32 rounded-lg" />
+                    )}
                     {long && (
                       <button onClick={() => setExpanded((s) => toggle(s, c.id))} className="mt-0.5 text-xs text-orange-400 hover:text-orange-300">
                         {open ? "Yig'ish" : "To'liq o'qish"}

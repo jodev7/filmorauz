@@ -23,9 +23,12 @@ type GifItem = {
 export default function GifPicker({
   onSelect,
   onClose,
+  className = "absolute bottom-12 left-2 right-2 z-30",
 }: {
   onSelect: (gifUrl: string) => void;
   onClose: () => void;
+  /** Position of the panel; the default suits the watch-room chat. */
+  className?: string;
 }) {
   const [query, setQuery] = useState("");
   const [gifs, setGifs] = useState<GifItem[]>([]);
@@ -73,7 +76,7 @@ export default function GifPicker({
   }, [query, fetchGifs]);
 
   return (
-    <div className="absolute bottom-12 left-2 right-2 z-30 bg-brand-dark border border-white/10 rounded-xl shadow-2xl flex flex-col max-h-80 overflow-hidden">
+    <div className={`${className} bg-brand-dark border border-white/10 rounded-xl shadow-2xl flex flex-col max-h-80 overflow-hidden`}>
       <div className="flex items-center gap-2 p-2 border-b border-white/10">
         <Search className="w-4 h-4 text-gray-400 shrink-0" />
         <input
@@ -83,7 +86,7 @@ export default function GifPicker({
           placeholder="GIF qidirish…"
           className="flex-1 min-w-0 bg-transparent text-sm focus:outline-none"
         />
-        <button onClick={onClose} className="p-1 text-gray-400 hover:text-white shrink-0">
+        <button type="button" onClick={onClose} className="p-1 text-gray-400 hover:text-white shrink-0">
           <X className="w-4 h-4" />
         </button>
       </div>
@@ -104,6 +107,7 @@ export default function GifPicker({
             {gifs.map((g) => (
               <button
                 key={g.id}
+                type="button"
                 onClick={() => onSelect(g.url)}
                 className="block w-full overflow-hidden rounded-lg hover:ring-2 hover:ring-brand-red transition"
               >

@@ -34,7 +34,8 @@ func NewCommentHandler(commentService *services.CommentService, notificationServ
 
 // CommentRequest is the request body for creating a comment
 type CommentRequest struct {
-	Content    string `json:"content" binding:"required"`
+	Content    string `json:"content"`     // may be empty when gif_url is set
+	GifURL     string `json:"gif_url"`     // optional GIF from the picker
 	TargetType string `json:"target_type"` // "movie" or "episode"
 	TargetID   string `json:"target_id"`   // ID of movie or episode
 	IsSpoiler  bool   `json:"is_spoiler"`  // show blurred until the reader opts in
@@ -47,7 +48,8 @@ type EpisodeCommentRequest struct {
 
 // ReplyRequest is the request body for replying to a comment
 type ReplyRequest struct {
-	Content   string `json:"content" binding:"required"`
+	Content   string `json:"content"` // may be empty when gif_url is set
+	GifURL    string `json:"gif_url"`
 	IsSpoiler bool   `json:"is_spoiler"`
 }
 
@@ -130,6 +132,7 @@ func commentToDTO(c models.CommentWithUser) services.CommentWithUserDTO {
 		LikesCount:          c.LikesCount,
 		LikedByMe:           c.LikedByMe,
 		IsSpoiler:           c.IsSpoiler,
+		GifURL:              c.GifURL,
 	}
 	if !c.MovieID.IsZero() {
 		dto.MovieID = c.MovieID.Hex()
@@ -333,7 +336,7 @@ func (h *CommentHandler) CreateComment(c *gin.Context) {
 		targetID = movieID
 	}
 
-	comment, err := h.commentService.CreateComment(movieID, userOID, req.Content, nil, targetType, targetID)
+	comment, err := h.commentService.CreateCommentWithGif(movieID, userOID, req.Content, req.GifURL, nil, targetType, targetID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -432,7 +435,7 @@ func (h *CommentHandler) CreateReply(c *gin.Context) {
 		targetID = parentComment.MovieID
 	}
 
-	comment, err := h.commentService.CreateComment(parentComment.MovieID, userOID, req.Content, &parentID, targetType, targetID)
+	comment, err := h.commentService.CreateCommentWithGif(parentComment.MovieID, userOID, req.Content, req.GifURL, &parentID, targetType, targetID)
 	if err == nil && req.IsSpoiler {
 		if markErr := h.commentService.MarkSpoiler(comment.ID); markErr == nil {
 			comment.IsSpoiler = true

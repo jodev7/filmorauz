@@ -41,6 +41,8 @@ type MovieComment struct {
 
 	// Author marked the comment as a spoiler — shown blurred until clicked.
 	IsSpoiler bool `bson:"is_spoiler,omitempty" json:"is_spoiler,omitempty"`
+	// Optional GIF attached from the picker (GIPHY media URL, see ValidCommentGifURL).
+	GifURL string `bson:"gif_url,omitempty" json:"gif_url,omitempty"`
 	// User reports ("shikoyat"); see comment_reports collection.
 	ReportsCount int `bson:"reports_count,omitempty" json:"reports_count,omitempty"`
 }
@@ -77,8 +79,9 @@ type CommentWithUser struct {
 	LikedByMe  bool                 `json:"liked_by_me"`
 	LikedBy    []primitive.ObjectID `json:"-"`
 	// Spoiler flag + report count
-	IsSpoiler    bool `json:"is_spoiler,omitempty"`
-	ReportsCount int  `json:"reports_count,omitempty"`
+	IsSpoiler    bool   `json:"is_spoiler,omitempty"`
+	GifURL       string `json:"gif_url,omitempty"`
+	ReportsCount int    `json:"reports_count,omitempty"`
 }
 
 // CommentModerationSettings holds global moderation settings

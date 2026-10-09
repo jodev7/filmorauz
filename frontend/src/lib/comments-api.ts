@@ -27,6 +27,8 @@ export interface Comment {
   likes_count?: number;
   liked_by_me?: boolean;
   is_spoiler?: boolean;
+  /** Optional GIF attached from the picker (GIPHY media URL). */
+  gif_url?: string;
   reports_count?: number;
   user?: {
     id: string;
@@ -153,10 +155,12 @@ export async function createComment(
   content: string,
   targetType?: string,
   targetId?: string,
-  isSpoiler = false
+  isSpoiler = false,
+  gifUrl = ""
 ): Promise<CreateCommentResponse> {
   const body: Record<string, string | boolean> = { content };
   if (isSpoiler) body.is_spoiler = true;
+  if (gifUrl) body.gif_url = gifUrl;
   
   // If targetType and targetId are provided, use the new format
   if (targetType && targetId) {
@@ -182,12 +186,13 @@ export async function createTargetComment(
   targetType: string,
   targetId: string,
   content: string,
-  isSpoiler = false
+  isSpoiler = false,
+  gifUrl = ""
 ): Promise<CreateCommentResponse> {
   // For backward compatibility, use movieId as targetId when targetType is movie
   const movieId = targetId; // Use targetId as movieId for backward compat
   
-  return createComment(token, movieId, content, targetType, targetId, isSpoiler);
+  return createComment(token, movieId, content, targetType, targetId, isSpoiler, gifUrl);
 }
 
 // Create a reply (authenticated)
@@ -195,12 +200,13 @@ export async function createReply(
   token: string,
   commentId: string,
   content: string,
-  isSpoiler = false
+  isSpoiler = false,
+  gifUrl = ""
 ): Promise<CreateCommentResponse> {
   const res = await fetch(`${API_URL}/v1/comments/${commentId}/replies`, {
     method: "POST",
     headers: authHeaders(token),
-    body: JSON.stringify(isSpoiler ? { content, is_spoiler: true } : { content }),
+    body: JSON.stringify({ content, ...(isSpoiler ? { is_spoiler: true } : {}), ...(gifUrl ? { gif_url: gifUrl } : {}) }),
   });
   const json = await res.json();
   if (!res.ok) {
