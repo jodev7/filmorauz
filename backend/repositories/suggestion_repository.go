@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"fmt"
+	"html"
 	"time"
 
 	"github.com/filmorauz/backend/models"
@@ -243,4 +244,40 @@ func (r *SuggestionRepository) GetStats() (map[string]int64, error) {
 	stats["rejected"] = rejected
 
 	return stats, nil
+}
+
+// UnescapeLegacyHTML rewrites suggestions that were saved HTML-escaped
+// ("so&#39;rayman") back to the text the user typed. Safe to run on every start.
+func (r *SuggestionRepository) UnescapeLegacyHTML() (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	entity := bson.M{"$regex": `&(#\d+|amp|lt|gt|quot);`}
+	cursor, err := r.col.Find(ctx, bson.M{"$or": []bson.M{{"title": entity}, {"message": entity}}},
+		options.Find().SetProjection(bson.M{"title": 1, "message": 1}))
+	if err != nil {
+		return 0, err
+	}
+	defer cursor.Close(ctx)
+
+	var fixed int64
+	for cursor.Next(ctx) {
+		var doc struct {
+			ID      primitive.ObjectID `bson:"_id"`
+			Title   string             `bson:"title"`
+			Message string             `bson:"message"`
+		}
+		if err := cursor.Decode(&doc); err != nil {
+			return fixed, err
+		}
+		title, message := html.UnescapeString(doc.Title), html.UnescapeString(doc.Message)
+		if title == doc.Title && message == doc.Message {
+			continue
+		}
+		if _, err := r.col.UpdateOne(ctx, bson.M{"_id": doc.ID}, bson.M{"$set": bson.M{"title": title, "message": message}}); err != nil {
+			return fixed, err
+		}
+		fixed++
+	}
+	return fixed, cursor.Err()
 }

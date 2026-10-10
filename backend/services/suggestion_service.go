@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"fmt"
-	"html"
 	"strings"
 
 	"github.com/filmorauz/backend/models"
@@ -32,11 +31,13 @@ func NewSuggestionService(
 
 func (s *SuggestionService) CreateSuggestion(ctx context.Context, userID primitive.ObjectID, userName, userEmail string, input *models.SuggestionInput, imageURL, imageStorageKey, imageMimeType string, imageSize int64) (*models.Suggestion, error) {
 	suggestion := &models.Suggestion{
-		UserID:          userID,
-		UserName:        userName,
-		Type:            input.Type,
-		Title:           html.EscapeString(strings.TrimSpace(input.Title)),
-		Message:         html.EscapeString(strings.TrimSpace(input.Message)),
+		UserID:   userID,
+		UserName: userName,
+		Type:     input.Type,
+		// Stored as typed: every reader (React, Telegram senders) escapes on
+		// output, so escaping here showed "so&#39;rayman" in the admin panel.
+		Title:           strings.TrimSpace(input.Title),
+		Message:         strings.TrimSpace(input.Message),
 		SourceURL:       strings.TrimSpace(input.SourceURL),
 		ImageURL:        imageURL,
 		ImageStorageKey: imageStorageKey,

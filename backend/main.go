@@ -379,6 +379,11 @@ func main() {
 
 	// Suggestion repository, service, and handler
 	suggestionRepo := repositories.NewSuggestionRepository(db)
+	if fixed, err := suggestionRepo.UnescapeLegacyHTML(); err != nil {
+		log.Printf("Warning: suggestion HTML unescape migration failed: %v", err)
+	} else if fixed > 0 {
+		log.Printf("[MIGRATION] Unescaped HTML entities in %d suggestion(s)", fixed)
+	}
 	suggestionService := services.NewSuggestionService(suggestionRepo, userRepo, notificationService)
 	suggestionHandler := handlers.NewSuggestionHandlerWithConfig(suggestionService, cfg)
 
