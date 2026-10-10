@@ -38,7 +38,30 @@ func NewTMDBClient(apiKey, readToken string) *TMDBClient {
 	if apiKey == "" && readToken == "" {
 		return nil
 	}
-	return &TMDBClient{apiKey: apiKey, token: readToken, baseURL: tmdbAPIBase, http: &http.Client{Timeout: 12 * time.Second}}
+	return &TMDBClient{apiKey: apiKey, token: readToken, baseURL: tmdbAPIBase, http: newTMDBHTTPClient()}
+}
+
+// newTMDBHTTPClient keeps connections to TMDB from going stale. Requests are
+// multiplexed over one HTTP/2 connection; when that connection dies silently
+// (CDN edge or a middlebox drops it) every request on it used to hang until
+// the client timeout — "context deadline exceeded ... awaiting headers" for
+// each search until Go finally gave the connection up. Pings notice a dead
+// connection within seconds and idle ones are not kept around for long.
+func newTMDBHTTPClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.IdleConnTimeout = 30 * time.Second
+	tr.HTTP2 = &http.HTTP2Config{SendPingTimeout: 5 * time.Second, PingTimeout: 3 * time.Second}
+	return &http.Client{Timeout: 8 * time.Second, Transport: tr}
+}
+
+// do sends req and, when the connection failed, once more on a fresh one.
+func (c *TMDBClient) do(req *http.Request) (*http.Response, error) {
+	resp, err := c.http.Do(req)
+	if err != nil && req.Context().Err() == nil {
+		c.http.CloseIdleConnections()
+		resp, err = c.http.Do(req.Clone(req.Context()))
+	}
+	return resp, err
 }
 
 func (c *TMDBClient) get(ctx context.Context, path string, q url.Values, out interface{}) error {
@@ -74,7 +97,7 @@ func (c *TMDBClient) getOnce(ctx context.Context, path string, q url.Values, out
 	}
 	req.URL.RawQuery = q.Encode()
 	req.Header.Set("Accept", "application/json")
-	resp, err := c.http.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		// *url.Error embeds the full URL, which contains api_key — drop it.
 		var ue *url.Error
