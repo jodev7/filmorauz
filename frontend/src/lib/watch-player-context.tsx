@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 
 // Shared "is the inline player open" state for a movie detail page. The play
 // button (in the details column) and the player section (full-width below)
@@ -29,6 +29,16 @@ export function WatchPlayerProvider({
     }, 50);
   }, []);
   const closePlayer = useCallback(() => setOpen(false), []);
+  // Deep-link support: ?play=1 auto-opens the player. Read client-side (instead
+  // of the server page's searchParams) so the detail page can be statically
+  // cached (ISR) rather than force-dynamic.
+  useEffect(() => {
+    try {
+      if (new URLSearchParams(window.location.search).get("play") === "1") openPlayer();
+    } catch {
+      /* no-op */
+    }
+  }, [openPlayer]);
   return <Ctx.Provider value={{ open, openPlayer, closePlayer }}>{children}</Ctx.Provider>;
 }
 

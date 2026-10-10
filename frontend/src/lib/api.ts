@@ -452,7 +452,7 @@ export async function getContinueWatching(token: string): Promise<ContinueWatchi
 
 export async function getMovie(slug: string): Promise<Movie> {
   const res = await fetch(`${API_URL}/movies/slug/${slug}`, {
-    cache: "no-store",
+    next: { revalidate: 300 }, // ISR: cache the public SSR shell 5m (playback/ratings are client-fetched)
   });
   if (!res.ok) throw new Error(`Movie not found: ${slug} (HTTP ${res.status})`);
   const json = await res.json();
@@ -884,12 +884,12 @@ export async function getTrendingMovies(period: string = "24h", limit: number = 
 // Uses new endpoint with hybrid scoring (content + popularity + user personalization)
 export async function getRecommendations(movieId: string, limit: number = 12): Promise<Movie[]> {
   const res = await fetch(`${API_URL}/movies/recommendations?movie_id=${movieId}&limit=${limit}`, {
-    cache: "no-store",
+    next: { revalidate: 300 },
   });
   if (!res.ok) {
     // Fallback to old endpoint if new one fails
     const fallbackRes = await fetch(`${API_URL}/movies/${movieId}/recommendations?limit=${limit}`, {
-      cache: "no-store",
+      next: { revalidate: 300 },
     });
     if (!fallbackRes.ok) throw new Error("Failed to fetch recommendations");
     const json = await fallbackRes.json();
@@ -3482,7 +3482,7 @@ export async function getCollections(): Promise<Collection[]> {
 // Get collection by slug (public)
 export async function getCollectionBySlug(slug: string): Promise<Collection | null> {
   const res = await fetch(`${API_URL}/collections/slug/${slug}`, {
-    cache: "no-store",
+    next: { revalidate: 300 },
   });
   if (!res.ok) {
     if (res.status === 404) return null;

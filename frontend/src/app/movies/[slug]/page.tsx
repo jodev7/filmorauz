@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 import dynamicImport from "next/dynamic";
 import { notFound } from "next/navigation";
 import Link from "next/link";
@@ -42,7 +42,6 @@ const WebsiteAdSlot = dynamicImport(() => import("@/components/ads/WebsiteAdSlot
 
 interface Props {
   params: { slug: string };
-  searchParams?: { play?: string };
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -109,9 +108,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   }
 }
 
-export default async function MovieDetailPage({ params, searchParams }: Props) {
+export default async function MovieDetailPage({ params }: Props) {
   const { slug } = params;
-  const autoOpenPlayer = searchParams?.play === "1";
   const { t } = getTranslations("uz");
 
   let movie;
@@ -236,7 +234,7 @@ export default async function MovieDetailPage({ params, searchParams }: Props) {
       {/* VideoObject JSON-LD — drives Google Video Search */}
       <JsonLd data={videoJsonLd} />
       <Navbar />
-      <WatchPlayerProvider initialOpen={autoOpenPlayer}>
+      <WatchPlayerProvider>
       <main className="min-h-screen">
         {/* Backdrop hero */}
         <div className="relative h-[36vh] sm:h-[55vh] min-h-[240px] sm:min-h-[380px]">

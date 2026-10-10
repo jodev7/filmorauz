@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft } from "lucide-react";

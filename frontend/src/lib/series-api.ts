@@ -127,7 +127,7 @@ export async function getSeries(page: number = 1, limit: number = 20, genre?: st
 // Get series by slug
 export async function getSeriesBySlug(slug: string): Promise<SeriesWithSeasons> {
   const res = await fetch(`${API_URL}/series/${slug}`, {
-    cache: "no-store",
+    next: { revalidate: 300 },
   });
   if (!res.ok) throw new Error("Failed to fetch series");
   return res.json();
