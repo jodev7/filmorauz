@@ -371,9 +371,14 @@ func (r *JobRepository) ClaimNextProcessingJob(ctx context.Context) (*models.Ing
 	update := bson.A{
 		bson.M{
 			"$set": bson.M{
-				"status":                "processing",
-				"stage":                 "processing",
-				"updated_at":            now,
+				"status":     "processing",
+				"stage":      "processing",
+				"updated_at": now,
+				// Owner of the run, so a graceful shutdown can hand the job back
+				// (ReleaseOwnedProcessingJobs) instead of waiting for the watchdog.
+				"worker_id": r.workerID,
+				// A previous attempt's error must not sit on a job that is running again.
+				"error":                 "",
 				"started_at":            bson.M{"$ifNull": bson.A{"$started_at", now}},
 				"processing_started_at": now,
 				// Backfill phase markers for legacy jobs that arrived without them.
@@ -1206,8 +1211,8 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 		threshold time.Duration
 		message   string
 	}{
-		{status: models.IngestionStatusProcessing, threshold: 10 * time.Minute, message: "Processing stage stalled for 10 minutes; returned to processing queue automatically"},
-		{status: models.IngestionStatusUploading, threshold: 5 * time.Minute, message: "Upload stage stalled for 5 minutes; returned to processing queue automatically"},
+		{status: models.IngestionStatusProcessing, threshold: 10 * time.Minute, message: "Worker stopped reporting for 10 minutes while processing (restart or crash, not a render time limit); returned to processing queue automatically"},
+		{status: models.IngestionStatusUploading, threshold: 5 * time.Minute, message: "Worker stopped reporting for 5 minutes while uploading (restart or crash); returned to processing queue automatically"},
 	}
 	for _, stage := range processStages {
 		stageCutoff := now.Add(-stage.threshold)
@@ -1288,6 +1293,54 @@ func (r *JobRepository) RecoverStaleJobs(ctx context.Context) (int64, error) {
 		log.Printf("[REPO] RecoverStaleJobs: recovered %d stale jobs", totalRecovered)
 	}
 	return totalRecovered, nil
+}
+
+// ReleaseOwnedProcessingJobs hands the jobs this worker is processing back to
+// the queue. Called on a graceful shutdown (deploy / systemctl restart): the
+// render is interrupted by us, not by the job, so it costs no retry and leaves
+// no error. Without it the jobs sat in "processing" until the watchdog marked
+// them "stalled" and burned a retry on every restart.
+func (r *JobRepository) ReleaseOwnedProcessingJobs(ctx context.Context) (int64, error) {
+	now := time.Now()
+	const message = "Worker qayta ishga tushdi — navbatga qaytarildi"
+	res, err := r.collection.UpdateMany(ctx, bson.M{
+		"worker_id": r.workerID,
+		// Every status the pipeline passes through before the movie row is
+		// created; later ones (creating_movie, sending_notification) must not
+		// be re-run from the top.
+		"status": bson.M{"$in": []models.IngestionStatus{
+			models.IngestionStatusProcessing,
+			models.IngestionStatusUploading,
+			models.IngestionStatusParsing,
+			models.IngestionStatusParsingComplete,
+			models.IngestionStatusEnrichingMetadata,
+			models.IngestionStatusHLSProcessing,
+			models.IngestionStatusFinalizingStorage,
+		}},
+		"stage": bson.M{"$ne": "waiting_for_episodes"},
+	}, bson.M{
+		"$set": bson.M{
+			"status":     models.IngestionStatusReadyToProcess,
+			"stage":      "ready_to_process",
+			"progress":   100,
+			"error":      "",
+			"message":    message,
+			"updated_at": now,
+			// The interrupted run may have got as far as marking these.
+			"steps.process": false,
+			"steps.upload":  false,
+		},
+		"$unset": unset("worker_id", "locked_until", "processing_started_at", "last_progress_at"),
+		"$push": bson.M{"logs": models.IngestionLog{
+			Timestamp: now,
+			Message:   message,
+			Level:     "info",
+		}},
+	})
+	if err != nil {
+		return 0, err
+	}
+	return res.ModifiedCount, nil
 }
 
 func (r *JobRepository) FailStaleProcessingJobs(ctx context.Context) (int64, error) {
@@ -1697,6 +1750,21 @@ func (r *JobRepository) UpdateQualityInfo(ctx context.Context, id, sourceQuality
 	}
 
 	_, err = r.collection.UpdateByID(ctx, objID, update)
+	return err
+}
+
+// UpdateSelectedQuality records the quality measured from the downloaded file
+// for sources that only reported "auto".
+func (r *JobRepository) UpdateSelectedQuality(ctx context.Context, id, quality string) error {
+	objID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return fmt.Errorf("invalid id")
+	}
+	_, err = r.collection.UpdateByID(ctx, objID, bson.M{"$set": bson.M{
+		"source_quality":   quality,
+		"selected_quality": quality,
+		"updated_at":       time.Now(),
+	}})
 	return err
 }
 

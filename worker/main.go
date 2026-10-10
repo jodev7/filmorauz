@@ -425,6 +425,14 @@ func main() {
 
 	// Wait for shutdown
 	<-workerCtx.Done()
+
+	releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if n, err := jobRepo.ReleaseOwnedProcessingJobs(releaseCtx); err != nil {
+		log.Printf("[QUEUE] release of in-flight jobs on shutdown failed: %v", err)
+	} else if n > 0 {
+		log.Printf("[QUEUE] released %d in-flight job(s) back to the queue on shutdown", n)
+	}
+	releaseCancel()
 	log.Println("Worker shutdown complete")
 }
 

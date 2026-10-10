@@ -92,9 +92,15 @@ class MovieDetails:
         self.quality = quality
         self.detail_url = detail_url
         self.player_url = player_url
+        # Set by a parser when it knows why the page has no video
+        # (e.g. the source has not uploaded the film yet).
+        self.error = ""
+        self.error_reason = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "error": self.error,
+            "error_reason": self.error_reason,
             "title": self.title,
             "description": self.description,
             "poster": self.poster,

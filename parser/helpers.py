@@ -3,6 +3,8 @@ Helper utilities for parsing
 """
 import re
 import os
+import shutil
+import subprocess
 from difflib import SequenceMatcher
 from typing import List, Dict, Any, Optional, Tuple
 from urllib.parse import urljoin, urlparse
@@ -190,6 +192,41 @@ def normalize_quality_label(label: str) -> str:
     if match:
         return f"{match.group(1)}p"
     return raw
+
+
+def is_concrete_quality(label: str) -> bool:
+    """True for a real resolution label ("720p"), False for "auto"/"unknown"/""."""
+    return bool(re.fullmatch(r"\d{3,4}p", (label or "").strip().lower()))
+
+
+def quality_label_for_height(height: int) -> str:
+    """Resolution label for a measured frame height. The cut-offs mirror the
+    worker's expectedQualitySatisfied, so a label derived here always passes
+    its post-download check (scope films are shorter than 16:9)."""
+    for label, min_height in (("2160p", 1900), ("1440p", 1300), ("1080p", 900),
+                              ("720p", 600), ("480p", 400), ("360p", 320)):
+        if height >= min_height:
+            return label
+    return "240p" if height > 0 else ""
+
+
+def probe_remote_quality(url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 12) -> str:
+    """Best resolution of a remote mp4 / HLS playlist as a label ("1080p"),
+    measured with ffprobe. Sources that publish no quality label would
+    otherwise show as "auto". Returns "" when it cannot be measured."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe or not (url or "").lower().startswith(("http://", "https://")):
+        return ""
+    cmd = [ffprobe, "-v", "error"]
+    if headers:
+        cmd += ["-headers", "".join(f"{k}: {v}\r\n" for k, v in headers.items())]
+    cmd += ["-select_streams", "v", "-show_entries", "stream=height", "-of", "csv=p=0", url]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    except Exception:
+        return ""
+    heights = [int(h) for h in re.findall(r"\d+", out)]
+    return quality_label_for_height(max(heights)) if heights else ""
 
 
 def quality_height(label: str, url: str = "") -> int:

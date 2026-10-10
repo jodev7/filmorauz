@@ -976,7 +976,7 @@ class AsilmediaParser(BaseParser):
                     f"[episode-parse] title={title} parent={parent_id} season={season} episode={episode} source_id={source_id}"
                 )
 
-        return MovieDetails(
+        details = MovieDetails(
             title=title,
             year=year or 0,
             description=description,
@@ -993,6 +993,15 @@ class AsilmediaParser(BaseParser):
             video_urls=video_urls,
             type=ct
         )
+        if not video_urls:
+            # Announced but not uploaded yet: the player block is replaced by
+            # a "Tez kunda ... joylanadi!" notice and there is nothing to fetch.
+            notice = soup.select_one("#player-section .fs-notice__text, .fs-notice .fs-notice__text")
+            notice_text = clean_text(notice.get_text()) if notice else ""
+            if notice_text:
+                details.error = "not_published_yet"
+                details.error_reason = f"Manbada video hali joylanmagan: «{notice_text}»"
+        return details
     
     @staticmethod
     def _sanitize_video_url(raw_url: str) -> str:

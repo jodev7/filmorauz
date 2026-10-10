@@ -133,6 +133,34 @@ func normalizeIdentityURL(raw string) string {
 	return strings.ToLower(parsed.Scheme + "://" + parsed.Host + parsed.Path)
 }
 
+// isConcreteQuality reports whether label is a real resolution ("720p") rather
+// than "auto" / "unknown" / "original".
+func isConcreteQuality(label string) bool {
+	return regexp.MustCompile(`^\d{3,4}p$`).MatchString(strings.ToLower(strings.TrimSpace(label)))
+}
+
+// qualityLabelForHeight names a measured frame height. Cut-offs match
+// expectedQualitySatisfied (scope films are shorter than 16:9).
+func qualityLabelForHeight(height int) string {
+	switch {
+	case height >= 1900:
+		return "2160p"
+	case height >= 1300:
+		return "1440p"
+	case height >= 900:
+		return "1080p"
+	case height >= 600:
+		return "720p"
+	case height >= 400:
+		return "480p"
+	case height >= 320:
+		return "360p"
+	case height > 0:
+		return "240p"
+	}
+	return ""
+}
+
 func expectedQualitySatisfied(selected string, actualHeight int) bool {
 	want := qualityHeight(selected, "")
 	if want == 0 || actualHeight <= 0 {
@@ -437,6 +465,14 @@ func (p *Pipeline) ProcessDownloadJob(ctx context.Context, job *models.Ingestion
 				localPath = ""
 				log.Printf("[WORKER] source quality mismatch job_id=%s err=%v", jobID, downloadErr)
 				continue
+			}
+			// Sources without a quality label report "auto"; the downloaded
+			// file tells the real one.
+			if label := qualityLabelForHeight(height); label != "" && !isConcreteQuality(job.SourceQuality) {
+				job.SourceQuality = label
+				if err := p.jobRepo.UpdateSelectedQuality(ctx, jobID, label); err != nil {
+					log.Printf("[WORKER] failed to persist measured quality job_id=%s err=%v", jobID, err)
+				}
 			}
 		}
 		downloadErr = nil
@@ -1155,6 +1191,9 @@ func (p *Pipeline) parseMovieDetails(job *models.IngestionJob) (*models.ParsedMo
 	if strings.TrimSpace(result.VideoURL) == "" {
 		log.Printf("[PIPELINE] Parser returned empty video_url job_id=%s source=%s source_id=%s detail_url=%s error=%s reason=%s",
 			jobID, job.Source, job.SourceID, job.DetailURL, result.Error, result.ManualReason)
+		if reason := strings.TrimSpace(result.ManualReason); reason != "" {
+			return nil, "", fmt.Errorf("video topilmadi: %s", reason)
+		}
 		return nil, "", fmt.Errorf("download_url empty after parser resolve")
 	}
 
@@ -2473,6 +2512,12 @@ func (p *Pipeline) processVideo(job *models.IngestionJob, inputPath string, cano
 	sourceResolution := ""
 	if inputWidth, inputHeight, err := p.getInputResolution(inputPath); err == nil {
 		sourceResolution = fmt.Sprintf("%dx%d", inputWidth, inputHeight)
+		if label := qualityLabelForHeight(inputHeight); label != "" && !isConcreteQuality(job.SourceQuality) {
+			job.SourceQuality = label
+			if err := p.jobRepo.UpdateSelectedQuality(context.Background(), jobID, label); err != nil {
+				log.Printf("[PIPELINE] WARNING: failed to persist measured quality: %v", err)
+			}
+		}
 	}
 	job.SourceResolution = sourceResolution
 	job.GeneratedQualities = append([]string(nil), generatedQualities...)

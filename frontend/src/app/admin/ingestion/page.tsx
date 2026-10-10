@@ -61,6 +61,18 @@ function qualityRank(q: string): number {
   return m ? parseInt(m[1], 10) : 0;
 }
 
+// Quality to show for a job. Sources without a label report "auto"/"unknown";
+// then the measured resolution ("1920x1080") names it. Same cut-offs as the
+// worker's qualityLabelForHeight.
+function jobQualityLabel(job: { selected_quality?: string; source_quality?: string; source_resolution?: string }): string {
+  const label = (job.selected_quality || job.source_quality || "").trim();
+  if (/^\d{3,4}p$/i.test(label)) return label;
+  const height = parseInt((job.source_resolution || "").split("x")[1] || "", 10);
+  if (!height) return "";
+  const steps: [number, string][] = [[1900, "2160p"], [1300, "1440p"], [900, "1080p"], [600, "720p"], [400, "480p"], [320, "360p"]];
+  return steps.find(([min]) => height >= min)?.[1] || "240p";
+}
+
 // Pick the highest-resolution label from a list of quality strings.
 function highestQuality(qualities: string[]): string {
   if (!qualities || qualities.length === 0) return "";
@@ -1092,7 +1104,9 @@ function CatalogTab({
     try {
       const details = await getSourceDetails(input.source, input.source_id, input.detail_url);
       const available = Array.isArray(details.available_qualities) ? details.available_qualities : [];
-      const selected = details.selected_quality || details.source_quality || highestQuality(available);
+      // "auto"/"unknown" is not a quality — the modal then says "Aniqlanmadi".
+      const selected = [details.selected_quality, details.source_quality, highestQuality(available)]
+        .find((q) => qualityRank(q || "") > 0) || "";
       const rawType = (details.type || input.type || "").toLowerCase();
       const contentType: "movie" | "serial" | "" =
         rawType === "serial" || rawType === "series" ? "serial"
@@ -2138,7 +2152,7 @@ function JobCardBase({
           )}
           {(job.source_quality || job.selected_quality || job.source_resolution || job.total_bytes || (job.available_qualities && job.available_qualities.length > 0)) && (
             <p className="text-xs text-gray-400 mt-1">
-              {(job.selected_quality || job.source_quality) && <span className="mr-3">Selected quality: <span className="text-white">{job.selected_quality || job.source_quality}</span></span>}
+              {(job.selected_quality || job.source_quality || job.source_resolution) && <span className="mr-3">Selected quality: <span className="text-white">{jobQualityLabel(job) || "aniqlanmoqda…"}</span></span>}
               {job.source_resolution && <span className="mr-3">Resolution: <span className="text-white">{job.source_resolution}</span></span>}
               {job.available_qualities && job.available_qualities.length > 0 && <span className="mr-3">Available: <span className="text-white">{job.available_qualities.join(", ")}</span></span>}
               {!!job.total_bytes && <span>Size: <span className="text-white">{(job.total_bytes / (1024 * 1024)).toFixed(1)} MB</span></span>}

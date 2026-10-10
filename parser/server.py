@@ -1036,10 +1036,11 @@ from kinolar_serial import KinolarSerialParser
 from uzbeklar_serial import UzbeklarSerialParser
 from uzmedia_serial import UzmediaSerialParser
 from seezntv_serial import SeezntvSerialParser
-from downloader_service import DownloaderService, _validate_download_target, report_progress_to_backend
+from downloader_service import DownloaderService, _validate_download_target, report_progress_to_backend, _build_stream_headers
 from uzmovi_browser_downloader import download_uzmovi_video
 from metadata_normalizer import normalize_metadata, validate_metadata, create_worker_payload
 from helpers import sort_video_candidates, normalize_quality_label, quality_height, detect_content_type, sign_fayllar_url
+from helpers import is_concrete_quality, probe_remote_quality
 from source_config import get_source_config
 import recovery
 from telemetry import (
@@ -3490,6 +3491,23 @@ class ParserHandler(BaseHTTPRequestHandler):
                 
                 if not source_quality:
                     source_quality = normalize_quality_label(normalized_metadata.get("quality", ""))
+
+                # Most sources publish no quality label ("auto"): measure the
+                # selected stream so the admin sees 480p/720p/1080p for them too.
+                if video_url and not is_concrete_quality(source_quality):
+                    probe_referer = details.get("video_page_url") or detail_url or ""
+                    probed_quality = probe_remote_quality(
+                        video_url, _build_stream_headers(probe_referer)
+                    )
+                    if probed_quality:
+                        logger.info(f"[PARSER] probed quality {probed_quality} (label was {source_quality or 'empty'})")
+                        source_quality = probed_quality
+                        for v in video_urls_list:
+                            if v.get('url') == video_url:
+                                v['quality'] = probed_quality
+                        available_qualities = [q for q in available_qualities if is_concrete_quality(q)]
+                        if probed_quality not in available_qualities:
+                            available_qualities.append(probed_quality)
 
                 classifier_evidence = str(details.get("content_type_reason") or "")
                 currentType = (details.get("type") or "").strip().lower()
