@@ -77,10 +77,8 @@ func (h *MovieHandler) ListMovies(c *gin.Context) {
 	}
 
 	// Map source_type "ingestion" to valid public type for all movies in list
-	mappedCount := 0
 	for i := range movies {
 		if movies[i].SourceType == "ingestion" {
-			originalType := movies[i].SourceType
 			if movies[i].VideoURL != "" {
 				if strings.HasSuffix(movies[i].VideoURL, ".m3u8") || strings.Contains(movies[i].VideoURL, "manifest") {
 					movies[i].SourceType = "direct_hls"
@@ -93,17 +91,11 @@ func (h *MovieHandler) ListMovies(c *gin.Context) {
 			if movies[i].SourceType == "ingestion" {
 				movies[i].SourceType = "direct_hls"
 			}
-			mappedCount++
-			log.Printf("[ListMovies] Mapped movie[%d] source_type: %q -> %q", i, originalType, movies[i].SourceType)
 		}
 		protectMovieMedia(&movies[i])
 		// Listings are a catalogue, not a player — never ship playback sources.
 		stripMoviePlayback(&movies[i])
 	}
-	if mappedCount > 0 {
-		log.Printf("[ListMovies] Total mapped: %d/%d movies", mappedCount, len(movies))
-	}
-	log.Printf("[MOVIE API] ListMovies genre_filter=%q response_genres=%v", genre, extractMovieGenres(movies))
 
 	c.JSON(http.StatusOK, gin.H{
 		"data":  movies,

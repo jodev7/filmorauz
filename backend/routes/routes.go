@@ -181,7 +181,7 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 
 	// Public movie routes
 	api.GET("/homepage", middleware.CacheResponse(30*time.Second), homepageHandler.GetHomepageData)
-	api.GET("/movies", movieHandler.ListMovies)
+	api.GET("/movies", middleware.CacheResponse(30*time.Second), movieHandler.ListMovies)
 	api.GET("/movies/trending", middleware.CacheResponse(30*time.Second), movieHandler.GetTrendingMovies)
 
 	// Watch-room chat GIF picker — proxies GIPHY so the API key stays
@@ -190,12 +190,12 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	// Movie by slug (must come before :id routes to avoid slug being treated as id)
 	// OptionalAuth: the payload is public, but the playback sources inside it
 	// are only filled in for logged-in users (see playback_gate.go).
-	api.GET("/movies/slug/:slug", middleware.OptionalAuth(authService), movieHandler.GetMovieBySlug)
+	api.GET("/movies/slug/:slug", middleware.CacheResponse(30*time.Second), middleware.OptionalAuth(authService), movieHandler.GetMovieBySlug)
 	// Movie by ID and recommendations
-	api.GET("/movies/:id", middleware.OptionalAuth(authService), movieHandler.GetMovieByID)
-	api.GET("/movies/recommendations", movieHandler.GetRecommendations) // ?movie_id=xxx&limit=12
-	api.GET("/movies/:id/recommendations", movieHandler.GetRecommendations)
-	api.GET("/search", movieHandler.SearchMovies)
+	api.GET("/movies/:id", middleware.CacheResponse(30*time.Second), middleware.OptionalAuth(authService), movieHandler.GetMovieByID)
+	api.GET("/movies/recommendations", middleware.CacheResponse(60*time.Second), movieHandler.GetRecommendations) // ?movie_id=xxx&limit=12
+	api.GET("/movies/:id/recommendations", middleware.CacheResponse(60*time.Second), movieHandler.GetRecommendations)
+	api.GET("/search", middleware.CacheResponse(30*time.Second), movieHandler.SearchMovies)
 
 	// Protected movie watch endpoint (requires auth + premium check)
 	v1Watch := api.Group("/v1")
@@ -466,9 +466,9 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	// Public collection routes
 	collections := api.Group("/collections")
 	{
-		collections.GET("", collectionHandler.GetCollections)
+		collections.GET("", middleware.CacheResponse(60*time.Second), collectionHandler.GetCollections)
 		collections.GET("/featured", middleware.CacheResponse(60*time.Second), collectionHandler.GetFeaturedCollections)
-		collections.GET("/slug/:slug", collectionHandler.GetCollectionBySlug)
+		collections.GET("/slug/:slug", middleware.CacheResponse(60*time.Second), collectionHandler.GetCollectionBySlug)
 	}
 
 	// Comment routes (v1)
@@ -517,27 +517,27 @@ func Setup(r *gin.Engine, sitemapHandler *handlers.SitemapHandler, authHandler *
 	// Season routes - must come before series/:slug
 	seasons := api.Group("/seasons")
 	{
-		seasons.GET("/:id/episodes", middleware.OptionalAuth(authService), seriesHandler.GetEpisodes)
+		seasons.GET("/:id/episodes", middleware.CacheResponse(30*time.Second), middleware.OptionalAuth(authService), seriesHandler.GetEpisodes)
 	}
 
 	// Episode routes
 	episodes := api.Group("/episodes")
 	{
-		episodes.GET("/:id", middleware.OptionalAuth(authService), seriesHandler.GetEpisode)
+		episodes.GET("/:id", middleware.CacheResponse(30*time.Second), middleware.OptionalAuth(authService), seriesHandler.GetEpisode)
 	}
 
 	// Series by ID routes - must come before /series/:slug
 	seriesByID := api.Group("/series-by-id")
 	{
-		seriesByID.GET("/:id/seasons", seriesHandler.GetSeasons)
-		seriesByID.GET("/:id/recommendations", seriesHandler.GetRecommendations)
+		seriesByID.GET("/:id/seasons", middleware.CacheResponse(60*time.Second), seriesHandler.GetSeasons)
+		seriesByID.GET("/:id/recommendations", middleware.CacheResponse(60*time.Second), seriesHandler.GetRecommendations)
 	}
 
 	// Series routes - least specific (just /series and /series/:slug)
 	series := api.Group("/series")
 	{
-		series.GET("", seriesHandler.ListSeries)
-		series.GET("/:slug", middleware.OptionalAuth(authService), seriesHandler.GetSeriesBySlug)
+		series.GET("", middleware.CacheResponse(60*time.Second), seriesHandler.ListSeries)
+		series.GET("/:slug", middleware.CacheResponse(60*time.Second), middleware.OptionalAuth(authService), seriesHandler.GetSeriesBySlug)
 	}
 
 	// Admin series management

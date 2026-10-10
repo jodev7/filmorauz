@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"fmt"
 	"sync"
 	"time"
 
@@ -49,6 +50,11 @@ func (w *cacheWriter) WriteString(s string) (int, error) {
 // an Authorization header bypasses the cache so per-user responses are never
 // served to the wrong viewer.
 func CacheResponse(ttl time.Duration) gin.HandlerFunc {
+	// Edge-cache hint so nginx and any CDN in front (Cloudflare) can also serve
+	// these public responses without hitting the backend. Only emitted on the
+	// anonymous path below — authenticated requests bypass caching entirely, so
+	// per-user responses never get a public Cache-Control.
+	cacheControl := fmt.Sprintf("public, max-age=%d", int(ttl.Seconds()))
 	return func(c *gin.Context) {
 		if c.Request.Method != "GET" || c.GetHeader("Authorization") != "" {
 			c.Next()
@@ -61,6 +67,7 @@ func CacheResponse(ttl time.Duration) gin.HandlerFunc {
 		respCacheMu.RUnlock()
 		if ok && time.Now().Before(entry.expiresAt) {
 			c.Header("X-Cache", "HIT")
+			c.Header("Cache-Control", cacheControl)
 			c.Data(entry.status, "application/json; charset=utf-8", entry.body)
 			c.Abort()
 			return
@@ -69,6 +76,7 @@ func CacheResponse(ttl time.Duration) gin.HandlerFunc {
 		writer := &cacheWriter{ResponseWriter: c.Writer, buf: &bytes.Buffer{}}
 		c.Writer = writer
 		c.Header("X-Cache", "MISS")
+		c.Header("Cache-Control", cacheControl)
 		c.Next()
 
 		status := c.Writer.Status()

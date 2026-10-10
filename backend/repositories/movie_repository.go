@@ -656,8 +656,6 @@ func (r *MovieRepository) List(genre string, page, limit int) ([]models.Movie, i
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	log.Printf("[ListMovies] === DEBUG START ===")
-	log.Printf("[ListMovies] Request: genre=%q, page=%d, limit=%d", genre, page, limit)
 	if normalized := normalizeGenreValues([]string{genre}); len(normalized) > 0 {
 		genre = normalized[0]
 	} else {
@@ -674,7 +672,6 @@ func (r *MovieRepository) List(genre string, page, limit int) ([]models.Movie, i
 	if genre != "" {
 		filter["genre"] = bson.M{"$in": []string{genre}}
 	}
-	log.Printf("[ListMovies] Query filter: %v", filter)
 
 	total, err := r.col.CountDocuments(ctx, filter)
 	if err != nil {
@@ -682,7 +679,6 @@ func (r *MovieRepository) List(genre string, page, limit int) ([]models.Movie, i
 		log.Printf("[ListMovies] === DEBUG END ===")
 		return nil, 0, fmt.Errorf("count documents: %w", err)
 	}
-	log.Printf("[ListMovies] Total matching movies: %d", total)
 
 	// Sort by updated_at desc (most recently edited/added first); fall back to
 	// created_at for documents that have never been edited.
@@ -706,7 +702,6 @@ func (r *MovieRepository) List(genre string, page, limit int) ([]models.Movie, i
 		log.Printf("[ListMovies] === DEBUG END ===")
 		return nil, 0, fmt.Errorf("decode raw movies: %w", err)
 	}
-	log.Printf("[ListMovies] Raw docs fetched: %d", len(rawDocs))
 
 	// Normalize each document
 	movies := make([]models.Movie, 0, len(rawDocs))
@@ -716,12 +711,9 @@ func (r *MovieRepository) List(genre string, page, limit int) ([]models.Movie, i
 			log.Printf("[ListMovies] WARN: failed to normalize: %v", err)
 			continue
 		}
-		log.Printf("[ListMovies] Movie: id=%v, slug=%q, source_type=%q", movie.ID, movie.Slug, movie.SourceType)
 		movies = append(movies, *movie)
 	}
 
-	log.Printf("[ListMovies] RETURNING: %d movies", len(movies))
-	log.Printf("[ListMovies] === DEBUG END ===")
 	return movies, total, nil
 }
 
