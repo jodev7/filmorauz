@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Clock, Calendar, Globe, ChevronLeft } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
-import MediaImage from "@/components/MediaImage";
+import Image from "next/image";
 import MoviePoster from "@/components/MoviePoster";
 import MovieCode from "@/components/MovieCode";
 import WatchButton from "@/components/WatchButton";
@@ -238,13 +238,19 @@ export default async function MovieDetailPage({ params }: Props) {
       <main className="min-h-screen">
         {/* Backdrop hero */}
         <div className="relative h-[36vh] sm:h-[55vh] min-h-[240px] sm:min-h-[380px]">
-          <MediaImage
-            src={movie.backdrop_url || movie.poster_url}
-            alt={movie.title}
-            loading="eager"
-            fetchPriority="high"
-            className="absolute inset-0 h-full w-full object-cover"
-          />
+          {(() => {
+            const backdropSrc = normalizeMediaUrl(movie.backdrop_url || movie.poster_url, "");
+            return backdropSrc ? (
+              <Image
+                src={backdropSrc}
+                alt={movie.title}
+                fill
+                priority
+                sizes="100vw"
+                className="object-cover"
+              />
+            ) : null;
+          })()}
           <div className="absolute inset-0 bg-gradient-to-t from-brand-dark via-brand-dark/50 to-black/30" />
         </div>
 

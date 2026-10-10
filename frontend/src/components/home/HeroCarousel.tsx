@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { Play } from "lucide-react";
 import { Movie } from "@/lib/api";
-import MediaImage from "@/components/MediaImage";
 import MediaTitle from "@/components/MediaTitle";
 import { formatDuration } from "@/lib/movie-utils";
 import { normalizeMediaUrl } from "@/lib/image-utils";
@@ -103,7 +103,7 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
         {movies.map((movie, index) => {
           const isActive = index === currentIndex;
           const shouldRender = loadedIndexes.has(index);
-          const backdropSrc = movie.backdrop_url || movie.poster_url;
+          const backdropSrc = normalizeMediaUrl(movie.backdrop_url || movie.poster_url, "");
           return (
             <div
               key={movie.id}
@@ -114,13 +114,18 @@ export default function HeroCarousel({ movies }: HeroCarouselProps) {
             >
               {/* Background Image with scale effect */}
               <div className="absolute inset-0 overflow-hidden">
-                {shouldRender && (
-                  <MediaImage
+                {shouldRender && backdropSrc && (
+                  <Image
                     src={backdropSrc}
                     alt={movie.title}
-                    loading={index === 0 ? "eager" : "lazy"}
-                    fetchPriority={index === 0 ? "high" : "auto"}
-                    className={`w-full h-full object-cover transition-transform duration-700 ease-in-out ${
+                    fill
+                    // The hero is the LCP element — prioritize the first slide
+                    // (adds preload + fetchpriority=high + eager) and lazy-load
+                    // the rest. sizes=100vw lets the optimizer ship a
+                    // viewport-width AVIF/WebP (far smaller than the raw CDN file).
+                    priority={index === 0}
+                    sizes="100vw"
+                    className={`object-cover transition-transform duration-700 ease-in-out ${
                       isActive ? "scale-105" : "scale-100"
                     }`}
                   />
