@@ -1,0 +1,7 @@
+[Unit]
+Description=Run frontend autoscaler every minute
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=60
+[Install]
+WantedBy=timers.target

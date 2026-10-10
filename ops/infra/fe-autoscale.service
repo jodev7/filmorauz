@@ -1,0 +1,5 @@
+[Unit]
+Description=Frontend PM2 cluster autoscaler
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/fe-autoscale.sh

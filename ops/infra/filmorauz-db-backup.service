@@ -1,0 +1,5 @@
+[Unit]
+Description=filmorauz MongoDB daily backup
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/filmorauz-db-backup.sh

@@ -1,0 +1,12 @@
+[Unit]
+Description=SSH tunnel to filmorauz MongoDB on backend box (WEB_VPS_HOST)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/ssh -N -i /root/.ssh/fu_mongo_tunnel -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes -L 127.0.0.1:27017:127.0.0.1:27017 root@WEB_VPS_HOST
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
